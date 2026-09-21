@@ -39,7 +39,7 @@ REQUIRED = (
     "tools/coordination-versions.json",
     "tools/check_workspace.py",
     ".github/pull_request_template.md",
-    ".github/workflows/validate.yml",
+    ".github/workflows/gallery-pages.yml",
 )
 # Repository prose uses inline links; code examples are excluded below.
 LINK = re.compile(r"!?\[[^\]\n]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+\"[^\"]*\")?\s*\)")

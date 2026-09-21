@@ -128,8 +128,8 @@ def validate_catalog() -> None:
             )
             if not (ROOT / source).is_file():
                 raise ValueError(f"Suite {name} references missing source: {source}")
-    workflow = (ROOT / ".github/workflows/validate.yml").read_text()
-    # CI uses explicit named invocations on single lines, with no second step inventory.
+    workflow = (ROOT / ".github/workflows/gallery-pages.yml").read_text()
+    # The Pages workflow uses explicit named invocations on single lines.
     import shlex
 
     from .cli import parser, make_plan

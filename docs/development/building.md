@@ -137,7 +137,7 @@ The `repository` profile checks documentation, pipeline selection, Python format
 
 `IPP_EGL_LIBRARY_DIR` or `--egl-dir` selects actual EGL/GLES libraries. `NODE_BIN`, `BLENDER_BIN` and the invoking Python interpreter select executables; the executor passes the same selections to child harnesses. A Blender release installed through setup is resolved from `target/tools`. The browser inherits its configured environment; use the [Blender/browser environment guide](blender.md) on hosts with private library wrappers.
 
-[CI](../../.github/workflows/validate.yml) invokes named profiles through this CLI. Pipeline tests validate those invocations against the current catalog. CI retains run reports and integration artifacts. Local validation does not claim that hosted jobs ran. Extend the maintained real native WebSocket, browser worker/WASM/WebGL and GLES scenarios when changing participating behavior; keep scenario intent separate from process setup.
+The [Pages workflow](../../.github/workflows/gallery-pages.yml) invokes the gallery suite through this CLI. Pipeline tests validate its commands against the current catalog. The repository, native and integration regression profiles remain available for local use; routine pushes do not run them as separate GitHub Actions jobs. Local validation does not claim that hosted jobs ran. Extend the maintained real native WebSocket, browser worker/WASM/WebGL and GLES scenarios when changing participating behavior; keep scenario intent separate from process setup.
 
 ## Release and size experiments
 

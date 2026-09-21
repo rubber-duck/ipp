@@ -1458,6 +1458,57 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const mountedRoot = (await waitForGui()).semantic;
       const mountedScan = waveformAnimation(await g.inspect());
       const mountedWavePulse = waveformAnimation(await g.inspect(), true);
+      const fullSceneFrame = await g.capture("gui-demo-full-before-isolation");
+      const vectorButton = g.page.locator("#gui-vector-only");
+      assert.equal(await vectorButton.getAttribute("aria-pressed"), "false");
+      await vectorButton.click();
+      const isolated = await g.waitFor(
+        (inspection) =>
+          !inspection.entities.some(({ metadata }) =>
+            metadata.symbolicId?.startsWith("gui-projector-"),
+          ),
+      );
+      assert.equal(await vectorButton.getAttribute("aria-pressed"), "true");
+      assert.deepEqual(
+        isolated.entities.map(({ metadata }) => metadata.symbolicId).sort(),
+        ["gallery-camera", "gui-demo"],
+      );
+      assert.ok(
+        !isolated.controllers?.some(({ id }) => id === dustController.id),
+        "vector isolation retained the projector dust controller",
+      );
+      const isolatedGui = await waitForGui();
+      assertRetainedGuiNodes(mountedRoot, isolatedGui.semantic);
+      const vectorFrame = await g.capture("gui-demo-vector-only");
+      assert.ok(
+        vectorFrame.frame.drawCalls > 0,
+        "vector panel stopped drawing",
+      );
+      assert.ok(
+        vectorFrame.frame.drawCalls < fullSceneFrame.frame.drawCalls,
+        "removing the projector did not reduce draw calls",
+      );
+      assert.ok(
+        (
+          await g.difference(
+            "gui-demo-full-before-isolation",
+            "gui-demo-vector-only",
+          )
+        ).changedPixels > 100,
+        "vector isolation did not visibly remove the projector",
+      );
+      await vectorButton.click();
+      await g.waitFor((inspection) =>
+        inspection.entities.some(
+          ({ metadata }) => metadata.symbolicId === "gui-projector-beam",
+        ),
+      );
+      assert.equal(await vectorButton.getAttribute("aria-pressed"), "false");
+      const restoredFrame = await g.capture("gui-demo-projector-restored");
+      assert.ok(
+        restoredFrame.frame.drawCalls > vectorFrame.frame.drawCalls,
+        "restoring the projector did not restore its draws",
+      );
       await g.navigate("shapes");
       const cleaned = await g.waitFor(
         (inspection) =>
@@ -1489,6 +1540,10 @@ test("Gallery runs a real GUI demo and cleans it up", {
 
       await g.navigate("gui");
       const returned = await waitForGui();
+      assert.equal(
+        await g.page.locator("#gui-vector-only").getAttribute("aria-pressed"),
+        "false",
+      );
       assert.notEqual(returned.semantic.entity, mountedEntity.id);
       assert.notEqual(
         returned.semantic.rootIncarnation,

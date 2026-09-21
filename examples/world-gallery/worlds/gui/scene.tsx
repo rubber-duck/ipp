@@ -82,6 +82,7 @@ interface MotionOwnership {
 
 export interface GuiSceneState {
   readonly ready: boolean;
+  readonly vectorOnly: boolean;
   readonly prepared: boolean;
   readonly revealed: boolean;
   readonly error?: string;
@@ -99,6 +100,7 @@ export interface GuiSceneState {
   readonly onCommit: () => void;
   readonly pulse: () => void;
   readonly selectSkin: (skin: GuiDemoSkin) => void;
+  readonly toggleVectorOnly: () => void;
   readonly setAutoscan: (value: boolean) => void;
   readonly setGain: (value: number) => void;
   readonly setCallsign: (value: string) => void;
@@ -402,6 +404,7 @@ export function useGuiScene(
   active: boolean,
 ): GuiSceneState {
   const [ready, setReady] = useState(false);
+  const [vectorOnly, setVectorOnly] = useState(false);
   const [prepared, setPrepared] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [treeCommitted, setTreeCommitted] = useState(false);
@@ -441,6 +444,7 @@ export function useGuiScene(
   useEffect(() => {
     const request = ++generation.current;
     setReady(false);
+    setVectorOnly(false);
     setPrepared(false);
     setRevealed(false);
     setTreeCommitted(false);
@@ -627,6 +631,9 @@ export function useGuiScene(
     setLastCommand("Pulse sent");
     record("PULSE BURST COMMITTED");
   }, [record]);
+  const toggleVectorOnly = useCallback(() => {
+    setVectorOnly((current) => !current);
+  }, []);
   const selectSkin = useCallback(
     (next: GuiDemoSkin) => {
       setSkin(next);
@@ -661,6 +668,7 @@ export function useGuiScene(
 
   return {
     ready,
+    vectorOnly,
     prepared,
     revealed,
     ...(error ? { error } : {}),
@@ -677,6 +685,7 @@ export function useGuiScene(
     font: absoluteAsset(17, FONT_URL),
     onCommit,
     pulse,
+    toggleVectorOnly,
     selectSkin,
     setAutoscan,
     setGain,
@@ -728,7 +737,9 @@ export function GuiWorld({ scene }: { scene: GuiSceneState }) {
         <VertexShader requiredAttributes={2}>{BEAM_VERTEX_SHADER}</VertexShader>
         <FragmentShader requiredAttributes={2}>{BEAM_SHADER}</FragmentShader>
       </ShaderAsset>
-      <HolographicProjector scene={scene} stagingX={stagingX} />
+      {!scene.vectorOnly && (
+        <HolographicProjector scene={scene} stagingX={stagingX} />
+      )}
       <ProjectorPanel scene={scene} stagingX={stagingX} />
     </World>
   );

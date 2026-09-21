@@ -13,6 +13,20 @@ export function GuiControls({ scene }: GuiControlsProps) {
         panel. Drag or zoom outside the panel to inspect the demo from another
         angle. Reset camera restores the original view.
       </p>
+      <button
+        id="gui-vector-only"
+        className="secondary-button"
+        type="button"
+        disabled={!scene.ready}
+        aria-pressed={scene.vectorOnly}
+        onClick={scene.toggleVectorOnly}
+      >
+        {scene.vectorOnly ? "Restore full scene" : "Show vector panel only"}
+      </button>
+      <p>
+        Compare the FPS readout at the same camera angle. Vector panel only
+        leaves the GUI Surface and camera mounted.
+      </p>
       <dl className="selection-summary">
         <div>
           <dt>Skin</dt>

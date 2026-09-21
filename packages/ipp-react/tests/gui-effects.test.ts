@@ -24,6 +24,7 @@ import type {
 import { ENTITY_HOST_TYPE } from "../src/components.js";
 import type { ReactWorldClient } from "../src/contract.js";
 import { GuiCommits } from "../src/gui/commits.js";
+import { TestGuiCommits } from "./gui-test-commits.js";
 import {
   Button,
   Checkbox,
@@ -889,6 +890,10 @@ interface WiredControls {
   checkboxId: number;
   emit(batch: GuiObservationBatch): GuiObservationSummary;
   removeButton(): Promise<void>;
+  captureButton(callback: () => void): void;
+  replayOlderSnapshot(): Promise<void>;
+  captureRemovedRoot(): void;
+  buttonRef: { current: GuiNodeHandle | null };
 }
 
 /** Mount a real column holding a real button and checkbox, then acknowledge
@@ -902,7 +907,7 @@ async function wiredControls(): Promise<WiredControls> {
   const cancelled: unknown[] = [];
   const unhandled: unknown[] = [];
   const errors: Error[] = [];
-  const commits = new GuiCommits(producer.client(), {
+  const commits = new TestGuiCommits(producer.client(), {
     checkSession: () => {},
     report: (error: unknown) =>
       error instanceof Error ? error : new Error(String(error)),
@@ -990,6 +995,14 @@ async function wiredControls(): Promise<WiredControls> {
         onError: (error) => void errors.push(error),
       }),
     removeButton,
+    captureButton: (callback) => {
+      buttonNode.props = { ...buttonNode.props, onPress: callback };
+      commits.reconcileLocal(tree.describe().gui);
+    },
+    replayOlderSnapshot: () =>
+      GuiCommits.prototype.apply.call(commits, [decl], resolveEntity),
+    captureRemovedRoot: () => commits.reconcileLocal([]),
+    buttonRef,
   };
 }
 
@@ -1099,6 +1112,29 @@ test("GuiCommits keeps delayed callbacks until diff removals tear them down", as
   );
   assert.equal(wired.errors.length, 1);
   assert.match(wired.errors[0]!.message, /Stale GUI control effect/);
+});
+
+test("older acknowledged GUI work cannot restore superseded callbacks or refs", async () => {
+  const wired = await wiredControls();
+  let latestPresses = 0;
+  wired.captureButton(() => {
+    latestPresses += 1;
+  });
+  await wired.replayOlderSnapshot();
+  wired.emit(
+    pressBatch(wired, wired.buttonId, [wired.columnId, wired.buttonId]),
+  );
+  assert.equal(latestPresses, 1);
+  assert.equal(wired.presses.length, 0);
+
+  wired.captureRemovedRoot();
+  assert.equal(wired.buttonRef.current, null);
+  await wired.replayOlderSnapshot();
+  wired.emit(
+    pressBatch(wired, wired.buttonId, [wired.columnId, wired.buttonId]),
+  );
+  assert.equal(latestPresses, 1);
+  assert.equal(wired.buttonRef.current, null);
 });
 
 test("GuiCommits tears subscriptions down on diff removals", async () => {

@@ -266,6 +266,7 @@ test("themes compile to runtime named parts without resolving interaction", () =
   });
   assert.deepEqual(GUI_THEME_PARTS, [
     "background",
+    "fill",
     "label",
     "icon",
     "focusRing",

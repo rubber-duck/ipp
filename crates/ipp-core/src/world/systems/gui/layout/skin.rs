@@ -340,6 +340,7 @@ pub fn resolve_state_part_style(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ControlVisualSources {
     background: bool,
+    fill: bool,
     icon: bool,
     plain_icon: bool,
 }
@@ -390,6 +391,9 @@ fn control_visual_sources(root: &GuiRoot, node: GuiNodeId) -> ControlVisualSourc
         };
         if visual_candidate(candidate, GuiPrimitivePart::Background.as_str()).is_some() {
             sources.background = true;
+        }
+        if visual_candidate(candidate, GuiPrimitivePart::Fill.as_str()).is_some() {
+            sources.fill = true;
         }
         if let Some(plain) = visual_candidate(candidate, GuiPrimitivePart::Icon.as_str()) {
             sources.icon = true;
@@ -680,7 +684,11 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
             SyntheticControlPlan::default()
         };
         if eligible {
-            for part in [GuiPrimitivePart::Background, GuiPrimitivePart::Icon] {
+            for part in [
+                GuiPrimitivePart::Background,
+                GuiPrimitivePart::Fill,
+                GuiPrimitivePart::Icon,
+            ] {
                 if node_primitives
                     .iter()
                     .any(|primitive| primitive_gui_id(primitive).is_some_and(|id| id.part == part))
@@ -693,6 +701,8 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
                         .position(|primitive| {
                             primitive_gui_id(primitive).is_some_and(|id| {
                                 part == GuiPrimitivePart::Background
+                                    || (part == GuiPrimitivePart::Fill
+                                        && id.part == GuiPrimitivePart::Icon)
                                     || id.part == GuiPrimitivePart::Label
                             })
                         })
@@ -776,9 +786,11 @@ pub(crate) fn skinned_parts_for_view<'a>(
         let interaction = cursors.interaction_for(target, node.enabled);
         let synthesis = synthetic_control_plan(view, root, node, &interaction);
         let mut has_background = false;
+        let mut has_fill = false;
         let mut has_icon = false;
         for part in entry.parts.into_iter().flatten() {
             has_background |= part == GuiPrimitivePart::Background;
+            has_fill |= part == GuiPrimitivePart::Fill;
             has_icon |= part == GuiPrimitivePart::Icon;
             parts.push(GuiSkinnedPart {
                 id: GuiPrimitiveId {
@@ -790,9 +802,14 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 node,
             });
         }
-        for part in [GuiPrimitivePart::Background, GuiPrimitivePart::Icon] {
+        for part in [
+            GuiPrimitivePart::Background,
+            GuiPrimitivePart::Fill,
+            GuiPrimitivePart::Icon,
+        ] {
             let present = match part {
                 GuiPrimitivePart::Background => has_background,
+                GuiPrimitivePart::Fill => has_fill,
                 GuiPrimitivePart::Icon => has_icon,
                 GuiPrimitivePart::Label | GuiPrimitivePart::FocusRing => false,
             };
@@ -826,6 +843,7 @@ pub(crate) fn skinned_parts_for_view<'a>(
 #[derive(Default)]
 struct SyntheticControlPlan {
     background: Option<SyntheticControlPart>,
+    fill: Option<SyntheticControlPart>,
     icon: Option<SyntheticControlPart>,
 }
 
@@ -833,6 +851,7 @@ impl SyntheticControlPlan {
     fn part(&self, part: GuiPrimitivePart) -> Option<&SyntheticControlPart> {
         match part {
             GuiPrimitivePart::Background => self.background.as_ref(),
+            GuiPrimitivePart::Fill => self.fill.as_ref(),
             GuiPrimitivePart::Icon => self.icon.as_ref(),
             GuiPrimitivePart::Label | GuiPrimitivePart::FocusRing => None,
         }
@@ -877,6 +896,14 @@ fn synthetic_control_plan(
             node,
             interaction,
             GuiPrimitivePart::Background,
+            sources,
+        ),
+        fill: synthetic_control_part(
+            view,
+            root,
+            node,
+            interaction,
+            GuiPrimitivePart::Fill,
             sources,
         ),
         icon: synthetic_control_part(
@@ -976,6 +1003,20 @@ fn synthetic_control_part(
                 node.opacity,
                 edge * 0.12 / units,
             )
+        }
+        (
+            GuiEvaluatedContent::Slider {
+                ..
+            },
+            GuiPrimitivePart::Fill,
+        ) if sources.fill => {
+            let ratio = match variant_for_content(&node.content) {
+                GuiControlVariant::Slider01(Some(value)) => value,
+                _ => 0.0,
+            };
+            let height = node.rect[3] * SLIDER_TRACK_HEIGHT;
+            let logical = super::super::slider_rail(node.rect)?.fill_rect(ratio, height)?;
+            (logical, node.color, node.opacity, height * 0.5 / units)
         }
         (
             GuiEvaluatedContent::Slider {

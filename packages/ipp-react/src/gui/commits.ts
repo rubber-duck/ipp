@@ -168,7 +168,6 @@ export class GuiCommits {
   /** Release every acknowledged root before forgetting its handles. Failed
    * phases remain pending and a later reset, apply or dispose retries them. */
   async reset(): Promise<void> {
-    this.localRoots.clear();
     for (const [identity, state] of [...this.states])
       this.stageCleanup(identity, state);
     await this.retryPendingCleanup();
@@ -189,10 +188,19 @@ export class GuiCommits {
     root: GuiDescribedRoot,
     identity: number,
   ): void {
-    root = this.localRoots.get(root.identity) ?? root;
     const ack = state.acked.get(identity);
-    const node = root.nodes.find((entry) => entry.identity === identity);
-    if (!ack || !node) return;
+    const node = this.localRoots
+      .get(root.identity)
+      ?.nodes.find((entry) => entry.identity === identity);
+    if (!ack) return;
+    if (!node) {
+      this.subscriptions.unsubscribe(
+        state.entity,
+        state.incarnation,
+        ack.nodeId,
+      );
+      return;
+    }
     const callbacks = retainedNodeCallbacks(node);
     this.subscriptions.subscribe(state.entity, state.incarnation, ack.nodeId, {
       lifetime: ack.lifetime,
@@ -296,7 +304,6 @@ export class GuiCommits {
     roots: readonly GuiDescribedRoot[],
     resolveEntity: (identity: number) => bigint | undefined,
   ): Promise<void> {
-    this.reconcileLocal(roots);
     const desiredEntities = new Map(
       roots.map((root) => [root.identity, resolveEntity(root.entity)]),
     );
@@ -335,7 +342,16 @@ export class GuiCommits {
     this.localRoots = new Map(roots.map((root) => [root.identity, root]));
     for (const [identity, state] of this.states) {
       const root = this.localRoots.get(identity);
-      if (!root) continue;
+      if (!root) {
+        this.nullRefs(state);
+        for (const ack of state.acked.values())
+          this.subscriptions.unsubscribe(
+            state.entity,
+            state.incarnation,
+            ack.nodeId,
+          );
+        continue;
+      }
       for (const nodeIdentity of state.acked.keys()) {
         this.observeNode(state, root, nodeIdentity);
       }
@@ -855,7 +871,12 @@ export class GuiCommits {
   }
 
   private syncRefs(root: GuiDescribedRoot, state: GuiRootState): void {
-    root = this.localRoots.get(root.identity) ?? root;
+    const current = this.localRoots.get(root.identity);
+    if (!current) {
+      this.nullRefs(state);
+      return;
+    }
+    root = current;
     const next = new Map<number, GuiNodeRef>();
     const bind = (
       key: number,

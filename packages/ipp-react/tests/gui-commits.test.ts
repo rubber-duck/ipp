@@ -20,7 +20,8 @@ import type {
   GuiDescribedNode,
   GuiDescribedRoot,
 } from "../src/gui/description.js";
-import { GuiCommits } from "../src/gui/commits.js";
+import type { GuiCommits } from "../src/gui/commits.js";
+import { TestGuiCommits } from "./gui-test-commits.js";
 import type { GuiControlTheme } from "../src/gui/theme.js";
 import {
   GUI_CHECKBOX_HOST_TYPE,
@@ -285,7 +286,7 @@ class FakeGuiRuntime {
   }
 
   commits(): GuiCommits {
-    return new GuiCommits(this.client(), {
+    return new TestGuiCommits(this.client(), {
       checkSession: () => {},
       report: (error: unknown) =>
         error instanceof Error ? error : new Error(String(error)),

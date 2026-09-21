@@ -20,6 +20,14 @@ export class CanvasWorldSession implements IppCanvasHandle {
   readonly closed: Promise<void>;
   private readonly worlds = new Set<CanvasWorldBinding>();
   private tail: Promise<void> = Promise.resolve();
+  private pendingRender:
+    | {
+        binding: CanvasWorldBinding;
+        children: ReactNode;
+        onCommit: (() => void) | undefined;
+        result: Promise<void>;
+      }
+    | undefined;
   private closing = false;
   private readonly closingListeners = new Set<() => void>();
 
@@ -61,7 +69,10 @@ export class CanvasWorldSession implements IppCanvasHandle {
     const binding = this.attach(this.report);
     return {
       ...binding.root,
-      render: (element) => this.enqueue(() => binding.root.render(element)),
+      render: (element) =>
+        binding.isClosing
+          ? Promise.reject(new Error("The React root is unmounted"))
+          : binding.render(element),
       flush: () => this.enqueue(() => binding.root.flush()),
       unmount: () => binding.close(),
     };
@@ -75,10 +86,43 @@ export class CanvasWorldSession implements IppCanvasHandle {
   }
 
   enqueue(work: () => Promise<void>): Promise<void> {
+    this.pendingRender = undefined;
+    return this.enqueueOrdered(work);
+  }
+
+  private enqueueOrdered(work: () => Promise<void>): Promise<void> {
     const next = this.tail.catch(() => {}).then(work);
     this.tail = next;
     void next.catch(() => {});
     return next;
+  }
+
+  enqueueRender(
+    binding: CanvasWorldBinding,
+    children: ReactNode,
+    onCommit: (() => void) | undefined,
+    report: (error: Error) => void,
+  ): Promise<void> {
+    if (this.pendingRender?.binding === binding) {
+      this.pendingRender.children = children;
+      this.pendingRender.onCommit = onCommit;
+      return this.pendingRender.result;
+    }
+    const pending = {
+      binding,
+      children,
+      onCommit,
+      result: Promise.resolve(),
+    };
+    const result = this.enqueueOrdered(async () => {
+      if (this.pendingRender === pending) this.pendingRender = undefined;
+      if (binding.isClosing) return;
+      await binding.root.render(pending.children);
+      if (!binding.isClosing) notify(() => pending.onCommit?.(), report);
+    });
+    pending.result = result;
+    this.pendingRender = pending;
+    return result;
   }
 
   release(world: CanvasWorldBinding): void {
@@ -87,6 +131,7 @@ export class CanvasWorldSession implements IppCanvasHandle {
 
   async flush(): Promise<void> {
     if (this.closing) throw new Error("The IPP canvas is closing");
+    this.pendingRender = undefined;
     for (;;) {
       const pending = this.tail;
       await pending;
@@ -144,20 +189,23 @@ export class CanvasWorldBinding {
     this.root = createRoot(session.client, { onError: report });
   }
 
-  render(children: ReactNode, onCommit?: () => void): void {
+  get isClosing(): boolean {
+    return this.closing !== undefined;
+  }
+
+  render(children: ReactNode, onCommit?: () => void): Promise<void> {
     // Defer custom reconciliation until React DOM has left its commit phase.
     // The shared queue also orders a departing scope before its replacement.
-    void this.session
-      .enqueue(async () => {
-        if (this.closing) return;
-        await this.root.render(children);
-        if (!this.closing) {
-          notify(() => onCommit?.(), this.report);
-        }
-      })
-      .catch(() => {
-        // The root's onError already reports rejected/invalid declarations.
-      });
+    const result = this.session.enqueueRender(
+      this,
+      children,
+      onCommit,
+      this.report,
+    );
+    void result.catch(() => {
+      // The root's onError already reports rejected/invalid declarations.
+    });
+    return result;
   }
 
   flush(): Promise<void> {

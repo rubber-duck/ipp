@@ -123,6 +123,8 @@ pub enum SurfacePrimitiveIdentity {
 pub enum GuiPrimitivePart {
     /// Resizable node background.
     Background,
+    /// Slider value fill, drawn between the track and thumb.
+    Fill,
     /// Text or control label.
     Label,
     /// Drawing or bitmap icon/content.
@@ -137,6 +139,7 @@ impl GuiPrimitivePart {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Background => "background",
+            Self::Fill => "fill",
             Self::Label => "label",
             Self::Icon => "icon",
             Self::FocusRing => "focusRing",

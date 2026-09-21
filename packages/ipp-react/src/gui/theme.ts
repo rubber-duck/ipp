@@ -13,6 +13,7 @@ import {
 
 export const GUI_THEME_PARTS = [
   "background",
+  "fill",
   "label",
   "icon",
   "focusRing",

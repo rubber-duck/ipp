@@ -28,6 +28,19 @@ pub(crate) struct GuiSliderRail {
 }
 
 impl GuiSliderRail {
+    /// Filled track from the first thumb center to the committed center.
+    pub(crate) fn fill_rect(self, fraction: f32, height: f32) -> Option<[f32; 4]> {
+        if !fraction.is_finite() || !height.is_finite() || height <= 0.0 {
+            return None;
+        }
+        Some([
+            self.center_min,
+            self.top + (self.height - height) * 0.5,
+            fraction.clamp(0.0, 1.0) * (self.center_max - self.center_min),
+            height,
+        ])
+    }
+
     /// Painted thumb rectangle for a normalized committed value.
     pub(crate) fn thumb_rect(self, fraction: f32) -> Option<[f32; 4]> {
         if !fraction.is_finite() {

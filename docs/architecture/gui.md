@@ -42,7 +42,7 @@ Text measurement and rendering share immutable font metrics and original glyph i
 
 Committed text is distinct from provisional composition. The platform adapter owns native focus, clipboard, IME, candidate placement and trusted-gesture soft-keyboard access; its temporary native buffer synchronizes through revision- and focus-fenced edits. Platform failure does not transfer text authority to the DOM or imply a successful edit.
 
-Skins declare stable named parts and ordinary immutable curve/font/bitmap/animation references. Resolve disabled over pressed over hovered over idle, with checked/value variants and a separate focus channel. Each property group has one resolved animation owner; overlapping skin channels do not compete to write the same property. Existing AnimationSystem transitions supply interruption continuity. Ready skin replacement preserves node identity, focus and values; pending replacements retain usable prior appearance.
+Skins declare stable named parts and ordinary immutable curve/font/bitmap/animation references. Slider fill and thumb follow the same committed value and rail geometry within the runtime. Resolve disabled over pressed over hovered over idle, with checked/value variants and a separate focus channel. Each property group has one resolved animation owner; overlapping skin channels do not compete to write the same property. Existing AnimationSystem transitions supply interruption continuity. Ready skin replacement preserves node identity, focus and values; pending replacements retain usable prior appearance.
 
 ## Client and persistence boundaries
 

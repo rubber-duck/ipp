@@ -222,6 +222,9 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
         background: {
           base: { color: palette.muted, asset: drawing("slider-track") },
         },
+        fill: {
+          base: { color: palette.secondary, asset: drawing("slider-fill") },
+        },
         icon: {
           base: { color: palette.primary, asset: drawing("slider-thumb") },
           hovered: { color: palette.hovered, scale: [1.12, 1.12] },
@@ -245,15 +248,6 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
             color={palette.primary}
           />
           <Stack width={5.1} height={0.36}>
-            <Padding width={5.1} height={0.36} padding={[0.142, 0, 0, 0.045]}>
-              <Artwork
-                width={0.09 + 4.83 * scene.gain}
-                height={0.076}
-                asset={drawing("slider-fill")}
-                color={palette.secondary}
-                enabled={false}
-              />
-            </Padding>
             <Slider
               key="signal-gain"
               width={5.1}

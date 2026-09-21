@@ -29,9 +29,11 @@ import type {
   BatchOutcome,
   ClientAssetSource,
   Command,
+  Client,
   StateOverlayLifecycleDiagnostic,
   StateOverlayAlias,
 } from "@ipp/client";
+import { CanvasWorldSession } from "../src/canvas-world-session.js";
 import {
   ReactWorldBatchRejectedError,
   Animation,
@@ -423,11 +425,14 @@ test("the same JSX resolves against each receiving root's contract and owner", a
   await settle(second, secondRoot.unmount());
 });
 
-test("actual React commits queue behind acknowledged handles and clear target offsets", async () => {
+test("rapid React commits retain the submitted render and coalesce pending descriptions", async () => {
   const client = new DeliveryBoundary();
   const root = createRoot(client);
   const first = root.render(world(3));
-  const second = root.render(world(5));
+  await turn();
+  const superseded = Array.from({ length: 100 }, (_, index) =>
+    root.render(world(index + 5)),
+  );
   const third = root.render(world());
   await turn();
   assert.equal(client.calls.length, 1);
@@ -449,26 +454,60 @@ test("actual React commits queue behind acknowledged handles and clear target of
       kind: "updateComponentStateOverlay",
       owner: { kind: "handle", id: 100n },
       overlay: { kind: "handle", id: 102n },
-      fields: [{ offset: 12, value: { kind: "f32", value: 5 } }],
-      clear: [],
-    },
-  ]);
-  client.acknowledge();
-  await second;
-  await turn();
-  assert.deepEqual(client.calls[2], [
-    {
-      kind: "updateComponentStateOverlay",
-      owner: { kind: "handle", id: 100n },
-      overlay: { kind: "handle", id: 102n },
       fields: [],
       clear: [12],
     },
   ]);
   client.acknowledge();
+  await Promise.all(superseded);
   await third;
+  assert.equal(client.calls.length, 2);
   await settle(client, root.unmount());
   assert.equal(client.listeners.size, 0);
+});
+
+test("canvas render slots keep explicit queue boundaries and replace later pending work", async () => {
+  const client = new DeliveryBoundary();
+  const session = new CanvasWorldSession(
+    client as unknown as Client,
+    () => {},
+    () => ({ width: 240, height: 180 }),
+  );
+  const root = session.createRoot();
+  const first = root.render(world(1));
+  await turn();
+  const beforeBarrier = root.render(world(2));
+  let barrierRan = false;
+  const barrier = session.enqueue(async () => {
+    barrierRan = true;
+  });
+  const afterBarrier = root.render(world(3));
+  const latest = root.render(world(4));
+  assert.equal(afterBarrier, latest);
+  assert.equal(client.calls.length, 1);
+  client.acknowledge();
+  await first;
+  await turn();
+  const newest = root.render(world(5));
+  assert.equal(newest, latest);
+  assert.equal(client.calls.length, 2);
+  assert.equal(barrierRan, false);
+  client.acknowledge();
+  await beforeBarrier;
+  await barrier;
+  assert.equal(barrierRan, true);
+  await turn();
+  assert.equal(client.calls.length, 3);
+  assert.deepEqual(client.calls[2]?.[0], {
+    kind: "updateComponentStateOverlay",
+    owner: { kind: "handle", id: 100n },
+    overlay: { kind: "handle", id: 102n },
+    fields: [{ offset: 12, value: { kind: "f32", value: 5 } }],
+    clear: [],
+  });
+  client.acknowledge();
+  await latest;
+  await settle(client, root.unmount());
 });
 
 test("rejected commit permits a corrected queued tree to rebuild", async () => {
@@ -481,6 +520,7 @@ test("rejected commit permits a corrected queued tree to rebuild", async () => {
   });
   const rejected = root.render(world(2, "scalar", true));
   const rejection = assert.rejects(rejected, ReactWorldBatchRejectedError);
+  await turn();
   const corrected = root.render(world(4));
   await turn();
   client.reject();
@@ -502,6 +542,7 @@ test("pending unmount awaits attachment then owner cleanup exactly once", async 
   const client = new DeliveryBoundary();
   const root = createRoot(client);
   const mounted = root.render(world(7));
+  await turn();
   const unmounted = root.unmount();
   assert.equal(root.unmount(), unmounted);
   await turn();
@@ -699,6 +740,7 @@ test("unmount following a rejected initial attachment creates no owner cleanup",
   const root = createRoot(client, { onError: () => {} });
   const mounted = root.render(world(1));
   const rejected = assert.rejects(mounted, ReactWorldBatchRejectedError);
+  await turn();
   const unmounted = root.unmount();
   await turn();
   client.reject();
@@ -909,6 +951,7 @@ test("world declarations retain typed target fields through acknowledgement, spa
       createElement(MeshInstance, { source, variant, bound: false }),
     );
   const first = root.render(mesh("https://example.test/é.ippm", 3));
+  await turn();
   const second = root.render(mesh("ipp://mesh/cube?width=1&height=1&length=1"));
   await turn();
   assert.equal(client.calls.length, 1);

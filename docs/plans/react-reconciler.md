@@ -18,7 +18,7 @@ Extend real worker/WASM/WebGL React scenarios with partial acknowledgement, Stri
 
 ## Commit and acknowledgement handling
 
-Track desired declarations, submitted work and acknowledged ownership separately. Retain enough state to clean up accepted work after unmount or partial failure; corrected renders must reconcile from actual applied identities. Fence callbacks and delayed completions by declaration and session. Verify current reconnection support before extending it; fresh sessions require fresh runtime handles.
+Track desired declarations, submitted work and acknowledged ownership separately. Replace superseded unsent render descriptions within one pending scheduler position; promises for those renders settle with the description actually applied at that position. Keep imperative commands, resource readiness, validation failure and teardown as ordered boundaries, and retain enough state to clean up accepted work after unmount or partial failure. Corrected renders reconcile from actual applied identities. Fence callbacks and delayed completions by declaration and session. Verify current reconnection support before extending it; fresh sessions require fresh runtime handles.
 
 ## Integration harness
 

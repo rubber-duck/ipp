@@ -1,5 +1,6 @@
 /** Mounted browser GUI fixture: React DOM -> IppCanvas -> generated worker client. */
 import { useCallback, useState, type ReactElement } from "react";
+import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   CameraWorldClient,
@@ -48,6 +49,7 @@ const controlTheme: GuiControlTheme = {
       hovered: { color: [0.14, 0.32, 0.7, 1] },
       pressed: { color: [0.04, 0.1, 0.28, 1] },
     },
+    fill: { base: { color: [0.15, 0.9, 0.55, 1] } },
     label: { base: { color: [0.96, 0.98, 1, 1] } },
     focusRing: { base: { color: [1, 0.72, 0.08, 1], opacity: 1 } },
   },
@@ -84,6 +86,81 @@ let errors: string[] = [];
 let cameraReady = false;
 let observationTrace: string[] = [];
 let renderedRevision = 0;
+let setCommitRevision: ((value: number) => void) | undefined;
+let releaseCommitReply: (() => void) | undefined;
+let heldCommitStarted: Promise<void> | undefined;
+let heldCommitBatches = 0;
+let restoreBatch: (() => void) | undefined;
+
+/** Hold one real, already-applied React batch reply while runtime input continues. */
+export function holdReactCommitReply(): void {
+  const current = handle;
+  if (!current || restoreBatch)
+    throw new Error("GUI commit gate is unavailable");
+  const client = current.client;
+  const original = client.batch.bind(client);
+  let started!: () => void;
+  heldCommitStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    releaseCommitReply = resolve;
+  });
+  heldCommitBatches = 0;
+  let held = false;
+  client.batch = async (...args) => {
+    const operations = args[0];
+    const relevant = operations.some(
+      (operation) => operation.kind === "updateComponentStateOverlay",
+    );
+    if (relevant) heldCommitBatches += 1;
+    const outcome = await original(...args);
+    if (relevant && !held) {
+      held = true;
+      started();
+      await released;
+    }
+    return outcome;
+  };
+  restoreBatch = () => {
+    client.batch = original;
+    restoreBatch = undefined;
+  };
+}
+
+export function renderCommitRevision(value: number): void {
+  if (!setCommitRevision) throw new Error("GUI commit fixture is not mounted");
+  flushSync(() => setCommitRevision!(value));
+}
+
+export async function waitForHeldReactCommit(): Promise<void> {
+  if (!heldCommitStarted) throw new Error("GUI commit gate is not armed");
+  await heldCommitStarted;
+}
+
+export async function releaseHeldReactCommit(): Promise<number> {
+  const current = handle;
+  if (!current || !releaseCommitReply)
+    throw new Error("GUI commit gate is not armed");
+  releaseCommitReply();
+  try {
+    await current.flush();
+    return heldCommitBatches;
+  } finally {
+    restoreBatch?.();
+    releaseCommitReply = undefined;
+    heldCommitStarted = undefined;
+  }
+}
+
+export async function committedRevision(): Promise<unknown> {
+  const current = handle;
+  if (!current) throw new Error("GUI commit fixture is not mounted");
+  const entity = (await current.client.inspect()).entities.find(
+    (entry) => entry.metadata.symbolicId === "mounted-gui-commit-revision",
+  );
+  return entity?.effective.find((entry) => "x" in entry.fields)?.fields.x;
+}
 
 function iconSource() {
   return {
@@ -147,6 +224,8 @@ function Application({
   readonly runtime: CanvasRuntimeConfiguration;
 }): ReactElement {
   const [renderRevision, setRenderRevision] = useState(0);
+  const [commitRevision, updateCommitRevision] = useState(0);
+  setCommitRevision = updateCommitRevision;
   renderedRevision = renderRevision;
   rerenderEquivalent = () => setRenderRevision((value) => value + 1);
   const ready = useCallback((next: IppCanvasHandle) => {
@@ -194,6 +273,9 @@ function Application({
         <Entity id="mounted-gui-camera">
           <Transform z={6} />
           <Camera projection={1} ortho_height={3} />
+        </Entity>
+        <Entity id="mounted-gui-commit-revision">
+          <Transform x={commitRevision} />
         </Entity>
         <Entity id="mounted-gui-panel">
           <Transform />
@@ -350,7 +432,7 @@ function averageRgb(
   ];
 }
 
-export async function controlPaintObservation(): Promise<{
+export async function controlPaintObservation(flush = true): Promise<{
   readonly checked: boolean;
   readonly slider: number;
   readonly drawCalls: number;
@@ -359,14 +441,15 @@ export async function controlPaintObservation(): Promise<{
   readonly checkboxOutsideIndicator: readonly [number, number, number];
   readonly sliderInitialThumb: readonly [number, number, number];
   readonly sliderMovedThumb: readonly [number, number, number];
+  readonly sliderFill: readonly [number, number, number];
 }> {
   const current = handle;
   const checkbox = checkboxRef.current;
   const slider = sliderRef.current;
   if (current === undefined || checkbox === null || slider === null)
     throw new Error("GUI control paint fixture is not ready");
-  await current.flush();
-  const [checkboxInspection, sliderInspection, frame] = await Promise.all([
+  if (flush) await current.flush();
+  const [checkboxInspection, sliderInspection] = await Promise.all([
     (current.client as GuiWorldClient).inspectGui({
       entity: checkbox.entity,
       nodeId: checkbox.nodeId,
@@ -377,8 +460,12 @@ export async function controlPaintObservation(): Promise<{
       nodeId: slider.nodeId,
       maxDepth: 1,
     }),
-    current.capture(),
   ]);
+  const frame = flush
+    ? await current.capture()
+    : await current.client.presentation!.capture(
+        (await current.client.inspectPage()).tick,
+      );
   const checked = checkboxInspection.nodes[0]?.controlValue;
   const scalar = sliderInspection.nodes[0]?.controlValue;
   if (checked?.kind !== "bool" || scalar?.kind !== "scalar")
@@ -402,6 +489,7 @@ export async function controlPaintObservation(): Promise<{
     ),
     sliderInitialThumb: averageRgb(pixels, frame.width, frame.height, 139, 90),
     sliderMovedThumb: averageRgb(pixels, frame.width, frame.height, 216, 90),
+    sliderFill: averageRgb(pixels, frame.width, frame.height, 184, 90),
   };
 }
 
@@ -550,6 +638,11 @@ export async function closeGuiCanvas(): Promise<{
   readonly canvasCount: number;
   readonly editorCount: number;
 }> {
+  releaseCommitReply?.();
+  restoreBatch?.();
+  releaseCommitReply = undefined;
+  heldCommitStarted = undefined;
+  setCommitRevision = undefined;
   unsubscribe?.();
   unsubscribe = undefined;
   const closing = handle;

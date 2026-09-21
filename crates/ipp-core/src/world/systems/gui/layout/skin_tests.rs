@@ -1081,6 +1081,57 @@ fn slider_thumb_tracks_committed_ratio_without_changing_identity() {
 }
 
 #[test]
+fn slider_fill_uses_committed_value_and_stable_skin_identity() {
+    let mut root = GuiRoot::default();
+    set_part_color(&mut root, 1, "background", [0.1, 0.2, 0.7, 1.0]);
+    set_part_color(&mut root, 1, "fill", [0.2, 0.9, 0.8, 1.0]);
+    let paint = |value| {
+        let mut node = evaluated_node(
+            1,
+            GuiEvaluatedContent::Slider {
+                value,
+                min: 0.0,
+                max: 10.0,
+                step: 0.0,
+                revision: 3,
+            },
+        );
+        node.background = None;
+        skinned_primitives_for_view(
+            &test_view(vec![node]),
+            &root,
+            &GuiSkinCursors::default(),
+            &MapResolver::empty(),
+        )
+    };
+    let mut identity = None;
+    for (value, width) in [(0.0, 0.0), (5.0, 3.125), (10.0, 6.25)] {
+        let painted = paint(value);
+        assert_eq!(painted.len(), 3);
+        let SurfaceRenderPrimitive::Box {
+            style,
+            size,
+            ..
+        } = &painted[1]
+        else {
+            panic!("slider fill must be a box")
+        };
+        assert_eq!(style.position, [1.875, 1.875]);
+        assert_eq!(*size, [width, 1.25]);
+        assert_eq!(style.color, [0.2, 0.9, 0.8, 1.0]);
+        identity.get_or_insert(style.identity);
+        assert_eq!(Some(style.identity), identity);
+        assert!(matches!(
+            style.identity,
+            SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+                part: GuiPrimitivePart::Fill,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn state_only_icon_keeps_inventory_and_identity_while_visually_hidden() {
     let mut node = evaluated_node(
         1,

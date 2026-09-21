@@ -175,10 +175,11 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
           async (url) => (await import(url)).observation(),
           fixture,
         );
-      const readControlPaint = () =>
+      const readControlPaint = (flush = true) =>
         env.page.evaluate(
-          async (url) => (await import(url)).controlPaintObservation(),
-          fixture,
+          async ({ url, flush }) =>
+            (await import(url)).controlPaintObservation(flush),
+          { url: fixture, flush },
         );
       type MountedObservation = Awaited<ReturnType<typeof readObservation>>;
       type ControlPaintObservation = Awaited<
@@ -200,12 +201,13 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       const waitForControlPaint = async (
         predicate: (value: ControlPaintObservation) => boolean,
         message: string,
+        flush = true,
       ): Promise<ControlPaintObservation> => {
         const deadline = performance.now() + 5_000;
-        let value = await readControlPaint();
+        let value = await readControlPaint(flush);
         while (!predicate(value) && performance.now() < deadline) {
           await new Promise<void>((resolve) => setTimeout(resolve, 25));
-          value = await readControlPaint();
+          value = await readControlPaint(flush);
         }
         assert.ok(predicate(value), `${message}: ${JSON.stringify(value)}`);
         return value;
@@ -408,8 +410,85 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
           intensity(controlBefore.sliderMovedThumb) + 100,
         `slider did not paint its committed thumb region: ${JSON.stringify({ controlBefore, controlAfter })}`,
       );
+      assert.ok(
+        controlAfter.sliderFill[1]! > controlBefore.sliderFill[1]! + 60,
+        `slider fill did not follow its committed value: ${JSON.stringify({ controlBefore, controlAfter })}`,
+      );
       assert.ok(controlAfter.drawCalls >= controlBefore.drawCalls);
       assert.equal(controlAfter.failedDrawCalls, 0);
+
+      await env.page.evaluate(
+        async (url) => (await import(url)).holdReactCommitReply(),
+        fixture,
+      );
+      try {
+        await env.page.evaluate(
+          async (url) => (await import(url)).renderCommitRevision(1),
+          fixture,
+        );
+        await env.page.evaluate(
+          async (url) => (await import(url)).waitForHeldReactCommit(),
+          fixture,
+        );
+        await env.page.evaluate(async (url) => {
+          const mounted = await import(url);
+          for (let revision = 2; revision <= 100; revision += 1)
+            mounted.renderCommitRevision(revision);
+        }, fixture);
+        const bounds = await env.page
+          .locator("#mounted-gui-canvas")
+          .boundingBox();
+        assert.ok(bounds);
+        const x = (local: number) => bounds.x + local;
+        const y = bounds.y + 90;
+        await env.page.mouse.click(x(130), y);
+        const low = await waitForControlPaint(
+          (value) => value.slider < 0.2,
+          "low gain did not commit while React was held",
+          false,
+        );
+        await env.page.mouse.move(x(130), y);
+        await env.page.mouse.down();
+        await env.page.mouse.move(x(225), y, { steps: 12 });
+        await env.page.mouse.up();
+        const high = await waitForControlPaint(
+          (value) => value.slider > 0.8,
+          "rapid drag did not commit while React was held",
+          false,
+        );
+        assert.ok(
+          high.sliderFill[1]! > low.sliderFill[1]! + 60,
+          `runtime fill did not advance during delayed React acknowledgement: ${JSON.stringify({ low, high })}`,
+        );
+        assert.ok(
+          intensity(high.sliderMovedThumb) >
+            intensity(low.sliderMovedThumb) + 100,
+          `runtime thumb did not advance during delayed React acknowledgement: ${JSON.stringify({ low, high })}`,
+        );
+        env.evidence.record("slider during delayed React acknowledgement", {
+          low,
+          high,
+        });
+      } finally {
+        const submissions = await env.page.evaluate(
+          async (url) => (await import(url)).releaseHeldReactCommit(),
+          fixture,
+        );
+        env.evidence.record("React submissions after held drag", {
+          submissions,
+        });
+        assert.ok(
+          submissions <= 2,
+          `rapid renders submitted ${submissions} batches`,
+        );
+      }
+      assert.equal(
+        await env.page.evaluate(
+          async (url) => (await import(url)).committedRevision(),
+          fixture,
+        ),
+        100,
+      );
 
       const teardown = await env.page.evaluate(
         async (url) => (await import(url)).closeGuiCanvas(),

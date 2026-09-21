@@ -106,6 +106,9 @@ export class ReactWorldCommits {
   private readonly unsubscribe: () => void;
   private tail: Promise<void> = Promise.resolve();
   private latest: Promise<void> = Promise.resolve();
+  private pendingRender:
+    | { description: ReactWorldDescription; result: Promise<void> }
+    | undefined;
   private signature: string | undefined;
   private inFlight = false;
   private diagnostics: StateOverlayLifecycleDiagnostic[] = [];
@@ -213,6 +216,8 @@ export class ReactWorldCommits {
   }
 
   private enqueue(work: () => Promise<void>): Promise<void> {
+    // Explicit work is an ordering boundary for a replaceable render slot.
+    this.pendingRender = undefined;
     const result = this.tail.then(work);
     this.tail = result.catch((error: unknown) => {
       this.report(error);
@@ -234,7 +239,19 @@ export class ReactWorldCommits {
     // re-enters apply. Forgetting the signature here would re-enter apply
     // with needsReset set and submit an owner release the caller never
     // settles, hanging the retry.
-    return this.enqueue(() => this.apply(description));
+    if (this.pendingRender) {
+      this.pendingRender.description = description;
+      this.latest = this.pendingRender.result;
+      return this.latest;
+    }
+    const pending = { description, result: Promise.resolve() };
+    const result = this.enqueue(() => {
+      if (this.pendingRender === pending) this.pendingRender = undefined;
+      return this.apply(pending.description);
+    });
+    pending.result = result;
+    this.pendingRender = pending;
+    return result;
   }
 
   failed(error: unknown): Promise<void> {

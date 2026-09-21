@@ -1,0 +1,16 @@
+#version 300 es
+precision highp float;
+uniform sampler2D u_texture;
+uniform vec4 u_clip;
+uniform vec4 u_color;
+in vec2 v_uv;
+in vec2 v_surface_position;
+out vec4 o_color;
+void main() {
+    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
+    vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
+    float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
+    if (clip_coverage <= 0.0) discard;
+    vec4 sampled = texture(u_texture, v_uv);
+    o_color = vec4(sampled.rgb * u_color.rgb, sampled.a * u_color.a * clip_coverage);
+}

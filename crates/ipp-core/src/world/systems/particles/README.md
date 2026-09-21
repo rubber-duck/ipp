@@ -1,0 +1,11 @@
+# Particle producers and presentation
+
+The optional `particles` capability separates live emission and immutable-cache playback from sprite or mesh presentation. An entity permits at most one producer and one particle presentation component. Producers own private per-incarnation CPU state; particles are not ECS entities. Evaluation follows final object transforms and runs independently of cameras and renderer lifetime.
+
+Live emission is seeded and advances with Host time. Disabling emission drains existing particles; changing restart, seed or simulation space resets the sequence. Birth capacity limits admission without killing already living particles. Pending mesh emission surfaces pause births. Playback instead samples an ordinary animatable time and permits arbitrary seeking, matching samples by stable particle identity. Live state is excluded from persistence; loading reconstructs it empty.
+
+Sprites own their appearance; particle meshes use sibling materials, including custom materials. Presentation changes preserve producer state. Alpha particles share scene transparency ordering, while additive particles need no depth sort. Effect bounds must enclose the particle batch; source mesh bounds cannot cull the effect. Per-particle picking and GPU simulation are unsupported.
+
+Start with [component declarations](components.rs), [System evaluation](system.rs) and the [portable cache codec/sampling](cache.rs). The renderer owns [instance preparation](../../../../../ipp-render-gl/src/services/render/particles.rs) and the [custom instancing interface](../../../../../ipp-render-gl/src/services/render/CUSTOM_MATERIALS.md#instanced-particle-meshes). The [runtime architecture](../../../../../../docs/architecture/runtime.md#particles) owns the evaluation boundary.
+
+`python tools/ipp.py test particles` exercises generated-worker/WASM/WebGL transport, uploads, playback and recovery; `python tools/ipp.py test particles-blender` adds real addon extraction and delivery. The [native GLES driver](../../../../../ipp-render-gl/examples/egl_particles.rs) accepts an EGL library directory and artifact directory with `particles` enabled. The shared regression catalog includes that driver when EGL is configured.

@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ipp-core",
+    "crates/ipp-protocol",
+    "crates/ipp-host-session",
+    "crates/ipp-render-gl",
+    "crates/ipp-wasm",
+    "crates/ipp-server",
+    "tools/ipp-schema-derive",
+    "tools/ipp-schema-gen",
+]
+default-members = ["crates/ipp-core", "crates/ipp-protocol", "crates/ipp-server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[workspace.dependencies]
+ipp-core = { path = "crates/ipp-core", default-features = false }
+ipp-protocol = { path = "crates/ipp-protocol", default-features = false }
+ipp-host-session = { path = "crates/ipp-host-session", default-features = false }
+ipp-render-gl = { path = "crates/ipp-render-gl", default-features = false }
+ipp-schema-derive = { path = "tools/ipp-schema-derive", default-features = false }
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+proc-macro2 = { version = "=1.0.107", default-features = false, features = ["proc-macro"] }
+quote = { version = "=1.0.47", default-features = false, features = ["proc-macro"] }
+syn = { version = "=3.0.5", default-features = false, features = ["derive", "parsing", "printing", "proc-macro"] }
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+# Complete UAX #29 grapheme segmentation for GUI text editing. Purpose: hand
+# tables cannot cover flags, modifiers, Hangul, ZWJ sequences and conjuncts
+# correctly. No features enabled; the crate has no transitive dependencies.
+# Maintained by unicode-rs with a stable API. Cost: small segmentation tables
+# linked only into `gui`-enabled builds (see ipp-core); lean builds omit it.
+unicode-segmentation = { version = "=1.12.0", default-features = false }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+# Keep normal release builds debuggable through panic diagnostics. Measure this
+# separate size profile against real workloads before choosing distribution defaults.
+[profile.release-small]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

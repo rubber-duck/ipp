@@ -1,0 +1,50 @@
+[package]
+name = "ipp-render-gl"
+description = "IPP rendering shared by WebGL 2 and OpenGL ES 3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipp-core.workspace = true
+
+[features]
+surfaces = ["ipp-core/surfaces"]
+gui = ["ipp-core/gui", "surfaces"]
+profiling = ["ipp-core/profiling"]
+mesh-poses = ["ipp-core/mesh-poses"]
+particles = ["ipp-core/particles"]
+default = []
+shadows = ["ipp-core/shadows"]
+skeletal-animation = ["ipp-core/skeletal-animation"]
+
+[lints]
+workspace = true
+
+[[example]]
+name = "egl_smoke"
+
+[[example]]
+name = "egl_skinning"
+required-features = ["skeletal-animation"]
+
+[[example]]
+name = "egl_mesh_poses"
+required-features = ["mesh-poses"]
+
+[[example]]
+name = "egl_particles"
+required-features = ["particles"]
+
+[[example]]
+name = "egl_surfaces"
+required-features = ["surfaces"]
+
+[[example]]
+name = "egl_gui_clips"
+required-features = ["gui"]
+
+[[example]]
+name = "egl_gui_layout"
+required-features = ["gui"]

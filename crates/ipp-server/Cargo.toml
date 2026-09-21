@@ -1,0 +1,45 @@
+[package]
+name = "ipp-server"
+description = "IPP native host foundation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipp-core.workspace = true
+ipp-host-session.workspace = true
+ipp-protocol.workspace = true
+ipp-render-gl = { workspace = true, optional = true }
+tungstenite = { workspace = true, optional = true }
+
+[features]
+gui = [
+    "surfaces",
+    "ipp-protocol/gui",
+    "ipp-host-session/gui",
+    "ipp-render-gl?/gui",
+]
+surfaces = ["ipp-protocol/surfaces", "ipp-host-session/surfaces", "ipp-render-gl?/surfaces"]
+profiling = ["ipp-protocol/profiling", "ipp-host-session/profiling", "ipp-render-gl?/profiling"]
+mesh-poses = ["ipp-protocol/mesh-poses", "ipp-host-session/mesh-poses", "ipp-render-gl?/mesh-poses"]
+particles = ["ipp-protocol/particles", "ipp-host-session/particles", "ipp-render-gl?/particles"]
+default = ["builtin-assets"]
+diagnostics = ["ipp-core/diagnostics", "ipp-host-session/diagnostics"]
+builtin-assets = ["ipp-protocol/builtin-assets", "ipp-host-session/builtin-assets"]
+websocket = ["dep:tungstenite"]
+render = ["dep:ipp-render-gl"]
+skeletal-animation = ["ipp-protocol/skeletal-animation", "ipp-host-session/skeletal-animation", "ipp-render-gl?/skeletal-animation"]
+shadows = ["render", "ipp-host-session/shadows", "ipp-render-gl?/shadows"]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ipp-server"
+path = "src/main.rs"
+required-features = ["websocket"]
+
+[[example]]
+name = "profile_scene"
+required-features = ["render", "shadows", "skeletal-animation", "mesh-poses", "particles"]

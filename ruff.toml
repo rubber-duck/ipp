@@ -1,0 +1,14 @@
+required-version = "==0.16.6"
+target-version = "py314"
+line-length = 88
+include = ["*.py", "*.pyi"]
+extend-exclude = ["target", "dist", "node_modules", ".beads"]
+force-exclude = true
+
+[per-file-target-version]
+"integrations/blender/**/*.py" = "py313"
+"tests/blender/**/*.py" = "py313"
+"tools/blender*.py" = "py313"
+
+[format]
+line-ending = "lf"

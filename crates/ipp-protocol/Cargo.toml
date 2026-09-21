@@ -1,0 +1,25 @@
+[package]
+name = "ipp-protocol"
+description = "IPP wire contracts and generated codecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipp-core.workspace = true
+
+[features]
+surfaces = ["ipp-core/surfaces"]
+gui = ["surfaces", "ipp-core/gui"]
+profiling = ["ipp-core/profiling"]
+mesh-poses = ["ipp-core/mesh-poses"]
+particles = ["ipp-core/particles"]
+default = ["builtin-assets"]
+builtin-assets = ["ipp-core/builtin-assets"]
+schema-export = []
+skeletal-animation = ["ipp-core/skeletal-animation"]
+shadows = ["ipp-core/shadows"]
+
+[lints]
+workspace = true

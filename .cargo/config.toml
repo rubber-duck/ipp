@@ -1,0 +1,3 @@
+[build]
+# Default build flags can be placed here
+rustflags = ["-W", "rust_2018_idioms"]

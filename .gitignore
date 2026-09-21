@@ -1,0 +1,31 @@
+# Rust
+/target
+
+# Node / JS
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Schemas
+/schema/
+
+# Environment / OS
+.DS_Store
+*.swp
+*~
+
+# Beads / Dolt local state
+.dolt/
+.beads-credential-key
+/.beads/dolt-config.log
+
+# Linked source worktrees
+/.worktrees/
+/.claude/worktrees/
+/.muse/worktrees/
+
+# Python tooling
+__pycache__/
+.venv/
+.ruff_cache/
+.mypy_cache/

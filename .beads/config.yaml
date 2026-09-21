@@ -1,0 +1,13 @@
+# Beads owns task tracking; source Git operations remain explicit.
+# IPP uses one project-local SQL server shared by linked Git worktrees.
+issue-prefix: ipp
+sync.remote: "git+ssh://git@github.com/rubber-duck/ipp.git"
+no-git-ops: true
+dolt:
+    mode: server
+    auto-start: false
+    auto-commit: "off"
+    auto-push: false
+export:
+    auto: false
+    git-add: false

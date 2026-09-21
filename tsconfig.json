@@ -1,0 +1,52 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {
+      "@ipp/client": [
+        "./packages/ipp-client/src/index.ts"
+      ]
+    },
+    "rootDir": ".",
+    "outDir": "dist",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "types": [
+      "node"
+    ],
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "examples/**/*.ts",
+    "packages/ipp-client/**/*.ts",
+    "tests/integration/**/*.ts",
+    "tests/browser/**/*.ts",
+    "packages/ipp-react/**/*.ts",
+    "packages/ipp-react/**/*.tsx",
+    "target/integration-artifacts/client/**/*.ts",
+    "tests/react/**/*.ts",
+    "tests/react/**/*.tsx",
+    "tests/render/**/*.ts",
+    "examples/**/*.tsx",
+    "tests/render/**/*.tsx",
+    "integrations/blender/client/**/*.ts",
+    "tests/performance/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "browser": {
+    "headless": {
+      "features": [],
+      "builtins": false
+    },
+    "headless-builtins": {
+      "features": [],
+      "builtins": true
+    },
+    "render-baseline": {
+      "features": [
+        "render",
+        "diagnostics"
+      ],
+      "builtins": false
+    },
+    "render": {
+      "features": [
+        "render",
+        "diagnostics"
+      ],
+      "builtins": true
+    },
+    "render-shadows": {
+      "features": [
+        "render",
+        "diagnostics",
+        "shadows"
+      ],
+      "builtins": true
+    },
+    "render-skeletal-animation": {
+      "features": [
+        "render",
+        "diagnostics",
+        "skeletal-animation"
+      ],
+      "builtins": true
+    },
+    "render-mesh-poses": {
+      "features": [
+        "render",
+        "diagnostics",
+        "mesh-poses"
+      ],
+      "builtins": false
+    },
+    "render-particles": {
+      "features": [
+        "render",
+        "diagnostics",
+        "particles"
+      ],
+      "builtins": true
+    },
+    "render-expanded": {
+      "features": [
+        "render",
+        "diagnostics",
+        "skeletal-animation",
+        "mesh-poses",
+        "particles",
+        "shadows",
+        "surfaces",
+        "gui"
+      ],
+      "builtins": true
+    },
+    "render-surfaces": {
+      "features": [
+        "render",
+        "diagnostics",
+        "surfaces"
+      ],
+      "builtins": true
+    },
+    "headless-gui": {
+      "features": [
+        "render",
+        "surfaces",
+        "gui"
+      ],
+      "builtins": false
+    }
+  },
+  "contracts": {
+    "baseline": [],
+    "builtin-assets": [
+      "builtin-assets"
+    ],
+    "skeletal-animation": [
+      "skeletal-animation"
+    ],
+    "mesh-poses": [
+      "mesh-poses"
+    ],
+    "particles": [
+      "particles"
+    ],
+    "shadows": [
+      "shadows"
+    ],
+    "expanded": [
+      "builtin-assets",
+      "skeletal-animation",
+      "mesh-poses",
+      "shadows",
+      "particles",
+      "surfaces",
+      "gui"
+    ],
+    "surfaces": [
+      "surfaces"
+    ],
+    "gui": [
+      "surfaces",
+      "gui"
+    ]
+  }
+}

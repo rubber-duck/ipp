@@ -1,0 +1,848 @@
+{
+  "dist/tests/integration/scaling.test.js": {
+    "builds": [
+      "typescript",
+      "scaling-host"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/browser/scaling.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/custom-materials.test.js": {
+    "builds": [
+      "typescript",
+      "gallery",
+      "react-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/blender.test.js": {
+    "builds": [
+      "typescript",
+      "blender-viewer",
+      "blender-addon",
+      "blender-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser",
+      "blender",
+      "certificates"
+    ]
+  },
+  "dist/tests/render/blender-disk.test.js": {
+    "builds": [
+      "typescript",
+      "blender-viewer",
+      "blender-addon",
+      "blender-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser",
+      "blender",
+      "certificates"
+    ]
+  },
+  "dist/packages/ipp-client/tests/resource-worker.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/frame-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/lifecycle-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/animation-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/camera-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/render-state-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/manifest-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/mesh-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/texture-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/integration/file-access.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/integration/integration.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/browser/browser.test.js": {
+    "builds": [
+      "typescript",
+      "browser:headless",
+      "browser:headless-builtins",
+      "lifecycle-probes"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/browser/lifecycle.test.js": {
+    "builds": [
+      "typescript",
+      "browser:headless",
+      "browser:headless-builtins",
+      "lifecycle-probes"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/integration/world-persistence.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/browser/world-persistence.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/world-persistence.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render-expanded"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/integration/world-host.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/browser/world-host.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/integration/lifecycle-subscriptions.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/browser/lifecycle-subscriptions.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/animation.test.js": {
+    "builds": [
+      "typescript",
+      "browser:headless",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-animation.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/integration/hierarchy.test.js": {
+    "builds": [
+      "typescript",
+      "world-hosts"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/render/hierarchy.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render",
+      "browser:render-expanded"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/camera.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-picking.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-navigation.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-dragging.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/debug-geometry.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render",
+      "browser:render-baseline"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/geometry.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render-expanded"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/react/react.test.js": {
+    "builds": [
+      "typescript",
+      "react-fixtures",
+      "browser:headless",
+      "browser:headless-builtins"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/packages/ipp-react/tests/renderer.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/react/gui-root.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-clipboard.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-commits.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-controls.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-declaration.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-effects.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-ime.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-input.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-soft-keyboard.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-text-bridge.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/render/canvas.test.js": {
+    "builds": [
+      "typescript",
+      "canvas-fixtures",
+      "browser:headless",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/dpi.test.js": {
+    "builds": [
+      "typescript",
+      "canvas-fixtures",
+      "browser:headless",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/render.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/fixture.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/render/viewer.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/ready-geometry.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-particles.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-gui.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-gui-camera.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/gallery-platformer.test.js": {
+    "builds": [
+      "typescript",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/lighting.test.js": {
+    "builds": [
+      "typescript",
+      "shapes",
+      "browser:render-shadows",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/particles-blender.test.js": {
+    "builds": [
+      "typescript",
+      "blender-viewer",
+      "blender-addon",
+      "blender-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser",
+      "blender",
+      "certificates"
+    ]
+  },
+  "dist/tests/render/particles.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render-particles"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/mesh-poses.test.js": {
+    "builds": [
+      "typescript",
+      "mesh-pose-fixtures",
+      "browser:render-baseline",
+      "browser:render-mesh-poses",
+      "browser:render-expanded"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/skinning.test.js": {
+    "builds": [
+      "typescript",
+      "skinning-fixtures",
+      "browser:render",
+      "browser:render-skeletal-animation",
+      "browser:render-expanded"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/texture.test.js": {
+    "builds": [
+      "typescript",
+      "textures",
+      "browser:headless",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/render/shapes.test.js": {
+    "builds": [
+      "typescript",
+      "shapes",
+      "browser:headless",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/packages/ipp-client/tests/transport.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-client/tests/worker.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/render/blender-stream.test.js": {
+    "builds": [
+      "typescript",
+      "blender-viewer",
+      "blender-addon",
+      "blender-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser",
+      "blender",
+      "certificates"
+    ]
+  },
+  "dist/packages/ipp-client/tests/asset-sources.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-client/tests/gui-input.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-client/tests/gui-observations.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-client/tests/gui-semantics.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/gui-input-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/gui-observations-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "crates/ipp-protocol/tests/gui-semantics-client.mjs": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/integration/surface.test.js": {
+    "builds": [
+      "typescript",
+      "surface-host",
+      "surface-assets"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/render/surface.test.js": {
+    "builds": [
+      "typescript",
+      "surface-fixtures",
+      "browser:render-surfaces"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/integration/gui.test.js": {
+    "builds": [
+      "typescript",
+      "gui-host",
+      "surface-assets"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/integration/gui-react-root.test.js": {
+    "builds": [
+      "typescript",
+      "gui-host"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/tests/browser/gui.test.js": {
+    "builds": [
+      "typescript",
+      "react-fixtures",
+      "surface-assets",
+      "browser:headless-gui"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  }
+}

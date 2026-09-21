@@ -1,0 +1,496 @@
+mod uniform_cache;
+
+use crate::RenderError;
+
+/// Renderer-private atlas ranges needed to draw one quadratic path.
+#[cfg(feature = "surfaces")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfacePathDescriptor {
+    /// First curve and curve count in the shared atlas.
+    pub curve_range: [u32; 2],
+    /// First of 32 horizontal/vertical band headers.
+    pub band_offset: u32,
+}
+
+#[cfg(feature = "surfaces")]
+impl SurfacePathDescriptor {
+    /// Construct one validated-at-draw descriptor.
+    pub fn new(curve_range: [u32; 2], band_offset: u32) -> Self {
+        Self {
+            curve_range,
+            band_offset,
+        }
+    }
+}
+
+/// One glyph/path instance packed for a contiguous Surface draw.
+#[cfg(feature = "surfaces")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfacePathInstance {
+    /// Local path bounds.
+    pub bounds: [f32; 4],
+    /// Local translation and scale.
+    pub placement: [f32; 4],
+    /// Straight linear RGBA.
+    pub color: [f32; 4],
+    /// Atlas curve/band lookup.
+    pub descriptor: SurfacePathDescriptor,
+}
+
+#[cfg(feature = "surfaces")]
+pub(super) fn pack_surface_instances(
+    instances: &[SurfacePathInstance],
+    packed: &mut Vec<[f32; 16]>,
+) {
+    packed.clear();
+    packed.extend(instances.iter().map(|instance| {
+        [
+            instance.bounds[0],
+            instance.bounds[1],
+            instance.bounds[2],
+            instance.bounds[3],
+            instance.placement[0],
+            instance.placement[1],
+            instance.placement[2],
+            instance.placement[3],
+            instance.color[0],
+            instance.color[1],
+            instance.color[2],
+            instance.color[3],
+            instance.descriptor.curve_range[0] as f32,
+            instance.descriptor.curve_range[1] as f32,
+            instance.descriptor.band_offset as f32,
+            0.0,
+        ]
+    }));
+}
+
+/// Parameterized box shape shared by the WebGL and GLES surface devices.
+///
+/// Corner radii and border width are explicit local Surface-metre dimensions
+/// applied after the common item scale. Devices clamp corners to the placed
+/// half size independently, preserving the authored elliptical corner instead
+/// of narrowing both axes to one scalar radius.
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceBoxShape {
+    /// Explicit local corner radii `[rx, ry]` in final Surface metres.
+    pub corner: [f32; 2],
+    /// Explicit local border width in final Surface metres; zero fills only.
+    pub border: f32,
+}
+
+#[cfg(feature = "gui")]
+impl SurfaceBoxShape {
+    /// Pack shape uniforms as `[corner_x, corner_y, border_width, reserved]`.
+    pub fn pack(&self) -> [f32; 4] {
+        [self.corner[0], self.corner[1], self.border, 0.0]
+    }
+}
+
+#[cfg(feature = "surfaces")]
+pub(super) fn surface_instances_exact(instances: &[SurfacePathInstance]) -> bool {
+    const MAX_EXACT_F32_INTEGER: u32 = 1 << 24;
+    instances.iter().all(|instance| {
+        instance.descriptor.curve_range[0] <= MAX_EXACT_F32_INTEGER
+            && instance.descriptor.curve_range[1] <= MAX_EXACT_F32_INTEGER
+            && instance.descriptor.band_offset <= MAX_EXACT_F32_INTEGER
+    })
+}
+
+#[cfg(all(test, feature = "surfaces"))]
+mod surface_instance_tests {
+    use super::*;
+
+    #[test]
+    fn floating_instance_descriptors_reject_the_first_inexact_integer() {
+        let instance = |band_offset| SurfacePathInstance {
+            bounds: [0.0; 4],
+            placement: [0.0; 4],
+            color: [0.0; 4],
+            descriptor: SurfacePathDescriptor::new([1 << 24, 1], band_offset),
+        };
+        assert!(surface_instances_exact(&[instance(1 << 24)]));
+        assert!(!surface_instances_exact(&[instance((1 << 24) + 1)]));
+    }
+
+    #[test]
+    fn packing_reuses_warmed_storage() {
+        let instance = SurfacePathInstance {
+            bounds: [1.0, 2.0, 3.0, 4.0],
+            placement: [5.0, 6.0, 7.0, 8.0],
+            color: [0.1, 0.2, 0.3, 0.4],
+            descriptor: SurfacePathDescriptor::new([9, 10], 11),
+        };
+        let instances = vec![instance; 256];
+        let mut packed = Vec::new();
+        pack_surface_instances(&instances, &mut packed);
+        let capacity = packed.capacity();
+        let pointer = packed.as_ptr();
+
+        pack_surface_instances(&instances[..8], &mut packed);
+        assert_eq!(packed.as_ptr(), pointer);
+        pack_surface_instances(&instances[..200], &mut packed);
+
+        assert_eq!(packed.capacity(), capacity);
+        assert_eq!(packed.as_ptr(), pointer);
+        assert_eq!(packed.len(), 200);
+        assert_eq!(
+            packed[0][..12],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(packed[0][12..], [9.0, 10.0, 11.0, 0.0]);
+    }
+}
+
+#[cfg(all(test, feature = "gui"))]
+mod surface_box_tests {
+    use super::*;
+
+    #[test]
+    fn box_shape_packs_explicit_corner_and_border_dimensions() {
+        let shape = SurfaceBoxShape {
+            corner: [0.05, 0.1],
+            border: 0.02,
+        };
+        assert_eq!(shape.pack(), [0.05, 0.1, 0.02, 0.0]);
+        assert_eq!(
+            SurfaceBoxShape {
+                corner: [0.0, 0.0],
+                border: 0.0,
+            }
+            .pack(),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod gles;
+
+#[cfg(target_arch = "wasm32")]
+mod webgl;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use gles::GlesRenderDevice;
+
+#[cfg(target_arch = "wasm32")]
+pub use webgl::WebGlRenderDevice;
+
+/// Compile-time GL device for the current target.
+#[cfg(not(target_arch = "wasm32"))]
+pub type PlatformRenderDevice = GlesRenderDevice;
+
+/// Compile-time GL device for the current target.
+#[cfg(target_arch = "wasm32")]
+pub type PlatformRenderDevice = WebGlRenderDevice;
+
+/// The GL operations used by the shared GL renderer, statically dispatched.
+///
+/// Implementations copy uploads synchronously and retain no borrowed CPU views.
+/// A device belongs to one context. Hosts keep that context current and discard
+/// its renderer on context loss before creating a replacement after restoration.
+pub trait RenderDevice: 'static {
+    /// Context-owned linked program and uniform locations.
+    type Program;
+    /// Context-owned vertex array, vertex/index buffers and draw count.
+    type Mesh;
+
+    /// Context-owned sRGB color texture.
+    type Texture;
+
+    /// Context-owned immutable quadratic path acceleration data.
+    #[cfg(feature = "surfaces")]
+    type SurfacePath;
+
+    /// Context-owned depth texture and framebuffer for the bounded spot shadow pass.
+    #[cfg(feature = "shadows")]
+    type ShadowMap;
+
+    /// Enable exhaustive routine draw/uniform error polling for diagnostics.
+    /// Allocation, compilation, uploads and pass boundaries always validate.
+    fn set_exhaustive_draw_checks(&mut self, _enabled: bool) {}
+
+    /// Bind per-frame lights and per-draw model/material uniforms.
+    fn set_lighting(
+        &mut self,
+        program: &Self::Program,
+        model: &[f32; 16],
+        normal: &[f32; 16],
+        surface: &[f32; 3],
+        frame: &crate::RenderLightingFrame,
+    ) -> Result<(), RenderError>;
+
+    /// Maximum square atlas dimension supported by this device and viewport.
+    #[cfg(feature = "shadows")]
+    fn shadow_map_limit(&self) -> u32 {
+        0
+    }
+
+    /// Allocate a depth-only 2D map, checking limits and framebuffer completeness.
+    #[cfg(feature = "shadows")]
+    fn create_shadow_map(&mut self, size: u32) -> Result<Self::ShadowMap, RenderError>;
+
+    /// Save the host target and render an atlas tile. Slot zero clears the atlas.
+    #[cfg(feature = "shadows")]
+    fn begin_shadow(
+        &mut self,
+        map: &Self::ShadowMap,
+        slot: u32,
+        grid: u32,
+    ) -> Result<(), RenderError>;
+
+    /// Restore the host framebuffer/viewport even after an unsuccessful depth draw.
+    #[cfg(feature = "shadows")]
+    fn end_shadow(&mut self) -> Result<(), RenderError>;
+
+    /// Bind the completed map for sampling in a lit forward program.
+    #[cfg(feature = "shadows")]
+    fn bind_shadow(
+        &mut self,
+        program: &Self::Program,
+        map: &Self::ShadowMap,
+        frame: &crate::RenderLightingFrame,
+    ) -> Result<(), RenderError>;
+
+    /// Release both map objects, tolerating invalid handles after context loss.
+    #[cfg(feature = "shadows")]
+    fn delete_shadow_map(&mut self, map: Self::ShadowMap);
+
+    /// Validate pass limits and reserve parameter storage without uploading draw values.
+    fn prepare_custom_parameters(
+        &mut self,
+        _program: &Self::Program,
+        _words: usize,
+        _textures: usize,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "custom shader parameters unavailable".into(),
+        ))
+    }
+
+    /// Upload renderer-packed std140 words and bind named texture parameters.
+    fn set_custom_parameters<'a>(
+        &mut self,
+        _program: &Self::Program,
+        _words: &[u32],
+        _textures: impl ExactSizeIterator<Item = Result<(&'a str, &'a Self::Texture), RenderError>>,
+        _alpha_mode: u32,
+        _alpha_cutoff: f32,
+    ) -> Result<(), RenderError>
+    where
+        Self::Texture: 'a,
+    {
+        Err(RenderError::RenderDevice(
+            "custom shader parameters unavailable".into(),
+        ))
+    }
+
+    /// Select ordinary opaque depth writes or straight-alpha blending.
+    fn set_alpha_blend(&mut self, enabled: bool) -> Result<(), RenderError> {
+        if enabled {
+            Err(RenderError::RenderDevice(
+                "alpha blending unavailable".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Select double-sided rasterization only for Surface primitive submission.
+    ///
+    /// Disabling this mode restores ordinary counter-clockwise front faces with
+    /// back-face culling for mesh draws.
+    #[cfg(feature = "surfaces")]
+    fn set_surface_double_sided(&mut self, _enabled: bool) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "double-sided Surface rendering unavailable".into(),
+        ))
+    }
+
+    /// Upload renderer-packed quadratic path data. Each segment is
+    /// `[start.x,start.y,control.x,control.y]`, `[end.x,end.y,kind,0]`.
+    #[cfg(feature = "surfaces")]
+    fn create_surface_path(
+        &mut self,
+        _bounds: &[f32; 4],
+        _segments: &[[f32; 8]],
+        _bands: &[[u32; 2]],
+    ) -> Result<Self::SurfacePath, RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface paths unavailable".into(),
+        ))
+    }
+
+    /// Draw one path in painter order with scene depth testing and no depth writes.
+    #[cfg(feature = "surfaces")]
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_path(
+        &mut self,
+        _program: &Self::Program,
+        _path: &Self::SurfacePath,
+        _bounds: &[f32; 4],
+        _descriptor: SurfacePathDescriptor,
+        _mvp: &[f32; 16],
+        _placement: &[f32; 4],
+        _clip: &[f32; 4],
+        _color: &[f32; 4],
+        _fill_rule: u32,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface paths unavailable".into(),
+        ))
+    }
+
+    /// Release one context-owned path allocation.
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_path(&mut self, _path: Self::SurfacePath) {}
+
+    /// Draw compatible contiguous path instances in one submission.
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_path_instances(
+        &mut self,
+        _program: &Self::Program,
+        _path: &Self::SurfacePath,
+        _instances: &[SurfacePathInstance],
+        _mvp: &[f32; 16],
+        _clip: &[f32; 4],
+        _fill_rule: u32,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface instancing unavailable".into(),
+        ))
+    }
+
+    /// Draw one straight-alpha bitmap quad in painter order.
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_bitmap(
+        &mut self,
+        _program: &Self::Program,
+        _texture: &Self::Texture,
+        _mvp: &[f32; 16],
+        _placement: &[f32; 4],
+        _clip: &[f32; 4],
+        _color: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface bitmaps unavailable".into(),
+        ))
+    }
+
+    /// Draw one GUI-only parameterized fill/border box quad in painter order.
+    ///
+    /// `placement` carries position and scaled size, `clip` the intersected
+    /// Surface-metre rectangle, `color` the straight linear fill, `border`
+    /// the straight linear border color and `shape` the explicit corner and
+    /// border dimensions. Empty clips are suppressed by the caller.
+    #[cfg(feature = "gui")]
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_box(
+        &mut self,
+        _program: &Self::Program,
+        _mvp: &[f32; 16],
+        _placement: &[f32; 4],
+        _clip: &[f32; 4],
+        _color: &[f32; 4],
+        _border: &[f32; 4],
+        _shape: SurfaceBoxShape,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface boxes unavailable".into(),
+        ))
+    }
+
+    /// Replace the transient instance stream; empty restores ordinary draws.
+    #[cfg(feature = "particles")]
+    fn set_instances(&mut self, instances: &[[f32; 20]]) -> Result<(), RenderError> {
+        if instances.is_empty() {
+            Ok(())
+        } else {
+            Err(RenderError::RenderDevice("Instancing unavailable".into()))
+        }
+    }
+
+    /// Select additive sprite blending after enabling transparency.
+    #[cfg(feature = "particles")]
+    fn set_additive(&mut self, enabled: bool) -> Result<(), RenderError> {
+        if enabled {
+            Err(RenderError::RenderDevice(
+                "Additive blending unavailable".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Compile and link a program; delete partial objects on failure.
+    fn create_program(
+        &mut self,
+        vertex: &str,
+        fragment: &str,
+    ) -> Result<Self::Program, RenderError>;
+
+    /// Upload only retained attribute streams and triangle indices.
+    fn create_mesh(&mut self, asset: &ipp_core::MeshAsset) -> Result<Self::Mesh, RenderError>;
+
+    /// Upload top-left-first packed RGBA8 pixels with sRGB color and linear straight alpha.
+    fn create_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<Self::Texture, RenderError>;
+
+    /// Allocate private SRGB8_ALPHA8 storage without uploading a whole CPU image.
+    fn allocate_texture(&mut self, width: u32, height: u32) -> Result<Self::Texture, RenderError>;
+
+    /// Upload complete packed rows. The input borrow ends before returning.
+    fn upload_texture_rows(
+        &mut self,
+        texture: &Self::Texture,
+        width: u32,
+        first_row: u32,
+        rows: u32,
+        pixels: &[u8],
+    ) -> Result<(), RenderError>;
+
+    /// Set viewport, opaque depth/culling state and clear the host target.
+    fn begin_frame(&mut self, width: u32, height: u32, clear: &[f32; 4])
+    -> Result<(), RenderError>;
+
+    /// Upload one validated mesh-local joint palette before drawing its instance.
+    #[cfg(feature = "skeletal-animation")]
+    fn set_skin_palette(
+        &mut self,
+        _program: &Self::Program,
+        _palette: &[[f32; 16]],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "device does not support skinning".into(),
+        ))
+    }
+
+    /// Draw one indexed instance with final effective scene values.
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &mut self,
+        program: &Self::Program,
+        mesh: &Self::Mesh,
+        mvp: &[f32; 16],
+        material: &[f32; 3],
+        #[cfg(feature = "mesh-poses")] pose: Option<(&Self::Mesh, f32)>,
+        texture: Option<&Self::Texture>,
+    ) -> Result<(), RenderError>;
+
+    /// Check submission errors. GPU completion/capture belongs to the host.
+    fn end_frame(&mut self) -> Result<(), RenderError>;
+
+    /// Release the mesh, or discard its invalid handles after context loss.
+    fn delete_mesh(&mut self, mesh: Self::Mesh);
+
+    /// Release this context's texture, tolerating invalid handles after loss.
+    fn delete_texture(&mut self, texture: Self::Texture);
+
+    /// Release the program, or discard its invalid handles after context loss.
+    fn delete_program(&mut self, program: Self::Program);
+}

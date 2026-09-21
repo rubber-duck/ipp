@@ -1,0 +1,14 @@
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+newline_style = "Unix"
+
+# Prefer expanded struct literals, enum variants and control-flow expressions.
+# Keep short calls and arrays compact when they remain easy to scan.
+struct_lit_width = 0
+struct_variant_width = 0
+single_line_if_else_max_width = 0
+single_line_let_else_max_width = 0
+
+# Stable rustfmt preserves existing blank lines but cannot require them between
+# definitions. AGENTS.md and the build guide specify that review convention.

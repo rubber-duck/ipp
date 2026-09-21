@@ -1,0 +1,16 @@
+{
+  "name": "@ipp/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared session and transport support for target-generated IPP clients",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "python ../../tools/ipp.py build client"
+  }
+}

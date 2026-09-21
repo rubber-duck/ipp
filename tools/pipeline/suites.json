@@ -1,0 +1,619 @@
+{
+  "gallery-site": {
+    "description": "Published gallery files render through HTTP, worker/WASM and WebGL at root and project URLs",
+    "sourceRoots": [
+      "examples/world-gallery/",
+      "tools/build/"
+    ],
+    "commands": [
+      {
+        "name": "browser",
+        "command": [
+          "@node",
+          "--test",
+          "tools/tests/gallery-site.test.mjs"
+        ],
+        "builds": [
+          "gallery-site"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      }
+    ]
+  },
+  "scaling": {
+    "description": "Release timings and operation counts for 1k/4k/16k core mutation and restoration",
+    "files": [
+      "dist/tests/integration/scaling.test.js",
+      "dist/tests/browser/scaling.test.js"
+    ],
+    "commands": [
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--release",
+          "--lib",
+          "maintained_scaling",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ]
+  },
+  "custom-materials": {
+    "description": "Backend shader bodies, named properties, animation, overlays, fallbacks and completed WebGL frames",
+    "files": [
+      "dist/tests/render/custom-materials.test.js"
+    ]
+  },
+  "blender": {
+    "description": "Real Blender HTTPS/WSS export, browser sync and completed frames",
+    "commands": [
+      {
+        "name": "package",
+        "command": [
+          "@python",
+          "tests/blender/package_check.py"
+        ],
+        "builds": [
+          "blender-addon"
+        ],
+        "requirements": [
+          "blender"
+        ]
+      },
+      {
+        "name": "server",
+        "command": [
+          "@blender",
+          "--background",
+          "--factory-startup",
+          "--python-exit-code",
+          "1",
+          "--python",
+          "tests/blender/server_test.py"
+        ],
+        "builds": [
+          "blender-addon"
+        ],
+        "requirements": [
+          "blender"
+        ]
+      },
+      {
+        "name": "exporter",
+        "command": [
+          "@blender",
+          "--background",
+          "--factory-startup",
+          "--python-exit-code",
+          "1",
+          "--python",
+          "tests/blender/exporter_check.py"
+        ],
+        "builds": [
+          "blender-addon"
+        ],
+        "requirements": [
+          "blender"
+        ]
+      },
+      {
+        "name": "action-sampling",
+        "command": [
+          "@blender",
+          "--background",
+          "--factory-startup",
+          "--python-exit-code",
+          "1",
+          "--python",
+          "tests/blender/action_sampling_check.py"
+        ],
+        "requirements": [
+          "blender"
+        ],
+        "builds": []
+      },
+      {
+        "name": "world-sampling",
+        "command": [
+          "@blender",
+          "--background",
+          "--factory-startup",
+          "--python-exit-code",
+          "1",
+          "--python",
+          "tests/blender/world_sampling_check.py"
+        ],
+        "requirements": [
+          "blender"
+        ],
+        "builds": []
+      }
+    ],
+    "files": [
+      "dist/tests/render/blender.test.js",
+      "dist/tests/render/blender-stream.test.js",
+      "dist/tests/render/blender-disk.test.js"
+    ],
+    "sourceRoots": [
+      "integrations/blender/",
+      "tests/blender/"
+    ]
+  },
+  "runner": {
+    "description": "Suite routing and shared build dependency invariants",
+    "commands": [
+      {
+        "name": "pipeline",
+        "command": [
+          "@python",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/tests",
+          "-p",
+          "test_*.py"
+        ],
+        "builds": [],
+        "requirements": []
+      }
+    ]
+  },
+  "rust": {
+    "description": "Default, minimal and expanded Rust workspace tests",
+    "commands": [
+      {
+        "name": "default",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--no-fail-fast",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "minimal",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--no-default-features",
+          "--no-fail-fast",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "expanded",
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--all-features",
+          "--no-fail-fast",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ]
+  },
+  "client": {
+    "description": "Generated client codecs, events and correlation",
+    "files": [
+      "dist/packages/ipp-client/tests/asset-sources.test.js",
+      "dist/packages/ipp-client/tests/gui-input.test.js",
+      "dist/packages/ipp-client/tests/gui-semantics.test.js",
+      "dist/packages/ipp-client/tests/gui-observations.test.js",
+      "dist/packages/ipp-client/tests/resource-worker.test.js",
+      "dist/packages/ipp-client/tests/transport.test.js",
+      "dist/packages/ipp-client/tests/worker.test.js",
+      "crates/ipp-protocol/tests/frame-client.mjs",
+      "crates/ipp-protocol/tests/lifecycle-client.mjs",
+      "crates/ipp-protocol/tests/animation-client.mjs",
+      "crates/ipp-protocol/tests/camera-client.mjs",
+      "crates/ipp-protocol/tests/render-state-client.mjs",
+      "crates/ipp-protocol/tests/manifest-client.mjs",
+      "crates/ipp-protocol/tests/mesh-client.mjs",
+      "crates/ipp-protocol/tests/texture-client.mjs",
+      "crates/ipp-protocol/tests/gui-input-client.mjs",
+      "crates/ipp-protocol/tests/gui-semantics-client.mjs",
+      "crates/ipp-protocol/tests/gui-observations-client.mjs"
+    ]
+  },
+  "contracts": {
+    "description": "Executed native/WASM contracts and reproducible generation",
+    "commands": []
+  },
+  "filesystem": {
+    "description": "Explicit read-only native filesystem routing",
+    "files": [
+      "dist/tests/integration/file-access.test.js"
+    ]
+  },
+  "native": {
+    "description": "Native WebSocket runtime, diagnostics and lifecycle",
+    "files": [
+      "dist/tests/integration/integration.test.js"
+    ]
+  },
+  "browser": {
+    "description": "Chromium worker/WASM transport and lifecycle",
+    "files": [
+      "dist/tests/browser/browser.test.js",
+      "dist/tests/browser/lifecycle.test.js"
+    ]
+  },
+  "snapshots": {
+    "description": "Reference-only Worlds and controller state through native/browser transports and WebGL",
+    "files": [
+      "dist/tests/integration/world-persistence.test.js",
+      "dist/tests/browser/world-persistence.test.js",
+      "dist/tests/render/world-persistence.test.js"
+    ]
+  },
+  "worlds": {
+    "description": "Shared native and browser world/resource scenarios",
+    "files": [
+      "dist/tests/integration/world-host.test.js",
+      "dist/tests/browser/world-host.test.js"
+    ]
+  },
+  "lifecycle": {
+    "description": "Lifecycle subscriptions, partial effects and session fences through native/browser clients",
+    "files": [
+      "dist/tests/integration/lifecycle-subscriptions.test.js",
+      "dist/tests/browser/lifecycle-subscriptions.test.js"
+    ]
+  },
+  "animation": {
+    "description": "Property playback and gallery skeleton poses through transports and completed WebGL frames",
+    "files": [
+      "dist/tests/integration/world-host.test.js",
+      "dist/tests/browser/world-host.test.js",
+      "dist/tests/render/animation.test.js",
+      "dist/tests/render/gallery-animation.test.js"
+    ]
+  },
+  "hierarchy": {
+    "description": "Hierarchy and terminal LookAt through native lifecycle and WebGL references",
+    "files": [
+      "dist/tests/integration/hierarchy.test.js",
+      "dist/tests/render/hierarchy.test.js"
+    ]
+  },
+  "cameras": {
+    "description": "Camera/picking scenarios and completed WebGL frame assertions",
+    "files": [
+      "dist/tests/integration/world-host.test.js",
+      "dist/tests/browser/world-host.test.js",
+      "dist/tests/render/camera.test.js",
+      "dist/tests/render/gallery-picking.test.js",
+      "dist/tests/render/gallery-navigation.test.js",
+      "dist/tests/render/gallery-dragging.test.js"
+    ]
+  },
+  "geometry": {
+    "description": "Shared primitive, compound and skeletal geometry through real clients and WebGL",
+    "files": [
+      "dist/tests/integration/world-host.test.js",
+      "dist/tests/browser/world-host.test.js",
+      "dist/tests/render/camera.test.js",
+      "dist/tests/render/debug-geometry.test.js",
+      "dist/tests/render/geometry.test.js"
+    ]
+  },
+  "react": {
+    "description": "React reconciliation, ownership and public package consumers",
+    "files": [
+      "dist/tests/react/react.test.js",
+      "dist/packages/ipp-react/tests/renderer.test.js"
+    ]
+  },
+  "canvas": {
+    "description": "Canvas composition, lifecycle and pixel density",
+    "files": [
+      "dist/tests/render/canvas.test.js",
+      "dist/tests/render/dpi.test.js"
+    ]
+  },
+  "render": {
+    "description": "Resources, gallery controls and actual WebGL frames",
+    "files": [
+      "dist/tests/render/render.test.js",
+      "dist/tests/render/fixture.test.js",
+      "dist/tests/render/viewer.test.js",
+      "dist/tests/render/ready-geometry.test.js",
+      "dist/tests/render/gallery-picking.test.js",
+      "dist/tests/render/gallery-navigation.test.js",
+      "dist/tests/render/gallery-particles.test.js",
+      "dist/tests/render/gallery-dragging.test.js",
+      "dist/tests/render/debug-geometry.test.js",
+      "dist/tests/render/geometry.test.js"
+    ]
+  },
+  "lighting": {
+    "description": "Direct lights, smooth normals, spot shadows and context recovery",
+    "files": [
+      "dist/tests/render/lighting.test.js"
+    ]
+  },
+  "particles-blender": {
+    "description": "Real Blender particle recipe and bake export",
+    "files": [
+      "dist/tests/render/particles-blender.test.js"
+    ],
+    "commands": [
+      {
+        "name": "particle-cache-export",
+        "command": [
+          "@blender",
+          "--background",
+          "--factory-startup",
+          "--python-exit-code",
+          "1",
+          "--python",
+          "tests/blender/particles_check.py"
+        ],
+        "builds": [
+          "typescript",
+          "blender-viewer",
+          "blender-addon",
+          "blender-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser",
+          "blender",
+          "certificates"
+        ]
+      }
+    ],
+    "sourceRoots": [
+      "integrations/blender/",
+      "tests/blender/"
+    ]
+  },
+  "gallery-particles": {
+    "description": "Interactive particle gallery controls, rendering and cleanup",
+    "files": [
+      "dist/tests/render/gallery-particles.test.js"
+    ]
+  },
+  "gallery-gui": {
+    "description": "GUI demo controls, native input, skins, scrolling, rendering and lifecycle cleanup",
+    "files": [
+      "dist/tests/render/gallery-gui.test.js"
+    ]
+  },
+  "gallery-gui-camera": {
+    "description": "Runtime-routed Surface GUI and background camera gestures",
+    "files": [
+      "dist/tests/render/gallery-gui-camera.test.js"
+    ]
+  },
+  "gallery-platformer": {
+    "description": "Imported platformer locomotion, smooth turning with a forward gait, following camera, lighting and lifecycle cleanup",
+    "files": [
+      "dist/tests/render/gallery-platformer.test.js"
+    ]
+  },
+  "particles": {
+    "description": "Particle emission, playback, instancing and recovery",
+    "files": [
+      "dist/tests/render/particles.test.js"
+    ]
+  },
+  "mesh-poses": {
+    "description": "Vertex pose interpolation, animation, normals, skinning, shadows and recovery",
+    "files": [
+      "dist/tests/render/mesh-poses.test.js"
+    ]
+  },
+  "skinning": {
+    "description": "Skeletal rigs, pose-keyframe players, blended deformation, normals and recovery",
+    "files": [
+      "dist/tests/render/skinning.test.js"
+    ]
+  },
+  "textures": {
+    "description": "Streaming textures, optional attributes and context recovery",
+    "files": [
+      "dist/tests/render/texture.test.js"
+    ]
+  },
+  "shapes": {
+    "description": "Built-in geometry, contours and rendered shape assertions",
+    "files": [
+      "dist/tests/render/shapes.test.js"
+    ]
+  },
+  "command-streaming": {
+    "description": "Bounded command storage, Host batch isolation and real native/worker streaming scenarios",
+    "commands": [
+      {
+        "name": "host",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-host-session",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "overlay",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "state_overlay",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "storage",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "recycled_command_buffers",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ],
+    "files": [
+      "dist/tests/integration/world-host.test.js",
+      "dist/tests/browser/world-host.test.js"
+    ]
+  },
+  "surfaces": {
+    "description": "Quadratic text/drawings, RGBA bitmaps, item lifecycle and real native/worker presentation",
+    "files": [
+      "dist/tests/integration/surface.test.js",
+      "dist/tests/render/surface.test.js"
+    ],
+    "commands": [
+      {
+        "name": "converters",
+        "command": [
+          "@development-python",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests/surface_assets",
+          "-p",
+          "test_*.py"
+        ],
+        "builds": [
+          "font-assets"
+        ],
+        "requirements": [
+          "python-tools"
+        ]
+      }
+    ],
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-render-gl/src/services/render/",
+      "crates/ipp-core/src/services/asset_management/",
+      "examples/surface-terminal/",
+      "tests/surface_assets/",
+      "assets/fonts/",
+      "licences/fonts/"
+    ]
+  },
+  "gui": {
+    "description": "GUI roots, node identity, committed control values and ownership through real native and worker clients",
+    "files": [
+      "dist/tests/react/gui-root.test.js",
+      "dist/packages/ipp-react/tests/gui-clipboard.test.js",
+      "dist/packages/ipp-react/tests/gui-commits.test.js",
+      "dist/packages/ipp-react/tests/gui-controls.test.js",
+      "dist/packages/ipp-react/tests/gui-declaration.test.js",
+      "dist/packages/ipp-react/tests/gui-effects.test.js",
+      "dist/packages/ipp-react/tests/gui-ime.test.js",
+      "dist/packages/ipp-react/tests/gui-input.test.js",
+      "dist/packages/ipp-react/tests/gui-soft-keyboard.test.js",
+      "dist/packages/ipp-react/tests/gui-text-bridge.test.js",
+      "dist/packages/ipp-client/tests/gui-input.test.js",
+      "dist/packages/ipp-client/tests/gui-observations.test.js",
+      "dist/packages/ipp-client/tests/gui-semantics.test.js",
+      "crates/ipp-protocol/tests/gui-input-client.mjs",
+      "crates/ipp-protocol/tests/gui-observations-client.mjs",
+      "crates/ipp-protocol/tests/gui-semantics-client.mjs",
+      "dist/tests/integration/gui.test.js",
+      "dist/tests/integration/gui-react-root.test.js",
+      "dist/tests/browser/gui.test.js"
+    ],
+    "commands": [
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui",
+          "--test",
+          "gui",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "protocol",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-protocol",
+          "--features",
+          "gui",
+          "--lib",
+          "gui_",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ],
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/gui/",
+      "crates/ipp-protocol/src/",
+      "crates/ipp-host-session/src/",
+      "tools/ipp-schema-gen/src/",
+      "packages/ipp-client/src/",
+      "packages/ipp-react/src/",
+      "tests/react/",
+      "tests/integration/",
+      "tests/browser/"
+    ]
+  }
+}

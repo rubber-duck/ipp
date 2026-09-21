@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24">
+  <title>IPP converter fixture</title>
+  <g transform="translate(2 2)">
+    <path fill="#2468a0" fill-rule="evenodd" d="M0 0h28v20H0z M4 4h20v12H4z"/>
+    <circle fill="#f0c040" cx="14" cy="10" r="4"/>
+    <path fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3 2" d="M3 17L10 11L15 15L25 5"/>
+  </g>
+</svg>

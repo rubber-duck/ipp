@@ -1,0 +1,19 @@
+{
+  "shure-tech-mono": {
+    "version": "Nerd Fonts 3.5.1",
+    "url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/patched-fonts/ShareTechMono/ShureTechMonoNerdFontMono-Regular.ttf",
+    "sha256": "9a821c1499aeab3c7cb03ab606678ffaca681497d5e0f0aa96a610ba9ff92a01"
+  },
+  "adwaita-mono": {
+    "version": "Adwaita Fonts 50.0 / Mono 34.1.0",
+    "url": "https://gitlab.gnome.org/GNOME/adwaita-fonts/-/raw/bd828c71418f7ae3af76687d6ca2a809111770f2/mono/AdwaitaMono-Regular.ttf",
+    "sha256": "0edc6a8d8ca249f594dee661b2f57f1a3baa33bc7aca826c6a9fe27b06f9f930"
+  },
+  "noto-sans": {
+    "version": "Noto Sans 2.015",
+    "url": "https://raw.githubusercontent.com/google/fonts/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosans/NotoSans%5Bwdth,wght%5D.ttf",
+    "sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+    "axes": { "wght": 400, "wdth": 100 },
+    "instance_sha256": "16a1ee5229882c1ba577d265014a85d8a4ddbcf5e45bd30bcfbabfdaf89cabf3"
+  }
+}

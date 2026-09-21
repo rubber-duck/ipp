@@ -1,0 +1,264 @@
+[
+  {
+    "id": "check:gles-particles",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_particles",
+      "--no-default-features",
+      "--features",
+      "particles",
+      "--locked",
+      "--",
+      "@egl",
+      "target/integration-artifacts/particles/gles"
+    ],
+    "dependencies": []
+  },
+  {
+    "id": "check:gles-spatial",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_smoke",
+      "--no-default-features",
+      "--locked",
+      "--",
+      "@egl",
+      "target/gallery-build/cube.mesh",
+      "target/integration-artifacts/render/native"
+    ],
+    "dependencies": [
+      "build:gallery"
+    ]
+  },
+  {
+    "id": "check:gles-textures",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_smoke",
+      "--no-default-features",
+      "--locked",
+      "--",
+      "@egl",
+      "target/texture-build/cube.mesh",
+      "target/integration-artifacts/render/native-textures",
+      "target/texture-build/checker.texture",
+      "target/shapes-build"
+    ],
+    "dependencies": [
+      "build:textures",
+      "build:shapes"
+    ]
+  },
+  {
+    "id": "check:gles-lighting",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_smoke",
+      "--no-default-features",
+      "--features",
+      "shadows",
+      "--locked",
+      "--",
+      "@egl",
+      "target/texture-build/cube.mesh",
+      "target/integration-artifacts/render/native-lighting",
+      "target/texture-build/checker.texture",
+      "target/shapes-build"
+    ],
+    "dependencies": [
+      "build:textures",
+      "build:shapes"
+    ]
+  },
+  {
+    "id": "check:gles-custom-materials",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_custom_materials",
+      "--no-default-features",
+      "--features",
+      "shadows,mesh-poses,skeletal-animation",
+      "--locked",
+      "--",
+      "@egl",
+      "target/gallery-build/cube.mesh",
+      "target/integration-artifacts/custom-materials/native"
+    ],
+    "dependencies": [
+      "build:gallery"
+    ]
+  },
+  {
+    "id": "check:gles-lit-skinning",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_skinning",
+      "--no-default-features",
+      "--features",
+      "skeletal-animation,shadows",
+      "--locked",
+      "--",
+      "@egl",
+      "target/skinning-build",
+      "target/integration-artifacts/skinning-lighting-gles"
+    ],
+    "dependencies": [
+      "build:skinning-fixtures"
+    ]
+  },
+  {
+    "id": "check:gles-skinning",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_skinning",
+      "--no-default-features",
+      "--features",
+      "skeletal-animation",
+      "--locked",
+      "--",
+      "@egl",
+      "target/skinning-build",
+      "target/integration-artifacts/skinning-gles"
+    ],
+    "dependencies": [
+      "build:skinning-fixtures"
+    ]
+  },
+  {
+    "id": "check:gles-mesh-poses",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_mesh_poses",
+      "--no-default-features",
+      "--features",
+      "mesh-poses",
+      "--locked",
+      "--",
+      "@egl",
+      "target/mesh-pose-build",
+      "target/integration-artifacts/mesh-poses-gles"
+    ],
+    "dependencies": [
+      "build:mesh-pose-fixtures"
+    ]
+  },
+  {
+    "id": "check:gles-lit-mesh-poses",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_mesh_poses",
+      "--no-default-features",
+      "--features",
+      "mesh-poses,shadows",
+      "--locked",
+      "--",
+      "@egl",
+      "target/mesh-pose-build",
+      "target/integration-artifacts/mesh-poses-lighting-gles"
+    ],
+    "dependencies": [
+      "build:mesh-pose-fixtures"
+    ]
+  },
+  {
+    "id": "check:gles-surfaces",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_surfaces",
+      "--no-default-features",
+      "--features",
+      "surfaces",
+      "--locked",
+      "--",
+      "@egl",
+      "target/surface-assets",
+      "target/font-assets",
+      "target/integration-artifacts/surfaces/gles"
+    ],
+    "dependencies": [
+      "build:surface-assets"
+    ]
+  },
+  {
+    "id": "check:gles-gui-clips",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_gui_clips",
+      "--no-default-features",
+      "--features",
+      "gui",
+      "--locked",
+      "--",
+      "@egl",
+      "target/integration-artifacts/gui-clips/gles"
+    ],
+    "dependencies": []
+  },
+  {
+    "id": "check:gles-gui-layout",
+    "command": [
+      "cargo",
+      "run",
+      "-p",
+      "ipp-render-gl",
+      "--example",
+      "egl_gui_layout",
+      "--no-default-features",
+      "--features",
+      "gui",
+      "--locked",
+      "--",
+      "@egl",
+      "target/surface-assets",
+      "target/font-assets",
+      "target/integration-artifacts/gui-layout/gles"
+    ],
+    "dependencies": [
+      "build:surface-assets"
+    ]
+  }
+]

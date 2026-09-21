@@ -1,0 +1,26 @@
+[package]
+name = "ipp-host-session"
+description = "Shared IPP host request, frame, and response session policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipp-core.workspace = true
+ipp-protocol.workspace = true
+
+[features]
+gui = ["surfaces", "ipp-core/gui", "ipp-protocol/gui"]
+surfaces = ["ipp-protocol/surfaces"]
+profiling = ["ipp-core/profiling"]
+mesh-poses = ["ipp-protocol/mesh-poses"]
+particles = ["ipp-protocol/particles"]
+default = ["builtin-assets"]
+diagnostics = ["ipp-core/diagnostics"]
+builtin-assets = ["ipp-protocol/builtin-assets"]
+skeletal-animation = ["ipp-protocol/skeletal-animation"]
+shadows = ["ipp-core/shadows", "ipp-protocol/shadows"]
+
+[lints]
+workspace = true

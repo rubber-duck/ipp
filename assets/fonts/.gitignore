@@ -1,0 +1,7 @@
+# Keep the source manifest and documentation; binary fonts are generated under target/.
+*.ttf
+*.otf
+*.ttc
+*.woff
+*.woff2
+*.ippf

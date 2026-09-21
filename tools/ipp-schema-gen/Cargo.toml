@@ -1,0 +1,13 @@
+[package]
+name = "ipp-schema-gen"
+description = "IPP target-contract processing and SDK generation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+
+[lints]
+workspace = true

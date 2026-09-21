@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "name": "KayKit_Platformer_Pack_1.0_FREE.zip",
+      "url": "https://kaylousberg.itch.io/kaykit-platformer",
+      "bytes": 23789539,
+      "sha256": "7e140ee01abf99a5896cf93a02ff3dc6a23a7222109fd04854821f44a3a3adeb",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "KayKit_Character_Animations_1.1.zip",
+      "url": "https://kaylousberg.itch.io/kaykit-character-animations",
+      "bytes": 14858957,
+      "sha256": "65882f31f905ad2e953819648a59287cdeab8f623908d5ef701971d3758be20f",
+      "license": "CC0-1.0"
+    }
+  ],
+  "rig": {
+    "source": "Rig_Medium",
+    "bones": 23,
+    "meshForwardRuntime": [0, 0, 1]
+  },
+  "actions": {
+    "Platformer_Walk": "Walking_A",
+    "Platformer_Run": "Running_A",
+    "Platformer_Crawl": "Crawling"
+  }
+}

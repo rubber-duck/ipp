@@ -6,7 +6,7 @@ This guide owns development prerequisites, local launchers and certificate setup
 
 ## Local Blender installation
 
-Use the selected Blender 5.2 LTS. [Pipeline setup](../../tools/pipeline/toolchains.json) pins the tested Linux x64 archive and checksum used by CI; [addon wheels](../../integrations/blender/wheels-linux-x64.json) target Blender Python 3.13. General repository tools use the [build-guide toolchain](building.md). Set `BLENDER_BIN` when `blender` is not on PATH; the invoking Python interpreter is propagated to maintained harnesses.
+Use Blender 5.2 LTS. [Pipeline setup](../../tools/pipeline/toolchains.json) pins the optional local Linux x64 archive and checksum; Pages CI uses the Blender Foundation Snap and verifies its 5.2 version. [Addon wheels](../../integrations/blender/wheels-linux-x64.json) target Blender Python 3.13. General repository tools use the [build-guide toolchain](building.md). Set `BLENDER_BIN` when `blender` is not on PATH; the invoking Python interpreter is propagated to maintained harnesses.
 
 ```sh
 blender --version

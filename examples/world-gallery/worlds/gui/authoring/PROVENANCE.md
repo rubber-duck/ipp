@@ -4,7 +4,7 @@ The projector, lit base and tiled floor are original procedural Blender geometry
 
 [build_projector.py](build_projector.py) is the reproducible source. [projector.blend](projector.blend) retains the generated meshes, packed textures, procedural material datablocks, lighting and preview camera. `target/projector-authoring/projector-preview.png` demonstrates the authored material and baked base, and is not evidence of IPP rendering. [compose_projector.py](compose_projector.py) applies the manifest's exact camera and transforms to produce `target/projector-authoring/projector-preview.blend` and `target/projector-authoring/projector-scene-preview.png`. Its sparse panel and translucent beam are composition placeholders. React owns the actual Surface controls, live lens and transparent projection shader.
 
-Ordinary gallery builds export the packed scene without rebaking. Meshes, textures and `projector.json` are generated under ignored `target/gallery-gui-assets/projector/` alongside three converted waveform drawings from the original SVG sources in `svg/`. Generate that product directly with `python tools/ipp.py build gallery-gui-assets`.
+Ordinary gallery builds export the packed scene without rebaking. Meshes, textures and `projector.json` are generated under ignored `target/gallery-gui-assets/projector/` alongside drawings converted from every original SVG source in `svg/`, currently the three waveform curves. Generate that product directly with `python tools/ipp.py build gallery-gui-assets`.
 
 ## Regeneration
 

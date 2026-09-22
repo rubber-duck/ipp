@@ -123,68 +123,101 @@ impl<D: RenderDevice> RenderService<D> {
                     font_size,
                     glyphs,
                 } => {
-                    let Some(data) = world
-                        .asset_resources()
-                        .get(font.key)
-                        .and_then(|resource| resource.data())
-                        .and_then(|asset| {
-                            asset
-                                .as_any()
-                                .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
-                        })
-                    else {
-                        stats.failed_draw_calls += 1;
-                        continue;
+                    #[cfg(feature = "gui")]
+                    let drawn_via_atlas = {
+                        let vp = world.render_viewport().unwrap_or((800, 600));
+                        let y_scale = (mvp[4] * mvp[4] + mvp[5] * mvp[5] + mvp[6] * mvp[6]).sqrt();
+                        let pixels_per_metre = y_scale * (vp.1 as f32 * 0.5);
+                        let nominal_px_height =
+                            *font_size * style.scale[1].abs() * pixels_per_metre;
+                        let band_opt =
+                            super::super::glyph_atlas::select_resolution_band(nominal_px_height);
+
+                        if let Some(band) = band_opt {
+                            self.draw_glyphs_via_atlas(
+                                world,
+                                item.entity,
+                                style,
+                                font.key,
+                                *font_size,
+                                glyphs,
+                                band,
+                                &mvp,
+                                clip,
+                                stats,
+                            )?
+                        } else {
+                            false
+                        }
                     };
-                    let unit = *font_size / data.font.units_per_em() as f32;
-                    let Some(path) = data.path.as_ref() else {
-                        continue;
-                    };
-                    instances.clear();
-                    if !ipp_core::render_buffer_reuse_enabled() {
-                        *instances = Vec::new();
-                    }
-                    for glyph in glyphs {
-                        let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
+
+                    #[cfg(not(feature = "gui"))]
+                    let drawn_via_atlas = false;
+
+                    if !drawn_via_atlas {
+                        let Some(data) = world
+                            .asset_resources()
+                            .get(font.key)
+                            .and_then(|resource| resource.data())
+                            .and_then(|asset| {
+                                asset
+                                    .as_any()
+                                    .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
+                            })
+                        else {
+                            stats.failed_draw_calls += 1;
                             continue;
                         };
-                        if range.curve_range[1] == 0 {
+                        let unit = *font_size / data.font.units_per_em() as f32;
+                        let Some(path) = data.path.as_ref() else {
                             continue;
+                        };
+                        instances.clear();
+                        if !ipp_core::render_buffer_reuse_enabled() {
+                            *instances = Vec::new();
                         }
-                        let bounds = data.glyph_bounds[glyph.glyph_id as usize];
-                        let tint = glyph.color.unwrap_or(style.color);
-                        let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
-                        let placement = [
-                            style.position[0] + glyph.position[0] * style.scale[0],
-                            style.position[1] + glyph.position[1] * style.scale[1],
-                            style.scale[0] * unit,
-                            style.scale[1] * unit,
-                        ];
-                        instances.push(super::super::device::SurfacePathInstance {
-                            bounds,
-                            placement,
-                            color,
-                            descriptor: range,
-                        });
-                    }
-                    if !instances.is_empty() {
-                        if self.surface_instance_program.is_none() {
-                            self.surface_instance_program =
-                                Some(self.device.borrow_mut().create_program(
-                                    include_str!("../shaders/surface_instanced.vert"),
-                                    include_str!("../shaders/surface.frag"),
-                                )?);
+                        for glyph in glyphs {
+                            let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
+                                continue;
+                            };
+                            if range.curve_range[1] == 0 {
+                                continue;
+                            }
+                            let bounds = data.glyph_bounds[glyph.glyph_id as usize];
+                            let tint = glyph.color.unwrap_or(style.color);
+                            let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
+                            let placement = [
+                                style.position[0] + glyph.position[0] * style.scale[0],
+                                style.position[1] + glyph.position[1] * style.scale[1],
+                                style.scale[0] * unit,
+                                style.scale[1] * unit,
+                            ];
+                            instances.push(super::super::device::SurfacePathInstance {
+                                bounds,
+                                placement,
+                                color,
+                                descriptor: range,
+                            });
                         }
-                        self.device.borrow_mut().draw_surface_path_instances(
-                            self.surface_instance_program.as_ref().unwrap(),
-                            path,
-                            instances,
-                            &mvp,
-                            &clip,
-                            0,
-                        )?;
-                        stats.draw_calls += 1;
-                        stats.triangles += instances.len() as u32 * 2;
+                        if !instances.is_empty() {
+                            if self.surface_instance_program.is_none() {
+                                self.surface_instance_program =
+                                    Some(self.device.borrow_mut().create_program(
+                                        include_str!("../shaders/surface_instanced.vert"),
+                                        include_str!("../shaders/surface.frag"),
+                                    )?);
+                            }
+                            self.device.borrow_mut().draw_surface_path_instances(
+                                self.surface_instance_program.as_ref().unwrap(),
+                                path,
+                                instances,
+                                &mvp,
+                                &clip,
+                                0,
+                            )?;
+                            stats.draw_calls += 1;
+                            stats.triangles += instances.len() as u32 * 2;
+                        }
                     }
                 }
                 ipp_core::SurfaceRenderPrimitive::Drawing {
@@ -350,6 +383,179 @@ impl<D: RenderDevice> RenderService<D> {
         boxes.clear();
 
         Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    #[allow(clippy::too_many_arguments)]
+    fn draw_glyphs_via_atlas(
+        &mut self,
+        world: &WorldContext<'_>,
+        entity: ipp_core::EntityId,
+        style: &ipp_core::systems::surface::SurfacePrimitiveStyle,
+        font_key: ipp_core::services::asset_management::AssetKey,
+        font_size: f32,
+        glyphs: &[ipp_core::systems::surface::SurfaceGlyph],
+        band: u16,
+        mvp: &[f32; 16],
+        clip: ipp_core::systems::surface::SurfaceClipRect,
+        stats: &mut RenderStats,
+    ) -> Result<bool, RenderError> {
+        let Some(data) = world
+            .asset_resources()
+            .get(font_key)
+            .and_then(|resource| resource.data())
+            .and_then(|asset| {
+                asset
+                    .as_any()
+                    .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
+            })
+        else {
+            return Ok(false);
+        };
+
+        let Some(path) = data.path.as_ref() else {
+            return Ok(false);
+        };
+
+        let font_units_per_em = data.font.units_per_em();
+        let scale = band as f32 / font_units_per_em as f32;
+
+        let mut misses = Vec::new();
+        for glyph in glyphs {
+            if let Some(&range) = data.ranges.get(glyph.glyph_id as usize) {
+                if range.curve_range[1] == 0 {
+                    continue;
+                }
+                let key = super::super::glyph_atlas::GlyphKey {
+                    font_key,
+                    glyph_id: glyph.glyph_id,
+                    resolution_band: band,
+                };
+                if self.glyph_atlas.get(&key).is_none() {
+                    misses.push((glyph.glyph_id, range));
+                }
+            }
+        }
+
+        if !misses.is_empty() {
+            stats.glyph_misses += misses.len() as u32;
+
+            let limit = super::super::glyph_atlas::MAX_POPULATES_PER_FRAME;
+            let to_populate = misses.len().min(limit);
+
+            if self.surface_program.is_none() {
+                self.surface_program = Some(self.device.borrow_mut().create_program(
+                    include_str!("../shaders/surface.vert"),
+                    include_str!("../shaders/surface.frag"),
+                )?);
+            }
+
+            let mut all_populated = true;
+            for &(glyph_id, range) in &misses[..to_populate] {
+                let bounds = data.glyph_bounds[glyph_id as usize];
+                let font_w = (bounds[2] - bounds[0]).max(0.0);
+                let font_h = (bounds[3] - bounds[1]).max(0.0);
+                let px_w = (font_w * scale).ceil() as u32;
+                let px_h = (font_h * scale).ceil() as u32;
+
+                let key = super::super::glyph_atlas::GlyphKey {
+                    font_key,
+                    glyph_id,
+                    resolution_band: band,
+                };
+
+                let Ok(([slot_x, slot_y], page_idx, _)) =
+                    self.glyph_atlas.allocate_slot(key, px_w, px_h, bounds)
+                else {
+                    all_populated = false;
+                    break;
+                };
+
+                let Some(page_handle) = self.glyph_atlas.page_handle(page_idx) else {
+                    all_populated = false;
+                    break;
+                };
+
+                let page_dim = super::super::glyph_atlas::ATLAS_PAGE_SIZE as f32;
+                let atlas_mvp = [
+                    2.0 / page_dim,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    -2.0 / page_dim,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    -1.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                ];
+                let placement = [
+                    slot_x as f32 - bounds[0] * scale,
+                    slot_y as f32 - bounds[1] * scale,
+                    scale,
+                    scale,
+                ];
+                let atlas_clip = [0.0, 0.0, page_dim, page_dim];
+                let color = [1.0, 1.0, 1.0, 1.0];
+
+                self.device
+                    .borrow_mut()
+                    .begin_glyph_atlas_page(page_handle)?;
+                let prog = self.surface_program.as_ref().unwrap();
+                let draw_result = self.device.borrow_mut().draw_surface_path(
+                    prog,
+                    path,
+                    &bounds,
+                    range,
+                    &atlas_mvp,
+                    &placement,
+                    &atlas_clip,
+                    &color,
+                    0,
+                );
+                self.device.borrow_mut().end_glyph_atlas_page()?;
+                if let Err(err) = draw_result {
+                    self.glyph_atlas.remove(&key);
+                    return Err(err);
+                }
+                stats.glyph_populates += 1;
+            }
+
+            if !all_populated || misses.len() > limit {
+                return Ok(false);
+            }
+        }
+
+        if self.surface_text_program.is_none() {
+            self.surface_text_program = Some(self.device.borrow_mut().create_program(
+                include_str!("../shaders/surface_text.vert"),
+                include_str!("../shaders/surface_text.frag"),
+            )?);
+        }
+
+        let program = self.surface_text_program.as_ref().unwrap();
+        self.glyph_batch_cache.draw_text_run(
+            program,
+            &self.glyph_atlas,
+            entity,
+            clip,
+            style,
+            font_key,
+            font_size,
+            font_units_per_em,
+            glyphs,
+            band,
+            mvp,
+            stats,
+        )?;
+
+        Ok(true)
     }
 }
 

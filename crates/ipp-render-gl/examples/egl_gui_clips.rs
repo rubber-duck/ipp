@@ -699,8 +699,152 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "border-only edge strip",
     )?;
     device.delete_gui_batch(batch);
-
     device.delete_program(box_program);
+
+    let path_program = device.create_program(
+        include_str!("../src/services/render/shaders/surface.vert"),
+        include_str!("../src/services/render/shaders/surface.frag"),
+    )?;
+    let mut bands = vec![[32, 4]; 32];
+    bands.extend((0..4).map(|curve| [curve, 0]));
+    let square = device.create_surface_path(
+        &[0.0, 0.0, 1.0, 1.0],
+        &[
+            [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ],
+        &bands,
+    )?;
+
+    let text_program = device.create_program(
+        include_str!("../src/services/render/shaders/surface_text.vert"),
+        include_str!("../src/services/render/shaders/surface_text.frag"),
+    )?;
+    let page = device.create_glyph_atlas_page(512, 512)?;
+
+    // Draw white unit square into slot [1, 1] to [31, 31] on the atlas page.
+    device.begin_glyph_atlas_page(&page)?;
+    let page_dim = 512.0;
+    let atlas_mvp = [
+        2.0 / page_dim,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -2.0 / page_dim,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        1.0,
+        0.0,
+        1.0,
+    ];
+    let slot_scale = 30.0;
+    let slot_placement = [1.0, 1.0, slot_scale, slot_scale];
+    let atlas_clip = [0.0, 0.0, page_dim, page_dim];
+    let white = [1.0, 1.0, 1.0, 1.0];
+    device.draw_surface_path(
+        &path_program,
+        &square,
+        &[0.0, 0.0, 1.0, 1.0],
+        SurfacePathDescriptor::new([0, 4], 0),
+        &atlas_mvp,
+        &slot_placement,
+        &atlas_clip,
+        &white,
+        0,
+    )?;
+    device.end_glyph_atlas_page()?;
+
+    let u0 = 1.0 / 512.0;
+    let v0 = 1.0 - 1.0 / 512.0;
+    let u1 = 31.0 / 512.0;
+    let v1 = 1.0 - 31.0 / 512.0;
+    let cyan = [0.0, 1.0, 1.0, 1.0];
+    let tl = ipp_render_gl::GlyphVertex {
+        position: [1.0, 1.0],
+        uv: [u0, v0],
+        color: cyan,
+    };
+    let bl = ipp_render_gl::GlyphVertex {
+        position: [1.0, 2.0],
+        uv: [u0, v1],
+        color: cyan,
+    };
+    let br = ipp_render_gl::GlyphVertex {
+        position: [2.0, 2.0],
+        uv: [u1, v1],
+        color: cyan,
+    };
+    let tr = ipp_render_gl::GlyphVertex {
+        position: [2.0, 1.0],
+        uv: [u1, v0],
+        color: cyan,
+    };
+    let glyph_vertices = [tl, bl, br, tl, br, tr];
+    let mut glyph_batch = device.create_glyph_batch(&glyph_vertices)?;
+
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    let atlas_tex = *device.glyph_atlas_texture(&page);
+    device.draw_glyph_batch(&text_program, &glyph_batch, &atlas_tex, &MVP, &ROOT)?;
+    let text_batch_frame = capture(&mut device, "glyph-batch")?;
+    check(
+        &text_batch_frame,
+        120,
+        120,
+        [0, 255, 255, 255],
+        8,
+        "retained glyph batch quad cyan tint",
+    )?;
+
+    // Replace GPU storage with yellow tint
+    let yellow = [1.0, 1.0, 0.0, 1.0];
+    let tl_y = ipp_render_gl::GlyphVertex {
+        position: [1.0, 1.0],
+        uv: [u0, v0],
+        color: yellow,
+    };
+    let bl_y = ipp_render_gl::GlyphVertex {
+        position: [1.0, 2.0],
+        uv: [u0, v1],
+        color: yellow,
+    };
+    let br_y = ipp_render_gl::GlyphVertex {
+        position: [2.0, 2.0],
+        uv: [u1, v1],
+        color: yellow,
+    };
+    let tr_y = ipp_render_gl::GlyphVertex {
+        position: [2.0, 1.0],
+        uv: [u1, v0],
+        color: yellow,
+    };
+    let updated_vertices = [tl_y, bl_y, br_y, tl_y, br_y, tr_y];
+    device.update_glyph_batch(&mut glyph_batch, &updated_vertices)?;
+
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    device.draw_glyph_batch(&text_program, &glyph_batch, &atlas_tex, &MVP, &ROOT)?;
+    let updated_batch_frame = capture(&mut device, "glyph-batch-updated")?;
+    check(
+        &updated_batch_frame,
+        120,
+        120,
+        [255, 255, 0, 255],
+        8,
+        "retained glyph batch updated yellow tint",
+    )?;
+
+    device.delete_glyph_batch(glyph_batch);
+    device.delete_glyph_atlas_page(page);
+    device.delete_program(text_program);
+    device.delete_surface_path(square);
+    device.delete_program(path_program);
 
     std::fs::write(
         evidence.join("gui-clips.txt"),

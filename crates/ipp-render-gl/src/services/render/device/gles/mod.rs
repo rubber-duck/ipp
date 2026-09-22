@@ -4,6 +4,8 @@ use std::ptr;
 use std::rc::Rc;
 
 #[cfg(feature = "gui")]
+pub use super::GlyphVertex;
+#[cfg(feature = "gui")]
 pub use super::GuiBoxVertex;
 use super::RenderDevice;
 #[cfg(feature = "gui")]
@@ -76,6 +78,8 @@ pub struct GlesRenderDevice {
     _thread: PhantomData<Rc<()>>,
     #[cfg(feature = "shadows")]
     shadow_target: Option<(u32, [i32; 4])>,
+    #[cfg(feature = "gui")]
+    glyph_atlas_target: Option<(u32, u32, [i32; 4], [f32; 2])>,
 }
 
 /// Native linked program with cached pass-specific uniform locations.
@@ -116,6 +120,24 @@ pub struct GlesGuiBatch {
     pub(crate) vbo: u32,
     pub(crate) vertex_count: i32,
     pub(crate) bytes: usize,
+}
+
+/// Native vertex array and buffer for a retained glyph quad batch.
+#[cfg(feature = "gui")]
+pub struct GlesGlyphBatch {
+    pub(crate) vao: u32,
+    pub(crate) vbo: u32,
+    pub(crate) vertex_count: i32,
+    pub(crate) bytes: usize,
+}
+
+/// Native texture and framebuffer for one glyph atlas page.
+#[cfg(feature = "gui")]
+pub struct GlesGlyphAtlasPage {
+    pub(crate) texture: u32,
+    pub(crate) framebuffer: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 #[cfg(feature = "surfaces")]

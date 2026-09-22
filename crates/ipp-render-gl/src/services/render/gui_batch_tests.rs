@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::{GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, generate_box_vertices};
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::{GlyphVertex, RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
 use ipp_core::systems::surface::{
     GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfaceClipRect,
@@ -34,6 +34,8 @@ impl RenderDevice for MockGuiDevice {
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockGuiBatch;
+    type GlyphBatch = MockGuiBatch;
+    type GlyphAtlasPage = u32;
 
     fn set_lighting(
         &mut self,
@@ -186,6 +188,68 @@ impl RenderDevice for MockGuiDevice {
     ) -> Result<(), RenderError> {
         self.draws.push((batch.id, *clip));
         Ok(())
+    }
+
+    fn create_glyph_batch(
+        &mut self,
+        vertices: &[GlyphVertex],
+    ) -> Result<Self::GlyphBatch, RenderError> {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.created_batches.push((id, vertices.len()));
+        Ok(MockGuiBatch {
+            id,
+            vertex_count: vertices.len(),
+        })
+    }
+
+    fn update_glyph_batch(
+        &mut self,
+        batch: &mut Self::GlyphBatch,
+        vertices: &[GlyphVertex],
+    ) -> Result<(), RenderError> {
+        batch.vertex_count = vertices.len();
+        self.updated_batches.push((batch.id, vertices.len()));
+        Ok(())
+    }
+
+    fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
+        self.deleted_batches.push(batch.id);
+    }
+
+    fn draw_glyph_batch(
+        &mut self,
+        _program: &Self::Program,
+        batch: &Self::GlyphBatch,
+        _atlas: &Self::Texture,
+        _mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.draws.push((batch.id, *clip));
+        Ok(())
+    }
+
+    fn create_glyph_atlas_page(
+        &mut self,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Self::GlyphAtlasPage, RenderError> {
+        self.next_id += 1;
+        Ok(self.next_id as u32)
+    }
+
+    fn delete_glyph_atlas_page(&mut self, _page: Self::GlyphAtlasPage) {}
+
+    fn begin_glyph_atlas_page(&mut self, _page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+        page
     }
 }
 

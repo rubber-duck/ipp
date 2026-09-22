@@ -201,6 +201,14 @@ impl crate::WorldContext<'_> {
 }
 
 impl crate::WorldContext<'_> {
+    /// Read the Host surface dimensions recorded for camera queries and rendering.
+    pub fn render_viewport(&self) -> Option<(u32, u32)> {
+        self.system::<super::CameraSystem>(super::CameraSystem::ID)
+            .expect("compiled camera system")
+            .read(self.world)
+            .render_viewport()
+    }
+
     /// Record the Host surface dimensions used to validate subsequent camera queries.
     pub fn set_render_viewport(&mut self, viewport: Option<(u32, u32)>) {
         self.with_system::<super::CameraSystem, _>(super::CameraSystem::ID, |system, _| {

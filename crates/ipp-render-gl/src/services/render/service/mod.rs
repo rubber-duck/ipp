@@ -95,6 +95,18 @@ pub struct RenderStats {
     /// Total resident bytes occupied by retained GUI batch GPU buffers.
     #[cfg(feature = "gui")]
     pub gui_resident_bytes: u32,
+    /// Glyph atlas cache misses during this submission.
+    #[cfg(feature = "gui")]
+    pub glyph_misses: u32,
+    /// Glyph atlas entries rasterized or populated during this submission.
+    #[cfg(feature = "gui")]
+    pub glyph_populates: u32,
+    /// Number of resident glyph atlas pages.
+    #[cfg(feature = "gui")]
+    pub glyph_pages: u32,
+    /// Total resident bytes occupied by glyph atlas page textures.
+    #[cfg(feature = "gui")]
+    pub glyph_resident_bytes: usize,
 }
 /// Host-owned rendering of evaluated World inputs through one graphics context.
 ///
@@ -129,7 +141,7 @@ pub struct RenderService<D: RenderDevice> {
     shadow_map_size: u32,
     debug: crate::services::render::debug_geometry::DebugGeometryRenderCache<D>,
     #[cfg(feature = "surfaces")]
-    surface_program: Option<D::Program>,
+    pub(super) surface_program: Option<D::Program>,
     #[cfg(feature = "surfaces")]
     surface_instance_program: Option<D::Program>,
     #[cfg(feature = "surfaces")]
@@ -138,6 +150,12 @@ pub struct RenderService<D: RenderDevice> {
     surface_box_program: Option<D::Program>,
     #[cfg(feature = "gui")]
     pub(super) gui_batch_cache: super::gui_batch::GuiBatchRenderCache<D>,
+    #[cfg(feature = "gui")]
+    surface_text_program: Option<D::Program>,
+    #[cfg(feature = "gui")]
+    pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
+    #[cfg(feature = "gui")]
+    pub(super) glyph_batch_cache: super::glyph_atlas::GlyphBatchRenderCache<D>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

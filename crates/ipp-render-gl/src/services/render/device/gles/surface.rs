@@ -581,4 +581,283 @@ impl GlesRenderDevice {
         }
         self.check_draw()
     }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn create_glyph_batch(
+        &mut self,
+        vertices: &[crate::services::render::glyph_atlas::GlyphVertex],
+    ) -> Result<super::GlesGlyphBatch, RenderError> {
+        self.submission.invalidate();
+        let vertex_count = i32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
+        let bytes = std::mem::size_of_val(vertices);
+        let mut vao = 0;
+        let mut vbo = 0;
+
+        // SAFETY: GL allocates exclusive handles for the current context.
+        unsafe {
+            (self.gl.gen_vertex_arrays)(1, &mut vao);
+            (self.gl.gen_buffers)(1, &mut vbo);
+            if vao == 0 || vbo == 0 {
+                if vao != 0 {
+                    (self.gl.delete_vertex_arrays)(1, &vao);
+                }
+                if vbo != 0 {
+                    (self.gl.delete_buffers)(1, &vbo);
+                }
+                return Err(RenderError::RenderDevice(
+                    "glyph batch allocation failed".into(),
+                ));
+            }
+            self.bind_vertex_array(vao);
+            (self.gl.bind_buffer)(ARRAY_BUFFER, vbo);
+            (self.gl.buffer_data)(
+                ARRAY_BUFFER,
+                bytes as isize,
+                vertices.as_ptr().cast(),
+                DYNAMIC_DRAW,
+            );
+            (self.gl.enable_attrib)(0);
+            (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 32, ptr::null());
+            (self.gl.enable_attrib)(1);
+            (self.gl.attrib_pointer)(1, 2, FLOAT, 0, 32, 8 as *const _);
+            (self.gl.enable_attrib)(2);
+            (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 32, 16 as *const _);
+            self.bind_vertex_array(0);
+            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+        }
+
+        if let Err(error) = self.check() {
+            self.delete_glyph_batch(super::GlesGlyphBatch {
+                vao,
+                vbo,
+                vertex_count,
+                bytes,
+            });
+            return Err(error);
+        }
+
+        Ok(super::GlesGlyphBatch {
+            vao,
+            vbo,
+            vertex_count,
+            bytes,
+        })
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn update_glyph_batch(
+        &mut self,
+        batch: &mut super::GlesGlyphBatch,
+        vertices: &[crate::services::render::glyph_atlas::GlyphVertex],
+    ) -> Result<(), RenderError> {
+        self.submission.invalidate();
+        let vertex_count = i32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
+        let bytes = std::mem::size_of_val(vertices);
+
+        // SAFETY: Orphaning permits driver storage retirement but does not guarantee
+        // stall-free allocation. Replacing with NULL first signals the driver to unbind
+        // the previous storage block from pending GPU reads, then reallocating uploads
+        // the complete batch contents without partial overwrites.
+        unsafe {
+            (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
+            (self.gl.buffer_data)(ARRAY_BUFFER, bytes as isize, ptr::null(), DYNAMIC_DRAW);
+            (self.gl.buffer_data)(
+                ARRAY_BUFFER,
+                bytes as isize,
+                vertices.as_ptr().cast(),
+                DYNAMIC_DRAW,
+            );
+            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+        }
+
+        batch.vertex_count = vertex_count;
+        batch.bytes = bytes;
+        self.check()
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn delete_glyph_batch(&mut self, batch: super::GlesGlyphBatch) {
+        self.submission.invalidate();
+
+        // SAFETY: Handle deletion is context-checked; invalid handles are tolerated.
+        unsafe {
+            if batch.vao != 0 {
+                (self.gl.delete_vertex_arrays)(1, &batch.vao);
+            }
+            if batch.vbo != 0 {
+                (self.gl.delete_buffers)(1, &batch.vbo);
+            }
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn draw_glyph_batch(
+        &mut self,
+        program: &GlesRenderProgram,
+        batch: &super::GlesGlyphBatch,
+        atlas_texture: &u32,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.submission.invalidate();
+        self.alpha_blend(true)?;
+        let clip_location = self.surface_location(program, c"u_clip");
+        let atlas_location = self.surface_location(program, c"u_atlas");
+
+        // SAFETY: Attribute pointers are bound in VAO; draw_arrays draws vertex_count.
+        // Texture and uniforms are bound and synchronously copied.
+        unsafe {
+            (self.gl.use_program)(program.id);
+            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
+            (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
+            (self.gl.uniform_int)(atlas_location, 0);
+            (self.gl.active_texture)(0x84C0);
+            (self.gl.bind_texture)(0x0DE1, *atlas_texture);
+            self.bind_vertex_array(batch.vao);
+            (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count);
+            self.bind_vertex_array(0);
+            (self.gl.bind_texture)(0x0DE1, 0);
+        }
+
+        self.check_draw()
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn create_glyph_atlas_page(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<super::GlesGlyphAtlasPage, RenderError> {
+        self.submission.invalidate();
+        let mut texture = 0;
+        let mut framebuffer = 0;
+
+        // SAFETY: Context owns new texture and framebuffer handles. Texture is initialized
+        // to RGBA8 with linear filtering and edge clamping, and cleared to zero alpha.
+        let complete = unsafe {
+            (self.gl.gen_textures)(1, &mut texture);
+            (self.gl.gen_framebuffers)(1, &mut framebuffer);
+            (self.gl.bind_texture)(0x0DE1, texture);
+            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2601); // MIN_FILTER LINEAR
+            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2601); // MAG_FILTER LINEAR
+            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F); // WRAP_S CLAMP_TO_EDGE
+            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F); // WRAP_T CLAMP_TO_EDGE
+            (self.gl.tex_image)(
+                0x0DE1,
+                0,
+                0x8058, // RGBA8
+                width as i32,
+                height as i32,
+                0,
+                0x1908, // RGBA
+                0x1401, // UNSIGNED_BYTE
+                ptr::null(),
+            );
+            let mut draw = 0;
+            let mut read = 0;
+            let mut vp = [0i32; 4];
+            (self.gl.get_integer)(0x8CA6, &mut draw);
+            (self.gl.get_integer)(0x8CAA, &mut read);
+            (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
+            (self.gl.bind_framebuffer)(0x8D40, framebuffer);
+            (self.gl.framebuffer_texture)(0x8D40, 0x8CE0, 0x0DE1, texture, 0);
+            let complete = (self.gl.check_framebuffer)(0x8D40) == 0x8CD5;
+            (self.gl.viewport)(0, 0, width as i32, height as i32);
+            (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
+            (self.gl.clear)(0x00004000); // COLOR_BUFFER_BIT
+            (self.gl.bind_framebuffer)(0x8CA9, draw as u32);
+            (self.gl.bind_framebuffer)(0x8CA8, read as u32);
+            (self.gl.viewport)(vp[0], vp[1], vp[2], vp[3]);
+            (self.gl.bind_texture)(0x0DE1, 0);
+            complete && texture != 0 && framebuffer != 0
+        };
+
+        if !complete || self.check().is_err() {
+            // SAFETY: Releases partially allocated texture and framebuffer on failure.
+            unsafe {
+                if texture != 0 {
+                    (self.gl.delete_textures)(1, &texture);
+                }
+                if framebuffer != 0 {
+                    (self.gl.delete_framebuffers)(1, &framebuffer);
+                }
+            }
+            return Err(RenderError::RenderDevice(
+                "glyph atlas allocation failed".into(),
+            ));
+        }
+
+        Ok(super::GlesGlyphAtlasPage {
+            texture,
+            framebuffer,
+            width,
+            height,
+        })
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn delete_glyph_atlas_page(&mut self, page: super::GlesGlyphAtlasPage) {
+        self.submission.invalidate();
+
+        // SAFETY: Context owns these handles and tolerates invalid handles.
+        unsafe {
+            if page.framebuffer != 0 {
+                (self.gl.delete_framebuffers)(1, &page.framebuffer);
+            }
+            if page.texture != 0 {
+                (self.gl.delete_textures)(1, &page.texture);
+            }
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn begin_glyph_atlas_page(
+        &mut self,
+        page: &super::GlesGlyphAtlasPage,
+    ) -> Result<(), RenderError> {
+        self.submission.invalidate();
+
+        // SAFETY: Saves the borrowed host framebuffer and viewport bindings before
+        // directing rendering into the atlas page framebuffer.
+        let (draw, read, viewport) = unsafe {
+            let mut draw = 0;
+            let mut read = 0;
+            let mut vp = [0i32; 4];
+            (self.gl.get_integer)(0x8CA6, &mut draw);
+            (self.gl.get_integer)(0x8CAA, &mut read);
+            (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
+            (draw as u32, read as u32, vp)
+        };
+
+        self.glyph_atlas_target = Some((draw, read, viewport, self.surface_viewport));
+        self.surface_viewport = [page.width as f32, page.height as f32];
+
+        // SAFETY: Directs subsequent draw commands to the atlas page framebuffer and viewport.
+        unsafe {
+            (self.gl.bind_framebuffer)(0x8D40, page.framebuffer);
+            (self.gl.viewport)(0, 0, page.width as i32, page.height as i32);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        self.submission.invalidate();
+
+        if let Some((draw, read, viewport, surface_vp)) = self.glyph_atlas_target.take() {
+            self.surface_viewport = surface_vp;
+
+            // SAFETY: Restores the saved host framebuffer bindings and viewport.
+            unsafe {
+                (self.gl.bind_framebuffer)(0x8CA9, draw);
+                (self.gl.bind_framebuffer)(0x8CA8, read);
+                (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
+            }
+        }
+
+        self.check()
+    }
 }

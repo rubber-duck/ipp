@@ -155,6 +155,35 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         }
       >()
     : undefined;
+  const glyphBatches = IPP_GUI
+    ? new Map<
+        number,
+        {
+          vao: WebGLVertexArrayObject;
+          vbo: WebGLBuffer;
+          count: number;
+          bytes: number;
+        }
+      >()
+    : undefined;
+  const glyphAtlasPages = IPP_GUI
+    ? new Map<
+        number,
+        {
+          texture: number;
+          framebuffer: WebGLFramebuffer;
+          width: number;
+          height: number;
+        }
+      >()
+    : undefined;
+  let glyphAtlasTarget:
+    | {
+        framebuffer: WebGLFramebuffer | null;
+        readFramebuffer: WebGLFramebuffer | null;
+        viewport: Int32Array;
+      }
+    | undefined;
   let surfaceBoxQuadVao: WebGLVertexArrayObject | null = null;
   let surfaceBoxQuadVbo: WebGLBuffer | null = null;
   const shadows = IPP_SHADOWS
@@ -541,6 +570,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     }
     if (IPP_GUI) {
       guiBatches!.clear();
+      glyphBatches!.clear();
+      glyphAtlasPages!.clear();
+      glyphAtlasTarget = undefined;
       surfaceBoxQuadVao = null;
       surfaceBoxQuadVbo = null;
     }
@@ -569,6 +601,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     }
     if (IPP_GUI) {
       guiBatches!.clear();
+      glyphBatches!.clear();
+      glyphAtlasPages!.clear();
+      glyphAtlasTarget = undefined;
       surfaceBoxQuadVao = null;
       surfaceBoxQuadVbo = null;
     }
@@ -1647,6 +1682,260 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               checkDraw();
               return 1;
             });
+          },
+          create_glyph_batch(
+            vertexPointer: number,
+            vertexCount: number,
+          ): number {
+            return status(() => {
+              const vao = gl.createVertexArray();
+              const vbo = gl.createBuffer();
+              if (!vao || !vbo) {
+                if (vao) gl.deleteVertexArray(vao);
+                if (vbo) gl.deleteBuffer(vbo);
+                throw new Error("Glyph batch allocation failed");
+              }
+              const byteLength = (vertexCount >>> 0) * 32;
+              const vertexData = floats(
+                vertexPointer >>> 0,
+                (vertexCount >>> 0) * 8,
+              );
+              bindVertexArray(vao);
+              gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+              gl.enableVertexAttribArray(0);
+              gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 32, 0);
+              gl.enableVertexAttribArray(1);
+              gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 8);
+              gl.enableVertexAttribArray(2);
+              gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 16);
+              bindVertexArray(null);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+              const handle = nextHandle();
+              glyphBatches!.set(handle, {
+                vao,
+                vbo,
+                count: vertexCount >>> 0,
+                bytes: byteLength,
+              });
+              return handle;
+            });
+          },
+          update_glyph_batch(
+            batchHandle: number,
+            vertexPointer: number,
+            vertexCount: number,
+          ): number {
+            return status(() => {
+              const batch = glyphBatches!.get(batchHandle >>> 0);
+              if (!batch) throw new Error("Stale glyph batch handle");
+              const byteLength = (vertexCount >>> 0) * 32;
+              const vertexData = floats(
+                vertexPointer >>> 0,
+                (vertexCount >>> 0) * 8,
+              );
+              gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
+              gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
+              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              batch.count = vertexCount >>> 0;
+              batch.bytes = byteLength;
+              return 1;
+            });
+          },
+          delete_glyph_batch(batchHandle: number): void {
+            const batch = glyphBatches!.get(batchHandle >>> 0);
+            if (batch) {
+              glyphBatches!.delete(batchHandle >>> 0);
+              gl.deleteVertexArray(batch.vao);
+              gl.deleteBuffer(batch.vbo);
+            }
+          },
+          draw_glyph_batch(
+            programHandle: number,
+            batchHandle: number,
+            atlasHandle: number,
+            mvpPointer: number,
+            clipPointer: number,
+          ): number {
+            return status(() => {
+              const program = programs.get(programHandle >>> 0);
+              if (!program) throw new Error("Stale glyph batch program handle");
+              const batch = glyphBatches!.get(batchHandle >>> 0);
+              if (!batch) throw new Error("Stale glyph batch handle");
+              const atlas = textures.get(atlasHandle >>> 0);
+              if (!atlas) throw new Error("Stale glyph atlas texture handle");
+              if (blendMode !== 2) {
+                gl.enable(gl.BLEND);
+                gl.blendEquation(gl.FUNC_ADD);
+                gl.blendFuncSeparate(
+                  gl.SRC_ALPHA,
+                  gl.ONE_MINUS_SRC_ALPHA,
+                  gl.ONE,
+                  gl.ONE_MINUS_SRC_ALPHA,
+                );
+                gl.depthMask(false);
+                blendMode = 2;
+              }
+              useProgram(program.object);
+              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              vector4Uniform(
+                parameterLocation(program, "u_clip"),
+                clipPointer >>> 0,
+                4,
+              );
+              const atlasLoc = parameterLocation(program, "u_atlas");
+              if (atlasLoc) {
+                gl.uniform1i(atlasLoc, 0);
+              }
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, atlas);
+              bindVertexArray(batch.vao);
+              gl.drawArrays(gl.TRIANGLES, 0, batch.count);
+              bindVertexArray(null);
+              gl.bindTexture(gl.TEXTURE_2D, null);
+              checkDraw();
+              return 1;
+            });
+          },
+          create_glyph_atlas_page(width: number, height: number): number {
+            return status(() => {
+              width >>>= 0;
+              height >>>= 0;
+              const texture = gl.createTexture();
+              const framebuffer = gl.createFramebuffer();
+              if (!texture || !framebuffer) {
+                if (texture) gl.deleteTexture(texture);
+                if (framebuffer) gl.deleteFramebuffer(framebuffer);
+                throw new Error("Glyph atlas allocation failed");
+              }
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, texture);
+              gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.RGBA,
+                width,
+                height,
+                0,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                null,
+              );
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+              gl.texParameteri(
+                gl.TEXTURE_2D,
+                gl.TEXTURE_WRAP_S,
+                gl.CLAMP_TO_EDGE,
+              );
+              gl.texParameteri(
+                gl.TEXTURE_2D,
+                gl.TEXTURE_WRAP_T,
+                gl.CLAMP_TO_EDGE,
+              );
+              const prevDraw = gl.getParameter(
+                gl.DRAW_FRAMEBUFFER_BINDING,
+              ) as WebGLFramebuffer | null;
+              const prevRead = gl.getParameter(
+                gl.READ_FRAMEBUFFER_BINDING,
+              ) as WebGLFramebuffer | null;
+              const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+              gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+              gl.framebufferTexture2D(
+                gl.FRAMEBUFFER,
+                gl.COLOR_ATTACHMENT0,
+                gl.TEXTURE_2D,
+                texture,
+                0,
+              );
+              const complete =
+                gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
+                gl.FRAMEBUFFER_COMPLETE;
+              gl.viewport(0, 0, width, height);
+              gl.clearColor(0, 0, 0, 0);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+              gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevDraw);
+              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevRead);
+              gl.viewport(
+                prevViewport[0],
+                prevViewport[1],
+                prevViewport[2],
+                prevViewport[3],
+              );
+              if (!complete) {
+                gl.deleteTexture(texture);
+                gl.deleteFramebuffer(framebuffer);
+                throw new Error("Glyph atlas framebuffer incomplete");
+              }
+              const textureHandle = nextHandle();
+              textures.set(textureHandle, texture);
+              const pageHandle = nextHandle();
+              glyphAtlasPages!.set(pageHandle, {
+                texture: textureHandle,
+                framebuffer,
+                width,
+                height,
+              });
+              return pageHandle;
+            });
+          },
+          delete_glyph_atlas_page(pageHandle: number): void {
+            const page = glyphAtlasPages!.get(pageHandle >>> 0);
+            if (page) {
+              glyphAtlasPages!.delete(pageHandle >>> 0);
+              gl.deleteFramebuffer(page.framebuffer);
+              const tex = textures.get(page.texture);
+              if (tex) {
+                textures.delete(page.texture);
+                gl.deleteTexture(tex);
+              }
+            }
+          },
+          begin_glyph_atlas_page(pageHandle: number): number {
+            return status(() => {
+              const page = glyphAtlasPages!.get(pageHandle >>> 0);
+              if (!page) throw new Error("Stale glyph atlas page handle");
+              glyphAtlasTarget = {
+                framebuffer: gl.getParameter(
+                  gl.DRAW_FRAMEBUFFER_BINDING,
+                ) as WebGLFramebuffer | null,
+                readFramebuffer: gl.getParameter(
+                  gl.READ_FRAMEBUFFER_BINDING,
+                ) as WebGLFramebuffer | null,
+                viewport: gl.getParameter(gl.VIEWPORT) as Int32Array,
+              };
+              gl.bindFramebuffer(gl.FRAMEBUFFER, page.framebuffer);
+              gl.viewport(0, 0, page.width, page.height);
+              return 1;
+            });
+          },
+          end_glyph_atlas_page(): number {
+            return status(() => {
+              if (glyphAtlasTarget) {
+                gl.bindFramebuffer(
+                  gl.DRAW_FRAMEBUFFER,
+                  glyphAtlasTarget.framebuffer,
+                );
+                gl.bindFramebuffer(
+                  gl.READ_FRAMEBUFFER,
+                  glyphAtlasTarget.readFramebuffer,
+                );
+                gl.viewport(
+                  glyphAtlasTarget.viewport[0],
+                  glyphAtlasTarget.viewport[1],
+                  glyphAtlasTarget.viewport[2],
+                  glyphAtlasTarget.viewport[3],
+                );
+                glyphAtlasTarget = undefined;
+              }
+              return 1;
+            });
+          },
+          glyph_atlas_texture(pageHandle: number): number {
+            const page = glyphAtlasPages!.get(pageHandle >>> 0);
+            return page ? page.texture : 0;
           },
         }
       : {}),

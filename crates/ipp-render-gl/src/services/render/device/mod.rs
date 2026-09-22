@@ -89,6 +89,8 @@ impl SurfaceBoxShape {
 }
 
 #[cfg(feature = "gui")]
+pub use super::glyph_atlas::GlyphVertex;
+#[cfg(feature = "gui")]
 pub use super::gui_batch::GuiBoxVertex;
 
 #[cfg(feature = "surfaces")]
@@ -213,6 +215,14 @@ pub trait RenderDevice: 'static {
     /// Context-owned retained GUI batch buffer and allocation metadata.
     #[cfg(feature = "gui")]
     type GuiBatch;
+
+    /// Context-owned retained glyph batch buffer and allocation metadata.
+    #[cfg(feature = "gui")]
+    type GlyphBatch;
+
+    /// Context-owned glyph atlas page texture and framebuffer target.
+    #[cfg(feature = "gui")]
+    type GlyphAtlasPage;
 
     /// Enable exhaustive routine draw/uniform error polling for diagnostics.
     /// Allocation, compilation, uploads and pass boundaries always validate.
@@ -442,6 +452,78 @@ pub trait RenderDevice: 'static {
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
+
+    /// Allocate and upload a retained glyph quad batch.
+    #[cfg(feature = "gui")]
+    fn create_glyph_batch(
+        &mut self,
+        _vertices: &[GlyphVertex],
+    ) -> Result<Self::GlyphBatch, RenderError> {
+        Err(RenderError::RenderDevice(
+            "glyph batches unavailable".into(),
+        ))
+    }
+
+    /// Replace complete batch contents via GPU storage replacement (orphaning).
+    #[cfg(feature = "gui")]
+    fn update_glyph_batch(
+        &mut self,
+        _batch: &mut Self::GlyphBatch,
+        _vertices: &[GlyphVertex],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "glyph batches unavailable".into(),
+        ))
+    }
+
+    /// Release one context-owned glyph batch allocation.
+    #[cfg(feature = "gui")]
+    fn delete_glyph_batch(&mut self, _batch: Self::GlyphBatch) {}
+
+    /// Draw one retained glyph batch in painter order with atlas sampling and clipping.
+    #[cfg(feature = "gui")]
+    fn draw_glyph_batch(
+        &mut self,
+        _program: &Self::Program,
+        _batch: &Self::GlyphBatch,
+        _atlas: &Self::Texture,
+        _mvp: &[f32; 16],
+        _clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "glyph batches unavailable".into(),
+        ))
+    }
+
+    /// Allocate an atlas page texture with linear filtering and render target.
+    #[cfg(feature = "gui")]
+    fn create_glyph_atlas_page(
+        &mut self,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Self::GlyphAtlasPage, RenderError> {
+        Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
+    }
+
+    /// Release an atlas page allocation.
+    #[cfg(feature = "gui")]
+    fn delete_glyph_atlas_page(&mut self, _page: Self::GlyphAtlasPage) {}
+
+    /// Save the current draw target and bind the atlas page framebuffer and viewport.
+    #[cfg(feature = "gui")]
+    fn begin_glyph_atlas_page(&mut self, _page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
+    }
+
+    /// Restore the host draw target and viewport.
+    #[cfg(feature = "gui")]
+    fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
+    }
+
+    /// Borrow the atlas page's underlying color texture for sampling.
+    #[cfg(feature = "gui")]
+    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture;
 
     /// Replace the transient instance stream; empty restores ordinary draws.
     #[cfg(feature = "particles")]

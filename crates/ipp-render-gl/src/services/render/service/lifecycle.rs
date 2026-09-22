@@ -27,6 +27,14 @@ impl<D: RenderDevice> RenderService<D> {
             surface_box_program: None,
             #[cfg(feature = "gui")]
             gui_batch_cache: super::super::gui_batch::GuiBatchRenderCache::new(device.clone()),
+            #[cfg(feature = "gui")]
+            surface_text_program: None,
+            #[cfg(feature = "gui")]
+            glyph_atlas: super::super::glyph_atlas::GlyphAtlas::new(device.clone()),
+            #[cfg(feature = "gui")]
+            glyph_batch_cache: super::super::glyph_atlas::GlyphBatchRenderCache::new(
+                device.clone(),
+            ),
             device,
             asset_context_active: Rc::new(Cell::new(true)),
             #[cfg(feature = "particles")]
@@ -175,6 +183,14 @@ impl<D: RenderDevice> RenderService<D> {
         }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
+        #[cfg(feature = "gui")]
+        if let Some(program) = self.surface_text_program.take() {
+            self.device.borrow_mut().delete_program(program);
+        }
+        #[cfg(feature = "gui")]
+        self.glyph_atlas.clear();
+        #[cfg(feature = "gui")]
+        self.glyph_batch_cache.clear();
         #[cfg(feature = "particles")]
         {
             self.particle_quad = None;

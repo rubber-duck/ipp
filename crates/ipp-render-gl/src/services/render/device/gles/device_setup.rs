@@ -106,6 +106,8 @@ impl GlesRenderDevice {
             surface_box_quad_vao: 0,
             #[cfg(feature = "gui")]
             surface_box_quad_vbo: 0,
+            #[cfg(feature = "gui")]
+            glyph_atlas_target: None,
             #[cfg(feature = "surfaces")]
             surface_instance_buffer: 0,
             #[cfg(feature = "surfaces")]

@@ -28,6 +28,8 @@ mod surface_path;
 mod template;
 
 #[cfg(feature = "gui")]
+pub mod glyph_atlas;
+#[cfg(feature = "gui")]
 pub mod gui_batch;
 
 #[cfg(feature = "gui")]
@@ -37,6 +39,8 @@ pub use device::SurfacePathDescriptor;
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathInstance;
 pub use device::{PlatformRenderDevice, RenderDevice};
+#[cfg(feature = "gui")]
+pub use glyph_atlas::GlyphVertex;
 #[cfg(feature = "gui")]
 pub use gui_batch::{GuiBoxVertex, GuiPartClass};
 

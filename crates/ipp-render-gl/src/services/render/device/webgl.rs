@@ -207,10 +207,40 @@ unsafe extern "C" {
     fn update_gui_batch(batch_handle: u32, vertex_ptr: *const f32, vertex_count: u32) -> u32;
 
     #[cfg(feature = "gui")]
-    fn delete_gui_batch(batch_handle: u32);
+    fn draw_gui_batch(program: u32, batch_handle: u32, mvp: *const f32, clip: *const f32) -> u32;
 
     #[cfg(feature = "gui")]
-    fn draw_gui_batch(program: u32, batch_handle: u32, mvp: *const f32, clip: *const f32) -> u32;
+    fn create_glyph_batch(vertex_ptr: *const f32, vertex_count: u32) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn update_glyph_batch(batch_handle: u32, vertex_ptr: *const f32, vertex_count: u32) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn delete_glyph_batch(batch_handle: u32);
+
+    #[cfg(feature = "gui")]
+    fn draw_glyph_batch(
+        program: u32,
+        batch_handle: u32,
+        atlas_handle: u32,
+        mvp: *const f32,
+        clip: *const f32,
+    ) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_atlas_page(width: u32, height: u32) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn delete_glyph_atlas_page(page_handle: u32);
+
+    #[cfg(feature = "gui")]
+    fn begin_glyph_atlas_page(page_handle: u32) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn end_glyph_atlas_page() -> u32;
+
+    #[cfg(feature = "gui")]
+    fn glyph_atlas_texture(page_handle: u32) -> u32;
 
     fn set_draw_checks(enabled: u32);
 
@@ -310,6 +340,12 @@ impl RenderDevice for WebGlRenderDevice {
 
     #[cfg(feature = "gui")]
     type GuiBatch = u32;
+
+    #[cfg(feature = "gui")]
+    type GlyphBatch = u32;
+
+    #[cfg(feature = "gui")]
+    type GlyphAtlasPage = u32;
 
     fn set_lighting(
         &mut self,
@@ -629,6 +665,85 @@ impl RenderDevice for WebGlRenderDevice {
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
         self.check(unsafe { draw_gui_batch(program.id, *batch, mvp.as_ptr(), clip.as_ptr()) })
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_batch(
+        &mut self,
+        vertices: &[super::GlyphVertex],
+    ) -> Result<Self::GlyphBatch, RenderError> {
+        let count = u32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
+        let id = unsafe { create_glyph_batch(vertices.as_ptr().cast(), count) };
+        if id == 0 {
+            Err(self.error())
+        } else {
+            Ok(id)
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    fn update_glyph_batch(
+        &mut self,
+        batch: &mut Self::GlyphBatch,
+        vertices: &[super::GlyphVertex],
+    ) -> Result<(), RenderError> {
+        let count = u32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
+        self.check(unsafe { update_glyph_batch(*batch, vertices.as_ptr().cast(), count) })
+    }
+
+    #[cfg(feature = "gui")]
+    fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
+        unsafe { delete_glyph_batch(batch) };
+    }
+
+    #[cfg(feature = "gui")]
+    fn draw_glyph_batch(
+        &mut self,
+        program: &Self::Program,
+        batch: &Self::GlyphBatch,
+        atlas: &Self::Texture,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.check(unsafe {
+            draw_glyph_batch(program.id, *batch, *atlas, mvp.as_ptr(), clip.as_ptr())
+        })
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_atlas_page(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<Self::GlyphAtlasPage, RenderError> {
+        let id = unsafe { create_glyph_atlas_page(width, height) };
+        if id == 0 {
+            Err(self.error())
+        } else {
+            Ok(id)
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
+        unsafe { delete_glyph_atlas_page(page) };
+    }
+
+    #[cfg(feature = "gui")]
+    fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
+        self.check(unsafe { begin_glyph_atlas_page(*page) })
+    }
+
+    #[cfg(feature = "gui")]
+    fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        self.check(unsafe { end_glyph_atlas_page() })
+    }
+
+    #[cfg(feature = "gui")]
+    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+        page
     }
 
     #[cfg(feature = "particles")]

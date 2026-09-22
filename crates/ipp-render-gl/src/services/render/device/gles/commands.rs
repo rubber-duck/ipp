@@ -20,6 +20,12 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "gui")]
     type GuiBatch = super::GlesGuiBatch;
 
+    #[cfg(feature = "gui")]
+    type GlyphBatch = super::GlesGlyphBatch;
+
+    #[cfg(feature = "gui")]
+    type GlyphAtlasPage = super::GlesGlyphAtlasPage;
+
     fn set_lighting(
         &mut self,
         program: &GlesRenderProgram,
@@ -216,6 +222,69 @@ impl RenderDevice for GlesRenderDevice {
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
         self.draw_gui_batch(program, batch, mvp, clip)
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_batch(
+        &mut self,
+        vertices: &[super::GlyphVertex],
+    ) -> Result<Self::GlyphBatch, RenderError> {
+        self.create_glyph_batch(vertices)
+    }
+
+    #[cfg(feature = "gui")]
+    fn update_glyph_batch(
+        &mut self,
+        batch: &mut Self::GlyphBatch,
+        vertices: &[super::GlyphVertex],
+    ) -> Result<(), RenderError> {
+        self.update_glyph_batch(batch, vertices)
+    }
+
+    #[cfg(feature = "gui")]
+    fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
+        self.delete_glyph_batch(batch);
+    }
+
+    #[cfg(feature = "gui")]
+    fn draw_glyph_batch(
+        &mut self,
+        program: &Self::Program,
+        batch: &Self::GlyphBatch,
+        atlas: &Self::Texture,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.draw_glyph_batch(program, batch, atlas, mvp, clip)
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_atlas_page(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<Self::GlyphAtlasPage, RenderError> {
+        self.create_glyph_atlas_page(width, height)
+    }
+
+    #[cfg(feature = "gui")]
+    fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
+        self.delete_glyph_atlas_page(page);
+    }
+
+    #[cfg(feature = "gui")]
+    fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
+        self.begin_glyph_atlas_page(page)
+    }
+
+    #[cfg(feature = "gui")]
+    fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        self.end_glyph_atlas_page()
+    }
+
+    #[cfg(feature = "gui")]
+    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+        &page.texture
     }
 
     #[cfg(feature = "particles")]

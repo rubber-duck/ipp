@@ -117,6 +117,10 @@ impl<D: RenderDevice> RenderService<D> {
                 debug_resident_bytes: self.debug.resident_bytes() as u32,
                 #[cfg(feature = "gui")]
                 gui_resident_bytes: self.gui_batch_cache.resident_bytes() as u32,
+                #[cfg(feature = "gui")]
+                glyph_pages: self.glyph_atlas.page_count(),
+                #[cfg(feature = "gui")]
+                glyph_resident_bytes: self.glyph_atlas.resident_bytes(),
                 ..RenderStats::default()
             });
         }
@@ -131,6 +135,10 @@ impl<D: RenderDevice> RenderService<D> {
                     debug_resident_bytes: self.debug.resident_bytes() as u32,
                     #[cfg(feature = "gui")]
                     gui_resident_bytes: self.gui_batch_cache.resident_bytes() as u32,
+                    #[cfg(feature = "gui")]
+                    glyph_pages: self.glyph_atlas.page_count(),
+                    #[cfg(feature = "gui")]
+                    glyph_resident_bytes: self.glyph_atlas.resident_bytes(),
                     ..RenderStats::default()
                 });
             }
@@ -472,6 +480,9 @@ impl<D: RenderDevice> RenderService<D> {
                     &live_surfaces,
                     &mut stats,
                 );
+                self.glyph_batch_cache.finish_frame();
+                stats.glyph_pages = self.glyph_atlas.page_count();
+                stats.glyph_resident_bytes = self.glyph_atlas.resident_bytes();
             }
 
             Ok(stats)

@@ -15,6 +15,15 @@ impl RenderDevice for Device {
     type ShadowMap = ();
     #[cfg(feature = "gui")]
     type GuiBatch = ();
+    #[cfg(feature = "gui")]
+    type GlyphBatch = ();
+    #[cfg(feature = "gui")]
+    type GlyphAtlasPage = ();
+
+    #[cfg(feature = "gui")]
+    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+        page
+    }
 
     fn set_lighting(
         &mut self,

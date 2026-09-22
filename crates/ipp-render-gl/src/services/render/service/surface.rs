@@ -41,8 +41,17 @@ impl<D: RenderDevice> RenderService<D> {
         stats: &mut RenderStats,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
-        let program = self.surface_program.as_ref().unwrap();
         let mvp = camera::multiply(view_projection, item.model);
+
+        #[cfg(feature = "gui")]
+        let mut current_box_batch: Option<(
+            ipp_core::systems::surface::SurfaceClipRect,
+            super::super::gui_batch::GuiPartClass,
+        )> = None;
+
+        #[cfg(feature = "gui")]
+        let mut pending_boxes: Vec<&ipp_core::SurfaceRenderPrimitive> = Vec::new();
+
         for primitive in &item.primitives {
             // Intersect the per-primitive clip with the root content rectangle
             // on every path. An empty intersection suppresses the primitive:
@@ -51,6 +60,62 @@ impl<D: RenderDevice> RenderService<D> {
             else {
                 continue;
             };
+
+            #[cfg(feature = "gui")]
+            if let ipp_core::SurfaceRenderPrimitive::Box {
+                ..
+            } = primitive
+            {
+                // The clip above is already non-empty; this re-check
+                // guards the device against invalid box dimensions in
+                // hand-built submissions with NaN uniforms.
+                if !ipp_core::surface_primitive_visible(primitive, item.clip_size) {
+                    continue;
+                }
+
+                let part_class = super::super::gui_batch::GuiPartClass::from_identity(
+                    primitive.style().identity,
+                );
+
+                match current_box_batch {
+                    Some((batch_clip, batch_class))
+                        if batch_clip == clip && batch_class == part_class =>
+                    {
+                        pending_boxes.push(primitive);
+                    }
+                    Some((batch_clip, batch_class)) => {
+                        self.flush_gui_boxes(
+                            item.entity,
+                            batch_clip,
+                            batch_class,
+                            &mut pending_boxes,
+                            &mvp,
+                            stats,
+                        )?;
+                        current_box_batch = Some((clip, part_class));
+                        pending_boxes.push(primitive);
+                    }
+                    None => {
+                        current_box_batch = Some((clip, part_class));
+                        pending_boxes.push(primitive);
+                    }
+                }
+
+                continue;
+            }
+
+            #[cfg(feature = "gui")]
+            if let Some((batch_clip, batch_class)) = current_box_batch.take() {
+                self.flush_gui_boxes(
+                    item.entity,
+                    batch_clip,
+                    batch_class,
+                    &mut pending_boxes,
+                    &mvp,
+                    stats,
+                )?;
+            }
+
             match primitive {
                 ipp_core::SurfaceRenderPrimitive::Glyphs {
                     style,
@@ -168,6 +233,7 @@ impl<D: RenderDevice> RenderService<D> {
                             layer.fill_rule,
                             ipp_core::services::asset_management::drawing::FillRule::EvenOdd
                         ));
+                        let program = self.surface_program.as_ref().unwrap();
                         self.device.borrow_mut().draw_surface_path(
                             program,
                             path,
@@ -226,54 +292,8 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 #[cfg(feature = "gui")]
                 ipp_core::SurfaceRenderPrimitive::Box {
-                    style,
-                    size,
-                    corner_radius,
-                    border_width,
-                    border_color,
                     ..
-                } => {
-                    // The clip above is already non-empty; this re-check
-                    // guards the device against invalid box dimensions in
-                    // hand-built submissions with NaN uniforms.
-                    if !ipp_core::surface_primitive_visible(primitive, item.clip_size) {
-                        continue;
-                    }
-                    if self.surface_box_program.is_none() {
-                        self.surface_box_program = Some(self.device.borrow_mut().create_program(
-                            include_str!("../shaders/surface_box.vert"),
-                            include_str!("../shaders/surface_box.frag"),
-                        )?);
-                    }
-                    let program = self.surface_box_program.as_ref().unwrap();
-                    let placement = [
-                        style.position[0],
-                        style.position[1],
-                        size[0] * style.scale[0],
-                        size[1] * style.scale[1],
-                    ];
-                    let color = [
-                        style.color[0],
-                        style.color[1],
-                        style.color[2],
-                        style.color[3] * style.opacity,
-                    ];
-                    let border = [
-                        border_color[0],
-                        border_color[1],
-                        border_color[2],
-                        border_color[3] * style.opacity,
-                    ];
-                    let shape = super::super::device::SurfaceBoxShape {
-                        corner: *corner_radius,
-                        border: *border_width,
-                    };
-                    self.device.borrow_mut().draw_surface_box(
-                        program, &mvp, &placement, &clip, &color, &border, shape,
-                    )?;
-                    stats.draw_calls += 1;
-                    stats.triangles += 2;
-                }
+                } => unreachable!(),
                 // A GUI box reaching a renderer built without the gui
                 // capability cannot draw: core and renderer features compose
                 // independently, so this fallback keeps every combination
@@ -285,6 +305,50 @@ impl<D: RenderDevice> RenderService<D> {
                 }
             }
         }
+
+        #[cfg(feature = "gui")]
+        if let Some((batch_clip, batch_class)) = current_box_batch.take() {
+            self.flush_gui_boxes(
+                item.entity,
+                batch_clip,
+                batch_class,
+                &mut pending_boxes,
+                &mvp,
+                stats,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn flush_gui_boxes(
+        &mut self,
+        entity: ipp_core::EntityId,
+        batch_clip: ipp_core::systems::surface::SurfaceClipRect,
+        part_class: super::super::gui_batch::GuiPartClass,
+        boxes: &mut Vec<&ipp_core::SurfaceRenderPrimitive>,
+        mvp: &[f32; 16],
+        stats: &mut RenderStats,
+    ) -> Result<(), RenderError> {
+        if boxes.is_empty() {
+            return Ok(());
+        }
+
+        if self.surface_box_program.is_none() {
+            self.surface_box_program = Some(self.device.borrow_mut().create_program(
+                include_str!("../shaders/surface_box.vert"),
+                include_str!("../shaders/surface_box.frag"),
+            )?);
+        }
+
+        let program = self.surface_box_program.as_ref().unwrap();
+
+        self.gui_batch_cache
+            .draw_box_batch(program, entity, batch_clip, part_class, boxes, mvp, stats)?;
+
+        boxes.clear();
+
         Ok(())
     }
 }

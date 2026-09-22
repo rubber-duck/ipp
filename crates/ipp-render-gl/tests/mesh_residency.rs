@@ -54,6 +54,8 @@ impl RenderDevice for TestDevice {
 
     #[cfg(feature = "shadows")]
     type ShadowMap = ();
+    #[cfg(feature = "gui")]
+    type GuiBatch = ();
 
     fn set_lighting(
         &mut self,

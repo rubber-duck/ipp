@@ -102,6 +102,10 @@ impl GlesRenderDevice {
             exhaustive_draw_checks: false,
             #[cfg(feature = "surfaces")]
             surface_quad_vao: 0,
+            #[cfg(feature = "gui")]
+            surface_box_quad_vao: 0,
+            #[cfg(feature = "gui")]
+            surface_box_quad_vbo: 0,
             #[cfg(feature = "surfaces")]
             surface_instance_buffer: 0,
             #[cfg(feature = "surfaces")]

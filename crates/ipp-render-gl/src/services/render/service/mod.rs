@@ -83,6 +83,18 @@ pub struct RenderStats {
     pub shadow_resident_bytes: u32,
     /// Private debug GPU bytes, separately bounded and absent from world assets.
     pub debug_resident_bytes: u32,
+    /// Batches submitted for GUI primitives.
+    #[cfg(feature = "gui")]
+    pub gui_batches: u32,
+    /// Number of GUI batches rebuilt due to primitive change or creation.
+    #[cfg(feature = "gui")]
+    pub gui_rebuilds: u32,
+    /// Number of GPU batch buffers allocated or replaced during this frame.
+    #[cfg(feature = "gui")]
+    pub gui_allocations: u32,
+    /// Total resident bytes occupied by retained GUI batch GPU buffers.
+    #[cfg(feature = "gui")]
+    pub gui_resident_bytes: u32,
 }
 /// Host-owned rendering of evaluated World inputs through one graphics context.
 ///
@@ -124,6 +136,8 @@ pub struct RenderService<D: RenderDevice> {
     surface_bitmap_program: Option<D::Program>,
     #[cfg(feature = "gui")]
     surface_box_program: Option<D::Program>,
+    #[cfg(feature = "gui")]
+    pub(super) gui_batch_cache: super::gui_batch::GuiBatchRenderCache<D>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

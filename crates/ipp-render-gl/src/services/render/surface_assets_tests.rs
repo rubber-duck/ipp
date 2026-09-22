@@ -13,6 +13,8 @@ impl RenderDevice for Device {
     type SurfacePath = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = ();
+    #[cfg(feature = "gui")]
+    type GuiBatch = ();
 
     fn set_lighting(
         &mut self,

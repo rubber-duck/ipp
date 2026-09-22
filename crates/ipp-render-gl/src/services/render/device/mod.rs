@@ -88,6 +88,9 @@ impl SurfaceBoxShape {
     }
 }
 
+#[cfg(feature = "gui")]
+pub use super::gui_batch::GuiBoxVertex;
+
 #[cfg(feature = "surfaces")]
 pub(super) fn surface_instances_exact(instances: &[SurfacePathInstance]) -> bool {
     const MAX_EXACT_F32_INTEGER: u32 = 1 << 24;
@@ -206,6 +209,10 @@ pub trait RenderDevice: 'static {
     /// Context-owned depth texture and framebuffer for the bounded spot shadow pass.
     #[cfg(feature = "shadows")]
     type ShadowMap;
+
+    /// Context-owned retained GUI batch buffer and allocation metadata.
+    #[cfg(feature = "gui")]
+    type GuiBatch;
 
     /// Enable exhaustive routine draw/uniform error polling for diagnostics.
     /// Allocation, compilation, uploads and pass boundaries always validate.
@@ -399,6 +406,41 @@ pub trait RenderDevice: 'static {
         Err(RenderError::RenderDevice(
             "surface boxes unavailable".into(),
         ))
+    }
+
+    /// Allocate and upload a retained non-indexed GUI triangle batch.
+    #[cfg(feature = "gui")]
+    fn create_gui_batch(
+        &mut self,
+        _vertices: &[GuiBoxVertex],
+    ) -> Result<Self::GuiBatch, RenderError> {
+        Err(RenderError::RenderDevice("gui batches unavailable".into()))
+    }
+
+    /// Replace complete batch contents via GPU storage replacement (orphaning).
+    #[cfg(feature = "gui")]
+    fn update_gui_batch(
+        &mut self,
+        _batch: &mut Self::GuiBatch,
+        _vertices: &[GuiBoxVertex],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice("gui batches unavailable".into()))
+    }
+
+    /// Release one context-owned GUI batch allocation.
+    #[cfg(feature = "gui")]
+    fn delete_gui_batch(&mut self, _batch: Self::GuiBatch) {}
+
+    /// Draw one retained GUI triangle batch in painter order with clipping.
+    #[cfg(feature = "gui")]
+    fn draw_gui_batch(
+        &mut self,
+        _program: &Self::Program,
+        _batch: &Self::GuiBatch,
+        _mvp: &[f32; 16],
+        _clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
 
     /// Replace the transient instance stream; empty restores ordinary draws.

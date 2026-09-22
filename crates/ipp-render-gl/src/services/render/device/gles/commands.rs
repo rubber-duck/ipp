@@ -17,6 +17,9 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "shadows")]
     type ShadowMap = lighting::GlesShadowMap;
 
+    #[cfg(feature = "gui")]
+    type GuiBatch = super::GlesGuiBatch;
+
     fn set_lighting(
         &mut self,
         program: &GlesRenderProgram,
@@ -180,6 +183,39 @@ impl RenderDevice for GlesRenderDevice {
         shape: super::SurfaceBoxShape,
     ) -> Result<(), RenderError> {
         self.draw_surface_box(program, mvp, placement, clip, color, border, shape)
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_gui_batch(
+        &mut self,
+        vertices: &[super::GuiBoxVertex],
+    ) -> Result<Self::GuiBatch, RenderError> {
+        self.create_gui_batch(vertices)
+    }
+
+    #[cfg(feature = "gui")]
+    fn update_gui_batch(
+        &mut self,
+        batch: &mut Self::GuiBatch,
+        vertices: &[super::GuiBoxVertex],
+    ) -> Result<(), RenderError> {
+        self.update_gui_batch(batch, vertices)
+    }
+
+    #[cfg(feature = "gui")]
+    fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
+        self.delete_gui_batch(batch);
+    }
+
+    #[cfg(feature = "gui")]
+    fn draw_gui_batch(
+        &mut self,
+        program: &Self::Program,
+        batch: &Self::GuiBatch,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.draw_gui_batch(program, batch, mvp, clip)
     }
 
     #[cfg(feature = "particles")]

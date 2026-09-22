@@ -144,6 +144,19 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let surfaceQuadVao: WebGLVertexArrayObject | null = null;
   let surfaceInstanceBuffer: WebGLBuffer | null = null;
   let surfaceInstanceCapacity = 0;
+  const guiBatches = IPP_GUI
+    ? new Map<
+        number,
+        {
+          vao: WebGLVertexArrayObject;
+          vbo: WebGLBuffer;
+          count: number;
+          bytes: number;
+        }
+      >()
+    : undefined;
+  let surfaceBoxQuadVao: WebGLVertexArrayObject | null = null;
+  let surfaceBoxQuadVbo: WebGLBuffer | null = null;
   const shadows = IPP_SHADOWS
     ? new Map<
         number,
@@ -526,6 +539,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceInstanceBuffer = null;
       surfaceInstanceCapacity = 0;
     }
+    if (IPP_GUI) {
+      guiBatches!.clear();
+      surfaceBoxQuadVao = null;
+      surfaceBoxQuadVbo = null;
+    }
 
     event.preventDefault();
     invalidateSubmission();
@@ -548,6 +566,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceQuadVao = null;
       surfaceInstanceBuffer = null;
       surfaceInstanceCapacity = 0;
+    }
+    if (IPP_GUI) {
+      guiBatches!.clear();
+      surfaceBoxQuadVao = null;
+      surfaceBoxQuadVbo = null;
     }
     if (IPP_SHADOWS) {
       shadows!.clear();
@@ -1414,38 +1437,187 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 gl.depthMask(false);
                 blendMode = 2;
               }
-              if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
-              if (!surfaceQuadVao)
-                throw new Error("Surface quad allocation failed");
+              if (!surfaceBoxQuadVao || !surfaceBoxQuadVbo) {
+                surfaceBoxQuadVao = gl.createVertexArray();
+                surfaceBoxQuadVbo = gl.createBuffer();
+                if (!surfaceBoxQuadVao || !surfaceBoxQuadVbo)
+                  throw new Error("Surface box quad allocation failed");
+                bindVertexArray(surfaceBoxQuadVao);
+                gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBoxQuadVbo);
+                gl.enableVertexAttribArray(0);
+                gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 72, 0);
+                gl.enableVertexAttribArray(1);
+                gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 72, 8);
+                gl.enableVertexAttribArray(2);
+                gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 72, 24);
+                gl.enableVertexAttribArray(3);
+                gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 72, 40);
+                gl.enableVertexAttribArray(4);
+                gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 72, 56);
+                bindVertexArray(null);
+                gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              }
+              const placement = floats(placementPointer >>> 0, 4);
+              const color = floats(colorPointer >>> 0, 4);
+              const border = floats(borderPointer >>> 0, 4);
+              const shape = floats(shapePointer >>> 0, 4);
+              const x0 = placement[0];
+              const y0 = placement[1];
+              const x1 = placement[0] + placement[2];
+              const y1 = placement[1] + placement[3];
+              const quadVertices = new Float32Array(108);
+              const corners = [
+                [x0, y0],
+                [x0, y1],
+                [x1, y1],
+                [x0, y0],
+                [x1, y1],
+                [x1, y0],
+              ];
+              for (let i = 0; i < 6; i++) {
+                const off = i * 18;
+                quadVertices[off] = corners[i][0];
+                quadVertices[off + 1] = corners[i][1];
+                quadVertices[off + 2] = placement[0];
+                quadVertices[off + 3] = placement[1];
+                quadVertices[off + 4] = placement[2];
+                quadVertices[off + 5] = placement[3];
+                quadVertices[off + 6] = color[0];
+                quadVertices[off + 7] = color[1];
+                quadVertices[off + 8] = color[2];
+                quadVertices[off + 9] = color[3];
+                quadVertices[off + 10] = border[0];
+                quadVertices[off + 11] = border[1];
+                quadVertices[off + 12] = border[2];
+                quadVertices[off + 13] = border[3];
+                quadVertices[off + 14] = shape[0];
+                quadVertices[off + 15] = shape[1];
+                quadVertices[off + 16] = shape[2];
+                quadVertices[off + 17] = shape[3];
+              }
+              gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBoxQuadVbo);
+              gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.DYNAMIC_DRAW);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
               useProgram(program.object);
               matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_placement"),
-                placementPointer >>> 0,
-                4,
-              );
               vector4Uniform(
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
                 4,
               );
+              bindVertexArray(surfaceBoxQuadVao);
+              gl.drawArrays(gl.TRIANGLES, 0, 6);
+              bindVertexArray(null);
+              checkDraw();
+              return 1;
+            });
+          },
+          create_gui_batch(vertexPointer: number, vertexCount: number): number {
+            return status(() => {
+              const vao = gl.createVertexArray();
+              const vbo = gl.createBuffer();
+              if (!vao || !vbo) {
+                if (vao) gl.deleteVertexArray(vao);
+                if (vbo) gl.deleteBuffer(vbo);
+                throw new Error("GUI batch allocation failed");
+              }
+              const byteLength = (vertexCount >>> 0) * 72;
+              const vertexData = floats(
+                vertexPointer >>> 0,
+                (vertexCount >>> 0) * 18,
+              );
+              bindVertexArray(vao);
+              gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+              gl.enableVertexAttribArray(0);
+              gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 72, 0);
+              gl.enableVertexAttribArray(1);
+              gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 72, 8);
+              gl.enableVertexAttribArray(2);
+              gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 72, 24);
+              gl.enableVertexAttribArray(3);
+              gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 72, 40);
+              gl.enableVertexAttribArray(4);
+              gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 72, 56);
+              bindVertexArray(null);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+              const handle = nextHandle();
+              guiBatches!.set(handle, {
+                vao,
+                vbo,
+                count: vertexCount >>> 0,
+                bytes: byteLength,
+              });
+              return handle;
+            });
+          },
+          update_gui_batch(
+            batchHandle: number,
+            vertexPointer: number,
+            vertexCount: number,
+          ): number {
+            return status(() => {
+              const batch = guiBatches!.get(batchHandle >>> 0);
+              if (!batch) throw new Error("Stale GUI batch handle");
+              const byteLength = (vertexCount >>> 0) * 72;
+              const vertexData = floats(
+                vertexPointer >>> 0,
+                (vertexCount >>> 0) * 18,
+              );
+              // Orphaning permits driver storage retirement but does not guarantee
+              // stall-free allocation. Replacing with NULL first signals the driver
+              // to unbind the previous storage block from pending GPU reads, then
+              // reallocating uploads the complete batch contents without partial overwrites.
+              gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
+              gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
+              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              batch.count = vertexCount >>> 0;
+              batch.bytes = byteLength;
+              return 1;
+            });
+          },
+          delete_gui_batch(batchHandle: number): void {
+            const batch = guiBatches!.get(batchHandle >>> 0);
+            if (batch) {
+              guiBatches!.delete(batchHandle >>> 0);
+              gl.deleteVertexArray(batch.vao);
+              gl.deleteBuffer(batch.vbo);
+            }
+          },
+          draw_gui_batch(
+            programHandle: number,
+            batchHandle: number,
+            mvpPointer: number,
+            clipPointer: number,
+          ): number {
+            return status(() => {
+              const program = programs.get(programHandle >>> 0);
+              if (!program) throw new Error("Stale GUI batch program handle");
+              const batch = guiBatches!.get(batchHandle >>> 0);
+              if (!batch) throw new Error("Stale GUI batch handle");
+              if (blendMode !== 2) {
+                gl.enable(gl.BLEND);
+                gl.blendEquation(gl.FUNC_ADD);
+                gl.blendFuncSeparate(
+                  gl.SRC_ALPHA,
+                  gl.ONE_MINUS_SRC_ALPHA,
+                  gl.ONE,
+                  gl.ONE_MINUS_SRC_ALPHA,
+                );
+                gl.depthMask(false);
+                blendMode = 2;
+              }
+              useProgram(program.object);
+              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
               vector4Uniform(
-                parameterLocation(program, "u_color"),
-                colorPointer >>> 0,
+                parameterLocation(program, "u_clip"),
+                clipPointer >>> 0,
                 4,
               );
-              vector4Uniform(
-                parameterLocation(program, "u_border_color"),
-                borderPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_box"),
-                shapePointer >>> 0,
-                4,
-              );
-              bindVertexArray(surfaceQuadVao);
-              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+              bindVertexArray(batch.vao);
+              gl.drawArrays(gl.TRIANGLES, 0, batch.count);
               bindVertexArray(null);
               checkDraw();
               return 1;

@@ -3,6 +3,8 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
 
+#[cfg(feature = "gui")]
+pub use super::GuiBoxVertex;
 use super::RenderDevice;
 #[cfg(feature = "gui")]
 use super::SurfaceBoxShape;
@@ -25,6 +27,8 @@ const INFO_LOG_LENGTH: u32 = 0x8B84;
 const ARRAY_BUFFER: u32 = 0x8892;
 const ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 const STATIC_DRAW: u32 = 0x88E4;
+#[cfg(feature = "gui")]
+const DYNAMIC_DRAW: u32 = 0x88E8;
 const FLOAT: u32 = 0x1406;
 const UNSIGNED_SHORT: u32 = 0x1403;
 const TRIANGLES: u32 = 0x0004;
@@ -57,6 +61,10 @@ pub struct GlesRenderDevice {
     exhaustive_draw_checks: bool,
     #[cfg(feature = "surfaces")]
     surface_quad_vao: u32,
+    #[cfg(feature = "gui")]
+    surface_box_quad_vao: u32,
+    #[cfg(feature = "gui")]
+    surface_box_quad_vbo: u32,
     #[cfg(feature = "surfaces")]
     surface_instance_buffer: u32,
     #[cfg(feature = "surfaces")]
@@ -99,6 +107,15 @@ pub struct GlesRenderMesh {
     skin: [u32; 2],
     uv: u32,
     weight: u32,
+}
+
+/// Native vertex array and buffer for a retained GUI triangle batch.
+#[cfg(feature = "gui")]
+pub struct GlesGuiBatch {
+    pub(crate) vao: u32,
+    pub(crate) vbo: u32,
+    pub(crate) vertex_count: i32,
+    pub(crate) bytes: usize,
 }
 
 #[cfg(feature = "surfaces")]

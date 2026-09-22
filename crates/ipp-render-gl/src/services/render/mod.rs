@@ -28,12 +28,17 @@ mod surface_path;
 mod template;
 
 #[cfg(feature = "gui")]
+pub mod gui_batch;
+
+#[cfg(feature = "gui")]
 pub use device::SurfaceBoxShape;
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathDescriptor;
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathInstance;
 pub use device::{PlatformRenderDevice, RenderDevice};
+#[cfg(feature = "gui")]
+pub use gui_batch::{GuiBoxVertex, GuiPartClass};
 
 #[cfg(target_arch = "wasm32")]
 pub use device::WebGlRenderDevice;

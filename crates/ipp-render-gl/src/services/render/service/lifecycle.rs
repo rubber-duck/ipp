@@ -25,6 +25,8 @@ impl<D: RenderDevice> RenderService<D> {
             surface_bitmap_program: None,
             #[cfg(feature = "gui")]
             surface_box_program: None,
+            #[cfg(feature = "gui")]
+            gui_batch_cache: super::super::gui_batch::GuiBatchRenderCache::new(device.clone()),
             device,
             asset_context_active: Rc::new(Cell::new(true)),
             #[cfg(feature = "particles")]
@@ -171,6 +173,8 @@ impl<D: RenderDevice> RenderService<D> {
         if let Some(program) = self.surface_box_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
+        #[cfg(feature = "gui")]
+        self.gui_batch_cache.clear();
         #[cfg(feature = "particles")]
         {
             self.particle_quad = None;
@@ -251,6 +255,8 @@ impl<D: RenderDevice> RenderService<D> {
 
 impl<D: RenderDevice> Drop for RenderService<D> {
     fn drop(&mut self) {
+        #[cfg(feature = "gui")]
+        self.gui_batch_cache.clear();
         #[cfg(feature = "shadows")]
         self.clear_shadows();
     }

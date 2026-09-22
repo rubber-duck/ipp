@@ -1,5 +1,9 @@
-use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
+use super::{
+    ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, GlesRenderDevice, GlesRenderProgram, GlesSurfacePath,
+    TRIANGLES,
+};
 use crate::RenderError;
+use std::ptr;
 
 impl GlesRenderDevice {
     fn surface_location(&self, program: &GlesRenderProgram, name: &'static std::ffi::CStr) -> i32 {
@@ -315,34 +319,202 @@ impl GlesRenderDevice {
     ) -> Result<(), RenderError> {
         self.submission.invalidate();
         self.alpha_blend(true)?;
-        if self.surface_quad_vao == 0 {
-            // SAFETY: GL writes one new name owned by this current context.
-            unsafe { (self.gl.gen_vertex_arrays)(1, &mut self.surface_quad_vao) };
-            if self.surface_quad_vao == 0 {
+        if self.surface_box_quad_vao == 0 {
+            // SAFETY: GL writes exclusive handles for the current context.
+            unsafe {
+                (self.gl.gen_vertex_arrays)(1, &mut self.surface_box_quad_vao);
+                (self.gl.gen_buffers)(1, &mut self.surface_box_quad_vbo);
+            }
+            if self.surface_box_quad_vao == 0 || self.surface_box_quad_vbo == 0 {
                 return Err(RenderError::RenderDevice(
-                    "surface quad allocation failed".into(),
+                    "surface box allocation failed".into(),
                 ));
             }
+            self.bind_vertex_array(self.surface_box_quad_vao);
+            // SAFETY: Configure vertex attributes on the dedicated box quad VAO.
+            unsafe {
+                (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
+                (self.gl.enable_attrib)(0);
+                (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 72, ptr::null());
+                (self.gl.enable_attrib)(1);
+                (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 72, 8 as *const _);
+                (self.gl.enable_attrib)(2);
+                (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 72, 24 as *const _);
+                (self.gl.enable_attrib)(3);
+                (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 72, 40 as *const _);
+                (self.gl.enable_attrib)(4);
+                (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 72, 56 as *const _);
+                self.bind_vertex_array(0);
+                (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+            }
         }
-        let shape = shape.pack();
-        let placement_location = self.surface_location(program, c"u_placement");
+        let style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+            identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
+                ipp_core::systems::surface::SurfaceItemId(0),
+            ),
+            position: [placement[0], placement[1]],
+            scale: [1.0, 1.0],
+            color: *color,
+            opacity: 1.0,
+            clip: None,
+        };
+        let vertices = crate::services::render::gui_batch::generate_box_vertices(
+            &style,
+            &[placement[2], placement[3]],
+            &shape.corner,
+            shape.border,
+            border,
+        );
         let clip_location = self.surface_location(program, c"u_clip");
-        let color_location = self.surface_location(program, c"u_color");
-        let border_location = self.surface_location(program, c"u_border_color");
-        let shape_location = self.surface_location(program, c"u_box");
-        // SAFETY: Uniform calls copy fixed arrays synchronously. The context owns
-        // every handle; the procedural box needs no texture or vertex buffers.
+        // SAFETY: Upload complete vertices to the dedicated box quad VBO and draw.
+        unsafe {
+            (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
+            (self.gl.buffer_data)(
+                ARRAY_BUFFER,
+                std::mem::size_of_val(&vertices) as isize,
+                vertices.as_ptr().cast(),
+                DYNAMIC_DRAW,
+            );
+            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+
+            (self.gl.use_program)(program.id);
+            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
+            (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
+            self.bind_vertex_array(self.surface_box_quad_vao);
+            (self.gl.draw_arrays)(TRIANGLES, 0, 6);
+            self.bind_vertex_array(0);
+        }
+        self.check_draw()
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn create_gui_batch(
+        &mut self,
+        vertices: &[crate::services::render::gui_batch::GuiBoxVertex],
+    ) -> Result<super::GlesGuiBatch, RenderError> {
+        self.submission.invalidate();
+        let vertex_count = i32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        let bytes = std::mem::size_of_val(vertices);
+        let mut vao = 0;
+        let mut vbo = 0;
+        // SAFETY: GL allocates exclusive handles for the current context.
+        unsafe {
+            (self.gl.gen_vertex_arrays)(1, &mut vao);
+            (self.gl.gen_buffers)(1, &mut vbo);
+            if vao == 0 || vbo == 0 {
+                if vao != 0 {
+                    (self.gl.delete_vertex_arrays)(1, &vao);
+                }
+                if vbo != 0 {
+                    (self.gl.delete_buffers)(1, &vbo);
+                }
+                return Err(RenderError::RenderDevice(
+                    "gui batch allocation failed".into(),
+                ));
+            }
+            self.bind_vertex_array(vao);
+            (self.gl.bind_buffer)(ARRAY_BUFFER, vbo);
+            (self.gl.buffer_data)(
+                ARRAY_BUFFER,
+                bytes as isize,
+                vertices.as_ptr().cast(),
+                DYNAMIC_DRAW,
+            );
+            (self.gl.enable_attrib)(0);
+            (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 72, ptr::null());
+            (self.gl.enable_attrib)(1);
+            (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 72, 8 as *const _);
+            (self.gl.enable_attrib)(2);
+            (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 72, 24 as *const _);
+            (self.gl.enable_attrib)(3);
+            (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 72, 40 as *const _);
+            (self.gl.enable_attrib)(4);
+            (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 72, 56 as *const _);
+            self.bind_vertex_array(0);
+            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+        }
+        if let Err(error) = self.check() {
+            self.delete_gui_batch(super::GlesGuiBatch {
+                vao,
+                vbo,
+                vertex_count,
+                bytes,
+            });
+            return Err(error);
+        }
+        Ok(super::GlesGuiBatch {
+            vao,
+            vbo,
+            vertex_count,
+            bytes,
+        })
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn update_gui_batch(
+        &mut self,
+        batch: &mut super::GlesGuiBatch,
+        vertices: &[crate::services::render::gui_batch::GuiBoxVertex],
+    ) -> Result<(), RenderError> {
+        self.submission.invalidate();
+        let vertex_count = i32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        let bytes = std::mem::size_of_val(vertices);
+        // SAFETY: Orphaning permits driver storage retirement but does not guarantee
+        // stall-free allocation. Replacing with NULL first signals the driver to unbind
+        // the previous storage block from pending GPU reads, then reallocating uploads
+        // the complete batch contents without partial overwrites.
+        unsafe {
+            (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
+            (self.gl.buffer_data)(ARRAY_BUFFER, bytes as isize, ptr::null(), DYNAMIC_DRAW);
+            (self.gl.buffer_data)(
+                ARRAY_BUFFER,
+                bytes as isize,
+                vertices.as_ptr().cast(),
+                DYNAMIC_DRAW,
+            );
+            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
+        }
+        batch.vertex_count = vertex_count;
+        batch.bytes = bytes;
+        self.check()
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn delete_gui_batch(&mut self, batch: super::GlesGuiBatch) {
+        self.submission.invalidate();
+        // SAFETY: Handle deletion is context-checked; invalid handles are tolerated.
+        unsafe {
+            if batch.vao != 0 {
+                (self.gl.delete_vertex_arrays)(1, &batch.vao);
+            }
+            if batch.vbo != 0 {
+                (self.gl.delete_buffers)(1, &batch.vbo);
+            }
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    pub(super) fn draw_gui_batch(
+        &mut self,
+        program: &GlesRenderProgram,
+        batch: &super::GlesGuiBatch,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.submission.invalidate();
+        self.alpha_blend(true)?;
+        let clip_location = self.surface_location(program, c"u_clip");
+        // SAFETY: The VAO encapsulates vertex attribute pointers; draw_arrays draws the
+        // current vertex count. Uniforms are synchronously copied.
         unsafe {
             (self.gl.use_program)(program.id);
             (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(placement_location, 1, placement.as_ptr());
             (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
-            (self.gl.uniform_vec4)(color_location, 1, color.as_ptr());
-            (self.gl.uniform_vec4)(border_location, 1, border.as_ptr());
-            (self.gl.uniform_vec4)(shape_location, 1, shape.as_ptr());
-            (self.gl.bind_vertex_array)(self.surface_quad_vao);
-            (self.gl.draw_arrays)(0x0005, 0, 4);
-            (self.gl.bind_vertex_array)(0);
+            self.bind_vertex_array(batch.vao);
+            (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count);
+            self.bind_vertex_array(0);
         }
         self.check_draw()
     }

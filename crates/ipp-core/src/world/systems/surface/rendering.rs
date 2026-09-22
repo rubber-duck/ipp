@@ -104,7 +104,7 @@ pub struct SurfaceRenderResource {
 /// authored item identities, and retained caches key raw labels by
 /// `(entity, SurfaceItemId)` in a domain disjoint from GUI paint keyed by
 /// root-local node identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SurfacePrimitiveIdentity {
     /// Raw authored Surface item, stable within its component collection.
     Authored(SurfaceItemId),

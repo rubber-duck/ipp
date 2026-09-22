@@ -115,6 +115,8 @@ impl<D: RenderDevice> RenderService<D> {
             return Ok(RenderStats {
                 uploaded_bytes: self.uploaded.replace(0),
                 debug_resident_bytes: self.debug.resident_bytes() as u32,
+                #[cfg(feature = "gui")]
+                gui_resident_bytes: self.gui_batch_cache.resident_bytes() as u32,
                 ..RenderStats::default()
             });
         }
@@ -127,6 +129,8 @@ impl<D: RenderDevice> RenderService<D> {
                     uploaded_bytes: self.uploaded.replace(0),
                     invalid_camera: true,
                     debug_resident_bytes: self.debug.resident_bytes() as u32,
+                    #[cfg(feature = "gui")]
+                    gui_resident_bytes: self.gui_batch_cache.resident_bytes() as u32,
                     ..RenderStats::default()
                 });
             }
@@ -456,9 +460,20 @@ impl<D: RenderDevice> RenderService<D> {
             stats.uploaded_bytes = stats
                 .uploaded_bytes
                 .saturating_add(self.uploaded.replace(0));
+
+            stats.debug_resident_bytes = self.debug.resident_bytes() as u32;
+
+            #[cfg(feature = "gui")]
             {
-                stats.debug_resident_bytes = self.debug.resident_bytes() as u32;
+                let live_surfaces: std::collections::BTreeSet<ipp_core::EntityId> =
+                    surfaces.iter().map(|s| s.entity).collect();
+                self.gui_batch_cache.finish_frame(
+                    &mut *self.device.borrow_mut(),
+                    &live_surfaces,
+                    &mut stats,
+                );
             }
+
             Ok(stats)
         })();
         self.light_selections

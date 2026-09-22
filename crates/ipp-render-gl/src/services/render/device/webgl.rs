@@ -200,6 +200,18 @@ unsafe extern "C" {
         shape: *const f32,
     ) -> u32;
 
+    #[cfg(feature = "gui")]
+    fn create_gui_batch(vertex_ptr: *const f32, vertex_count: u32) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn update_gui_batch(batch_handle: u32, vertex_ptr: *const f32, vertex_count: u32) -> u32;
+
+    #[cfg(feature = "gui")]
+    fn delete_gui_batch(batch_handle: u32);
+
+    #[cfg(feature = "gui")]
+    fn draw_gui_batch(program: u32, batch_handle: u32, mvp: *const f32, clip: *const f32) -> u32;
+
     fn set_draw_checks(enabled: u32);
 
     fn end_frame() -> u32;
@@ -295,6 +307,9 @@ impl RenderDevice for WebGlRenderDevice {
 
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
+
+    #[cfg(feature = "gui")]
+    type GuiBatch = u32;
 
     fn set_lighting(
         &mut self,
@@ -572,6 +587,48 @@ impl RenderDevice for WebGlRenderDevice {
                 shape.as_ptr(),
             )
         })
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_gui_batch(
+        &mut self,
+        vertices: &[super::GuiBoxVertex],
+    ) -> Result<Self::GuiBatch, RenderError> {
+        let count = u32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        let id = unsafe { create_gui_batch(vertices.as_ptr().cast(), count) };
+        if id == 0 {
+            Err(self.error())
+        } else {
+            Ok(id)
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    fn update_gui_batch(
+        &mut self,
+        batch: &mut Self::GuiBatch,
+        vertices: &[super::GuiBoxVertex],
+    ) -> Result<(), RenderError> {
+        let count = u32::try_from(vertices.len())
+            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        self.check(unsafe { update_gui_batch(*batch, vertices.as_ptr().cast(), count) })
+    }
+
+    #[cfg(feature = "gui")]
+    fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
+        unsafe { delete_gui_batch(batch) };
+    }
+
+    #[cfg(feature = "gui")]
+    fn draw_gui_batch(
+        &mut self,
+        program: &Self::Program,
+        batch: &Self::GuiBatch,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.check(unsafe { draw_gui_batch(program.id, *batch, mvp.as_ptr(), clip.as_ptr()) })
     }
 
     #[cfg(feature = "particles")]

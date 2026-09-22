@@ -1,11 +1,17 @@
 //! Retained text geometry batches and shared glyph coverage atlases.
 //!
-//! Repeated text quads sample coverage images from shared atlas pages.
-//! Entries are keyed by font identity, glyph ID and resolution band.
-//! Retained batches reuse local vertex geometry across camera motion within
-//! a stable resolution band and rebuild only when affected text edits occur.
-//! A glyph whose population fails backs off before retrying; its text keeps the
-//! analytic path meanwhile.
+//! Repeated text quads sample coverage images from shared atlas pages. Entries are keyed
+//! by font identity, glyph ID and resolution band. Each text run keeps its band with
+//! hysteresis, so camera motion near a band threshold changes neither its entries nor its
+//! retained geometry. Runs publish reference-counted demand before their World draws, and
+//! the Service populates the missing entries of a frame before its main pass.
+//!
+//! Pages without demand stay resident. They retire after a configurable number of idle
+//! demand publications, when allocation pressure needs their space, or all at once when
+//! no World demands any glyph. Pressure reclaims a partially live page only when no idle
+//! page remains. Retained batches check the pages they sample, so retiring one page
+//! rebuilds only the runs that reference it. A glyph whose population fails backs off
+//! before retrying; its text keeps the analytic path meanwhile.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,14 +23,10 @@ use ipp_core::systems::surface::{
     SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
 };
 
-use super::gui_batch::RetainedSurfaceSubmission;
 use crate::{RenderDevice, RenderError, RenderStats};
 
 /// Page width and height in texels for each atlas page texture.
 pub const ATLAS_PAGE_SIZE: u32 = 512;
-
-/// Maximum number of resident atlas pages before allocation rejection.
-pub const MAX_ATLAS_PAGES: usize = 4;
 
 /// Maximum number of new glyph coverage entries populated per frame.
 pub const MAX_POPULATES_PER_FRAME: usize = 32;
@@ -38,22 +40,86 @@ pub const MAX_POPULATE_RETRY_DOUBLINGS: u32 = 8;
 /// Supported discrete resolution bands (nominal pixel heights per em).
 pub const RESOLUTION_BANDS: [u16; 5] = [16, 24, 32, 48, 64];
 
-/// Select a stable presentation resolution band for the requested pixel height.
+/// Relative distance a projected em height must move beyond the range of a run's band
+/// before the run selects another band or leaves the atlas.
+pub const BAND_HYSTERESIS: f32 = 0.1;
+
+/// Projected em heights, in pixels, that atlas bands serve; others use analytic curves.
+const ATLAS_PIXEL_HEIGHTS: [f32; 2] = [10.0, 80.0];
+
+/// A band serves projected heights up to its nominal height divided by this factor.
+const BAND_COVERAGE: f32 = 0.88;
+
+/// Glyph quads one retained batch holds at most.
+const MAX_BATCH_GLYPHS: usize = 256;
+
+/// Bounds a Host may place on the shared glyph atlas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphAtlasLimits {
+    /// Resident page budget, at least one. Allocation beyond it reclaims idle pages first.
+    pub max_pages: usize,
+    /// Demand publications a page without demand stays resident before it retires.
+    /// Every World render that publishes glyph demand counts once.
+    pub idle_page_publications: u64,
+}
+
+impl GlyphAtlasLimits {
+    /// Four pages; an idle page retires after about ten seconds of one World at 60 Hz.
+    pub const DEFAULT: Self = Self {
+        max_pages: 4,
+        idle_page_publications: 600,
+    };
+}
+
+impl Default for GlyphAtlasLimits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Select the resolution band for a projected em height, keeping `current` with hysteresis.
 ///
-/// Returns `None` for extreme scales (< 10.0 or > 80.0 px) which fall back to
-/// analytic curve rendering.
-pub fn select_resolution_band(pixel_height: f32) -> Option<u16> {
-    if !pixel_height.is_finite() || !(10.0..=80.0).contains(&pixel_height) {
+/// A run keeps its band while the height stays within [`BAND_HYSTERESIS`] of that band's
+/// range. Otherwise the nearest band serving the height is selected, or `None` for
+/// extreme scales (below 10 px or above 80 px), which fall back to analytic curves.
+pub fn select_resolution_band(pixel_height: f32, current: Option<u16>) -> Option<u16> {
+    if !pixel_height.is_finite() {
         return None;
     }
 
-    for &band in &RESOLUTION_BANDS {
-        if band as f32 >= pixel_height * 0.88 {
-            return Some(band);
-        }
+    if let Some([low, high]) = current.and_then(band_heights)
+        && pixel_height >= low * (1.0 - BAND_HYSTERESIS)
+        && pixel_height <= high * (1.0 + BAND_HYSTERESIS)
+    {
+        return current;
     }
 
-    Some(RESOLUTION_BANDS[RESOLUTION_BANDS.len() - 1])
+    if !(ATLAS_PIXEL_HEIGHTS[0]..=ATLAS_PIXEL_HEIGHTS[1]).contains(&pixel_height) {
+        return None;
+    }
+
+    RESOLUTION_BANDS
+        .iter()
+        .copied()
+        .find(|&band| f32::from(band) >= pixel_height * BAND_COVERAGE)
+        .or(RESOLUTION_BANDS.last().copied())
+}
+
+/// Projected heights `[low, high]` for which [`select_resolution_band`] selects `band`
+/// without history.
+fn band_heights(band: u16) -> Option<[f32; 2]> {
+    let index = RESOLUTION_BANDS.iter().position(|&value| value == band)?;
+    let low = index
+        .checked_sub(1)
+        .map_or(ATLAS_PIXEL_HEIGHTS[0], |previous| {
+            f32::from(RESOLUTION_BANDS[previous]) / BAND_COVERAGE
+        });
+    let high = if index + 1 == RESOLUTION_BANDS.len() {
+        ATLAS_PIXEL_HEIGHTS[1]
+    } else {
+        f32::from(band) / BAND_COVERAGE
+    };
+    Some([low, high])
 }
 
 /// Project an em-height segment at the text origin through the final transform.
@@ -116,14 +182,6 @@ pub struct GlyphVertex {
 // GLES attribute strides and the WebGL bridge read exactly this many bytes per vertex.
 const _: () = assert!(std::mem::size_of::<GlyphVertex>() == 32);
 
-/// Glyph demand one live Surface publishes before a frame.
-pub enum GlyphSurfaceDemand {
-    /// The Surface will be submitted and needs exactly these entries.
-    Submitted(BTreeSet<GlyphKey>),
-    /// The Surface is culled and keeps the demand of its last submission.
-    Culled,
-}
-
 /// Delay before a glyph whose population failed may be attempted again.
 #[derive(Clone, Copy, Debug, Default)]
 struct GlyphPopulationBackoff {
@@ -155,30 +213,35 @@ pub struct GlyphAtlasEntry {
     pub font_bounds: [f32; 4],
 }
 
-/// One allocated atlas page texture and its shelf-packing state.
-pub struct AtlasPage<D: RenderDevice> {
-    /// Context-owned atlas page texture and framebuffer.
-    pub handle: D::GlyphAtlasPage,
+/// One allocated atlas page texture, its shelf-packing state and demand accounting.
+struct AtlasPage<D: RenderDevice> {
+    handle: D::GlyphAtlasPage,
     current_x: u32,
     current_y: u32,
     row_height: u32,
-    entries_count: usize,
+    /// Entries allocated on this page.
+    entries: usize,
+    /// Entries on this page that at least one text run demands.
+    demanded: usize,
+    /// Demand publication at which the page last had no demanded entry.
+    idle_since: u64,
 }
 
 impl<D: RenderDevice> AtlasPage<D> {
-    /// Create a new empty atlas page bound to the given device allocation.
-    pub fn new(handle: D::GlyphAtlasPage) -> Self {
+    fn new(handle: D::GlyphAtlasPage, tick: u64) -> Self {
         Self {
             handle,
             current_x: 0,
             current_y: 0,
             row_height: 0,
-            entries_count: 0,
+            entries: 0,
+            demanded: 0,
+            idle_since: tick,
         }
     }
 
     /// Allocate a padded slot of `slot_width x slot_height` on this page.
-    pub fn allocate(&mut self, slot_width: u32, slot_height: u32) -> Option<[u32; 2]> {
+    fn allocate(&mut self, slot_width: u32, slot_height: u32) -> Option<[u32; 2]> {
         if slot_width > ATLAS_PAGE_SIZE || slot_height > ATLAS_PAGE_SIZE {
             return None;
         }
@@ -196,21 +259,29 @@ impl<D: RenderDevice> AtlasPage<D> {
         let pos = [self.current_x, self.current_y];
         self.current_x += slot_width;
         self.row_height = self.row_height.max(slot_height);
-        self.entries_count += 1;
         Some(pos)
+    }
+
+    /// Entries no run demands; pressure reclaims the page holding the most.
+    fn stale_entries(&self) -> usize {
+        self.entries - self.demanded
     }
 }
 
 /// Renderer-owned shared glyph coverage atlas.
 pub struct GlyphAtlas<D: RenderDevice> {
     device: Rc<RefCell<D>>,
+    limits: GlyphAtlasLimits,
     pages: BTreeMap<usize, AtlasPage<D>>,
     next_page: usize,
-    epoch: u64,
-    live_keys: BTreeMap<ipp_core::WorldId, BTreeMap<ipp_core::EntityId, BTreeSet<GlyphKey>>>,
-    needs_reclaim: bool,
     entries: BTreeMap<GlyphKey, GlyphAtlasEntry>,
+    /// Text runs demanding each entry, across every World.
+    demand: BTreeMap<GlyphKey, u32>,
     demand_tick: u64,
+    /// Advances whenever resident entries are removed, invalidating residency checks.
+    residency_generation: u64,
+    needs_reclaim: bool,
+    retired_pages: u32,
     population_backoff: BTreeMap<GlyphKey, GlyphPopulationBackoff>,
 }
 
@@ -219,113 +290,165 @@ impl<D: RenderDevice> GlyphAtlas<D> {
     pub fn new(device: Rc<RefCell<D>>) -> Self {
         Self {
             device,
+            limits: GlyphAtlasLimits::DEFAULT,
             pages: BTreeMap::new(),
             next_page: 0,
-            epoch: 0,
-            live_keys: BTreeMap::new(),
-            needs_reclaim: false,
             entries: BTreeMap::new(),
+            demand: BTreeMap::new(),
             demand_tick: 0,
+            residency_generation: 0,
+            needs_reclaim: false,
+            retired_pages: 0,
             population_backoff: BTreeMap::new(),
         }
     }
 
-    /// Release all atlas pages and invalidate all cached glyph entries.
+    /// Replace the atlas bounds. A lowered page budget applies at the next publication.
+    pub fn set_limits(&mut self, limits: GlyphAtlasLimits) {
+        self.limits = GlyphAtlasLimits {
+            max_pages: limits.max_pages.max(1),
+            ..limits
+        };
+    }
+
+    /// Release all atlas pages, entries and demand, as after context loss.
     pub fn clear(&mut self) {
         let mut device = self.device.borrow_mut();
         for (_, page) in std::mem::take(&mut self.pages) {
             device.delete_glyph_atlas_page(page.handle);
         }
         self.entries.clear();
-        self.live_keys.clear();
+        self.demand.clear();
         self.population_backoff.clear();
-        self.epoch = self.epoch.wrapping_add(1);
+        self.needs_reclaim = false;
+        self.residency_generation = self.residency_generation.wrapping_add(1);
     }
 
-    /// Publish one World's glyph demand before drawing and advance the back-off clock.
-    ///
-    /// A Surface submitted this frame replaces its demand, a culled Surface keeps the
-    /// demand of its last submission and Surfaces absent from `surfaces` release theirs.
-    /// Whole pages with no consumers are retired; pressure may reclaim a partially
-    /// stale page. Its epoch invalidates retained UVs before any new draws.
-    pub fn prepare_world(
-        &mut self,
-        world: ipp_core::WorldId,
-        surfaces: BTreeMap<ipp_core::EntityId, GlyphSurfaceDemand>,
-    ) {
-        let mut previous = self.live_keys.remove(&world).unwrap_or_default();
-        let demand = surfaces
-            .into_iter()
-            .map(|(entity, surface)| {
-                let keys = match surface {
-                    GlyphSurfaceDemand::Submitted(keys) => keys,
-                    GlyphSurfaceDemand::Culled => previous.remove(&entity).unwrap_or_default(),
-                };
-                (entity, keys)
-            })
-            .collect();
-        self.live_keys.insert(world, demand);
+    /// Add one run's reference to each of `keys`, which holds no key twice.
+    pub fn acquire(&mut self, keys: &[GlyphKey]) {
+        for key in keys {
+            let count = self.demand.entry(*key).or_default();
+            *count += 1;
+            if *count > 1 {
+                continue;
+            }
 
-        self.demand_tick += 1;
-        self.reclaim();
-    }
-
-    /// Retire demand when a World leaves presentation.
-    pub fn forget_world(&mut self, world: ipp_core::WorldId) {
-        self.live_keys.remove(&world);
-        self.reclaim();
-    }
-
-    fn reclaim(&mut self) {
-        let live: BTreeSet<_> = self
-            .live_keys
-            .values()
-            .flat_map(BTreeMap::values)
-            .flatten()
-            .copied()
-            .collect();
-
-        let mut counts = BTreeMap::<usize, (usize, usize)>::new();
-        for (key, entry) in &self.entries {
-            let count = counts.entry(entry.page_index).or_default();
-            count.0 += 1;
-            count.1 += usize::from(live.contains(key));
+            if let Some(entry) = self.entries.get(key)
+                && let Some(page) = self.pages.get_mut(&entry.page_index)
+            {
+                page.demanded += 1;
+            }
         }
+    }
 
-        let partial = self
-            .needs_reclaim
-            .then(|| {
-                counts
-                    .iter()
-                    .filter(|(_, (total, used))| used < total)
-                    .max_by_key(|(id, (total, used))| (total - used, std::cmp::Reverse(**id)))
-            })
-            .flatten()
-            .map(|(&id, _)| id);
-        let dead: BTreeSet<_> = self
-            .pages
-            .keys()
-            .copied()
-            .filter(|id| counts.get(id).is_none_or(|(_, used)| *used == 0) || Some(*id) == partial)
-            .collect();
+    /// Remove one run's reference to each of `keys`, which holds no key twice.
+    pub fn release(&mut self, keys: &[GlyphKey]) {
+        for key in keys {
+            let Some(count) = self.demand.get_mut(key) else {
+                continue;
+            };
+            *count -= 1;
+            if *count > 0 {
+                continue;
+            }
 
-        if !dead.is_empty() {
-            self.epoch = self.epoch.wrapping_add(1);
-            self.entries
-                .retain(|_, entry| !dead.contains(&entry.page_index));
-
-            let mut device = self.device.borrow_mut();
-            for id in dead {
-                if let Some(page) = self.pages.remove(&id) {
-                    device.delete_glyph_atlas_page(page.handle);
+            self.demand.remove(key);
+            self.population_backoff.remove(key);
+            if let Some(entry) = self.entries.get(key)
+                && let Some(page) = self.pages.get_mut(&entry.page_index)
+            {
+                page.demanded -= 1;
+                if page.demanded == 0 {
+                    page.idle_since = self.demand_tick;
                 }
             }
+        }
+    }
+
+    /// Start one World's demand publication before its runs check residency.
+    ///
+    /// Advances the back-off and idle clocks, retires expired idle pages, answers
+    /// pressure recorded by a failed allocation and applies a lowered page budget.
+    pub fn begin_publication(&mut self) {
+        self.demand_tick += 1;
+
+        let expired: Vec<usize> = self
+            .pages
+            .iter()
+            .filter(|(_, page)| {
+                page.demanded == 0
+                    && self.demand_tick - page.idle_since >= self.limits.idle_page_publications
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        for id in expired {
+            self.retire_page(id);
+        }
+
+        if std::mem::take(&mut self.needs_reclaim)
+            && let Some(id) = self.idle_page().or_else(|| self.most_stale_page())
+        {
+            self.retire_page(id);
+        }
+
+        while self.pages.len() > self.limits.max_pages {
+            let fewest_demanded = self
+                .pages
+                .iter()
+                .min_by_key(|&(&id, page)| (page.demanded, std::cmp::Reverse(id)))
+                .map(|(&id, _)| id);
+            let Some(id) = self.idle_page().or(fewest_demanded) else {
+                break;
+            };
+            self.retire_page(id);
         }
 
         // Back-off matters only while a glyph stays demanded and unpopulated.
         self.population_backoff
-            .retain(|key, _| live.contains(key) && !self.entries.contains_key(key));
-        self.needs_reclaim = false;
+            .retain(|key, _| self.demand.contains_key(key) && !self.entries.contains_key(key));
+    }
+
+    /// Release every page once no World demands any glyph.
+    pub fn release_if_unused(&mut self) {
+        if !self.demand.is_empty() {
+            return;
+        }
+
+        let pages: Vec<usize> = self.pages.keys().copied().collect();
+        for id in pages {
+            self.retire_page(id);
+        }
+    }
+
+    /// The page without demand that has been idle longest.
+    fn idle_page(&self) -> Option<usize> {
+        self.pages
+            .iter()
+            .filter(|(_, page)| page.demanded == 0)
+            .min_by_key(|&(&id, page)| (page.idle_since, id))
+            .map(|(&id, _)| id)
+    }
+
+    /// The partially live page holding the most entries no run demands.
+    fn most_stale_page(&self) -> Option<usize> {
+        self.pages
+            .iter()
+            .filter(|(_, page)| page.stale_entries() > 0)
+            .max_by_key(|&(&id, page)| (page.stale_entries(), std::cmp::Reverse(id)))
+            .map(|(&id, _)| id)
+    }
+
+    fn retire_page(&mut self, id: usize) {
+        let Some(page) = self.pages.remove(&id) else {
+            return;
+        };
+
+        self.entries.retain(|_, entry| entry.page_index != id);
+        self.residency_generation = self.residency_generation.wrapping_add(1);
+        self.retired_pages += 1;
+        self.device
+            .borrow_mut()
+            .delete_glyph_atlas_page(page.handle);
     }
 
     /// Number of resident atlas pages.
@@ -338,22 +461,55 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         self.pages.len() * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * 4)
     }
 
+    /// Pages retired since the last call, by idle expiry, pressure or lost demand.
+    pub fn take_retired_pages(&mut self) -> u32 {
+        std::mem::take(&mut self.retired_pages)
+    }
+
+    /// Advances whenever resident entries are removed; equal values mean every entry
+    /// resident at the earlier check is still resident.
+    pub fn residency_generation(&self) -> u64 {
+        self.residency_generation
+    }
+
     /// Look up a cached glyph entry.
     pub fn get(&self, key: &GlyphKey) -> Option<&GlyphAtlasEntry> {
         self.entries.get(key)
     }
 
+    /// Whether a page is still resident.
+    pub fn has_page(&self, page_index: usize) -> bool {
+        self.pages.contains_key(&page_index)
+    }
+
     /// Discard an entry whose coverage was never written and delay its next population.
     ///
     /// Only the population that allocated an entry can fail it, before any retained run
-    /// samples its UVs, so the epoch and every other entry stay valid.
+    /// samples its UVs, so every other entry and retained batch stays valid.
     pub fn abandon_population(&mut self, key: GlyphKey) {
-        self.entries.remove(&key);
+        self.discard_population(key);
 
         let backoff = self.population_backoff.entry(key).or_default();
         backoff.failures = backoff.failures.saturating_add(1);
         let doublings = (backoff.failures - 1).min(MAX_POPULATE_RETRY_DOUBLINGS);
         backoff.retry_tick = self.demand_tick + (POPULATE_RETRY_TICKS << doublings);
+    }
+
+    /// Discard an entry whose coverage was never written, without delaying a retry.
+    pub fn discard_population(&mut self, key: GlyphKey) {
+        let Some(entry) = self.entries.remove(&key) else {
+            return;
+        };
+
+        if let Some(page) = self.pages.get_mut(&entry.page_index) {
+            page.entries -= 1;
+            if self.demand.contains_key(&key) {
+                page.demanded -= 1;
+                if page.demanded == 0 {
+                    page.idle_since = self.demand_tick;
+                }
+            }
+        }
     }
 
     /// Whether a glyph whose population failed is still waiting to be retried.
@@ -371,8 +527,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
     /// Allocate slot coordinates and UV mapping for a new glyph entry.
     ///
-    /// The slot is allocated with a 1-pixel border on each side to prevent
-    /// bilinear sampling bleed.
+    /// The slot is allocated with a 1-pixel border on each side to prevent bilinear
+    /// sampling bleed. When no page has room and the page budget is exhausted, the
+    /// longest idle page retires; with no idle page the allocation fails and the next
+    /// publication reclaims the most stale page.
     pub fn allocate_slot(
         &mut self,
         key: GlyphKey,
@@ -393,42 +551,39 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         let slot_w = px_width + 2;
         let slot_h = px_height + 2;
 
-        let mut target_page = None;
-        let mut slot_pos = None;
+        let existing = self
+            .pages
+            .iter_mut()
+            .find_map(|(&index, page)| Some((index, page.allocate(slot_w, slot_h)?)));
+        let (page_index, [slot_x, slot_y]) = match existing {
+            Some(slot) => slot,
+            None => {
+                if self.pages.len() >= self.limits.max_pages {
+                    let Some(idle) = self.idle_page() else {
+                        self.needs_reclaim = true;
+                        return Err(RenderError::RenderDevice(
+                            "glyph atlas page capacity exceeded".into(),
+                        ));
+                    };
+                    self.retire_page(idle);
+                }
 
-        for (&idx, page) in &mut self.pages {
-            if let Some(pos) = page.allocate(slot_w, slot_h) {
-                target_page = Some(idx);
-                slot_pos = Some(pos);
-                break;
+                let handle = self
+                    .device
+                    .borrow_mut()
+                    .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?;
+                let index = self.next_page;
+                self.next_page += 1;
+                let page = self
+                    .pages
+                    .entry(index)
+                    .or_insert(AtlasPage::new(handle, self.demand_tick));
+                let slot = page.allocate(slot_w, slot_h).ok_or_else(|| {
+                    RenderError::RenderDevice("glyph exceeds atlas page size".into())
+                })?;
+                (index, slot)
             }
-        }
-
-        if target_page.is_none() {
-            if self.pages.len() >= MAX_ATLAS_PAGES {
-                self.needs_reclaim = true;
-                return Err(RenderError::RenderDevice(
-                    "glyph atlas page capacity exceeded".into(),
-                ));
-            }
-
-            let handle = self
-                .device
-                .borrow_mut()
-                .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?;
-            let mut page = AtlasPage::new(handle);
-            let pos = page
-                .allocate(slot_w, slot_h)
-                .ok_or_else(|| RenderError::RenderDevice("glyph exceeds atlas page size".into()))?;
-            let idx = self.next_page;
-            self.next_page += 1;
-            self.pages.insert(idx, page);
-            target_page = Some(idx);
-            slot_pos = Some(pos);
-        }
-
-        let page_index = target_page.unwrap();
-        let [slot_x, slot_y] = slot_pos.unwrap();
+        };
 
         // 1-pixel border offset: content starts at [slot_x + 1, slot_y + 1]
         let content_x = slot_x + 1;
@@ -448,6 +603,12 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             font_bounds,
         };
 
+        if let Some(page) = self.pages.get_mut(&page_index) {
+            page.entries += 1;
+            if self.demand.contains_key(&key) {
+                page.demanded += 1;
+            }
+        }
         self.entries.insert(key, entry);
         Ok(([content_x, content_y], page_index, entry))
     }
@@ -458,44 +619,162 @@ impl<D: RenderDevice> GlyphAtlas<D> {
     }
 }
 
-/// Stable key identifying one retained text run's GPU batch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TextRunKey {
+/// Glyph atlas work one World frame found and performed.
+#[derive(Debug, Default)]
+pub struct GlyphFrameWork {
+    queue: Vec<GlyphKey>,
+    missing: BTreeSet<GlyphKey>,
+    /// Distinct demanded entries found missing, including deferred ones.
+    pub misses: u32,
+    /// Entries rasterized into the atlas.
+    pub populates: u32,
+    /// Recoverable allocation or rasterization failures.
+    pub failures: u32,
+}
+
+impl GlyphFrameWork {
+    /// Forget the previous frame's work.
+    pub fn clear(&mut self) {
+        self.queue.clear();
+        self.missing.clear();
+        self.misses = 0;
+        self.populates = 0;
+        self.failures = 0;
+    }
+
+    /// Record a missing entry; queue it within the per-frame budget unless it backs off.
+    fn miss(&mut self, atlas: &GlyphAtlas<impl RenderDevice>, key: GlyphKey) {
+        if !self.missing.insert(key) {
+            return;
+        }
+
+        self.misses += 1;
+        if self.queue.len() < MAX_POPULATES_PER_FRAME && !atlas.population_deferred(&key) {
+            self.queue.push(key);
+        }
+    }
+
+    /// Take the population queue, in the order its runs published their demand.
+    pub fn take_queue(&mut self) -> Vec<GlyphKey> {
+        std::mem::take(&mut self.queue)
+    }
+
+    /// Return a consumed queue so its capacity serves later frames.
+    pub fn restore_queue(&mut self, mut queue: Vec<GlyphKey>) {
+        queue.clear();
+        self.queue = queue;
+    }
+
+    /// Report this frame's work in the submission statistics.
+    pub fn publish(&self, stats: &mut RenderStats) {
+        stats.glyph_misses = self.misses;
+        stats.glyph_populates = self.populates;
+        stats.glyph_population_failures = self.failures;
+    }
+}
+
+/// Evaluated inputs of one text run, shared by demand publication and drawing.
+#[derive(Clone, Copy, Debug)]
+pub struct TextRun<'a> {
     /// Live entity owning the Surface component.
     pub entity: ipp_core::EntityId,
-    /// Stable primitive identity.
-    pub identity: SurfacePrimitiveIdentity,
-}
-
-/// Retained GPU batch holding text glyph triangle geometry.
-pub struct RetainedGlyphBatch<D: RenderDevice> {
-    /// Context-owned GPU batch buffer.
-    pub gpu: D::GlyphBatch,
-    /// Atlas page index this batch samples from.
-    pub page_index: usize,
+    /// Evaluated style carrying the stable primitive identity.
+    pub style: &'a SurfacePrimitiveStyle,
     /// Effective clip rectangle in Surface metres.
     pub clip: SurfaceClipRect,
-    /// Content hash of glyph layout, font incarnation, colors and clip.
-    pub hash: u64,
-    /// Allocated GPU bytes.
-    pub bytes: usize,
-    /// Total vertex count.
-    pub vertex_count: usize,
-    /// Active resolution band.
-    pub resolution_band: u16,
+    /// Ready font asset incarnation.
+    pub font_key: AssetKey,
+    /// Metres per em.
+    pub font_size: f32,
+    /// Font units per em of the ready font.
+    pub units_per_em: u32,
+    /// Positioned glyphs in painter order.
+    pub glyphs: &'a [SurfaceGlyph],
 }
 
+impl TextRun<'_> {
+    /// Hash the inputs that select demanded entries, then every input shaping vertices.
+    fn hashes(&self, band: Option<u16>) -> (u64, u64) {
+        let mut demand = std::collections::hash_map::DefaultHasher::new();
+        let mut paint = std::collections::hash_map::DefaultHasher::new();
+
+        demand.write_u64(self.font_key.to_u64());
+        demand.write_u32(self.font_size.to_bits());
+        demand.write_u32(self.units_per_em);
+        band.hash(&mut demand);
+        for coord in self
+            .clip
+            .iter()
+            .chain(&self.style.position)
+            .chain(&self.style.scale)
+        {
+            demand.write_u32(coord.to_bits());
+        }
+        for lane in self.style.color {
+            paint.write_u32(lane.to_bits());
+        }
+        paint.write_u32(self.style.opacity.to_bits());
+
+        for glyph in self.glyphs {
+            demand.write_u32(glyph.glyph_id);
+            demand.write_u32(glyph.position[0].to_bits());
+            demand.write_u32(glyph.position[1].to_bits());
+            match glyph.color {
+                Some(color) => {
+                    paint.write_u8(1);
+                    for lane in color {
+                        paint.write_u32(lane.to_bits());
+                    }
+                }
+                None => paint.write_u8(0),
+            }
+        }
+
+        let demand = demand.finish();
+        paint.write_u64(demand);
+        (demand, paint.finish())
+    }
+}
+
+/// Retained GPU batch holding text glyph triangle geometry from one atlas page.
+struct RetainedGlyphBatch<D: RenderDevice> {
+    gpu: D::GlyphBatch,
+    page_index: usize,
+    bytes: usize,
+    vertex_count: usize,
+}
+
+/// One text run's band, published demand and retained batches.
 struct RetainedGlyphRun<D: RenderDevice> {
-    hash: u64,
+    band: Option<u16>,
+    demand_hash: Option<u64>,
+    geometry_hash: u64,
+    /// Sorted demanded entries.
+    keys: Vec<GlyphKey>,
+    /// Residency generation at which every demanded entry was resident.
+    resident: Option<u64>,
+    /// Publication that last showed this run.
+    seen: u64,
+    /// Geometry hash the batches were built from.
+    built_hash: Option<u64>,
     batches: Vec<RetainedGlyphBatch<D>>,
 }
 
-/// Renderer-owned retained cache of text run GPU batches.
+/// Text runs of one Surface.
+struct RetainedGlyphSurface<D: RenderDevice> {
+    runs: BTreeMap<SurfacePrimitiveIdentity, RetainedGlyphRun<D>>,
+    /// Publication that last showed or kept this Surface.
+    seen: u64,
+    /// Runs shown by publication `seen`; `None` keeps every run of a culled Surface.
+    shown: Option<usize>,
+}
+
+/// Renderer-owned retained text runs of one World: bands, atlas demand and GPU batches.
 pub struct GlyphBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
-    retained_runs: BTreeMap<TextRunKey, RetainedGlyphRun<D>>,
-    scratch_vertices: Vec<GlyphVertex>,
-    used_runs: BTreeSet<TextRunKey>,
+    surfaces: BTreeMap<ipp_core::EntityId, RetainedGlyphSurface<D>>,
+    publication: u64,
+    scratch_keys: Vec<GlyphKey>,
 }
 
 impl<D: RenderDevice> GlyphBatchRenderCache<D> {
@@ -503,319 +782,430 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     pub fn new(device: Rc<RefCell<D>>) -> Self {
         Self {
             device,
-            retained_runs: BTreeMap::new(),
-            scratch_vertices: Vec::new(),
-            used_runs: BTreeSet::new(),
+            surfaces: BTreeMap::new(),
+            publication: 0,
+            scratch_keys: Vec::new(),
         }
     }
 
-    /// Clear all retained GPU text batches.
+    /// Release every retained GPU text batch; demand belongs to the atlas.
     pub fn clear(&mut self) {
         let mut device = self.device.borrow_mut();
-        let runs = std::mem::take(&mut self.retained_runs);
-        for (_, run) in runs {
-            for batch in run.batches {
-                device.delete_glyph_batch(batch.gpu);
+        for (_, surface) in std::mem::take(&mut self.surfaces) {
+            for (_, run) in surface.runs {
+                for batch in run.batches {
+                    device.delete_glyph_batch(batch.gpu);
+                }
             }
         }
-        self.scratch_vertices.clear();
-        self.used_runs.clear();
+    }
+
+    /// Release this World's demand from the atlas and every retained batch.
+    pub fn release_demand(&mut self, atlas: &mut GlyphAtlas<D>) {
+        for surface in self.surfaces.values() {
+            for run in surface.runs.values() {
+                atlas.release(&run.keys);
+            }
+        }
+        self.clear();
     }
 
     /// Total resident bytes occupied by retained text run GPU batches.
     pub fn resident_bytes(&self) -> usize {
-        self.retained_runs
+        self.surfaces
             .values()
-            .flat_map(|r| &r.batches)
-            .map(|b| b.bytes)
+            .flat_map(|surface| surface.runs.values())
+            .flat_map(|run| &run.batches)
+            .map(|batch| batch.bytes)
             .sum()
     }
 
-    /// Submit one retained text run. Reuses existing GPU storage when unchanged.
-    #[allow(clippy::too_many_arguments)]
+    /// Start publishing this World's demand for one frame.
+    pub fn begin_publication(&mut self) {
+        self.publication += 1;
+    }
+
+    /// Keep a culled Surface's runs with their bands, demand and batches.
+    pub fn keep_surface(&mut self, entity: ipp_core::EntityId) {
+        if let Some(surface) = self.surfaces.get_mut(&entity) {
+            surface.seen = self.publication;
+            surface.shown = None;
+        }
+    }
+
+    /// Publish one visible run's band and demand, recording entries missing from the atlas.
+    ///
+    /// `glyph_bounds` returns font-unit bounds for glyphs with coverage; other glyphs need
+    /// no entry. Unchanged runs only hash their inputs.
+    pub fn publish_run(
+        &mut self,
+        atlas: &mut GlyphAtlas<D>,
+        run: &TextRun<'_>,
+        projected_height: f32,
+        glyph_bounds: impl Fn(u32) -> Option<[f32; 4]>,
+        work: &mut GlyphFrameWork,
+    ) {
+        let publication = self.publication;
+        let surface = self
+            .surfaces
+            .entry(run.entity)
+            .or_insert_with(|| RetainedGlyphSurface {
+                runs: BTreeMap::new(),
+                seen: publication,
+                shown: Some(0),
+            });
+        if surface.seen != publication {
+            surface.seen = publication;
+            surface.shown = Some(0);
+        }
+
+        let record = surface
+            .runs
+            .entry(run.style.identity)
+            .or_insert_with(empty_run);
+        if record.seen != publication {
+            record.seen = publication;
+            surface.shown = surface.shown.map(|shown| shown + 1);
+        }
+
+        record.band = select_resolution_band(projected_height, record.band);
+        let (demand_hash, geometry_hash) = run.hashes(record.band);
+        record.geometry_hash = geometry_hash;
+
+        if record.demand_hash != Some(demand_hash) {
+            self.scratch_keys.clear();
+            if let Some(band) = record.band {
+                let unit = run.font_size / run.units_per_em as f32;
+                for glyph in run.glyphs {
+                    if let Some(bounds) = glyph_bounds(glyph.glyph_id)
+                        && glyph_intersects_clip(run.style, glyph, bounds, unit, run.clip)
+                    {
+                        self.scratch_keys.push(GlyphKey {
+                            font_key: run.font_key,
+                            glyph_id: glyph.glyph_id,
+                            resolution_band: band,
+                        });
+                    }
+                }
+                self.scratch_keys.sort_unstable();
+                self.scratch_keys.dedup();
+            }
+
+            // Acquire first, so entries kept by the edit never look idle.
+            atlas.acquire(&self.scratch_keys);
+            atlas.release(&record.keys);
+            std::mem::swap(&mut record.keys, &mut self.scratch_keys);
+            record.demand_hash = Some(demand_hash);
+            record.resident = None;
+        }
+
+        let generation = atlas.residency_generation();
+        if record.resident != Some(generation) {
+            let mut complete = true;
+            for key in &record.keys {
+                if atlas.get(key).is_none() {
+                    complete = false;
+                    work.miss(atlas, *key);
+                }
+            }
+            if complete {
+                record.resident = Some(generation);
+            }
+        }
+    }
+
+    /// Release the demand and batches of runs this publication no longer shows.
+    ///
+    /// Surfaces this publication neither showed nor kept were destroyed or lost their
+    /// text. A shown Surface releases the runs it no longer contains.
+    pub fn end_publication(&mut self, atlas: &mut GlyphAtlas<D>) {
+        let publication = self.publication;
+        let mut device = self.device.borrow_mut();
+        self.surfaces.retain(|_, surface| {
+            if surface.seen != publication {
+                for (_, run) in std::mem::take(&mut surface.runs) {
+                    release_run(atlas, &mut device, run);
+                }
+                return false;
+            }
+
+            if surface
+                .shown
+                .is_some_and(|shown| shown < surface.runs.len())
+            {
+                surface.runs.retain(|_, run| {
+                    if run.seen == publication {
+                        return true;
+                    }
+
+                    release_run(atlas, &mut device, std::mem::replace(run, empty_run()));
+                    false
+                });
+            }
+            true
+        });
+    }
+
+    /// Draw one published run from retained batches.
+    ///
+    /// Batches rebuild after an edit or after a page they sample retires. Returns
+    /// `false` without drawing when the run has no band or a demanded entry is not
+    /// resident; the caller then draws analytic glyphs.
     pub fn draw_text_run(
         &mut self,
         program: &D::Program,
         atlas: &GlyphAtlas<D>,
-        entity: ipp_core::EntityId,
-        clip: SurfaceClipRect,
-        style: &SurfacePrimitiveStyle,
-        font_key: AssetKey,
-        font_size: f32,
-        font_units_per_em: u32,
-        glyphs: &[SurfaceGlyph],
-        resolution_band: u16,
+        run: &TextRun<'_>,
         mvp: &[f32; 16],
         stats: &mut RenderStats,
-    ) -> Result<(), RenderError> {
-        let run_key = TextRunKey {
-            entity,
-            identity: style.identity,
+    ) -> Result<bool, RenderError> {
+        let Some(record) = self
+            .surfaces
+            .get_mut(&run.entity)
+            .and_then(|surface| surface.runs.get_mut(&run.style.identity))
+        else {
+            return Ok(false);
         };
-        self.used_runs.insert(run_key);
+        let Some(band) = record.band else {
+            return Ok(false);
+        };
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        hasher.write_u64(atlas.epoch);
-        hasher.write_u64(font_key.to_u64());
-        hasher.write_u32(font_size.to_bits());
-        hasher.write_u32(font_units_per_em);
-        hasher.write_u16(resolution_band);
-        for &coord in &clip {
-            hasher.write_u32(coord.to_bits());
-        }
-        for &coord in &style.position {
-            hasher.write_u32(coord.to_bits());
-        }
-        for &coord in &style.scale {
-            hasher.write_u32(coord.to_bits());
-        }
-        for &coord in &style.color {
-            hasher.write_u32(coord.to_bits());
-        }
-        hasher.write_u32(style.opacity.to_bits());
-        for glyph in glyphs {
-            hasher.write_u32(glyph.glyph_id);
-            hasher.write_u32(glyph.position[0].to_bits());
-            hasher.write_u32(glyph.position[1].to_bits());
-            hasher.write_u8(u8::from(glyph.color.is_some()));
-            if let Some(col) = glyph.color {
-                for c in col {
-                    hasher.write_u32(c.to_bits());
-                }
+        let generation = atlas.residency_generation();
+        if record.resident != Some(generation) {
+            if !record.keys.iter().all(|key| atlas.get(key).is_some()) {
+                return Ok(false);
             }
-        }
-        let hash = hasher.finish();
-
-        if let Some(run) = self
-            .retained_runs
-            .get(&run_key)
-            .filter(|run| run.hash == hash)
-        {
-            return self.draw_batches(program, atlas, &run.batches, mvp, &clip, stats);
+            record.resident = Some(generation);
         }
 
-        self.scratch_vertices.clear();
-        let mut target_page_index = None;
-        let mut geometry = Vec::new();
-        let unit = font_size / font_units_per_em as f32;
-
-        for glyph in glyphs {
-            let key = GlyphKey {
-                font_key,
-                glyph_id: glyph.glyph_id,
-                resolution_band,
-            };
-            let Some(entry) = atlas.get(&key) else {
-                continue;
-            };
-
-            let b = entry.font_bounds;
-            if b[0] >= b[2] || b[1] >= b[3] {
-                continue; // Omit empty/whitespace glyphs
-            }
-
-            let tint = glyph.color.unwrap_or(style.color);
-            let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
-            if color[3] <= 0.0 {
-                continue;
-            }
-
-            let origin_x = style.position[0] + glyph.position[0] * style.scale[0];
-            let origin_y = style.position[1] + glyph.position[1] * style.scale[1];
-
-            let x0 = origin_x + b[0] * unit * style.scale[0];
-            let y0 = origin_y + b[1] * unit * style.scale[1];
-            let x1 = origin_x + b[2] * unit * style.scale[0];
-            let y1 = origin_y + b[3] * unit * style.scale[1];
-
-            if x0.max(x1) <= clip[0]
-                || x0.min(x1) >= clip[2]
-                || y0.max(y1) <= clip[1]
-                || y0.min(y1) >= clip[3]
-            {
-                continue;
-            }
-            if !self.scratch_vertices.is_empty()
-                && (target_page_index != Some(entry.page_index)
-                    || self.scratch_vertices.len() >= 256 * 6)
-            {
-                geometry.push((
-                    target_page_index.unwrap(),
-                    std::mem::take(&mut self.scratch_vertices),
-                ));
-            }
-            target_page_index = Some(entry.page_index);
-
-            let [u0, v0, u1, v1] = entry.uv;
-
-            // Emit 6 vertices: CCW front face [TL, BL, BR, TL, BR, TR]
-            let tl = GlyphVertex {
-                position: [x0, y0],
-                uv: [u0, v0],
-                color,
-            };
-            let bl = GlyphVertex {
-                position: [x0, y1],
-                uv: [u0, v1],
-                color,
-            };
-            let br = GlyphVertex {
-                position: [x1, y1],
-                uv: [u1, v1],
-                color,
-            };
-            let tr = GlyphVertex {
-                position: [x1, y0],
-                uv: [u1, v0],
-                color,
-            };
-
-            self.scratch_vertices
-                .extend_from_slice(&[tl, bl, br, tl, br, tr]);
+        let reusable = record.built_hash == Some(record.geometry_hash)
+            && record
+                .batches
+                .iter()
+                .all(|batch| atlas.has_page(batch.page_index));
+        if !reusable {
+            rebuild_batches(&self.device, atlas, record, run, band, stats)?;
         }
 
-        if !self.scratch_vertices.is_empty() {
-            geometry.push((
-                target_page_index.unwrap(),
-                std::mem::take(&mut self.scratch_vertices),
-            ));
-        }
-
-        let mut previous = self
-            .retained_runs
-            .remove(&run_key)
-            .map(|run| run.batches)
-            .unwrap_or_default()
-            .into_iter();
-        let mut batches = Vec::new();
-        let mut failure = None;
-
-        for (page_index, vertices) in geometry {
-            let bytes = std::mem::size_of_val(vertices.as_slice());
-            let mut batch = previous.next();
-            let result = if let Some(ref mut retained) = batch {
-                self.device
-                    .borrow_mut()
-                    .update_glyph_batch(&mut retained.gpu, &vertices)
-            } else {
-                self.device
-                    .borrow_mut()
-                    .create_glyph_batch(&vertices)
-                    .map(|gpu| {
-                        batch = Some(RetainedGlyphBatch {
-                            gpu,
-                            page_index,
-                            clip,
-                            hash,
-                            bytes,
-                            vertex_count: vertices.len(),
-                            resolution_band,
-                        });
-                    })
-            };
-
-            // A failed replacement leaves its storage unknown: release that batch too.
-            if let Err(error) = result {
-                if let Some(batch) = batch {
-                    self.device.borrow_mut().delete_glyph_batch(batch.gpu);
-                }
-                failure = Some(error);
-                break;
-            }
-
-            let mut batch = batch.unwrap();
-            batch.page_index = page_index;
-            batch.bytes = bytes;
-            batch.vertex_count = vertices.len();
-            batch.clip = clip;
-            batch.hash = hash;
-            batch.resolution_band = resolution_band;
-            batches.push(batch);
-
-            stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
-            stats.gui_rebuilds += 1;
-            stats.gui_allocations += 1;
-
-            self.scratch_vertices = vertices;
-            self.scratch_vertices.clear();
-        }
-
-        for batch in previous {
-            self.device.borrow_mut().delete_glyph_batch(batch.gpu);
-        }
-
-        if let Some(error) = failure {
-            for batch in batches {
-                self.device.borrow_mut().delete_glyph_batch(batch.gpu);
-            }
-            return Err(error);
-        }
-
-        // Retain ownership even if a draw fails, so frame cleanup can release it.
-        self.retained_runs.insert(
-            run_key,
-            RetainedGlyphRun {
-                hash,
-                batches,
-            },
-        );
-        self.draw_batches(
-            program,
-            atlas,
-            &self.retained_runs[&run_key].batches,
-            mvp,
-            &clip,
-            stats,
-        )
-    }
-
-    fn draw_batches(
-        &self,
-        program: &D::Program,
-        atlas: &GlyphAtlas<D>,
-        batches: &[RetainedGlyphBatch<D>],
-        mvp: &[f32; 16],
-        clip: &SurfaceClipRect,
-        stats: &mut RenderStats,
-    ) -> Result<(), RenderError> {
-        for batch in batches {
+        for batch in &record.batches {
             let texture = atlas
                 .page_texture(batch.page_index)
                 .ok_or_else(|| RenderError::RenderDevice("atlas page texture missing".into()))?;
             self.device
                 .borrow_mut()
-                .draw_glyph_batch(program, &batch.gpu, texture, mvp, clip)?;
+                .draw_glyph_batch(program, &batch.gpu, texture, mvp, &run.clip)?;
             stats.draw_calls += 1;
             stats.triangles += (batch.vertex_count / 3) as u32;
             stats.gui_batches += 1;
         }
-        Ok(())
+
+        Ok(true)
     }
+}
 
-    /// Conclude frame submission, releasing runs a completed frame shows to be stale.
-    ///
-    /// `surfaces` is `None` when submission did not complete; every run is then kept.
-    pub fn finish_frame(&mut self, surfaces: Option<&RetainedSurfaceSubmission<'_>>) {
-        if let Some(surfaces) = surfaces {
-            let stale: Vec<TextRunKey> = self
-                .retained_runs
-                .keys()
-                .copied()
-                .filter(|key| surfaces.is_stale(key.entity, self.used_runs.contains(key)))
-                .collect();
+/// A run before its first publication.
+fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
+    RetainedGlyphRun {
+        band: None,
+        demand_hash: None,
+        geometry_hash: 0,
+        keys: Vec::new(),
+        resident: None,
+        seen: 0,
+        built_hash: None,
+        batches: Vec::new(),
+    }
+}
 
-            let mut device = self.device.borrow_mut();
-            for key in stale {
-                if let Some(run) = self.retained_runs.remove(&key) {
-                    for batch in run.batches {
-                        device.delete_glyph_batch(batch.gpu);
-                    }
-                }
-            }
+fn release_run<D: RenderDevice>(
+    atlas: &mut GlyphAtlas<D>,
+    device: &mut D,
+    run: RetainedGlyphRun<D>,
+) {
+    atlas.release(&run.keys);
+    for batch in run.batches {
+        device.delete_glyph_batch(batch.gpu);
+    }
+}
+
+/// Glyph quads of one atlas page, in the order they paint.
+struct PageBucket {
+    page_index: usize,
+    vertices: Vec<GlyphVertex>,
+    /// Quad bounds and colours, kept only when the run mixes colours.
+    quads: Vec<([f32; 4], [f32; 4])>,
+}
+
+/// Replace a run's batches with complete geometry grouped by atlas page.
+///
+/// Quads join the last batch of their page unless a later batch holds an overlapping quad
+/// of another colour. Same-colour coverage composites identically in either order, so a
+/// run of one colour needs one batch per page however its pages interleave.
+fn rebuild_batches<D: RenderDevice>(
+    device: &Rc<RefCell<D>>,
+    atlas: &GlyphAtlas<D>,
+    record: &mut RetainedGlyphRun<D>,
+    run: &TextRun<'_>,
+    band: u16,
+    stats: &mut RenderStats,
+) -> Result<(), RenderError> {
+    let style = run.style;
+    let unit = run.font_size / run.units_per_em as f32;
+    let uniform = run
+        .glyphs
+        .iter()
+        .all(|glyph| glyph.color.is_none_or(|color| color == style.color));
+    let mut buckets: Vec<PageBucket> = Vec::new();
+
+    for glyph in run.glyphs {
+        let key = GlyphKey {
+            font_key: run.font_key,
+            glyph_id: glyph.glyph_id,
+            resolution_band: band,
+        };
+        let Some(entry) = atlas.get(&key) else {
+            continue;
+        };
+
+        let b = entry.font_bounds;
+        if b[0] >= b[2] || b[1] >= b[3] {
+            continue; // Omit empty/whitespace glyphs
         }
 
-        self.used_runs.clear();
+        let tint = glyph.color.unwrap_or(style.color);
+        let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
+        if color[3] <= 0.0 {
+            continue;
+        }
+
+        let origin_x = style.position[0] + glyph.position[0] * style.scale[0];
+        let origin_y = style.position[1] + glyph.position[1] * style.scale[1];
+        let x0 = origin_x + b[0] * unit * style.scale[0];
+        let y0 = origin_y + b[1] * unit * style.scale[1];
+        let x1 = origin_x + b[2] * unit * style.scale[0];
+        let y1 = origin_y + b[3] * unit * style.scale[1];
+        let bounds = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        let clip = run.clip;
+        if bounds[2] <= clip[0]
+            || bounds[0] >= clip[2]
+            || bounds[3] <= clip[1]
+            || bounds[1] >= clip[3]
+        {
+            continue;
+        }
+
+        let target = buckets
+            .iter()
+            .rposition(|bucket| bucket.page_index == entry.page_index)
+            .filter(|&index| buckets[index].vertices.len() < MAX_BATCH_GLYPHS * 6)
+            .filter(|&index| {
+                uniform
+                    || !buckets[index + 1..]
+                        .iter()
+                        .flat_map(|bucket| &bucket.quads)
+                        .any(|(other, other_color)| {
+                            *other_color != color
+                                && other[0] < bounds[2]
+                                && bounds[0] < other[2]
+                                && other[1] < bounds[3]
+                                && bounds[1] < other[3]
+                        })
+            });
+        let bucket = match target {
+            Some(index) => &mut buckets[index],
+            None => {
+                buckets.push(PageBucket {
+                    page_index: entry.page_index,
+                    vertices: Vec::new(),
+                    quads: Vec::new(),
+                });
+                buckets.last_mut().expect("pushed bucket")
+            }
+        };
+
+        let [u0, v0, u1, v1] = entry.uv;
+        let vertex = |position, uv| GlyphVertex {
+            position,
+            uv,
+            color,
+        };
+        let tl = vertex([x0, y0], [u0, v0]);
+        let bl = vertex([x0, y1], [u0, v1]);
+        let br = vertex([x1, y1], [u1, v1]);
+        let tr = vertex([x1, y0], [u1, v0]);
+
+        // Emit 6 vertices: CCW front face [TL, BL, BR, TL, BR, TR]
+        bucket.vertices.extend_from_slice(&[tl, bl, br, tl, br, tr]);
+        if !uniform {
+            bucket.quads.push((bounds, color));
+        }
     }
+
+    // Reuse retained storage in order; release what the new geometry no longer needs.
+    let mut previous = std::mem::take(&mut record.batches).into_iter();
+    record.built_hash = None;
+    let mut failure = None;
+
+    for bucket in buckets {
+        let bytes = std::mem::size_of_val(bucket.vertices.as_slice());
+        let reused = previous.next();
+        let result = match reused {
+            Some(mut batch) => {
+                let updated = device
+                    .borrow_mut()
+                    .update_glyph_batch(&mut batch.gpu, &bucket.vertices);
+                match updated {
+                    Ok(()) => Ok(batch),
+                    Err(error) => Err((error, Some(batch))),
+                }
+            }
+            None => device
+                .borrow_mut()
+                .create_glyph_batch(&bucket.vertices)
+                .map(|gpu| RetainedGlyphBatch {
+                    gpu,
+                    page_index: bucket.page_index,
+                    bytes,
+                    vertex_count: 0,
+                })
+                .map_err(|error| (error, None)),
+        };
+
+        // A failed replacement leaves its storage unknown: release that batch too.
+        let mut batch = match result {
+            Ok(batch) => batch,
+            Err((error, batch)) => {
+                if let Some(batch) = batch {
+                    device.borrow_mut().delete_glyph_batch(batch.gpu);
+                }
+                failure = Some(error);
+                break;
+            }
+        };
+
+        batch.page_index = bucket.page_index;
+        batch.bytes = bytes;
+        batch.vertex_count = bucket.vertices.len();
+        record.batches.push(batch);
+
+        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
+        stats.gui_rebuilds += 1;
+        stats.gui_allocations += 1;
+    }
+
+    for batch in previous {
+        device.borrow_mut().delete_glyph_batch(batch.gpu);
+    }
+
+    if let Some(error) = failure {
+        for batch in record.batches.drain(..) {
+            device.borrow_mut().delete_glyph_batch(batch.gpu);
+        }
+        return Err(error);
+    }
+
+    record.built_hash = Some(record.geometry_hash);
+    Ok(())
 }
 
 impl<D: RenderDevice> Drop for GlyphAtlas<D> {
@@ -828,114 +1218,6 @@ impl<D: RenderDevice> Drop for GlyphBatchRenderCache<D> {
     fn drop(&mut self) {
         self.clear();
     }
-}
-
-/// Root code bitmask helper for quadratic Bezier root finding.
-#[inline]
-fn root_code(p1: f32, p2: f32, p3: f32) -> u32 {
-    let i1 = (p1.to_bits() >> 31) & 1;
-    let i2 = (p2.to_bits() >> 30) & 2;
-    let i3 = (p3.to_bits() >> 29) & 4;
-    let shift = (i2 & 2) | (i1 & !2);
-    let shift = (i3 & 4) | (shift & !4);
-    (0x2E74u32 >> shift) & 0x0101
-}
-
-/// Horizontal ray crossing solution for quadratic Bezier segment.
-fn solve_horizontal(p12: [f32; 4], p3: [f32; 2], a: [f32; 2], b: [f32; 2], line: bool) -> [f32; 2] {
-    if line {
-        let denom = p12[1] - p3[1];
-        let t = if denom.abs() > 1e-7 {
-            p12[1] / denom
-        } else {
-            0.0
-        };
-        let crossing = p12[0] + (p3[0] - p12[0]) * t;
-        return [crossing, crossing];
-    }
-
-    let d_sq = b[1] * b[1] - a[1] * p12[1];
-    let d = d_sq.max(0.0).sqrt();
-    let t = if a[1].abs() > 1.0 / 65536.0 {
-        [(b[1] - d) / a[1], (b[1] + d) / a[1]]
-    } else if b[1].abs() > 1e-7 {
-        let v = p12[1] / (2.0 * b[1]);
-        [v, v]
-    } else {
-        [0.0, 0.0]
-    };
-
-    [
-        (a[0] * t[0] - 2.0 * b[0]) * t[0] + p12[0],
-        (a[0] * t[1] - 2.0 * b[0]) * t[1] + p12[0],
-    ]
-}
-
-/// Vertical ray crossing solution for quadratic Bezier segment.
-fn solve_vertical(p12: [f32; 4], p3: [f32; 2], a: [f32; 2], b: [f32; 2], line: bool) -> [f32; 2] {
-    let q = [p12[1], p12[0], p12[3], p12[2]];
-    solve_horizontal(q, [p3[1], p3[0]], [a[1], a[0]], [b[1], b[0]], line)
-}
-
-/// Evaluate exact subpixel quadratic curve coverage at `sample` position.
-pub fn evaluate_glyph_coverage(
-    curves: &[[f32; 8]],
-    sample: [f32; 2],
-    pixels_per_unit: [f32; 2],
-) -> f32 {
-    let mut xcov = 0.0f32;
-    let mut ycov = 0.0f32;
-    let mut xwgt = 0.0f32;
-    let mut ywgt = 0.0f32;
-
-    for curve in curves {
-        let p12 = [
-            curve[0] - sample[0],
-            curve[1] - sample[1],
-            curve[2] - sample[0],
-            curve[3] - sample[1],
-        ];
-        let p3 = [curve[4] - sample[0], curve[5] - sample[1]];
-        let b = [p12[2] - p12[0], p12[3] - p12[1]];
-        let a = [p3[0] - p12[2] - b[0], p3[1] - p12[3] - b[1]];
-        let line = curve[6] == 0.0;
-
-        let code_h = root_code(p12[1], p12[3], p3[1]);
-        if code_h != 0 {
-            let r = [
-                solve_horizontal(p12, p3, a, b, line)[0] * pixels_per_unit[0],
-                solve_horizontal(p12, p3, a, b, line)[1] * pixels_per_unit[0],
-            ];
-            if (code_h & 1) != 0 {
-                xcov += (r[0] + 0.5).clamp(0.0, 1.0);
-                xwgt = xwgt.max((1.0 - r[0].abs() * 2.0).clamp(0.0, 1.0));
-            }
-            if code_h > 1 {
-                xcov -= (r[1] + 0.5).clamp(0.0, 1.0);
-                xwgt = xwgt.max((1.0 - r[1].abs() * 2.0).clamp(0.0, 1.0));
-            }
-        }
-
-        let code_v = root_code(p12[0], p12[2], p3[0]);
-        if code_v != 0 {
-            let r = [
-                solve_vertical(p12, p3, a, b, line)[0] * pixels_per_unit[1],
-                solve_vertical(p12, p3, a, b, line)[1] * pixels_per_unit[1],
-            ];
-            if (code_v & 1) != 0 {
-                ycov -= (r[0] + 0.5).clamp(0.0, 1.0);
-                ywgt = ywgt.max((1.0 - r[0].abs() * 2.0).clamp(0.0, 1.0));
-            }
-            if code_v > 1 {
-                ycov += (r[1] + 0.5).clamp(0.0, 1.0);
-                ywgt = ywgt.max((1.0 - r[1].abs() * 2.0).clamp(0.0, 1.0));
-            }
-        }
-    }
-
-    let denom = (xwgt + ywgt).max(1.0 / 65536.0);
-    let cov = ((xcov * xwgt + ycov * ywgt).abs() / denom).max(xcov.abs().min(ycov.abs()));
-    cov.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

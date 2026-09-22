@@ -829,19 +829,22 @@ impl GlesRenderDevice {
     ) -> Result<(), RenderError> {
         self.submission.invalidate();
 
-        // SAFETY: Saves the borrowed host framebuffer and viewport bindings before
-        // directing rendering into the atlas page framebuffer.
-        let (draw, read, viewport) = unsafe {
-            let mut draw = 0;
-            let mut read = 0;
-            let mut vp = [0i32; 4];
-            (self.gl.get_integer)(0x8CA6, &mut draw);
-            (self.gl.get_integer)(0x8CAA, &mut read);
-            (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
-            (draw as u32, read as u32, vp)
-        };
+        // Switching between pages keeps the host target saved by the first begin.
+        if self.glyph_atlas_target.is_none() {
+            // SAFETY: Saves the borrowed host framebuffer and viewport bindings before
+            // directing rendering into the atlas page framebuffer.
+            let (draw, read, viewport) = unsafe {
+                let mut draw = 0;
+                let mut read = 0;
+                let mut vp = [0i32; 4];
+                (self.gl.get_integer)(0x8CA6, &mut draw);
+                (self.gl.get_integer)(0x8CAA, &mut read);
+                (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
+                (draw as u32, read as u32, vp)
+            };
 
-        self.glyph_atlas_target = Some((draw, read, viewport, self.surface_viewport));
+            self.glyph_atlas_target = Some((draw, read, viewport, self.surface_viewport));
+        }
         self.surface_viewport = [page.width as f32, page.height as f32];
 
         // SAFETY: Directs subsequent draw commands to the atlas page framebuffer and viewport.

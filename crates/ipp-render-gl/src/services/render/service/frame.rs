@@ -33,22 +33,42 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "surfaces")]
         let surface_items = world.surface_render_items();
         self.debug.retain(world.debug_render_items());
+
+        // One preparation serves glyph demand and drawing: `None` without a selected
+        // camera, an error when it cannot represent this viewport.
+        let camera = world.active_camera().map(|_| {
+            world
+                .prepare_camera(width, height)
+                .map(|camera| camera.view_projection)
+        });
         #[cfg(feature = "gui")]
-        self.prepare_glyph_demand(world, surface_items, (width, height));
+        {
+            self.glyph_frame.clear();
+            // Without a usable camera no Surface is submitted, so the previous demand stays.
+            if let Some(Ok(view_projection)) = camera {
+                self.prepare_glyph_demand(world, surface_items, view_projection, (width, height));
+            }
+        }
 
         self.device
             .borrow_mut()
             .begin_frame(width, height, &BACKGROUND)?;
+        // Populate atlas misses before the main pass, binding each page once.
+        #[cfg(feature = "gui")]
+        let populated = self.populate_glyph_misses(world);
+        #[cfg(not(feature = "gui"))]
+        let populated = Ok(());
         // Always release draw bindings, including when upload/draw fails.
         #[cfg_attr(not(feature = "gui"), allow(unused_mut))]
-        let mut result = self.draw_items(
-            world,
-            items,
-            #[cfg(feature = "surfaces")]
-            surface_items,
-            width,
-            height,
-        );
+        let mut result = populated.and_then(|()| {
+            self.draw_items(
+                world,
+                items,
+                #[cfg(feature = "surfaces")]
+                surface_items,
+                camera,
+            )
+        });
         let finish = self.device.borrow_mut().end_frame();
         #[cfg(feature = "gui")]
         self.finish_retained_surfaces(world.id(), surface_items, result.as_mut().ok());
@@ -80,8 +100,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &WorldContext<'_>,
         items: &[ipp_core::RenderItem],
         #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
-        width: u32,
-        height: u32,
+        camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
     ) -> Result<RenderStats, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
@@ -96,8 +115,7 @@ impl<D: RenderDevice> RenderService<D> {
             items,
             #[cfg(feature = "surfaces")]
             surfaces,
-            width,
-            height,
+            camera,
             &mut scratch,
         );
         // Return capacity even after device errors; no borrowed data is retained.
@@ -111,23 +129,22 @@ impl<D: RenderDevice> RenderService<D> {
         world: &WorldContext<'_>,
         items: &[ipp_core::RenderItem],
         #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
-        width: u32,
-        height: u32,
+        camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderStats, RenderError> {
         // `render` publishes retained GUI residency after every completed frame.
-        if world.active_camera().is_none() {
-            #[cfg(feature = "shadows")]
-            self.clear_shadows();
-            return Ok(RenderStats {
-                uploaded_bytes: self.uploaded.replace(0),
-                debug_resident_bytes: self.debug.resident_bytes() as u32,
-                ..RenderStats::default()
-            });
-        }
-        let view_projection = match world.prepare_camera(width, height) {
-            Ok(camera) => camera.view_projection,
-            Err(_) => {
+        let view_projection = match camera {
+            None => {
+                #[cfg(feature = "shadows")]
+                self.clear_shadows();
+                return Ok(RenderStats {
+                    uploaded_bytes: self.uploaded.replace(0),
+                    debug_resident_bytes: self.debug.resident_bytes() as u32,
+                    ..RenderStats::default()
+                });
+            }
+            Some(Ok(view_projection)) => view_projection,
+            Some(Err(_)) => {
                 // A host resize can make a previously usable projection exceed
                 // f32 representation. Preserve the world and correlated replies.
                 return Ok(RenderStats {

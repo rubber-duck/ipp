@@ -31,6 +31,7 @@ interface RenderHostExports {
   ipp_render_glyph_misses?(): number;
   ipp_render_glyph_populates?(): number;
   ipp_render_glyph_population_failures?(): number;
+  ipp_render_glyph_page_retirements?(): number;
   ipp_render_glyph_pages?(): number;
   ipp_render_glyph_resident_bytes?(): number;
   ipp_render_failed_draw_calls(): number;
@@ -233,6 +234,8 @@ export class RenderWorkerService {
           glyphPopulates: runtime.ipp_render_glyph_populates?.() ?? 0,
           glyphPopulationFailures:
             runtime.ipp_render_glyph_population_failures?.() ?? 0,
+          glyphPageRetirements:
+            runtime.ipp_render_glyph_page_retirements?.() ?? 0,
           glyphPages: runtime.ipp_render_glyph_pages?.() ?? 0,
           glyphResidentBytes: runtime.ipp_render_glyph_resident_bytes?.() ?? 0,
           invalidCamera: runtime.ipp_render_invalid_camera() !== 0,

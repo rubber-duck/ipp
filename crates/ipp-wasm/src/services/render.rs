@@ -362,6 +362,38 @@ pub extern "C" fn ipp_render_glyph_population_failures() -> u32 {
 // SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
 #[cfg(feature = "gui")]
 #[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_glyph_page_retirements() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.glyph_page_retirements)
+    })
+}
+
+/// Bound this context's shared glyph atlas: its resident page budget and the demand
+/// publications a page without demand stays resident. Limits survive context loss.
+// SAFETY: Unique symbol; scalar arguments and exclusive access to owned renderer state.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_set_glyph_atlas_limits(
+    max_pages: u32,
+    idle_page_publications: u32,
+) -> u32 {
+    update(|presentation, _host| {
+        presentation
+            .renderer
+            .set_glyph_atlas_limits(ipp_render_gl::GlyphAtlasLimits {
+                max_pages: max_pages as usize,
+                idle_page_publications: u64::from(idle_page_publications),
+            });
+        Ok(())
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
 pub extern "C" fn ipp_render_glyph_pages() -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| {
         boundary

@@ -34,6 +34,8 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             glyph_batch_cache: BTreeMap::new(),
             #[cfg(feature = "gui")]
+            glyph_frame: Default::default(),
+            #[cfg(feature = "gui")]
             submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
@@ -254,14 +256,29 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Drop renderer-only history when a World is destroyed or detached from presentation.
+    ///
+    /// The World's glyph demand leaves the shared atlas; pages other Worlds still use
+    /// stay resident.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
         self.light_selections.remove(&world);
         #[cfg(feature = "gui")]
         {
             self.gui_batch_cache.remove(&world);
-            self.glyph_batch_cache.remove(&world);
-            self.glyph_atlas.forget_world(world);
+            if let Some(mut cache) = self.glyph_batch_cache.remove(&world) {
+                cache.release_demand(&mut self.glyph_atlas);
+            }
+            self.glyph_atlas.release_if_unused();
         }
+    }
+
+    /// Bound the shared glyph atlas of this context: its resident page budget and how
+    /// many demand publications a page without demand stays resident.
+    ///
+    /// A lowered budget retires pages at the next publication; zero pages is treated
+    /// as one.
+    #[cfg(feature = "gui")]
+    pub fn set_glyph_atlas_limits(&mut self, limits: super::super::glyph_atlas::GlyphAtlasLimits) {
+        self.glyph_atlas.set_limits(limits);
     }
 
     /// Linked programs actually demanded in this graphics context.

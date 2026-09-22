@@ -146,6 +146,11 @@ export interface GuiStyleProps {
    * child outward or overlap siblings, and ancestor clips still apply. */
   readonly margin?: readonly [number, number, number, number] | undefined;
   readonly flex?: number | undefined;
+  /** Alignment from -1 (start) to 1 (end). A parent Stack aligns this node
+   * on both axes and a Row or Column on its cross axis, moving the node's
+   * whole subtree; an Align node also positions its own child by these
+   * lanes. Wrap content in Padding or SizedBox to align it without also
+   * aligning the wrapper. */
   readonly alignX?: number | undefined;
   readonly alignY?: number | undefined;
   /** Linear RGBA in 0..1. */

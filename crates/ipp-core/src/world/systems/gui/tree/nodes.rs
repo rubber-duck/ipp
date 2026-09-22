@@ -128,9 +128,11 @@ pub struct GuiNodeStyle {
     pub margin: Option<[f32; 4]>,
     /// Flex grow/shrink factor in flex containers.
     pub flex: Option<f32>,
-    /// Alignment X factor (-1.0 to 1.0).
+    /// Alignment X factor from -1.0 (start) to 1.0 (end). Stack and Column
+    /// place this node by it; an Align node also places its content by it.
     pub align_x: Option<f32>,
-    /// Alignment Y factor (-1.0 to 1.0).
+    /// Alignment Y factor from -1.0 (start) to 1.0 (end). Stack and Row
+    /// place this node by it; an Align node also places its content by it.
     pub align_y: Option<f32>,
     /// Foreground / text colour (RGBA 0.0..=1.0).
     pub color: [f32; 4],

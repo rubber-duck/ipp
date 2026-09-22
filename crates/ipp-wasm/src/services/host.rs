@@ -8,9 +8,43 @@ use std::collections::VecDeque;
 use ipp_core::{HostRuntime, WorldContext};
 use ipp_host_session::HostServices;
 
+/// The single World a browser Host presents through its graphics context.
+///
+/// Presenting another World ends the previous World's presentation. This Host never
+/// draws a World it does not present, so the previous World's renderer caches are
+/// released rather than holding retained batches and glyph atlas demand until unload.
+#[cfg(any(test, all(feature = "render", target_arch = "wasm32")))]
+#[derive(Default)]
+struct WasmPresentationTarget {
+    world: Option<ipp_core::WorldId>,
+}
+
+#[cfg(any(test, all(feature = "render", target_arch = "wasm32")))]
+impl WasmPresentationTarget {
+    /// Present `world`, returning a different previously presented World to forget.
+    fn attach(&mut self, world: ipp_core::WorldId) -> Option<ipp_core::WorldId> {
+        self.world
+            .replace(world)
+            .filter(|previous| *previous != world)
+    }
+
+    /// Stop presenting `world`; returns whether it was the presented World.
+    fn detach(&mut self, world: ipp_core::WorldId) -> bool {
+        let presented = self.presents(world);
+        if presented {
+            self.world = None;
+        }
+        presented
+    }
+
+    fn presents(&self, world: ipp_core::WorldId) -> bool {
+        self.world == Some(world)
+    }
+}
+
 pub(crate) struct WasmHostServices {
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
-    presentation_world: Option<ipp_core::WorldId>,
+    presentation_world: WasmPresentationTarget,
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
     outbox: VecDeque<Vec<u8>>,
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
@@ -49,7 +83,7 @@ impl HostServices for WasmHostServices {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             #[cfg(all(feature = "render", target_arch = "wasm32"))]
-            presentation_world: None,
+            presentation_world: WasmPresentationTarget::default(),
             pending: VecDeque::new(),
             outbox: VecDeque::new(),
             #[cfg(all(feature = "render", target_arch = "wasm32"))]
@@ -65,7 +99,9 @@ impl HostServices for WasmHostServices {
     fn attach_world(&mut self, _world: ipp_core::WorldId) -> Result<(), String> {
         #[cfg(all(feature = "render", target_arch = "wasm32"))]
         {
-            self.presentation_world = Some(_world);
+            if let Some(previous) = self.presentation_world.attach(_world) {
+                self.presentation.forget_world(previous);
+            }
             self.presentation.reset_world();
         }
         Ok(())
@@ -73,8 +109,7 @@ impl HostServices for WasmHostServices {
 
     fn detach_world(&mut self, _world: ipp_core::WorldId) {
         #[cfg(all(feature = "render", target_arch = "wasm32"))]
-        if self.presentation_world == Some(_world) {
-            self.presentation_world = None;
+        if self.presentation_world.detach(_world) {
             self.presentation.forget_world(_world);
         }
     }
@@ -84,7 +119,7 @@ impl HostServices for WasmHostServices {
         _world: &mut WorldContext<'_>,
     ) -> Result<(), ipp_host_session::HostPresentationFailure> {
         #[cfg(all(feature = "render", target_arch = "wasm32"))]
-        if self.presentation_world == Some(_world.id()) {
+        if self.presentation_world.presents(_world.id()) {
             self.presentation.render(_world)?;
         }
         Ok(())
@@ -203,5 +238,34 @@ mod tests {
                 .status,
             AssetResourceStatus::Failed(error) if error.contains("file")
         ));
+    }
+
+    #[test]
+    fn presenting_another_world_forgets_only_the_previous_presentation() {
+        let [first, second] = [ipp_core::WorldId(1), ipp_core::WorldId(2)];
+        let mut target = WasmPresentationTarget::default();
+
+        assert_eq!(target.attach(first), None);
+        assert_eq!(
+            target.attach(first),
+            None,
+            "another session on the presented World keeps its caches"
+        );
+        assert_eq!(target.attach(second), Some(first));
+        assert!(target.presents(second) && !target.presents(first));
+        assert!(
+            !target.detach(first),
+            "the replaced World was already forgotten when it lost presentation"
+        );
+
+        assert_eq!(
+            target.attach(first),
+            Some(second),
+            "re-attaching presents the first World again from released caches"
+        );
+        assert!(target.detach(first));
+        assert!(!target.presents(first));
+        assert!(!target.detach(first));
+        assert_eq!(target.attach(second), None);
     }
 }

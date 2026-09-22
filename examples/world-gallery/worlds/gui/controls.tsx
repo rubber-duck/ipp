@@ -41,6 +41,10 @@ export function GuiControls({ scene }: GuiControlsProps) {
           <dd id="gui-autoscan">{scene.autoscan ? "enabled" : "standby"}</dd>
         </div>
         <div>
+          <dt>Span</dt>
+          <dd id="gui-span">{scene.wide ? "wide" : "narrow"}</dd>
+        </div>
+        <div>
           <dt>Signal gain</dt>
           <dd id="gui-gain">{Math.round(scene.gain * 100)}%</dd>
         </div>

@@ -88,6 +88,7 @@ export interface GuiSceneState {
   readonly error?: string;
   readonly skin: GuiDemoSkin;
   readonly autoscan: boolean;
+  readonly wide: boolean;
   readonly gain: number;
   readonly callsign: string;
   readonly pulseSequence: number;
@@ -98,6 +99,8 @@ export interface GuiSceneState {
   readonly font: ClientAssetSource;
   readonly onCommit: () => void;
   readonly pulse: () => void;
+  readonly uplink: () => void;
+  readonly toggleSpan: () => void;
   readonly selectSkin: (skin: GuiDemoSkin) => void;
   readonly toggleVectorOnly: () => void;
   readonly setAutoscan: (value: boolean) => void;
@@ -414,6 +417,7 @@ export function useGuiScene(
   const [beamSection, setBeamSection] = useState<ProjectorBeamSection>();
   const [skin, setSkin] = useState<GuiDemoSkin>("aurora");
   const [autoscan, setAutoscanState] = useState(INITIAL_AUTOSCAN);
+  const [wide, setWide] = useState(false);
   const [gain, setGainState] = useState(INITIAL_GAIN);
   const [callsign, setCallsignState] = useState(INITIAL_CALLSIGN);
   const [lastCommand, setLastCommand] = useState("Awaiting command");
@@ -456,6 +460,7 @@ export function useGuiScene(
     if (!canvas || !active) return;
     setSkin("aurora");
     setAutoscanState(INITIAL_AUTOSCAN);
+    setWide(false);
     setGainState(INITIAL_GAIN);
     setCallsignState(INITIAL_CALLSIGN);
     setLastCommand("Awaiting command");
@@ -632,6 +637,14 @@ export function useGuiScene(
     setLastCommand("Pulse sent");
     record("PULSE BURST COMMITTED");
   }, [record]);
+  const uplink = useCallback(() => {
+    setLastCommand("Uplink sent");
+    record("UPLINK PACKET QUEUED");
+  }, [record]);
+  const toggleSpan = useCallback(() => {
+    setWide(!wide);
+    record(`SPAN ${wide ? "NARROW" : "WIDE"}`);
+  }, [wide, record]);
   const toggleVectorOnly = useCallback(() => {
     setVectorOnly((current) => !current);
   }, []);
@@ -675,6 +688,7 @@ export function useGuiScene(
     ...(error ? { error } : {}),
     skin,
     autoscan,
+    wide,
     gain,
     callsign,
     pulseSequence,
@@ -685,6 +699,8 @@ export function useGuiScene(
     font: absoluteAsset(17, FONT_URL),
     onCommit,
     pulse,
+    uplink,
+    toggleSpan,
     toggleVectorOnly,
     selectSkin,
     setAutoscan,

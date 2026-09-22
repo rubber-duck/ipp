@@ -9,7 +9,6 @@ import type {
   GuiSemanticTree,
   Inspection,
 } from "@ipp/client";
-import { GUI_ICONS } from "../../examples/world-gallery/worlds/gui/presentation.js";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { responseGate } from "../browser/response-gate.js";
 import {
@@ -33,6 +32,79 @@ interface ProjectedGuiNode {
   readonly clientX: number;
   readonly clientY: number;
   readonly node: GuiSemanticNode;
+}
+
+type LogicalRect = readonly [number, number, number, number];
+
+interface RegionStats {
+  readonly pixels: number;
+  readonly mean: readonly [number, number, number];
+  readonly min: readonly [number, number, number];
+  readonly max: readonly [number, number, number];
+}
+
+/** Verified Nerd Font code points, restated independently of the fixture. */
+const ICON_CODE_POINTS = {
+  cube: "\uf1b2",
+  signal: "\uf012",
+  pulse: "\ueb31",
+  aurora: "\uf2dc",
+  ember: "\uf06d",
+  neon: "\uf0e7",
+} as const;
+
+/** Largest per-channel difference between two region means. */
+function meanDifference(first: RegionStats, second: RegionStats): number {
+  return Math.max(
+    ...first.mean.map((value, channel) =>
+      Math.abs(value - second.mean[channel]!),
+    ),
+  );
+}
+
+function srgbToLinear(value: number): number {
+  const unit = value / 255;
+  return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+}
+
+function linearToSrgb(value: number): number {
+  const encoded =
+    value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
+  return encoded * 255;
+}
+
+function near(actual: number, expected: number, what: string): void {
+  assert.ok(
+    Math.abs(actual - expected) < 0.01,
+    `${what}: ${actual} is not ${expected}`,
+  );
+}
+
+/** The resizable SPAN frame, matched by its authored sizes. */
+function spanFrame(state: GalleryGuiState): GuiSemanticNode {
+  const node = state.detailed.nodes.find(
+    ({ content, style }) =>
+      content.kind === "container" &&
+      content.containerKind === "stack" &&
+      style.enabled === false &&
+      Math.abs((style.height ?? 0) - 0.38) < 1e-5 &&
+      [1.2, 2.0].some((width) => Math.abs((style.width ?? 0) - width) < 1e-5),
+  );
+  assert.ok(node, "missing resizable SPAN frame");
+  const semantic = state.semantic.nodes.find(({ id }) => id === node.id);
+  assert.ok(semantic, "SPAN frame is absent from semantics");
+  return semantic;
+}
+
+/** Evaluated bounds of the one text leaf, such as an icon glyph, with this text. */
+function textBounds(state: GalleryGuiState, text: string) {
+  const matches = state.detailed.nodes.filter(
+    ({ content }) => content.kind === "text" && content.text === text,
+  );
+  assert.equal(matches.length, 1, `expected one text leaf ${text}`);
+  const semantic = state.semantic.nodes.find(({ id }) => id === matches[0]!.id);
+  assert.ok(semantic, `text leaf ${text} is absent from semantics`);
+  return semantic.bounds;
 }
 
 const guiEnvironment = {
@@ -201,6 +273,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
   const cancelMesh = responseGate();
   const readyFont = responseGate();
   const readyMesh = responseGate();
+  const readyWaveform = responseGate();
   let responseMode: "failure" | "cancel" | "ready" | "pass" = "pass";
   let failedRequest!: () => void;
   const failureRequested = new Promise<void>((resolve) => {
@@ -216,6 +289,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
         beforeResponse: async (url, signal) => {
           const font = url.pathname.endsWith("/shure-tech-mono.ippf");
           const mesh = url.pathname.endsWith(PROJECTOR_MESH_SOURCES[0]);
+          const waveform = url.pathname.endsWith("/waveform.ippd");
+          if (waveform) {
+            // The waveform drawing gates readiness like the font and mesh.
+            if (responseMode === "ready") await readyWaveform.hold(signal);
+            return undefined;
+          }
           if (!font && !mesh) return;
           if (responseMode === "failure") {
             failedRequest();
@@ -375,11 +454,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
         );
       };
       const assertTransparentCorners = async (label: string) => {
-        const previousX = await g.call<number>("setGalleryGuiX", 1000);
+        await g.call("overrideGalleryGuiTransform", { x: 1000 });
         try {
           await g.capture(`${label}-backdrop`);
         } finally {
-          await g.call("setGalleryGuiX", previousX);
+          await g.call("releaseGalleryGuiTransform");
         }
         await g.capture(label);
         const corners = [
@@ -409,6 +488,76 @@ test("Gallery runs a real GUI demo and cleans it up", {
           ),
           `outside rounded panel corners must reveal the unchanged scene: ${JSON.stringify({ painted, backdrop })}`,
         );
+      };
+      // Region evidence stays in its own file: capture metadata can exhaust
+      // the bounded event log before these later observations.
+      const regionEvidence: Record<string, unknown> = {};
+      const recordRegions = async (name: string, value: unknown) => {
+        regionEvidence[name] = value;
+        await writeFile(
+          join(scenario.evidence.directory, "region-evidence.json"),
+          JSON.stringify(regionEvidence, null, 2) + "\n",
+        );
+      };
+      const regionStats = <K extends string>(
+        label: string,
+        rects: Record<K, LogicalRect>,
+      ) =>
+        g.call<Record<K, RegionStats>>("galleryGuiRegionStats", label, rects);
+      // Face the panel to the camera so thin skin features span several
+      // pixels, then restore the authored placement.
+      const withDetailView = async <T>(body: () => Promise<T>) => {
+        await g.page.mouse.move(1, 1);
+        await g.call("faceGalleryGuiToCamera");
+        try {
+          return await body();
+        } finally {
+          await g.call("releaseGalleryGuiTransform");
+        }
+      };
+      // Named background lanes: `background` carries the animated appearance,
+      // `background_disabled` the authored disabled state lane.
+      const partValue = (
+        tree: GuiSemanticTree,
+        node: GuiSemanticNode,
+        part: "background" | "background_disabled",
+        property: "color" | "opacity",
+      ) =>
+        g.call<{ kind: string; value: number | readonly number[] }>(
+          "galleryGuiPartValue",
+          tree.entity,
+          node.id,
+          part,
+          property,
+        );
+      const waitForPartOpacity = async (
+        tree: GuiSemanticTree,
+        node: GuiSemanticNode,
+        expected: number,
+      ) => {
+        const deadline = performance.now() + 10_000;
+        for (;;) {
+          const value = await partValue(tree, node, "background", "opacity");
+          if (Math.abs(Number(value.value) - expected) < 1e-4) return;
+          if (performance.now() > deadline)
+            throw new Error(
+              `${node.name} opacity stayed ${JSON.stringify(value)}, expected ${expected}`,
+            );
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      };
+      // UPLINK fill beside its label and the panel gap to its right.
+      const uplinkRegions = (label: string, node: GuiSemanticNode) => {
+        const [x, y, width, height] = node.bounds;
+        return regionStats(label, {
+          fill: [x + 0.72, y + 0.12, x + 0.9, y + height - 0.12],
+          gap: [
+            x + width + 0.04,
+            y + 0.12,
+            x + width + 0.09,
+            y + height - 0.12,
+          ],
+        });
       };
       const startGui = async () => {
         await g.selectScene("gui");
@@ -599,16 +748,36 @@ test("Gallery runs a real GUI demo and cleans it up", {
               source.endsWith("/shure-tech-mono.ippf") && status !== "loaded",
           ),
       );
-      await g.call("delayNextGuiBatch");
       readyFont.release();
+      await readyWaveform.requested;
+      await g.waitFor((inspection) =>
+        inspection.resources.some(
+          ({ source, status }) =>
+            source.endsWith("/shure-tech-mono.ippf") && status === "loaded",
+        ),
+      );
+      const waveformPending = await waitForGui();
+      assert.ok(
+        waveformPending.semantic.nodes
+          .filter(({ actions }) => actions.length > 0)
+          .every(({ visible }) => !visible),
+        "the GUI demo prepared before its essential waveform drawing loaded",
+      );
+      assert.equal(
+        await g.page.locator("#status").getAttribute("data-state"),
+        "starting",
+      );
+      await g.call("delayNextGuiBatch");
+      readyWaveform.release();
       await g.held();
       const resourcesReady = await g.inspect();
       const essentialResources = resourcesReady.resources.filter(
         ({ source }) =>
           source.endsWith("/shure-tech-mono.ippf") ||
+          source.endsWith("/waveform.ippd") ||
           source.endsWith(PROJECTOR_MESH_SOURCES[0]),
       );
-      assert.equal(essentialResources.length, 2);
+      assert.equal(essentialResources.length, 3);
       assert.ok(essentialResources.every(({ status }) => status === "loaded"));
 
       assertNoScanner(resourcesReady);
@@ -743,6 +912,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "EMBER",
         "NEON",
         "PULSE",
+        "SPAN",
+        "UPLINK",
       ]);
       assert.deepEqual(controlValue(initial.semantic, "checkbox"), {
         kind: "bool",
@@ -854,7 +1025,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const glyphTexts = initial.detailed.nodes.flatMap(({ content }) =>
         content.kind === "text" ? [content.text] : [],
       );
-      for (const icon of Object.values(GUI_ICONS))
+      for (const icon of Object.values(ICON_CODE_POINTS))
         assert.ok(glyphTexts.includes(icon), `missing Nerd Font icon ${icon}`);
 
       assert.equal(
@@ -869,6 +1040,58 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.equal(overview.frame.backend.failedDrawCalls, 0);
       assert.ok(overview.summary.coverage > 0.08);
       assert.deepEqual(overview.inspection.renderDiagnostics, []);
+
+      // UPLINK is mounted disabled while SCAN runs. Its disabled lane is an
+      // ordinary named part property and paints a solid dim fill.
+      const disabledUplink = semanticNode(initial.semantic, "button", "UPLINK");
+      assert.equal(disabledUplink.enabled, false);
+      assert.deepEqual(disabledUplink.actions, []);
+      const auroraDisabled = [0.2, 0.35, 0.42, 0.45] as const;
+      const disabledLane = {
+        color: await partValue(
+          initial.semantic,
+          disabledUplink,
+          "background_disabled",
+          "color",
+        ),
+        opacity: await partValue(
+          initial.semantic,
+          disabledUplink,
+          "background_disabled",
+          "opacity",
+        ),
+      };
+      (disabledLane.color.value as readonly number[]).forEach(
+        (value, channel) =>
+          near(value, auroraDisabled[channel]!, "disabled UPLINK colour"),
+      );
+      near(Number(disabledLane.opacity.value), 0.45, "disabled UPLINK opacity");
+      const disabledRegions = await withDetailView(async () => {
+        await g.capture("gui-detail-uplink-disabled");
+        return uplinkRegions("gui-detail-uplink-disabled", disabledUplink);
+      });
+      // Straight linear colour at alpha 0.45 x opacity 0.45 over the
+      // measured panel background, encoded once for display.
+      const disabledAlpha = auroraDisabled[3] * 0.45;
+      const expectedDisabled = auroraDisabled
+        .slice(0, 3)
+        .map((value, channel) =>
+          linearToSrgb(
+            value * disabledAlpha +
+              srgbToLinear(disabledRegions.gap.mean[channel]!) *
+                (1 - disabledAlpha),
+          ),
+        );
+      await recordRegions("uplink-disabled", {
+        ...disabledRegions,
+        expectedDisabled,
+      });
+      disabledRegions.fill.mean.forEach((value, channel) =>
+        assert.ok(
+          Math.abs(value - expectedDisabled[channel]!) < 12,
+          `disabled UPLINK fill ${JSON.stringify(disabledRegions.fill.mean)} is not ${JSON.stringify(expectedDisabled)}`,
+        ),
+      );
 
       const cameraBeforeControls = transform(await g.inspect());
       const checkboxRegion = await g.call<
@@ -889,6 +1112,28 @@ test("Gallery runs a real GUI demo and cleans it up", {
       });
       await g.waitFor(
         (inspection) => waveformAnimation(inspection).state === "paused",
+      );
+
+      // SCAN standby enables UPLINK; the skin transition returns its part
+      // properties to the idle lane and the captured fill changes with them.
+      current = await waitForGui(
+        ({ semantic }) => semanticNode(semantic, "button", "UPLINK").enabled,
+      );
+      const enabledUplink = semanticNode(current.semantic, "button", "UPLINK");
+      assert.equal(enabledUplink.id, disabledUplink.id);
+      await waitForPartOpacity(current.semantic, enabledUplink, 1);
+      const enabledRegions = await withDetailView(async () => {
+        await g.capture("gui-detail-uplink-enabled");
+        return uplinkRegions("gui-detail-uplink-enabled", enabledUplink);
+      });
+      await recordRegions("uplink-enabled", enabledRegions);
+      assert.ok(
+        meanDifference(enabledRegions.fill, disabledRegions.fill) > 8,
+        "enabling UPLINK did not change its captured fill",
+      );
+      assert.ok(
+        meanDifference(enabledRegions.gap, disabledRegions.gap) < 4,
+        "UPLINK comparison background moved between captures",
       );
 
       const dustStart = await g.capture("gui-projector-dust-start");
@@ -1201,6 +1446,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
           waveformAnimation(inspection).state === "playing" &&
           waveformAnimation(inspection).time > 0.2,
       );
+      // Running SCAN disables UPLINK again; its skin transition animates the
+      // background part's ordinary properties into the disabled sample.
+      current = await waitForGui(
+        ({ semantic }) => !semanticNode(semantic, "button", "UPLINK").enabled,
+      );
+      await waitForPartOpacity(current.semantic, enabledUplink, 0.45);
       const toggledPulse = await g.capture("gui-waveform-pulse-scan-toggled");
       assert.ok(
         Number(
@@ -1307,6 +1558,23 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await g.waitFor(
         (inspection) => waveformAnimation(inspection).state === "paused",
       );
+      current = await waitForGui(
+        ({ semantic }) => semanticNode(semantic, "button", "UPLINK").enabled,
+      );
+      // Returning to idle is not asserted through the animated lane: the
+      // reverse skin transition is currently refused (see the region
+      // evidence), so the semantic state and this capture are the evidence.
+      await withDetailView(async () => {
+        await g.capture("gui-detail-uplink-reenabled");
+      });
+      await recordRegions("uplink-reenabled", {
+        opacity: await partValue(
+          current.semantic,
+          enabledUplink,
+          "background",
+          "opacity",
+        ),
+      });
       const beforeReset = await waitForGui();
 
       await g.page.locator("#reset-camera").click();
@@ -1494,6 +1762,236 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(neonDifference.meanAbsoluteChannelDifference > 1);
       assert.equal(neonFrame.frame.backend.failedDrawCalls, 0);
       assert.deepEqual(neonFrame.inspection.renderDiagnostics, []);
+
+      // Detailed Neon regions. Every rectangle derives from evaluated bounds
+      // plus the layout expectations restated here.
+      await withDetailView(async () => {
+        const detail = await waitForGui();
+        await g.capture("gui-detail-neon");
+        const evidence: Record<string, unknown> = {};
+
+        // Six icon cells: each glyph lands in its documented cell and paints.
+        const pulseButton = semanticNode(detail.semantic, "button", "PULSE");
+        const [px, py, pw, ph] = pulseButton.bounds;
+        const title = textBounds(detail, "GUI DEMO");
+        const spanButton = semanticNode(detail.semantic, "button", "SPAN");
+        const pulseIcon = textBounds(detail, ICON_CODE_POINTS.pulse);
+        near(pulseIcon[0] + pulseIcon[2] / 2, px + 0.45, "PULSE icon x");
+        near(pulseIcon[1] + pulseIcon[3] / 2, py + ph / 2, "PULSE icon y");
+        assert.ok(pulseIcon[0] + pulseIcon[2] <= px + 1.08);
+        for (const skin of ["aurora", "ember", "neon"] as const) {
+          const [bx, by, , bh] = semanticNode(
+            detail.semantic,
+            "button",
+            skin.toUpperCase(),
+          ).bounds;
+          const icon = textBounds(detail, ICON_CODE_POINTS[skin]);
+          near(icon[0] + icon[2] / 2, bx + 0.125, `${skin} icon x`);
+          near(icon[1] + icon[3] / 2, by + bh / 2, `${skin} icon y`);
+          assert.ok(icon[0] + icon[2] <= bx + 0.27);
+        }
+        const cube = textBounds(detail, ICON_CODE_POINTS.cube);
+        near(cube[0], px, "cube icon x");
+        near(cube[1] + cube[3] / 2, title[1] + title[3] / 2, "cube icon y");
+        assert.ok(cube[0] + cube[2] <= title[0]);
+        const signal = textBounds(detail, ICON_CODE_POINTS.signal);
+        near(
+          signal[0] + signal[2],
+          spanButton.bounds[0] + spanButton.bounds[2] + 0.67,
+          "signal icon x",
+        );
+        near(signal[1] + signal[3] / 2, title[1] + title[3] / 2, "signal y");
+        const iconRects = Object.fromEntries(
+          Object.entries(ICON_CODE_POINTS).map(([name, glyph]) => {
+            const [x, y, width, height] = textBounds(detail, glyph);
+            return [name, [x, y, x + width, y + height] as LogicalRect];
+          }),
+        );
+        const [ix, iy, iw, ih] = semanticNode(
+          detail.semantic,
+          "textInput",
+          "CALLSIGN",
+        ).bounds;
+        // PULSE bands above/below its centre row, then farther out.
+        const band = (x0: number, top: boolean): LogicalRect => [
+          px + x0,
+          top ? py + 0.04 : py + ph - 0.12,
+          px + x0 + 0.3,
+          top ? py + 0.12 : py + ph - 0.04,
+        ];
+        const neon = await regionStats<string>("gui-detail-neon", {
+          ...iconRects,
+          nearTop: band(0.3, true),
+          nearBottom: band(0.3, false),
+          middle: band(1.2, false),
+          farTop: band(2.6, true),
+          farBottom: band(2.6, false),
+          halo: [px - 0.06, py + 0.25, px - 0.02, py + ph - 0.25],
+          haloBaseline: [px - 0.2, py + 0.25, px - 0.16, py + ph - 0.25],
+          ringTop: [ix + 0.35 * iw, iy + 0.004, ix + 0.65 * iw, iy + 0.02],
+          ringBottom: [
+            ix + 0.35 * iw,
+            iy + ih - 0.02,
+            ix + 0.65 * iw,
+            iy + ih - 0.004,
+          ],
+          ringRight: [
+            ix + iw - 0.02,
+            iy + 0.3 * ih,
+            ix + iw - 0.004,
+            iy + 0.7 * ih,
+          ],
+          hollow: [ix + 0.62 * iw, iy + 0.3 * ih, ix + 0.9 * iw, iy + 0.7 * ih],
+        });
+        evidence.regions = neon;
+        for (const name of Object.keys(ICON_CODE_POINTS)) {
+          const stats = neon[name]!;
+          assert.ok(
+            stats.max[1] > 170 && stats.max[2] > 170,
+            `${name} icon cell did not paint its glyph: ${JSON.stringify(stats)}`,
+          );
+        }
+
+        // PULSE fill falls off radially from its icon cell: symmetric above
+        // and below the centre, decreasing outward, flat beyond the radius.
+        const { nearTop, nearBottom, middle, farTop, farBottom } = neon;
+        assert.ok(
+          Math.abs(nearTop!.mean[1] - nearBottom!.mean[1]) < 10 &&
+            nearBottom!.mean[1] > middle!.mean[1] + 12 &&
+            middle!.mean[1] > farBottom!.mean[1] + 12 &&
+            Math.abs(farTop!.mean[1] - farBottom!.mean[1]) < 8,
+          "PULSE lost its radial gradient",
+        );
+
+        // Neon's resting PULSE halo brightens only the band beside the
+        // button; the semantic bounds stay on the button itself.
+        assert.ok(
+          neon.halo!.mean[1] > neon.haloBaseline!.mean[1] + 20 &&
+            neon.halo!.mean[2] > neon.haloBaseline!.mean[2] + 20,
+          "PULSE halo is missing",
+        );
+        near(pw, 3.24, "PULSE semantic width excludes its halo");
+
+        // The focused callsign ring strokes the edge and leaves the centre clear.
+        const callsign = semanticNode(detail.semantic, "textInput", "CALLSIGN");
+        assert.deepEqual(detail.semantic.focused, {
+          id: callsign.id,
+          lifetime: callsign.lifetime,
+        });
+        assert.ok(
+          [neon.ringTop!, neon.ringBottom!, neon.ringRight!].every(
+            ({ mean: [r, , b] }) => r > 150 && r > b + 30,
+          ),
+          "focused callsign ring lost its Neon focus colour",
+        );
+        assert.ok(
+          neon.hollow!.mean[0] < 60 &&
+            neon.hollow!.mean[2] > neon.hollow!.mean[0],
+          "focus ring filled the callsign centre",
+        );
+
+        // SPAN widens its frame; corner radii and border widths keep their
+        // authored metres, so every corner and border region is unchanged.
+        const narrow = spanFrame(detail);
+        near(narrow.bounds[2], 1.2, "narrow SPAN width");
+        const frameRects = ([x, y, width, height]: readonly number[]) => ({
+          topLeft: [x! - 0.03, y! - 0.03, x! + 0.15, y! + 0.15] as LogicalRect,
+          bottomLeft: [
+            x! - 0.03,
+            y! + height! - 0.15,
+            x! + 0.15,
+            y! + height! + 0.03,
+          ] as LogicalRect,
+          left: [
+            x! - 0.03,
+            y! + 0.12,
+            x! + 0.06,
+            y! + height! - 0.12,
+          ] as LogicalRect,
+          topRight: [
+            x! + width! - 0.15,
+            y! - 0.03,
+            x! + width! + 0.03,
+            y! + 0.15,
+          ] as LogicalRect,
+          bottomRight: [
+            x! + width! - 0.15,
+            y! + height! - 0.15,
+            x! + width! + 0.03,
+            y! + height! + 0.03,
+          ] as LogicalRect,
+          top: [
+            x! + width! / 2 - 0.1,
+            y! - 0.03,
+            x! + width! / 2 + 0.1,
+            y! + 0.06,
+          ] as LogicalRect,
+        });
+        // Beyond the narrow frame but inside the wide one, clear of its text.
+        const widened: LogicalRect = [
+          narrow.bounds[0] + 1.4,
+          narrow.bounds[1] + 0.12,
+          narrow.bounds[0] + 1.7,
+          narrow.bounds[1] + 0.26,
+        ];
+        const narrowRegions = await regionStats("gui-detail-neon", {
+          ...frameRects(narrow.bounds),
+          widened,
+        });
+        await g.call(
+          "galleryGuiAction",
+          { role: "button", name: "SPAN" },
+          { kind: "press" },
+        );
+        await g.page.waitForFunction(
+          () => document.querySelector("#gui-span")?.textContent === "wide",
+        );
+        const wideState = await waitForGui(
+          (state) => Math.abs(spanFrame(state).bounds[2] - 2.0) < 1e-4,
+        );
+        const wide = spanFrame(wideState);
+        assert.equal(wide.id, narrow.id);
+        near(wide.bounds[0], narrow.bounds[0], "SPAN keeps its left edge");
+        await g.capture("gui-detail-span-wide");
+        const wideRegions = await regionStats("gui-detail-span-wide", {
+          ...frameRects(wide.bounds),
+          widened,
+        });
+        evidence.span = {
+          narrow: narrow.bounds,
+          wide: wide.bounds,
+          narrowRegions,
+          wideRegions,
+        };
+        assert.ok(
+          meanDifference(wideRegions.widened, narrowRegions.widened) > 20,
+          "SPAN did not paint its widened frame",
+        );
+        for (const key of Object.keys(
+          frameRects(narrow.bounds),
+        ) as (keyof ReturnType<typeof frameRects>)[]) {
+          const difference = meanDifference(
+            narrowRegions[key],
+            wideRegions[key],
+          );
+          assert.ok(
+            difference < 4,
+            `SPAN ${key} region changed by ${difference} when resized`,
+          );
+        }
+        await g.call(
+          "galleryGuiAction",
+          { role: "button", name: "SPAN" },
+          { kind: "press" },
+        );
+        await g.page.waitForFunction(
+          () => document.querySelector("#gui-span")?.textContent === "narrow",
+        );
+        await waitForGui(
+          (state) => Math.abs(spanFrame(state).bounds[2] - 1.2) < 1e-4,
+        );
+        await recordRegions("neon", evidence);
+      });
 
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
       const scroll = await g.call<ProjectedGuiNode>("galleryGuiScrollPoint");

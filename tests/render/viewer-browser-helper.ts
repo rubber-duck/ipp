@@ -8,6 +8,7 @@ import type {
   GuiPartProperty,
   GuiWorldClient,
   PickingWorldClient,
+  StateOverlayRef,
   SurfaceWorldClient,
   SystemQuery,
 } from "@ipp/client";
@@ -251,6 +252,105 @@ export async function sampleGalleryGuiCapture(
   );
 }
 
+export interface GalleryGuiRegionStats {
+  readonly pixels: number;
+  readonly mean: readonly [number, number, number];
+  readonly min: readonly [number, number, number];
+  readonly max: readonly [number, number, number];
+}
+
+/**
+ * Summarize completed-frame pixels whose centres fall inside each named
+ * logical GUI rectangle `[minX, minY, maxX, maxY]`, projected through the
+ * actual Surface and camera transforms.
+ */
+export async function galleryGuiRegionStats(
+  label: string,
+  rects: Readonly<Record<string, readonly [number, number, number, number]>>,
+): Promise<Record<string, GalleryGuiRegionStats>> {
+  const handle = requireCanvas();
+  const client = handle.client as SurfaceWorldClient;
+  const inspection = await client.inspect();
+  const surface = inspection.entities
+    .find(({ metadata }) => metadata.symbolicId === "gui-demo")
+    ?.effective.find(
+      ({ component }) => component === client.components.Surface!.id,
+    );
+  if (!surface) throw new Error("Missing effective GUI demo Surface");
+  const width = Number(surface.fields.width);
+  const height = Number(surface.fields.height);
+  const frame = requireCapture(label);
+  const names = Object.keys(rects);
+  const projected = await projectGalleryPoints(
+    "gui-demo",
+    names.flatMap((name) => {
+      const [minX, minY, maxX, maxY] = rects[name]!;
+      return [
+        [minX, minY],
+        [maxX, minY],
+        [maxX, maxY],
+        [minX, maxY],
+      ].map(([x, y]) => [x! - width / 2, height / 2 - y!, 0]);
+    }),
+  );
+  const result: Record<string, GalleryGuiRegionStats> = {};
+  names.forEach((name, index) => {
+    const quad = projected
+      .slice(index * 4, index * 4 + 4)
+      .map(({ x, y }) => [x * frame.width, y * frame.height] as const);
+    result[name] = quadStats(frame, quad, name);
+  });
+  return result;
+}
+
+/** Channel statistics over pixels whose centres fall inside a convex quad. */
+function quadStats(
+  frame: FrameCapture,
+  quad: readonly (readonly [number, number])[],
+  name: string,
+): GalleryGuiRegionStats {
+  const inside = (px: number, py: number) => {
+    let sign = 0;
+    for (let index = 0; index < quad.length; index++) {
+      const [ax, ay] = quad[index]!;
+      const [bx, by] = quad[(index + 1) % quad.length]!;
+      const cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+      if (cross === 0) continue;
+      if (sign === 0) sign = Math.sign(cross);
+      else if (Math.sign(cross) !== sign) return false;
+    }
+    return true;
+  };
+  const xs = quad.map(([x]) => x);
+  const ys = quad.map(([, y]) => y);
+  const left = Math.max(0, Math.floor(Math.min(...xs)));
+  const right = Math.min(frame.width - 1, Math.ceil(Math.max(...xs)));
+  const top = Math.max(0, Math.floor(Math.min(...ys)));
+  const bottom = Math.min(frame.height - 1, Math.ceil(Math.max(...ys)));
+  const sum = [0, 0, 0];
+  const min = [255, 255, 255];
+  const max = [0, 0, 0];
+  let pixels = 0;
+  for (let y = top; y <= bottom; y++)
+    for (let x = left; x <= right; x++) {
+      if (!inside(x + 0.5, y + 0.5)) continue;
+      const pixel = sample(frame, x, y);
+      for (let channel = 0; channel < 3; channel++) {
+        sum[channel]! += pixel[channel]!;
+        min[channel] = Math.min(min[channel]!, pixel[channel]!);
+        max[channel] = Math.max(max[channel]!, pixel[channel]!);
+      }
+      pixels++;
+    }
+  if (pixels === 0) throw new Error(`GUI region ${name} covers no pixels`);
+  return {
+    pixels,
+    mean: sum.map((value) => value / pixels) as [number, number, number],
+    min: min as [number, number, number],
+    max: max as [number, number, number],
+  };
+}
+
 /** Sample completed frame pixels independently of scene geometry. */
 export function sampleViewerCapture(
   label: string,
@@ -266,27 +366,105 @@ export function sampleViewerCapture(
   );
 }
 
-/** Move the same panel temporarily to expose the real backdrop under its corners. */
-export async function setGalleryGuiX(x: number): Promise<number> {
-  const { client, entity } = await galleryGuiContext();
+let galleryGuiTransformOwner: StateOverlayRef | undefined;
+
+/**
+ * Temporarily override the panel's Transform fields with a StateOverlay
+ * attached above the application's own. Later attachments win, and
+ * releasing the owner reveals the authored placement again.
+ */
+export async function overrideGalleryGuiTransform(
+  fields: Readonly<Record<string, number>>,
+): Promise<void> {
+  if (galleryGuiTransformOwner)
+    throw new Error("A GUI placement override is already attached");
+  const { handle, client } = await galleryGuiContext();
   const component = client.components.Transform!;
-  const previous = Number(
-    entity.effective.find(({ component: id }) => id === component.id)!.fields.x,
-  );
+  const owner = { kind: "alias", alias: 1 } as const;
   const result = await client.batch([
+    { kind: "createStateOverlayOwner", alias: 1 },
     {
-      kind: "setField",
-      entity: { kind: "handle", id: entity.id },
+      kind: "attachEntityOverlayBinding",
+      owner,
+      alias: 2,
+      symbolicId: "gui-demo",
+      mode: "bound",
+    },
+    {
+      kind: "attachComponentStateOverlay",
+      owner,
+      binding: { kind: "alias", alias: 2 },
+      alias: 3,
       component: component.id,
-      field: {
-        offset: component.fields.x!.offset,
-        value: { kind: "f32", value: x },
-      },
+      mode: "bound",
+      fields: Object.entries(fields).map(([name, value]) => ({
+        offset: component.fields[name]!.offset,
+        value: { kind: "f32" as const, value },
+      })),
     },
   ]);
+  const created = result.stateOverlays.find(({ alias }) => alias === 1);
+  if (created) galleryGuiTransformOwner = { kind: "handle", id: created.id };
   if (!result.ok)
-    throw new Error(`GUI capture placement failed: ${result.error.reason}`);
-  return previous;
+    throw new Error(`GUI placement override failed: ${result.error.reason}`);
+  await handle.flush();
+}
+
+/** Release the placement override, revealing the authored panel placement. */
+export async function releaseGalleryGuiTransform(): Promise<void> {
+  const owner = galleryGuiTransformOwner;
+  if (!owner) throw new Error("No GUI placement override is attached");
+  galleryGuiTransformOwner = undefined;
+  const handle = requireCanvas();
+  const result = await handle.client.batch([
+    { kind: "releaseStateOverlayOwner", owner },
+  ]);
+  if (!result.ok)
+    throw new Error(`GUI placement release failed: ${result.error.reason}`);
+  await handle.flush();
+}
+
+/**
+ * Face the panel squarely toward the current camera, filling `fill` of the
+ * limiting view axis, so thin skin features span several pixels. Placement
+ * changes only projection: layout, paint and semantics are unchanged.
+ */
+export async function faceGalleryGuiToCamera(fill = 0.92): Promise<void> {
+  const { handle, client, inspection, entity, surface } =
+    await galleryGuiContext();
+  const camera = inspection.entities.find(
+    ({ metadata }) => metadata.symbolicId === "gallery-camera",
+  );
+  if (!camera) throw new Error("Missing gallery camera");
+  const fields = (owner: typeof camera, name: string) =>
+    owner.effective.find(
+      ({ component }) => component === client.components[name]!.id,
+    )!.fields;
+  const view = fields(camera, "Transform");
+  const projection = fields(camera, "Camera");
+  if (Number(projection.projection) === 1)
+    throw new Error("Detailed GUI placement expects a perspective camera");
+  const panel = fields(entity, "Transform");
+  const rotation = ["qx", "qy", "qz", "qw"].map((key) => Number(view[key]));
+  const forward = rotateByQuaternion([0, 0, -1], rotation);
+  const tanY = Math.tan(Number(projection.fov_y) / 2);
+  const tanX = (tanY * handle.viewport.width) / handle.viewport.height;
+  const width = Number(surface.fields.width) * Number(panel.sx);
+  const height = Number(surface.fields.height) * Number(panel.sy);
+  const distance = Math.max(
+    width / (2 * tanX * fill),
+    height / (2 * tanY * fill),
+  );
+  // The panel's +Z front faces the camera when it shares the camera rotation.
+  await overrideGalleryGuiTransform({
+    x: Number(view.x) + forward[0]! * distance,
+    y: Number(view.y) + forward[1]! * distance,
+    z: Number(view.z) + forward[2]! * distance,
+    qx: rotation[0]!,
+    qy: rotation[1]!,
+    qz: rotation[2]!,
+    qw: rotation[3]!,
+  });
 }
 
 /** Drive an acknowledged controller through the production animation protocol. */
@@ -349,6 +527,8 @@ export async function galleryGuiAction(
 
 /** Observe the production input path during sustained DOM input, without gating it. */
 export function observeGalleryGuiInput() {
+  if (finishGuiInputObservation)
+    throw new Error("GUI input observation is already installed");
   const client = requireCanvas().client as GuiWorldClient;
   const submit = client.submitGuiInput;
   const pending = new Set<Promise<unknown>>();
@@ -377,16 +557,29 @@ export function observeGalleryGuiInput() {
     );
     return result;
   };
-  finishGuiInputObservation = async () => {
+  finishGuiInputObservation = async (timeoutMs) => {
+    // Restore the production path before waiting, so a stuck submission
+    // cannot leave the spy installed.
     client.submitGuiInput = submit;
-    await Promise.allSettled([...pending]);
     finishGuiInputObservation = undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      Promise.allSettled([...pending]).then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!settled)
+      throw new Error(
+        `${pending.size} GUI input submissions did not settle within ${timeoutMs} ms`,
+      );
     return observation;
   };
 }
 
 let finishGuiInputObservation:
-  | (() => Promise<{
+  | ((timeoutMs: number) => Promise<{
       sent: number;
       completed: number;
       peakPending: number;
@@ -394,10 +587,10 @@ let finishGuiInputObservation:
     }>)
   | undefined;
 
-export async function finishGalleryGuiInputObservation() {
+export async function finishGalleryGuiInputObservation(timeoutMs = 10_000) {
   if (!finishGuiInputObservation)
     throw new Error("GUI input observation was not started");
-  return finishGuiInputObservation();
+  return finishGuiInputObservation(timeoutMs);
 }
 
 /** Execute the gallery's actual generated camera query path for geometry assertions. */
@@ -460,25 +653,11 @@ export async function projectGalleryPoints(
   const object = fields(entity, "Transform");
   const view = fields(camera, "Transform");
   const projection = fields(camera, "Camera");
-  const rotate = (v: number[], q: number[]) => {
-    const [x, y, z] = v as [number, number, number];
-    const [qx, qy, qz, qw] = q as [number, number, number, number];
-    const t = [
-      2 * (qy * z - qz * y),
-      2 * (qz * x - qx * z),
-      2 * (qx * y - qy * x),
-    ];
-    return [
-      x + qw * t[0]! + qy * t[2]! - qz * t[1]!,
-      y + qw * t[1]! + qz * t[0]! - qx * t[2]!,
-      z + qw * t[2]! + qx * t[1]! - qy * t[0]!,
-    ];
-  };
   const bounds = document
     .querySelector<HTMLCanvasElement>("#ipp-world-canvas")!
     .getBoundingClientRect();
   return offsets.map((local) => {
-    const point = rotate(
+    const point = rotateByQuaternion(
       local.map((v, axis) => v * Number(object[["sx", "sy", "sz"][axis]!])),
       ["qx", "qy", "qz", "qw"].map((key) => Number(object[key])),
     );
@@ -488,7 +667,7 @@ export async function projectGalleryPoints(
         Number(object[["x", "y", "z"][axis]!]) -
         Number(view[["x", "y", "z"][axis]!]),
     );
-    const cameraPoint = rotate(relative, [
+    const cameraPoint = rotateByQuaternion(relative, [
       -Number(view.qx),
       -Number(view.qy),
       -Number(view.qz),
@@ -1060,6 +1239,22 @@ function projectPlanePoint(
   const ndcX = (projection * viewX) / (-viewZ * (frame.width / frame.height));
   const ndcY = (projection * viewY) / -viewZ;
   return [((ndcX + 1) * frame.width) / 2, ((1 - ndcY) * frame.height) / 2];
+}
+
+/** Rotate a vector by an xyzw quaternion. */
+function rotateByQuaternion(v: readonly number[], q: readonly number[]) {
+  const [x, y, z] = v as [number, number, number];
+  const [qx, qy, qz, qw] = q as [number, number, number, number];
+  const t = [
+    2 * (qy * z - qz * y),
+    2 * (qz * x - qx * z),
+    2 * (qx * y - qy * x),
+  ];
+  return [
+    x + qw * t[0]! + qy * t[2]! - qz * t[1]!,
+    y + qw * t[1]! + qz * t[0]! - qx * t[2]!,
+    z + qw * t[2]! + qx * t[1]! - qy * t[0]!,
+  ];
 }
 
 function dot(a: readonly number[], b: readonly number[]): number {

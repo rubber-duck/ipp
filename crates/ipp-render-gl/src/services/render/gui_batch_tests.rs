@@ -7,8 +7,8 @@ use super::{GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, generate_box_vertic
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
 use ipp_core::systems::surface::{
-    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, SurfaceClipRect, SurfacePrimitiveIdentity,
-    SurfacePrimitiveStyle, SurfaceRenderPrimitive,
+    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfaceClipRect,
+    SurfacePrimitiveIdentity, SurfacePrimitiveStyle, SurfaceRenderPrimitive,
 };
 
 #[derive(Default)]
@@ -238,26 +238,244 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
     let size = [3.0, 4.0];
     let corner = [0.1, 0.2];
     let border_color = [0.0, 1.0, 0.0, 1.0];
+    let fill = GuiShapeFill::Solid([1.0, 0.0, 0.0, 1.0]);
 
-    let vertices = generate_box_vertices(&style, &size, &corner, 0.05, &border_color);
+    let vertices = generate_box_vertices(&style, &size, &corner, 0.05, &border_color, &fill, None);
     assert_eq!(vertices.len(), 6);
 
-    // Quad corners in Surface coordinates: TL=(1, 2), BL=(1, 6), BR=(4, 6), TR=(4, 2)
-    assert_eq!(vertices[0].position, [1.0, 2.0]); // TL
-    assert_eq!(vertices[1].position, [1.0, 6.0]); // BL
-    assert_eq!(vertices[2].position, [4.0, 6.0]); // BR
+    // Quad corners in Surface coordinates with 0.002 conservative AA padding:
+    // x0 = 1.0 - 0.002 = 0.998, y0 = 2.0 - 0.002 = 1.998
+    // x1 = 4.0 + 0.002 = 4.002, y1 = 6.0 + 0.002 = 6.002
+    assert_eq!(vertices[0].position, [0.998, 1.998]); // TL
+    assert_eq!(vertices[1].position, [0.998, 6.002]); // BL
+    assert_eq!(vertices[2].position, [4.002, 6.002]); // BR
 
-    assert_eq!(vertices[3].position, [1.0, 2.0]); // TL
-    assert_eq!(vertices[4].position, [4.0, 6.0]); // BR
-    assert_eq!(vertices[5].position, [4.0, 2.0]); // TR
+    assert_eq!(vertices[3].position, [0.998, 1.998]); // TL
+    assert_eq!(vertices[4].position, [4.002, 6.002]); // BR
+    assert_eq!(vertices[5].position, [4.002, 1.998]); // TR
 
     // All vertices carry identical shape uniforms
     for v in &vertices {
         assert_eq!(v.placement, [1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(v.color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(v.color0, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(v.color1, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(v.border_color, [0.0, 1.0, 0.0, 1.0]);
         assert_eq!(v.shape, [0.1, 0.2, 0.05, 0.0]);
+        assert_eq!(v.gradient_coords, [0.0; 4]);
+        assert_eq!(v.material_params, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(v.glow_color, [0.0; 4]);
     }
+}
+
+#[test]
+fn linear_gradient_fill_sets_coordinates_and_material_type() {
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+            root_incarnation: 1,
+            node: GuiNodeId(1),
+            lifetime: 1,
+            part: GuiPrimitivePart::Background,
+        }),
+        position: [0.0, 0.0],
+        scale: [1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        opacity: 0.5,
+        clip: None,
+    };
+    let fill = GuiShapeFill::LinearGradient {
+        start: [0.0, 0.0],
+        end: [2.0, 1.0],
+        start_color: [1.0, 0.0, 0.0, 1.0],
+        end_color: [0.0, 0.0, 1.0, 0.8],
+    };
+
+    let vertices = generate_box_vertices(
+        &style,
+        &[2.0, 1.0],
+        &[0.0, 0.0],
+        0.0,
+        &[0.0; 4],
+        &fill,
+        None,
+    );
+    assert_eq!(vertices.len(), 6);
+
+    for v in &vertices {
+        assert_eq!(v.color0, [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(v.color1, [0.0, 0.0, 1.0, 0.4]);
+        assert_eq!(v.gradient_coords, [0.0, 0.0, 2.0, 1.0]);
+        assert_eq!(v.material_params[0], 1.0);
+    }
+}
+
+#[test]
+fn radial_gradient_fill_sets_center_radius_and_material_type() {
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+            root_incarnation: 1,
+            node: GuiNodeId(1),
+            lifetime: 1,
+            part: GuiPrimitivePart::Background,
+        }),
+        position: [0.0, 0.0],
+        scale: [2.0, 2.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let fill = GuiShapeFill::RadialGradient {
+        center: [0.5, 0.5],
+        radius: 0.25,
+        start_color: [1.0, 1.0, 0.0, 1.0],
+        end_color: [0.0, 1.0, 1.0, 0.0],
+    };
+
+    let vertices = generate_box_vertices(
+        &style,
+        &[1.0, 1.0],
+        &[0.0, 0.0],
+        0.0,
+        &[0.0; 4],
+        &fill,
+        None,
+    );
+    assert_eq!(vertices.len(), 6);
+
+    for v in &vertices {
+        assert_eq!(v.color0, [1.0, 1.0, 0.0, 1.0]);
+        assert_eq!(v.color1, [0.0, 1.0, 1.0, 0.0]);
+        assert_eq!(v.gradient_coords, [1.0, 1.0, 0.5, 0.0]);
+        assert_eq!(v.material_params[0], 2.0);
+    }
+}
+
+#[test]
+fn glow_expands_quad_padding_and_packs_glow_parameters() {
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+            root_incarnation: 1,
+            node: GuiNodeId(1),
+            lifetime: 1,
+            part: GuiPrimitivePart::Background,
+        }),
+        position: [2.0, 3.0],
+        scale: [1.0, 1.0],
+        color: [0.0, 0.0, 0.0, 1.0],
+        opacity: 0.8,
+        clip: None,
+    };
+    let glow = GuiShapeGlow {
+        color: [0.3, 0.6, 0.9, 1.0],
+        intensity: 1.5,
+        radius: 0.05,
+        falloff: 2.0,
+    };
+
+    let vertices = generate_box_vertices(
+        &style,
+        &[1.0, 1.0],
+        &[0.02, 0.02],
+        0.0,
+        &[0.0; 4],
+        &GuiShapeFill::Solid([0.0; 4]),
+        Some(&glow),
+    );
+    assert_eq!(vertices.len(), 6);
+
+    let expected_x0 = 2.0 - 0.052;
+    let expected_y0 = 3.0 - 0.052;
+    let expected_x1 = 3.0 + 0.052;
+    let expected_y1 = 4.0 + 0.052;
+
+    assert!((vertices[0].position[0] - expected_x0).abs() < 1e-6);
+    assert!((vertices[0].position[1] - expected_y0).abs() < 1e-6);
+    assert!((vertices[2].position[0] - expected_x1).abs() < 1e-6);
+    assert!((vertices[2].position[1] - expected_y1).abs() < 1e-6);
+
+    for v in &vertices {
+        assert_eq!(v.material_params[1], 1.5);
+        assert_eq!(v.material_params[2], 0.05);
+        assert_eq!(v.material_params[3], 2.0);
+        assert_eq!(v.glow_color, [0.3, 0.6, 0.9, 0.8]);
+    }
+}
+
+#[test]
+fn border_only_box_splits_into_four_edge_strips_without_interior() {
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+            root_incarnation: 1,
+            node: GuiNodeId(1),
+            lifetime: 1,
+            part: GuiPrimitivePart::Background,
+        }),
+        position: [0.0, 0.0],
+        scale: [1.0, 1.0],
+        color: [0.0, 0.0, 0.0, 0.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let border_color = [1.0, 1.0, 1.0, 1.0];
+    let size = [10.0, 10.0];
+    let corner = [0.1, 0.1];
+    let border_width = 0.2;
+
+    let vertices = generate_box_vertices(
+        &style,
+        &size,
+        &corner,
+        border_width,
+        &border_color,
+        &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
+        None,
+    );
+    assert_eq!(
+        vertices.len(),
+        24,
+        "large border-only box splits into 4 edge quads (24 vertices)"
+    );
+
+    for quad_idx in 0..4 {
+        let q = &vertices[quad_idx * 6..(quad_idx + 1) * 6];
+        assert_eq!(q[0].position, q[3].position);
+        assert_eq!(q[2].position, q[4].position);
+    }
+}
+
+#[test]
+fn small_border_only_box_uses_single_quad() {
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+            root_incarnation: 1,
+            node: GuiNodeId(1),
+            lifetime: 1,
+            part: GuiPrimitivePart::Background,
+        }),
+        position: [0.0, 0.0],
+        scale: [1.0, 1.0],
+        color: [0.0, 0.0, 0.0, 0.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let border_color = [1.0, 1.0, 1.0, 1.0];
+    let size = [0.3, 0.3];
+    let corner = [0.1, 0.1];
+    let border_width = 0.1;
+
+    let vertices = generate_box_vertices(
+        &style,
+        &size,
+        &corner,
+        border_width,
+        &border_color,
+        &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
+        None,
+    );
+    assert_eq!(
+        vertices.len(),
+        6,
+        "small border-only box uses a single quad to avoid strip overhead"
+    );
 }
 
 #[test]

@@ -335,15 +335,23 @@ impl GlesRenderDevice {
             unsafe {
                 (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
                 (self.gl.enable_attrib)(0);
-                (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 72, ptr::null());
+                (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 136, ptr::null());
                 (self.gl.enable_attrib)(1);
-                (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 72, 8 as *const _);
+                (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 136, 8 as *const _);
                 (self.gl.enable_attrib)(2);
-                (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 72, 24 as *const _);
+                (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 136, 24 as *const _);
                 (self.gl.enable_attrib)(3);
-                (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 72, 40 as *const _);
+                (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 136, 40 as *const _);
                 (self.gl.enable_attrib)(4);
-                (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 72, 56 as *const _);
+                (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 136, 56 as *const _);
+                (self.gl.enable_attrib)(5);
+                (self.gl.attrib_pointer)(5, 4, FLOAT, 0, 136, 72 as *const _);
+                (self.gl.enable_attrib)(6);
+                (self.gl.attrib_pointer)(6, 4, FLOAT, 0, 136, 88 as *const _);
+                (self.gl.enable_attrib)(7);
+                (self.gl.attrib_pointer)(7, 4, FLOAT, 0, 136, 104 as *const _);
+                (self.gl.enable_attrib)(8);
+                (self.gl.attrib_pointer)(8, 4, FLOAT, 0, 136, 120 as *const _);
                 self.bind_vertex_array(0);
                 (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
             }
@@ -358,20 +366,24 @@ impl GlesRenderDevice {
             opacity: 1.0,
             clip: None,
         };
+        let fill = ipp_core::systems::surface::GuiShapeFill::Solid(*color);
         let vertices = crate::services::render::gui_batch::generate_box_vertices(
             &style,
             &[placement[2], placement[3]],
             &shape.corner,
             shape.border,
             border,
+            &fill,
+            None,
         );
+        let bytes = std::mem::size_of_val(vertices.as_slice());
         let clip_location = self.surface_location(program, c"u_clip");
         // SAFETY: Upload complete vertices to the dedicated box quad VBO and draw.
         unsafe {
             (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
             (self.gl.buffer_data)(
                 ARRAY_BUFFER,
-                std::mem::size_of_val(&vertices) as isize,
+                bytes as isize,
                 vertices.as_ptr().cast(),
                 DYNAMIC_DRAW,
             );
@@ -381,7 +393,7 @@ impl GlesRenderDevice {
             (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
             (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
             self.bind_vertex_array(self.surface_box_quad_vao);
-            (self.gl.draw_arrays)(TRIANGLES, 0, 6);
+            (self.gl.draw_arrays)(TRIANGLES, 0, vertices.len() as i32);
             self.bind_vertex_array(0);
         }
         self.check_draw()
@@ -422,15 +434,23 @@ impl GlesRenderDevice {
                 DYNAMIC_DRAW,
             );
             (self.gl.enable_attrib)(0);
-            (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 72, ptr::null());
+            (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 136, ptr::null());
             (self.gl.enable_attrib)(1);
-            (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 72, 8 as *const _);
+            (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 136, 8 as *const _);
             (self.gl.enable_attrib)(2);
-            (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 72, 24 as *const _);
+            (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 136, 24 as *const _);
             (self.gl.enable_attrib)(3);
-            (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 72, 40 as *const _);
+            (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 136, 40 as *const _);
             (self.gl.enable_attrib)(4);
-            (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 72, 56 as *const _);
+            (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 136, 56 as *const _);
+            (self.gl.enable_attrib)(5);
+            (self.gl.attrib_pointer)(5, 4, FLOAT, 0, 136, 72 as *const _);
+            (self.gl.enable_attrib)(6);
+            (self.gl.attrib_pointer)(6, 4, FLOAT, 0, 136, 88 as *const _);
+            (self.gl.enable_attrib)(7);
+            (self.gl.attrib_pointer)(7, 4, FLOAT, 0, 136, 104 as *const _);
+            (self.gl.enable_attrib)(8);
+            (self.gl.attrib_pointer)(8, 4, FLOAT, 0, 136, 120 as *const _);
             self.bind_vertex_array(0);
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }

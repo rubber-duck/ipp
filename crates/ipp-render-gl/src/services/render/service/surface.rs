@@ -213,7 +213,9 @@ impl<D: RenderDevice> RenderService<D> {
                     let Some(path) = data.path.as_ref() else {
                         continue;
                     };
-                    for (layer, &range) in data.drawing.layers().iter().zip(&data.ranges) {
+                    for (i, (layer, &range)) in
+                        data.drawing.layers().iter().zip(&data.ranges).enumerate()
+                    {
                         if range.curve_range[1] == 0 {
                             continue;
                         }
@@ -233,16 +235,14 @@ impl<D: RenderDevice> RenderService<D> {
                             layer.fill_rule,
                             ipp_core::services::asset_management::drawing::FillRule::EvenOdd
                         ));
+                        let bounds = data
+                            .layer_bounds
+                            .get(i)
+                            .copied()
+                            .unwrap_or_else(|| data.drawing.bounds());
                         let program = self.surface_program.as_ref().unwrap();
                         self.device.borrow_mut().draw_surface_path(
-                            program,
-                            path,
-                            &data.drawing.bounds(),
-                            range,
-                            &mvp,
-                            &placement,
-                            &clip,
-                            &color,
+                            program, path, &bounds, range, &mvp, &placement, &clip, &color,
                             fill_rule,
                         )?;
                         stats.draw_calls += 1;

@@ -547,6 +547,159 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if recovered != boxes {
         return Err("recreated device must redraw identical boxes".into());
     }
+
+    // GUI batch with gradients, borders, and localized glow.
+    let linear_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
+            ipp_core::systems::surface::SurfaceItemId(10),
+        ),
+        position: [0.5, 0.5],
+        scale: [1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let linear_fill = ipp_core::systems::surface::GuiShapeFill::LinearGradient {
+        start: [0.0, 0.0],
+        end: [1.0, 1.0],
+        start_color: [1.0, 0.0, 0.0, 1.0],
+        end_color: [0.0, 0.0, 1.0, 1.0],
+    };
+    let mut batch_vertices = Vec::new();
+    batch_vertices.extend_from_slice(&ipp_render_gl::gui_batch::generate_box_vertices(
+        &linear_style,
+        &[1.0, 1.0],
+        &[0.1, 0.1],
+        0.0,
+        &[0.0; 4],
+        &linear_fill,
+        None,
+    ));
+
+    let radial_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
+            ipp_core::systems::surface::SurfaceItemId(11),
+        ),
+        position: [2.0, 0.5],
+        scale: [1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let radial_fill = ipp_core::systems::surface::GuiShapeFill::RadialGradient {
+        center: [0.5, 0.5],
+        radius: 0.5,
+        start_color: [1.0, 1.0, 0.0, 1.0],
+        end_color: [0.5, 0.0, 0.5, 1.0],
+    };
+    batch_vertices.extend_from_slice(&ipp_render_gl::gui_batch::generate_box_vertices(
+        &radial_style,
+        &[1.0, 1.0],
+        &[0.35, 0.12],
+        0.0,
+        &[0.0; 4],
+        &radial_fill,
+        None,
+    ));
+
+    let glow_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
+            ipp_core::systems::surface::SurfaceItemId(12),
+        ),
+        position: [0.5, 1.75],
+        scale: [1.0, 1.0],
+        color: [0.0, 1.0, 1.0, 1.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let glow = ipp_core::systems::surface::GuiShapeGlow {
+        color: [0.0, 1.0, 0.0, 1.0],
+        intensity: 1.0,
+        radius: 0.15,
+        falloff: 1.5,
+    };
+    batch_vertices.extend_from_slice(&ipp_render_gl::gui_batch::generate_box_vertices(
+        &glow_style,
+        &[1.0, 0.75],
+        &[0.1, 0.1],
+        0.0,
+        &[0.0; 4],
+        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0, 1.0, 1.0, 1.0]),
+        Some(&glow),
+    ));
+
+    let border_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
+            ipp_core::systems::surface::SurfaceItemId(13),
+        ),
+        position: [2.0, 1.75],
+        scale: [1.0, 1.0],
+        color: [0.0, 0.0, 0.0, 0.0],
+        opacity: 1.0,
+        clip: None,
+    };
+    let border_verts = ipp_render_gl::gui_batch::generate_box_vertices(
+        &border_style,
+        &[1.0, 0.75],
+        &[0.1, 0.1],
+        0.1,
+        &[1.0, 0.5, 0.0, 1.0],
+        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
+        None,
+    );
+    assert_eq!(
+        border_verts.len(),
+        24,
+        "border-only must use 4 edge strips (24 vertices)"
+    );
+    batch_vertices.extend_from_slice(&border_verts);
+
+    let batch = device.create_gui_batch(&batch_vertices)?;
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    device.draw_gui_batch(&box_program, &batch, &MVP, &ROOT)?;
+    let materials_frame = capture(&mut device, "boxes-materials")?;
+    check(
+        &materials_frame,
+        80,
+        80,
+        [187, 0, 187, 255],
+        8,
+        "linear gradient center",
+    )?;
+    check(
+        &materials_frame,
+        200,
+        80,
+        [255, 255, 0, 255],
+        24,
+        "radial gradient center",
+    )?;
+    check(
+        &materials_frame,
+        80,
+        170,
+        [0, 255, 255, 255],
+        16,
+        "glow box interior",
+    )?;
+    check(
+        &materials_frame,
+        200,
+        170,
+        BLACK,
+        0,
+        "border-only hollow interior",
+    )?;
+    check(
+        &materials_frame,
+        200,
+        144,
+        [255, 188, 0, 255],
+        8,
+        "border-only edge strip",
+    )?;
+    device.delete_gui_batch(batch);
+
     device.delete_program(box_program);
 
     std::fs::write(

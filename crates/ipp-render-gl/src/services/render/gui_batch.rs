@@ -16,10 +16,11 @@ use ipp_core::systems::surface::{
     SurfacePrimitiveStyle, SurfaceRenderPrimitive,
 };
 
-/// One vertex in a non-indexed GUI triangle batch (72 bytes).
+/// One vertex in a non-indexed GUI triangle batch (136 bytes).
 ///
-/// Shape parameters are associated with every vertex so multiple compatible boxes
-/// can be batched into one draw call without uniforms or instancing.
+/// Shape parameters, material stops and glow properties are associated with every
+/// vertex so multiple compatible boxes can be batched into one draw call without
+/// uniforms or instancing.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GuiBoxVertex {
@@ -27,12 +28,20 @@ pub struct GuiBoxVertex {
     pub position: [f32; 2],
     /// Placed origin and size in Surface metres `[pos_x, pos_y, size_x, size_y]`.
     pub placement: [f32; 4],
-    /// Straight linear RGBA fill tint/color.
-    pub color: [f32; 4],
-    /// Straight linear RGBA border color.
-    pub border_color: [f32; 4],
     /// Shape metrics `[corner_rx, corner_ry, border_width, reserved]`.
     pub shape: [f32; 4],
+    /// Fill start / solid straight linear RGBA.
+    pub color0: [f32; 4],
+    /// Fill end straight linear RGBA (for gradients).
+    pub color1: [f32; 4],
+    /// Border straight linear RGBA.
+    pub border_color: [f32; 4],
+    /// Gradient coordinates `[start_x, start_y, end_x, end_y]` or `[center_x, center_y, radius, 0.0]`.
+    pub gradient_coords: [f32; 4],
+    /// Material parameters: `[fill_type, glow_intensity, glow_radius, glow_falloff]`.
+    pub material_params: [f32; 4],
+    /// Glow straight linear RGBA.
+    pub glow_color: [f32; 4],
 }
 
 /// Compatibility partition distinguishing frequently changing cursor/control work
@@ -84,13 +93,13 @@ pub struct PrimitiveKey {
     pub identity: SurfacePrimitiveIdentity,
 }
 
-/// Cached CPU geometry for one box primitive (6 vertices forming 2 triangles).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Cached CPU geometry for one box primitive.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CachedPrimitiveGeometry {
     /// Content hash of all geometry and material inputs.
     pub hash: u64,
-    /// Explicit 6-vertex quad (counter-clockwise front face).
-    pub vertices: [GuiBoxVertex; 6],
+    /// Explicit vertices forming triangles (counter-clockwise front face).
+    pub vertices: Vec<GuiBoxVertex>,
 }
 
 /// Retained GPU batch holding a device buffer handle and revision metadata.
@@ -103,7 +112,7 @@ pub struct RetainedGuiBatch<D: RenderDevice> {
     pub hash: u64,
     /// Allocated GPU bytes.
     pub bytes: usize,
-    /// Total vertex count (`primitive_count * 6`).
+    /// Total vertex count.
     pub vertex_count: usize,
 }
 
@@ -112,39 +121,39 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     retained_batches: BTreeMap<GuiBatchKey, RetainedGuiBatch<D>>,
     cpu_primitives: BTreeMap<PrimitiveKey, CachedPrimitiveGeometry>,
+    scratch_vertices: Vec<GuiBoxVertex>,
     used_batches: BTreeSet<GuiBatchKey>,
     used_primitives: BTreeSet<PrimitiveKey>,
-    scratch_vertices: Vec<GuiBoxVertex>,
 }
 
 impl<D: RenderDevice> GuiBatchRenderCache<D> {
-    /// Construct a new empty cache borrowing the shared render device.
+    /// Create a new empty batch render cache bound to the given device.
     pub fn new(device: Rc<RefCell<D>>) -> Self {
         Self {
             device,
             retained_batches: BTreeMap::new(),
             cpu_primitives: BTreeMap::new(),
+            scratch_vertices: Vec::new(),
             used_batches: BTreeSet::new(),
             used_primitives: BTreeSet::new(),
-            scratch_vertices: Vec::new(),
         }
     }
 
-    /// Discard all retained GPU batches and CPU geometry (e.g. on context loss).
+    /// Clear all retained GPU batches and CPU geometry cache entries.
     pub fn clear(&mut self) {
         self.retained_batches.clear();
         self.cpu_primitives.clear();
+        self.scratch_vertices.clear();
         self.used_batches.clear();
         self.used_primitives.clear();
-        self.scratch_vertices.clear();
     }
 
-    /// Return total resident GPU bytes across all live retained batches.
+    /// Total resident bytes occupied by retained GPU batch allocations.
     pub fn resident_bytes(&self) -> usize {
         self.retained_batches.values().map(|b| b.bytes).sum()
     }
 
-    /// Submit a run of compatible consecutive box primitives as a retained batch.
+    /// Submit one batch of compatible box primitives.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_box_batch(
         &mut self,
@@ -209,7 +218,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             batch_hasher.write_u64(prim_hash);
 
             let vertices = match self.cpu_primitives.get(&prim_key) {
-                Some(cached) if cached.hash == prim_hash => cached.vertices,
+                Some(cached) if cached.hash == prim_hash => &cached.vertices,
                 _ => {
                     let quad = generate_box_vertices(
                         style,
@@ -217,6 +226,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                         corner_radius,
                         *border_width,
                         border_color,
+                        fill,
+                        glow.as_ref(),
                     );
                     self.cpu_primitives.insert(
                         prim_key,
@@ -226,11 +237,11 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                         },
                     );
                     stats.gui_rebuilds += 1;
-                    quad
+                    &self.cpu_primitives.get(&prim_key).unwrap().vertices
                 }
             };
 
-            self.scratch_vertices.extend_from_slice(&vertices);
+            self.scratch_vertices.extend_from_slice(vertices);
         }
 
         let batch_hash = batch_hasher.finish();
@@ -326,77 +337,187 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             live_surfaces.contains(&key.entity) && self.used_primitives.contains(key)
         });
 
+        // Reset per-frame tracking.
         self.used_batches.clear();
         self.used_primitives.clear();
 
+        // Calculate total resident bytes for GUI batches.
         stats.gui_resident_bytes = self.resident_bytes() as u32;
     }
 }
 
-/// Compute 6 explicit vertices for a quad with counter-clockwise front winding.
+/// Compute explicit vertices for a box with counter-clockwise front winding.
+///
+/// Returns 6 vertices for standard filled/glow quads, or 24 vertices (4 edge strips)
+/// for large border-only shapes to minimize interior fragment fill-rate.
 pub fn generate_box_vertices(
     style: &SurfacePrimitiveStyle,
     size: &[f32; 2],
     corner_radius: &[f32; 2],
     border_width: f32,
     border_color: &[f32; 4],
-) -> [GuiBoxVertex; 6] {
+    fill: &GuiShapeFill,
+    glow: Option<&GuiShapeGlow>,
+) -> Vec<GuiBoxVertex> {
     let pos = style.position;
     let scale = style.scale;
     let placed_size = [size[0] * scale[0], size[1] * scale[1]];
 
     let placement = [pos[0], pos[1], placed_size[0], placed_size[1]];
-    let color = [
-        style.color[0],
-        style.color[1],
-        style.color[2],
-        style.color[3] * style.opacity,
-    ];
+    let shape = [corner_radius[0], corner_radius[1], border_width, 0.0];
     let border = [
         border_color[0],
         border_color[1],
         border_color[2],
         border_color[3] * style.opacity,
     ];
-    let shape = [corner_radius[0], corner_radius[1], border_width, 0.0];
 
-    let x0 = pos[0];
-    let y0 = pos[1];
-    let x1 = pos[0] + placed_size[0];
-    let y1 = pos[1] + placed_size[1];
+    let (fill_type, color0, color1, gradient_coords) = match fill {
+        GuiShapeFill::Solid(color) => (
+            0.0f32,
+            [color[0], color[1], color[2], color[3] * style.opacity],
+            [color[0], color[1], color[2], color[3] * style.opacity],
+            [0.0; 4],
+        ),
+        GuiShapeFill::LinearGradient {
+            start,
+            end,
+            start_color,
+            end_color,
+        } => (
+            1.0f32,
+            [
+                start_color[0],
+                start_color[1],
+                start_color[2],
+                start_color[3] * style.opacity,
+            ],
+            [
+                end_color[0],
+                end_color[1],
+                end_color[2],
+                end_color[3] * style.opacity,
+            ],
+            [
+                start[0] * scale[0],
+                start[1] * scale[1],
+                end[0] * scale[0],
+                end[1] * scale[1],
+            ],
+        ),
+        GuiShapeFill::RadialGradient {
+            center,
+            radius,
+            start_color,
+            end_color,
+        } => (
+            2.0f32,
+            [
+                start_color[0],
+                start_color[1],
+                start_color[2],
+                start_color[3] * style.opacity,
+            ],
+            [
+                end_color[0],
+                end_color[1],
+                end_color[2],
+                end_color[3] * style.opacity,
+            ],
+            [
+                center[0] * scale[0],
+                center[1] * scale[1],
+                *radius * scale[0].abs().max(scale[1].abs()),
+                0.0,
+            ],
+        ),
+    };
 
-    let v_tl = GuiBoxVertex {
-        position: [x0, y0],
-        placement,
-        color,
-        border_color: border,
-        shape,
-    };
-    let v_bl = GuiBoxVertex {
-        position: [x0, y1],
-        placement,
-        color,
-        border_color: border,
-        shape,
-    };
-    let v_br = GuiBoxVertex {
-        position: [x1, y1],
-        placement,
-        color,
-        border_color: border,
-        shape,
-    };
-    let v_tr = GuiBoxVertex {
-        position: [x1, y0],
-        placement,
-        color,
-        border_color: border,
-        shape,
+    let (glow_intensity, glow_radius, glow_falloff, glow_color) = match glow {
+        Some(g) if g.is_valid() && g.intensity > 0.0 && g.radius > 0.0 => (
+            g.intensity,
+            g.cutoff_distance() * scale[0].abs().max(scale[1].abs()),
+            g.falloff,
+            [
+                g.color[0],
+                g.color[1],
+                g.color[2],
+                g.color[3] * style.opacity,
+            ],
+        ),
+        _ => (0.0, 0.0, 1.0, [0.0; 4]),
     };
 
-    // Tri 1: TL -> BL -> BR (CCW in object space with flipped Y)
-    // Tri 2: TL -> BR -> TR (CCW in object space with flipped Y)
-    [v_tl, v_bl, v_br, v_tl, v_br, v_tr]
+    let material_params = [fill_type, glow_intensity, glow_radius, glow_falloff];
+
+    let pad = if glow_radius > 0.0 {
+        glow_radius + 0.002
+    } else {
+        0.002
+    };
+
+    let x0 = pos[0] - pad;
+    let y0 = pos[1] - pad;
+    let x1 = pos[0] + placed_size[0] + pad;
+    let y1 = pos[1] + placed_size[1] + pad;
+
+    let make_vertex = |x: f32, y: f32| -> GuiBoxVertex {
+        GuiBoxVertex {
+            position: [x, y],
+            placement,
+            shape,
+            color0,
+            color1,
+            border_color: border,
+            gradient_coords,
+            material_params,
+            glow_color,
+        }
+    };
+
+    let make_quad = |rx0: f32, ry0: f32, rx1: f32, ry1: f32| -> [GuiBoxVertex; 6] {
+        let tl = make_vertex(rx0, ry0);
+        let bl = make_vertex(rx0, ry1);
+        let br = make_vertex(rx1, ry1);
+        let tr = make_vertex(rx1, ry0);
+        // Tri 1: TL -> BL -> BR (CCW in object space with flipped Y)
+        // Tri 2: TL -> BR -> TR (CCW in object space with flipped Y)
+        [tl, bl, br, tl, br, tr]
+    };
+
+    let is_border_only = border_width > 0.0
+        && glow_radius <= 0.0
+        && matches!(fill, GuiShapeFill::Solid(col) if col[3] <= 0.0 || style.opacity <= 0.0);
+
+    let strip_thickness = border_width.max(corner_radius[0]).max(corner_radius[1]) + pad;
+    let can_use_strips = is_border_only
+        && placed_size[0] >= 3.0 * strip_thickness
+        && placed_size[1] >= 3.0 * strip_thickness;
+
+    if can_use_strips {
+        let mut vertices = Vec::with_capacity(24);
+        // Top strip: covers top-left, top edge, top-right
+        vertices.extend_from_slice(&make_quad(x0, y0, x1, y0 + strip_thickness));
+        // Bottom strip: covers bottom-left, bottom edge, bottom-right
+        vertices.extend_from_slice(&make_quad(x0, y1 - strip_thickness, x1, y1));
+        // Left strip: between top and bottom strips
+        vertices.extend_from_slice(&make_quad(
+            x0,
+            y0 + strip_thickness,
+            x0 + strip_thickness,
+            y1 - strip_thickness,
+        ));
+        // Right strip: between top and bottom strips
+        vertices.extend_from_slice(&make_quad(
+            x1 - strip_thickness,
+            y0 + strip_thickness,
+            x1,
+            y1 - strip_thickness,
+        ));
+        vertices
+    } else {
+        make_quad(x0, y0, x1, y1).to_vec()
+    }
 }
 
 /// Hash all evaluated geometry and material lanes of a box primitive.

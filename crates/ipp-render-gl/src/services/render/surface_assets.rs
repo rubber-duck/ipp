@@ -63,6 +63,7 @@ pub(super) struct GlDrawingData<D: RenderDevice> {
     pub drawing: DrawingAsset,
     pub path: Option<D::SurfacePath>,
     pub ranges: Vec<super::device::SurfacePathDescriptor>,
+    pub layer_bounds: Vec<[f32; 4]>,
     device: SharedRenderDevice<D>,
     gpu_bytes: usize,
     graphics_prepared: bool,
@@ -274,11 +275,17 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
                 Poll::Ready(Ok(drawing)) => drawing,
             },
         };
+        let layer_bounds: Vec<[f32; 4]> = drawing
+            .layers()
+            .iter()
+            .map(|layer| compute_layer_bounds(drawing.bounds(), layer))
+            .collect();
         let atlas = surface_path::atlas(
             drawing
                 .layers()
                 .iter()
-                .map(|layer| (drawing.bounds(), layer.contours.as_slice())),
+                .zip(&layer_bounds)
+                .map(|(layer, &bounds)| (bounds, layer.contours.as_slice())),
         );
         let bytes = atlas.curves.len() * 32 + atlas.bands.len() * 8;
         let path = if atlas.curves.is_empty() {
@@ -299,6 +306,7 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
                         drawing,
                         path: None,
                         ranges: atlas.descriptors,
+                        layer_bounds,
                         device: self.device.clone(),
                         gpu_bytes: 0,
                         graphics_prepared: false,
@@ -313,10 +321,61 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
             drawing,
             path,
             ranges: atlas.descriptors,
+            layer_bounds,
             device: self.device.clone(),
             gpu_bytes: bytes,
             graphics_prepared: true,
         }))
+    }
+}
+
+fn compute_layer_bounds(
+    drawing_bounds: [f32; 4],
+    layer: &ipp_core::services::asset_management::drawing::DrawingLayer,
+) -> [f32; 4] {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for contour in &layer.contours {
+        min_x = min_x.min(contour.start[0]);
+        min_y = min_y.min(contour.start[1]);
+        max_x = max_x.max(contour.start[0]);
+        max_y = max_y.max(contour.start[1]);
+
+        for segment in &contour.segments {
+            match segment {
+                ipp_core::services::asset_management::quadratic::QuadraticSegment::Line {
+                    to,
+                } => {
+                    min_x = min_x.min(to[0]);
+                    min_y = min_y.min(to[1]);
+                    max_x = max_x.max(to[0]);
+                    max_y = max_y.max(to[1]);
+                }
+                ipp_core::services::asset_management::quadratic::QuadraticSegment::Quadratic {
+                    control,
+                    to,
+                } => {
+                    min_x = min_x.min(control[0]).min(to[0]);
+                    min_y = min_y.min(control[1]).min(to[1]);
+                    max_x = max_x.max(control[0]).max(to[0]);
+                    max_y = max_y.max(control[1]).max(to[1]);
+                }
+            }
+        }
+    }
+
+    if min_x >= max_x || min_y >= max_y {
+        drawing_bounds
+    } else {
+        [
+            min_x.max(drawing_bounds[0]),
+            min_y.max(drawing_bounds[1]),
+            max_x.min(drawing_bounds[2]),
+            max_y.min(drawing_bounds[3]),
+        ]
     }
 }
 

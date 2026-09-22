@@ -1445,15 +1445,23 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 bindVertexArray(surfaceBoxQuadVao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBoxQuadVbo);
                 gl.enableVertexAttribArray(0);
-                gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 72, 0);
+                gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 136, 0);
                 gl.enableVertexAttribArray(1);
-                gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 72, 8);
+                gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 136, 8);
                 gl.enableVertexAttribArray(2);
-                gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 72, 24);
+                gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 136, 24);
                 gl.enableVertexAttribArray(3);
-                gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 72, 40);
+                gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 136, 40);
                 gl.enableVertexAttribArray(4);
-                gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 72, 56);
+                gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 136, 56);
+                gl.enableVertexAttribArray(5);
+                gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 136, 72);
+                gl.enableVertexAttribArray(6);
+                gl.vertexAttribPointer(6, 4, gl.FLOAT, false, 136, 88);
+                gl.enableVertexAttribArray(7);
+                gl.vertexAttribPointer(7, 4, gl.FLOAT, false, 136, 104);
+                gl.enableVertexAttribArray(8);
+                gl.vertexAttribPointer(8, 4, gl.FLOAT, false, 136, 120);
                 bindVertexArray(null);
                 gl.bindBuffer(gl.ARRAY_BUFFER, null);
               }
@@ -1465,7 +1473,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               const y0 = placement[1];
               const x1 = placement[0] + placement[2];
               const y1 = placement[1] + placement[3];
-              const quadVertices = new Float32Array(108);
+              const quadVertices = new Float32Array(204);
               const corners = [
                 [x0, y0],
                 [x0, y1],
@@ -1475,25 +1483,34 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 [x1, y0],
               ];
               for (let i = 0; i < 6; i++) {
-                const off = i * 18;
+                const off = i * 34;
                 quadVertices[off] = corners[i][0];
                 quadVertices[off + 1] = corners[i][1];
                 quadVertices[off + 2] = placement[0];
                 quadVertices[off + 3] = placement[1];
                 quadVertices[off + 4] = placement[2];
                 quadVertices[off + 5] = placement[3];
-                quadVertices[off + 6] = color[0];
-                quadVertices[off + 7] = color[1];
-                quadVertices[off + 8] = color[2];
-                quadVertices[off + 9] = color[3];
-                quadVertices[off + 10] = border[0];
-                quadVertices[off + 11] = border[1];
-                quadVertices[off + 12] = border[2];
-                quadVertices[off + 13] = border[3];
-                quadVertices[off + 14] = shape[0];
-                quadVertices[off + 15] = shape[1];
-                quadVertices[off + 16] = shape[2];
-                quadVertices[off + 17] = shape[3];
+                quadVertices[off + 6] = shape[0];
+                quadVertices[off + 7] = shape[1];
+                quadVertices[off + 8] = shape[2];
+                quadVertices[off + 9] = shape[3];
+                quadVertices[off + 10] = color[0];
+                quadVertices[off + 11] = color[1];
+                quadVertices[off + 12] = color[2];
+                quadVertices[off + 13] = color[3];
+                quadVertices[off + 14] = color[0];
+                quadVertices[off + 15] = color[1];
+                quadVertices[off + 16] = color[2];
+                quadVertices[off + 17] = color[3];
+                quadVertices[off + 18] = border[0];
+                quadVertices[off + 19] = border[1];
+                quadVertices[off + 20] = border[2];
+                quadVertices[off + 21] = border[3];
+                // quadVertices[off + 22..off + 25] are gradient_coords (zeros)
+                // quadVertices[off + 26..off + 29] are material_params:
+                // fill_type = 0.0, glow_intensity = 0.0, glow_radius = 0.0, glow_falloff = 1.0
+                quadVertices[off + 29] = 1.0;
+                // quadVertices[off + 30..off + 33] are glow_color (zeros)
               }
               gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBoxQuadVbo);
               gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.DYNAMIC_DRAW);
@@ -1521,24 +1538,32 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 if (vbo) gl.deleteBuffer(vbo);
                 throw new Error("GUI batch allocation failed");
               }
-              const byteLength = (vertexCount >>> 0) * 72;
+              const byteLength = (vertexCount >>> 0) * 136;
               const vertexData = floats(
                 vertexPointer >>> 0,
-                (vertexCount >>> 0) * 18,
+                (vertexCount >>> 0) * 34,
               );
               bindVertexArray(vao);
               gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
               gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
               gl.enableVertexAttribArray(0);
-              gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 72, 0);
+              gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 136, 0);
               gl.enableVertexAttribArray(1);
-              gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 72, 8);
+              gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 136, 8);
               gl.enableVertexAttribArray(2);
-              gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 72, 24);
+              gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 136, 24);
               gl.enableVertexAttribArray(3);
-              gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 72, 40);
+              gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 136, 40);
               gl.enableVertexAttribArray(4);
-              gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 72, 56);
+              gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 136, 56);
+              gl.enableVertexAttribArray(5);
+              gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 136, 72);
+              gl.enableVertexAttribArray(6);
+              gl.vertexAttribPointer(6, 4, gl.FLOAT, false, 136, 88);
+              gl.enableVertexAttribArray(7);
+              gl.vertexAttribPointer(7, 4, gl.FLOAT, false, 136, 104);
+              gl.enableVertexAttribArray(8);
+              gl.vertexAttribPointer(8, 4, gl.FLOAT, false, 136, 120);
               bindVertexArray(null);
               gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
@@ -1560,10 +1585,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             return status(() => {
               const batch = guiBatches!.get(batchHandle >>> 0);
               if (!batch) throw new Error("Stale GUI batch handle");
-              const byteLength = (vertexCount >>> 0) * 72;
+              const byteLength = (vertexCount >>> 0) * 136;
               const vertexData = floats(
                 vertexPointer >>> 0,
-                (vertexCount >>> 0) * 18,
+                (vertexCount >>> 0) * 34,
               );
               // Orphaning permits driver storage retirement but does not guarantee
               // stall-free allocation. Replacing with NULL first signals the driver

@@ -34,6 +34,27 @@
 //! regions together without remeasuring text; paint-only edits (colour,
 //! opacity) rebuild paint records only.
 //!
+//! ## Margins
+//!
+//! A margin (`[top, right, bottom, left]`) is interpreted by the parent
+//! container, so its effect depends on that container:
+//!
+//! - Row and Column reserve both main-axis margins around the child and
+//!   shrink its remaining main-axis space. On the cross axis the leading
+//!   margin offsets the child in addition to its alignment; the trailing
+//!   margin is ignored, and neither margin shrinks the cross constraint or
+//!   counts toward the container's cross extent.
+//! - Stack shrinks each child's constraints by its margins on both axes,
+//!   aligns the margin box, and fits its own extent to margin boxes.
+//! - Padding, Align, SizedBox and ScrollView ignore child margins.
+//! - The root node is offset by its top and left margins; its constraints
+//!   and clip remain the Surface rectangle.
+//!
+//! Validation accepts any finite margin, including negative values. A
+//! negative margin moves the child outward or lets it overlap siblings, and
+//! in a Stack enlarges its constraints. Paint and hit regions remain
+//! subject to ancestor clips.
+//!
 //! ## Retention
 //!
 //! [`GuiLayoutCache`] retains one [`GuiEvaluatedView`] per root entity,
@@ -2070,8 +2091,8 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         rect / (acc * own).abs().max(f32::MIN_POSITIVE)
     }
 
-    /// Stack layout: every child observes the full content box and aligns
-    /// within the settled extent. The stack sizes to the largest child.
+    /// Stack layout: every child observes the content box minus its margins
+    /// and aligns within the settled extent. The stack fits outer child sizes.
     #[allow(clippy::too_many_arguments)]
     fn layout_stack(
         &mut self,
@@ -2088,14 +2109,20 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         let mut available = true;
         let mut sizes: Vec<(GuiNodeId, [f32; 2])> = Vec::new();
         for &child in &node.children {
+            let margin = self.child_margin(child);
+            let outer = [margin[3] + margin[1], margin[0] + margin[2]];
             let size = self.visit(
                 child,
-                Constraints::loose(constraints.max_w, constraints.max_h),
-                origin_final,
+                Constraints::loose(
+                    (constraints.max_w - outer[0]).max(0.0),
+                    (constraints.max_h - outer[1]).max(0.0),
+                ),
+                Self::place(origin_final, [margin[3], margin[0]], acc_total),
                 acc_total,
                 clip,
                 depth + 1,
             );
+            let size = [(size[0] + outer[0]).max(0.0), (size[1] + outer[1]).max(0.0)];
             extent[0] = extent[0].max(size[0]);
             extent[1] = extent[1].max(size[1]);
             sizes.push((child, size));
@@ -2107,12 +2134,13 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             fill_or_fit(extent[1], fill[1]),
         ];
         for (child, child_size) in sizes {
+            let margin = self.child_margin(child);
             let child_style = self.root.style(child).unwrap_or_default();
             let fx = align_factor(child_style.align_x, -1.0);
             let fy = align_factor(child_style.align_y, -1.0);
             let shift = [
-                fx * (size[0] - child_size[0]).max(0.0),
-                fy * (size[1] - child_size[1]).max(0.0),
+                margin[3] + fx * (size[0] - child_size[0]).max(0.0),
+                margin[0] + fy * (size[1] - child_size[1]).max(0.0),
             ];
             let placed = Self::place(origin_final, shift, acc_total);
             if let Some(record) = self.nodes.iter_mut().rev().find(|node| node.node == child) {

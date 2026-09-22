@@ -535,10 +535,17 @@ fn main() -> Result<()> {
     )?;
     check(
         &layered,
-        160,
+        312,
         100,
         BACKGROUND,
         "scroll clip remains effective beside layered siblings",
+    )?;
+    check(
+        &layered,
+        200,
+        100,
+        [124, 203, 255, 255],
+        "drawing honors its stack margin beside the clipped content",
     )?;
     std::fs::write(evidence.join("gui-layout-layered.rgba"), &layered)?;
 

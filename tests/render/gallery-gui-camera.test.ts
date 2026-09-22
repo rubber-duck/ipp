@@ -159,6 +159,94 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         [sliderEnd.clientX, sliderEnd.clientY],
       );
 
+      // Keep a real browser pointer held while replaying a high-rate move
+      // stream. Six Playwright drag steps did not expose the request backlog
+      // caused by updating hundreds of waveform decoration nodes per gain edit.
+      await g.call(
+        "galleryGuiAction",
+        { role: "slider" },
+        { kind: "setScalar", value: 0.1 },
+      );
+      const beforeStream = transform(await g.inspect());
+      await g.capture("sustained-slider-before");
+      const sliderRegion = await g.call<
+        readonly [number, number, number, number]
+      >("galleryGuiRegion", { role: "slider" }, 0.02, 0.08);
+      await g.call("observeGalleryGuiInput");
+      await g.page.mouse.move(sliderStart.clientX, sliderStart.clientY);
+      await g.page.mouse.down();
+      try {
+        await g.page.evaluate(
+          async ({ from, to }) => {
+            const canvas =
+              document.querySelector<HTMLCanvasElement>("#ipp-world-canvas")!;
+            await new Promise<void>((resolve) => {
+              let count = 0;
+              const timer = setInterval(() => {
+                const fraction = (count % 120) / 119;
+                canvas.dispatchEvent(
+                  new PointerEvent("pointermove", {
+                    bubbles: true,
+                    pointerId: 1,
+                    pointerType: "mouse",
+                    isPrimary: true,
+                    buttons: 1,
+                    clientX:
+                      from.clientX + (to.clientX - from.clientX) * fraction,
+                    clientY:
+                      from.clientY + (to.clientY - from.clientY) * fraction,
+                  }),
+                );
+                if (++count === 360) {
+                  clearInterval(timer);
+                  resolve();
+                }
+              }, 8);
+            });
+          },
+          { from: sliderStart, to: sliderEnd },
+        );
+        await g.page.mouse.move(sliderEnd.clientX, sliderEnd.clientY);
+      } finally {
+        await g.page.mouse.up();
+      }
+      const inputStream = await g.call<{
+        sent: number;
+        completed: number;
+        peakPending: number;
+        errors: string[];
+      }>("finishGalleryGuiInputObservation");
+      await scenario.evidence.record("sustained-slider-input", inputStream);
+      assert.ok(inputStream.sent >= 362);
+      assert.deepEqual(inputStream.errors, []);
+      assert.equal(inputStream.completed, inputStream.sent);
+      assert.deepEqual(transform(await g.settle()), beforeStream);
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-gain")?.textContent === "75%",
+      );
+      const streamed = await g.call<GalleryGuiState>("galleryGuiState");
+      const gain = streamed.semantic.nodes.find(
+        ({ role }) => role === "slider",
+      )!.value;
+      assert.equal(gain.kind, "scalar");
+      assert.ok(Math.abs(gain.value - 0.75) < 1e-6);
+      assert.equal(
+        await g.page.locator("#status").getAttribute("data-state"),
+        "ready",
+      );
+      const streamedFrame = await g.capture("sustained-slider-complete");
+      assert.ok(streamedFrame.summary.coverage > 0.08);
+      const sliderPixels = await g.call<{ changedPixels: number }>(
+        "compareViewerCaptureRegion",
+        "sustained-slider-before",
+        "sustained-slider-complete",
+        sliderRegion,
+      );
+      assert.ok(
+        sliderPixels.changedPixels > 80,
+        "streamed slider value did not reach the rendered thumb",
+      );
+
       const input = await point("textInput", "CALLSIGN");
       await unchangedAfterDrag(
         [input.clientX - 12, input.clientY],
@@ -197,6 +285,18 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
 
       const aurora = await point("button", "AURORA");
       const ember = await point("button", "EMBER");
+      const probeTree = (await g.call<GalleryGuiState>("galleryGuiState"))
+        .semantic;
+      const partScale = (name: string) =>
+        g.call<DynamicValue>(
+          "galleryGuiPartValue",
+          probeTree.entity,
+          probeTree.nodes.find(
+            (node) => node.role === "button" && node.name === name,
+          )!.id,
+          "background",
+          "scale",
+        );
       const burstStarted = performance.now();
       await g.page.locator("#ipp-world-canvas").evaluate(
         (canvas, points) => {
@@ -230,13 +330,6 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           [ember.clientX, ember.clientY],
         ],
       );
-      const partScale = (name: string) =>
-        g.call<DynamicValue>(
-          "galleryGuiPartValue",
-          { role: "button", name },
-          "background",
-          "scale",
-        );
       for (;;) {
         const finalScale = await partScale("EMBER");
         if (

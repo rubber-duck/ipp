@@ -43,7 +43,8 @@
     "examples/**/*.tsx",
     "tests/render/**/*.tsx",
     "integrations/blender/client/**/*.ts",
-    "tests/performance/**/*.ts"
+    "tests/performance/**/*.ts",
+    "crates/ipp-render-gl/src/services/render/webgl.ts"
   ],
   "exclude": [
     "dist",

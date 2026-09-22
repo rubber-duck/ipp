@@ -10,7 +10,7 @@ use crate::systems::gui::{
     GuiInputEffectKind, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
     GuiPointerButton, GuiRoot, GuiUnhandledReason,
 };
-use crate::systems::surface::{GuiPrimitivePart, SurfacePrimitiveIdentity};
+use crate::systems::surface::{GuiPrimitivePart, GuiShapeFill, SurfacePrimitiveIdentity};
 use crate::{
     Batch, Command, ComponentValue, DynamicValue, EntityMetadata, EntityRef, FieldValue,
     FieldWrite, HostRuntime, Surface, SurfaceCommand, SurfaceGlyph, SurfaceItemContent,
@@ -489,7 +489,10 @@ fn node_centre(
     [rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0]
 }
 
-/// Background color of node 2 in the prepared Surface primitives.
+/// Painted background fill of node 2 in the prepared Surface primitives.
+///
+/// The renderer paints a box from its `fill`; the style colour lane only
+/// joins its revision. Both must carry the same (possibly sampled) colour.
 fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) -> [f32; 4] {
     host.world_mut(world)
         .unwrap()
@@ -505,6 +508,7 @@ fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityI
                 .find_map(|primitive| match primitive {
                     SurfaceRenderPrimitive::Box {
                         style,
+                        fill,
                         ..
                     } if matches!(
                         style.identity,
@@ -514,7 +518,15 @@ fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityI
                                 && id.part == GuiPrimitivePart::Background
                     ) =>
                     {
-                        Some(style.color)
+                        let GuiShapeFill::Solid(painted) = fill else {
+                            panic!("background box must paint a solid fill, got {fill:?}");
+                        };
+
+                        assert_eq!(
+                            style.color, *painted,
+                            "painted fill diverged from the style colour lane"
+                        );
+                        Some(*painted)
                     }
                     _ => None,
                 })

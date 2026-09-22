@@ -433,6 +433,68 @@ test("theme-only control paint stays in named parts instead of node style", () =
   });
 });
 
+test("colour-only state lanes select a solid fill over an inherited gradient", () => {
+  const glow = { color: [0, 1, 1, 1] as const, intensity: 0.2, radius: 0.03 };
+  const properties = guiThemeProperties(5, {
+    parts: {
+      background: {
+        base: {
+          color: [0.1, 0.1, 0.1, 1],
+          gradient: { kind: "linear", color0: [1, 0, 0, 1] },
+          glow,
+        },
+        hovered: {
+          color: [0, 1, 0, 1],
+          gradient: { kind: "radial", color0: [0, 0, 1, 1] },
+        },
+        pressed: { opacity: 0.8 },
+        disabled: { color: [0.4, 0.4, 0.4, 0.5], glow: { intensity: 0 } },
+        checked: { color: [1, 1, 0, 1] },
+      },
+      icon: { base: { color: [1, 1, 1, 1] }, hovered: { color: [0, 0, 0, 1] } },
+    },
+  });
+
+  assert.deepEqual(properties.node_5_part_background_fill_mode, {
+    kind: "f32",
+    value: 1,
+  });
+  assert.deepEqual(properties.node_5_part_background_hovered_fill_mode, {
+    kind: "f32",
+    value: 2,
+  });
+  assert.deepEqual(properties.node_5_part_background_disabled_fill_mode, {
+    kind: "f32",
+    value: 0,
+  });
+  assert.deepEqual(
+    properties.node_5_part_background_hovered_checked_fill_mode,
+    {
+      kind: "f32",
+      value: 0,
+    },
+  );
+  // Lanes without a colour keep inheriting the fill; glow lanes inherit
+  // independently and are removed only by an explicit zero intensity.
+  assert.equal(properties.node_5_part_background_pressed_fill_mode, undefined);
+  assert.equal(
+    properties.node_5_part_background_disabled_glow_color,
+    undefined,
+  );
+  assert.deepEqual(properties.node_5_part_background_disabled_glow_intensity, {
+    kind: "f32",
+    value: 0,
+  });
+  // Parts without any gradient need no explicit mode.
+  assert.equal(properties.node_5_part_icon_hovered_fill_mode, undefined);
+  assert.equal(
+    Object.keys(guiThemeProperties(3, defaultGuiTheme)).some((name) =>
+      name.endsWith("_fill_mode"),
+    ),
+    false,
+  );
+});
+
 test("content kinds map to control roles, names and actions", () => {
   assert.equal(controlKindForContent(buttonContent("Go")), "button");
   assert.equal(controlKindForContent(checkboxContent(true)), "checkbox");

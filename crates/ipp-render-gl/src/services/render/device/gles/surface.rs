@@ -1,8 +1,8 @@
-use super::{
-    ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, GlesRenderDevice, GlesRenderProgram, GlesSurfacePath,
-    TRIANGLES,
-};
+#[cfg(feature = "gui")]
+use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
+use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
 use crate::RenderError;
+#[cfg(feature = "gui")]
 use std::ptr;
 
 impl GlesRenderDevice {
@@ -378,6 +378,7 @@ impl GlesRenderDevice {
         );
         let bytes = std::mem::size_of_val(vertices.as_slice());
         let clip_location = self.surface_location(program, c"u_clip");
+        let viewport_location = self.surface_location(program, c"u_viewport");
         // SAFETY: Upload complete vertices to the dedicated box quad VBO and draw.
         unsafe {
             (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
@@ -392,6 +393,8 @@ impl GlesRenderDevice {
             (self.gl.use_program)(program.id);
             (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
             (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
+            let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
+            (self.gl.uniform_vec4)(viewport_location, 1, viewport.as_ptr());
             self.bind_vertex_array(self.surface_box_quad_vao);
             (self.gl.draw_arrays)(TRIANGLES, 0, vertices.len() as i32);
             self.bind_vertex_array(0);
@@ -481,13 +484,11 @@ impl GlesRenderDevice {
         let vertex_count = i32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
         let bytes = std::mem::size_of_val(vertices);
-        // SAFETY: Orphaning permits driver storage retirement but does not guarantee
-        // stall-free allocation. Replacing with NULL first signals the driver to unbind
-        // the previous storage block from pending GPU reads, then reallocating uploads
-        // the complete batch contents without partial overwrites.
+        // SAFETY: BufferData replaces the complete store and copies the live slice
+        // synchronously. GL preserves storage needed by queued consumers; replacement
+        // permits driver retirement but does not promise stall-free allocation.
         unsafe {
             (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
-            (self.gl.buffer_data)(ARRAY_BUFFER, bytes as isize, ptr::null(), DYNAMIC_DRAW);
             (self.gl.buffer_data)(
                 ARRAY_BUFFER,
                 bytes as isize,
@@ -496,9 +497,12 @@ impl GlesRenderDevice {
             );
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
+
+        // Counts describe the store only after GL accepted the replacement.
+        self.check()?;
         batch.vertex_count = vertex_count;
         batch.bytes = bytes;
-        self.check()
+        Ok(())
     }
 
     #[cfg(feature = "gui")]
@@ -526,12 +530,15 @@ impl GlesRenderDevice {
         self.submission.invalidate();
         self.alpha_blend(true)?;
         let clip_location = self.surface_location(program, c"u_clip");
+        let viewport_location = self.surface_location(program, c"u_viewport");
         // SAFETY: The VAO encapsulates vertex attribute pointers; draw_arrays draws the
         // current vertex count. Uniforms are synchronously copied.
         unsafe {
             (self.gl.use_program)(program.id);
             (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
             (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
+            let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
+            (self.gl.uniform_vec4)(viewport_location, 1, viewport.as_ptr());
             self.bind_vertex_array(batch.vao);
             (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count);
             self.bind_vertex_array(0);
@@ -656,13 +663,11 @@ impl GlesRenderDevice {
             .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
         let bytes = std::mem::size_of_val(vertices);
 
-        // SAFETY: Orphaning permits driver storage retirement but does not guarantee
-        // stall-free allocation. Replacing with NULL first signals the driver to unbind
-        // the previous storage block from pending GPU reads, then reallocating uploads
-        // the complete batch contents without partial overwrites.
+        // SAFETY: BufferData replaces the complete store and copies the live slice
+        // synchronously. GL preserves storage needed by queued consumers; replacement
+        // permits driver retirement but does not promise stall-free allocation.
         unsafe {
             (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
-            (self.gl.buffer_data)(ARRAY_BUFFER, bytes as isize, ptr::null(), DYNAMIC_DRAW);
             (self.gl.buffer_data)(
                 ARRAY_BUFFER,
                 bytes as isize,
@@ -672,9 +677,11 @@ impl GlesRenderDevice {
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
 
+        // Counts describe the store only after GL accepted the replacement.
+        self.check()?;
         batch.vertex_count = vertex_count;
         batch.bytes = bytes;
-        self.check()
+        Ok(())
     }
 
     #[cfg(feature = "gui")]
@@ -774,7 +781,8 @@ impl GlesRenderDevice {
             complete && texture != 0 && framebuffer != 0
         };
 
-        if !complete || self.check().is_err() {
+        let checked = self.check();
+        if !complete || checked.is_err() {
             // SAFETY: Releases partially allocated texture and framebuffer on failure.
             unsafe {
                 if texture != 0 {
@@ -784,9 +792,11 @@ impl GlesRenderDevice {
                     (self.gl.delete_framebuffers)(1, &framebuffer);
                 }
             }
-            return Err(RenderError::RenderDevice(
-                "glyph atlas allocation failed".into(),
-            ));
+
+            // Preserve context loss so the service reaches recovery.
+            return Err(checked.err().unwrap_or_else(|| {
+                RenderError::RenderDevice("glyph atlas allocation failed".into())
+            }));
         }
 
         Ok(super::GlesGlyphAtlasPage {

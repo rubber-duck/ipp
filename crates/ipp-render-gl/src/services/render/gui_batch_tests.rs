@@ -3,7 +3,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, generate_box_vertices};
+use std::collections::BTreeSet;
+
+use super::{
+    GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, RetainedSurfaceSubmission,
+    generate_box_vertices,
+};
 use crate::{GlyphVertex, RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
 use ipp_core::systems::surface::{
@@ -18,6 +23,7 @@ struct MockGuiDevice {
     deleted_batches: Vec<usize>,
     draws: Vec<(usize, [f32; 4])>,
     next_id: usize,
+    fail_updates: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -170,6 +176,10 @@ impl RenderDevice for MockGuiDevice {
         batch: &mut Self::GuiBatch,
         vertices: &[GuiBoxVertex],
     ) -> Result<(), RenderError> {
+        if self.fail_updates {
+            return Err(RenderError::RenderDevice("injected update failure".into()));
+        }
+
         batch.vertex_count = vertices.len();
         self.updated_batches.push((batch.id, vertices.len()));
         Ok(())
@@ -248,7 +258,7 @@ impl RenderDevice for MockGuiDevice {
         Ok(())
     }
 
-    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+    fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
 }
@@ -484,25 +494,33 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
     let corner = [0.1, 0.1];
     let border_width = 0.2;
 
-    let vertices = generate_box_vertices(
-        &style,
-        &size,
-        &corner,
-        border_width,
-        &border_color,
-        &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
-        None,
-    );
-    assert_eq!(
-        vertices.len(),
-        24,
-        "large border-only box splits into 4 edge quads (24 vertices)"
-    );
+    let glow = GuiShapeGlow {
+        color: [0.0, 1.0, 0.0, 1.0],
+        intensity: 1.0,
+        radius: 0.15,
+        falloff: 2.0,
+    };
+    for glow in [None, Some(&glow)] {
+        let vertices = generate_box_vertices(
+            &style,
+            &size,
+            &corner,
+            border_width,
+            &border_color,
+            &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
+            glow,
+        );
+        assert_eq!(
+            vertices.len(),
+            24,
+            "large border-only box splits into 4 edge quads (24 vertices)"
+        );
 
-    for quad_idx in 0..4 {
-        let q = &vertices[quad_idx * 6..(quad_idx + 1) * 6];
-        assert_eq!(q[0].position, q[3].position);
-        assert_eq!(q[2].position, q[4].position);
+        for quad_idx in 0..4 {
+            let q = &vertices[quad_idx * 6..(quad_idx + 1) * 6];
+            assert_eq!(q[0].position, q[3].position);
+            assert_eq!(q[2].position, q[4].position);
+        }
     }
 }
 
@@ -654,14 +672,14 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
         .unwrap();
     assert_eq!(stats1.gui_rebuilds, 2);
 
-    // Modify only box2 (e.g. hovered color or slider thumb position)
+    // Modify only box2 (e.g. hovered fill colour or slider thumb position)
     let mut box2_modified = box2.clone();
     if let SurfaceRenderPrimitive::Box {
-        style,
+        fill,
         ..
     } = &mut box2_modified
     {
-        style.color = [1.0, 1.0, 0.0, 1.0];
+        *fill = GuiShapeFill::Solid([1.0, 1.0, 0.0, 1.0]);
     }
     let boxes_modified = [&box1, &box2_modified];
 
@@ -682,10 +700,68 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
         stats2.gui_rebuilds, 1,
         "only the modified primitive geometry rebuilds"
     );
-    assert_eq!(stats2.gui_allocations, 0);
+    assert_eq!(stats2.gui_allocations, 1);
     assert_eq!(device.borrow().updated_batches.len(), 1);
     let expected_bytes = 12 * std::mem::size_of::<GuiBoxVertex>() as u32;
     assert_eq!(stats2.uploaded_bytes, expected_bytes);
+}
+
+#[test]
+fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+
+    let mut panel = sample_box_primitive(
+        1,
+        1,
+        GuiPrimitivePart::Background,
+        [0.0, 0.0],
+        [1.0, 1.0],
+        None,
+    );
+    if let SurfaceRenderPrimitive::Box {
+        fill,
+        ..
+    } = &mut panel
+    {
+        *fill = GuiShapeFill::LinearGradient {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            start_color: [0.1, 0.2, 0.3, 1.0],
+            end_color: [0.3, 0.2, 0.1, 1.0],
+        };
+    }
+    let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
+        let mut stats = RenderStats::default();
+        cache
+            .draw_box_batch(
+                &1,
+                ipp_core::EntityId::from_bits(1),
+                [0.0, 0.0, 4.0, 2.0],
+                GuiPartClass::Background,
+                &[primitive],
+                &[0.0; 16],
+                &mut stats,
+            )
+            .unwrap();
+        stats
+    };
+    draw(&mut cache, &panel);
+
+    // A colour transition reaches the style lane, which a gradient box never paints.
+    let mut transitioning = panel.clone();
+    if let SurfaceRenderPrimitive::Box {
+        style,
+        ..
+    } = &mut transitioning
+    {
+        style.color = [1.0, 0.0, 0.0, 1.0];
+    }
+    let stats = draw(&mut cache, &transitioning);
+    assert_eq!(stats.gui_rebuilds, 0);
+    assert_eq!(stats.gui_allocations, 0);
+    assert_eq!(stats.uploaded_bytes, 0);
+    assert!(device.borrow().updated_batches.is_empty());
 }
 
 #[test]
@@ -831,13 +907,143 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
     live.insert(entity1);
     // entity2 is destroyed and removed from live surfaces
 
-    cache.finish_frame(&mut *device.borrow_mut(), &live, &mut stats);
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &live,
+    }));
 
     assert_eq!(
         device.borrow().deleted_batches.len(),
         1,
         "destroyed entity batch must be freed on GPU"
     );
-    let batch_bytes = 6 * std::mem::size_of::<GuiBoxVertex>() as u32;
-    assert_eq!(stats.gui_resident_bytes, batch_bytes);
+    let batch_bytes = 6 * std::mem::size_of::<GuiBoxVertex>();
+    assert_eq!(cache.resident_bytes(), batch_bytes);
+}
+
+#[test]
+fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+
+    let shown = ipp_core::EntityId::from_bits(1);
+    let culled = ipp_core::EntityId::from_bits(2);
+    let panel = sample_box_primitive(
+        1,
+        1,
+        GuiPrimitivePart::Background,
+        [0.0, 0.0],
+        [1.0, 1.0],
+        None,
+    );
+    let clip = [0.0, 0.0, 4.0, 2.0];
+    let mvp = [0.0; 16];
+    let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, entity, stats: &mut _| {
+        cache
+            .draw_box_batch(
+                &1,
+                entity,
+                clip,
+                GuiPartClass::Background,
+                &[&panel],
+                &mvp,
+                stats,
+            )
+            .unwrap();
+    };
+    let live = BTreeSet::from([shown, culled]);
+
+    let mut cold = RenderStats::default();
+    draw(&mut cache, shown, &mut cold);
+    draw(&mut cache, culled, &mut cold);
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &live,
+    }));
+    assert_eq!(device.borrow().created_batches.len(), 2);
+
+    // One frame outside the frustum: the culled Surface is live but never submitted.
+    draw(&mut cache, shown, &mut RenderStats::default());
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &BTreeSet::from([shown]),
+    }));
+
+    // A failed or cameraless frame cannot judge any key, even for destroyed Surfaces.
+    cache.finish_frame(None);
+    assert!(device.borrow().deleted_batches.is_empty());
+
+    let mut visible_again = RenderStats::default();
+    draw(&mut cache, culled, &mut visible_again);
+    assert_eq!(visible_again.uploaded_bytes, 0);
+    assert_eq!(visible_again.gui_rebuilds, 0);
+    assert_eq!(visible_again.gui_allocations, 0);
+    assert_eq!(visible_again.gui_batches, 1);
+    assert_eq!(device.borrow().created_batches.len(), 2);
+    assert!(device.borrow().updated_batches.is_empty());
+
+    // Submitting a Surface without a batch it retained releases that batch.
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &BTreeSet::from([shown, culled]),
+    }));
+    assert_eq!(device.borrow().deleted_batches, [1]);
+    assert_eq!(
+        cache.resident_bytes(),
+        6 * std::mem::size_of::<GuiBoxVertex>()
+    );
+}
+
+#[test]
+fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+
+    let entity = ipp_core::EntityId::from_bits(1);
+    let panel = sample_box_primitive(
+        1,
+        1,
+        GuiPrimitivePart::Background,
+        [0.0, 0.0],
+        [1.0, 1.0],
+        None,
+    );
+    let moved = sample_box_primitive(
+        1,
+        1,
+        GuiPrimitivePart::Background,
+        [0.5, 0.0],
+        [1.0, 1.0],
+        None,
+    );
+    let clip = [0.0, 0.0, 4.0, 2.0];
+    let mvp = [0.0; 16];
+    let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
+        cache.draw_box_batch(
+            &1,
+            entity,
+            clip,
+            GuiPartClass::Background,
+            &[primitive],
+            &mvp,
+            &mut RenderStats::default(),
+        )
+    };
+
+    draw(&mut cache, &panel).unwrap();
+    device.borrow_mut().fail_updates = true;
+    assert!(draw(&mut cache, &moved).is_err());
+    assert_eq!(device.borrow().deleted_batches, [1]);
+    assert_eq!(cache.resident_bytes(), 0);
+    assert_eq!(
+        device.borrow().draws.len(),
+        1,
+        "stale storage is never drawn"
+    );
+
+    // The next frame allocates complete storage instead of reusing the failed batch.
+    device.borrow_mut().fail_updates = false;
+    draw(&mut cache, &moved).unwrap();
+    assert_eq!(device.borrow().created_batches.len(), 2);
+    assert_eq!(device.borrow().draws.last().unwrap().0, 2);
 }

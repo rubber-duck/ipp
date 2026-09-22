@@ -1,10 +1,8 @@
-import type { ClientAssetSource } from "@ipp/client";
 import {
   Align,
   Button,
   Checkbox,
   Column,
-  Drawing,
   Padding,
   Row,
   ScrollView,
@@ -14,13 +12,10 @@ import {
   TextInput,
   type GuiControlTheme,
 } from "@ipp/react/gui";
-import { useMemo, type ReactNode, type ComponentProps } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { GuiDemoSkin, GuiSceneState } from "./scene.js";
-import {
-  Waveform,
-  waveformResourceSources,
-  type WaveformRefs,
-} from "./waveform.js";
+import { Waveform, type WaveformRefs } from "./waveform.js";
+import { GUI_ICONS, Icon, Shape } from "./presentation.js";
 
 export const SURFACE_WIDTH = 7.4;
 export const SURFACE_HEIGHT = 4.8;
@@ -68,72 +63,25 @@ export const PALETTES: Readonly<Record<GuiDemoSkin, Palette>> = {
     disabled: [0.45, 0.23, 0.14, 0.45],
     focus: [1, 0.93, 0.63, 1],
   },
+  neon: {
+    shell: [0.002, 0.008, 0.016, 0.96],
+    panel: [0.004, 0.016, 0.03, 0.96],
+    primary: [0.82, 0.98, 1, 1],
+    secondary: [0.16, 0.85, 1, 1],
+    muted: [0.3, 0.52, 0.62, 1],
+    button: [0.05, 0.45, 0.62, 0.95],
+    hovered: [0.55, 0.95, 1, 1],
+    pressed: [0.04, 0.35, 0.5, 0.95],
+    disabled: [0.22, 0.32, 0.36, 0.45],
+    focus: [1, 0.8, 0.35, 1],
+  },
 };
 
-const DRAWING_SIZES = {
-  "panel-fill": [740, 480],
-  "panel-frame": [740, 480],
-  "section-frame": [680, 100],
-  "telemetry-frame": [344, 136],
-  "pulse-button": [328, 84],
-  "pulse-button-ember": [328, 84],
-  "control-outline": [300, 60],
-  "switch-on": [104, 48],
-  "switch-off": [104, 48],
-  "slider-scale": [480, 15],
-  "slider-thumb": [100, 100],
-  "slider-track": [510, 10],
-  "slider-fill": [1, 1],
-  "link-status": [62, 24],
-} as const;
-
-function drawing(name: string): ClientAssetSource {
-  return {
-    kind: 18,
-    source: new URL(
-      `/target/gallery-gui-assets/${name}.ippd`,
-      globalThis.location.href,
-    ).href,
-  };
-}
-
-export function dashboardResourceSources(): readonly ClientAssetSource[] {
-  return [
-    ...Object.keys(DRAWING_SIZES).map(drawing),
-    ...waveformResourceSources(),
-  ];
-}
-
-/** Drawing leaves retain authored coordinates; controls fit skin assets themselves. */
-function Artwork(props: ComponentProps<typeof Drawing>) {
-  const name = props.asset?.source.split("/").pop()?.replace(".ippd", "") ?? "";
-  const native =
-    name === "gui-mark"
-      ? [0.52, 0.5]
-      : DRAWING_SIZES[name as keyof typeof DRAWING_SIZES];
-  return (
-    <Drawing
-      {...props}
-      theme={{
-        parts: {
-          icon: {
-            base: {
-              scale: [
-                (props.width ?? 1) / native[0]!,
-                (props.height ?? 1) / native[1]!,
-              ],
-            },
-          },
-        },
-      }}
-    />
-  );
-}
-
-function controlTheme(
+/** Every skin uses the shared retained shape and glyph renderer. */
+function shapeControlTheme(
   scene: GuiSceneState,
   palette: Palette,
-  asset: string,
+  pulse = false,
 ): GuiControlTheme {
   const state = (color: Color, time: number, scale = 1) => ({
     color,
@@ -147,17 +95,71 @@ function controlTheme(
       time,
     },
   });
+  const edge = {
+    cornerRadius: [0.05, 0.05] as const,
+    borderWidth: 0.012,
+    borderColor: palette.secondary,
+  };
+  const fill = {
+    kind: "linear" as const,
+    start: [0, 0] as const,
+    end: [0, pulse ? 0.84 : 0.38] as const,
+    color0: pulse
+      ? ([
+          palette.button[0] * 0.15,
+          palette.button[1] * 0.15,
+          palette.button[2] * 0.15,
+          palette.button[3],
+        ] as Color)
+      : palette.panel,
+    color1: palette.shell,
+  };
+  const halo = {
+    color: palette.secondary,
+    intensity: 0.18,
+    radius: 0.035,
+    falloff: 2,
+  };
   return {
     font: scene.font,
     parts: {
       background: {
-        base: { ...state(palette.button, 0), asset: drawing(asset) },
-        hovered: state(palette.hovered, 0.1, 1.025),
-        pressed: state(palette.pressed, 0.2, 0.985),
-        disabled: state(palette.disabled, 0.3),
+        base: {
+          ...state(palette.button, 0),
+          ...edge,
+          gradient: fill,
+          ...(scene.skin === "neon" ? { glow: halo } : {}),
+        },
+        hovered: {
+          ...state(palette.hovered, 0.1, 1.025),
+          ...edge,
+          gradient: fill,
+          glow: { ...halo, intensity: 0.3, radius: 0.05 },
+        },
+        pressed: {
+          ...state(palette.pressed, 0.2, 0.985),
+          ...edge,
+          gradient: fill,
+        },
+        disabled: {
+          ...state(palette.disabled, 0.3),
+          cornerRadius: [0.05, 0.05] as const,
+          borderWidth: 0.012,
+          borderColor: palette.muted,
+          glow: { intensity: 0 },
+        },
       },
       label: { base: { color: palette.primary } },
-      focusRing: { base: { color: palette.focus, opacity: 1 } },
+      focusRing: {
+        base: {
+          color: palette.focus,
+          opacity: 1,
+          cornerRadius: [0.06, 0.06] as const,
+          borderWidth: 0.01,
+          borderColor: palette.focus,
+          glow: { ...halo, color: palette.focus },
+        },
+      },
     },
   };
 }
@@ -191,25 +193,36 @@ function Frame({
   height,
   palette,
   children,
-  asset = "section-frame",
 }: {
   width: number;
   height: number;
   palette: Palette;
   children: ReactNode;
-  asset?: string;
 }) {
   return (
-    <Stack width={width} height={height} backgroundColor={palette.panel}>
+    <Stack
+      width={width}
+      height={height}
+      backgroundColor={palette.panel}
+      theme={{
+        parts: {
+          background: {
+            base: {
+              color: palette.panel,
+              cornerRadius: [0.05, 0.05],
+              borderWidth: 0.008,
+              borderColor: [
+                palette.secondary[0],
+                palette.secondary[1],
+                palette.secondary[2],
+                0.42,
+              ],
+            },
+          },
+        },
+      }}
+    >
       {children}
-      <Artwork
-        width={width}
-        height={height}
-        asset={drawing(asset)}
-        color={palette.secondary}
-        opacity={0.42}
-        enabled={false}
-      />
     </Stack>
   );
 }
@@ -220,17 +233,60 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
       font: scene.font,
       parts: {
         background: {
-          base: { color: palette.muted, asset: drawing("slider-track") },
+          base: {
+            color: palette.panel,
+            cornerRadius: [0.04, 0.04] as const,
+            borderWidth: 0.01,
+            borderColor: palette.muted,
+          },
         },
         fill: {
-          base: { color: palette.secondary, asset: drawing("slider-fill") },
+          base: {
+            color: palette.secondary,
+            cornerRadius: [0.04, 0.04] as const,
+            gradient: {
+              kind: "linear" as const,
+              start: [0, 0] as const,
+              end: [1, 0] as const,
+              color0: palette.secondary,
+              color1: palette.primary,
+            },
+          },
         },
         icon: {
-          base: { color: palette.primary, asset: drawing("slider-thumb") },
-          hovered: { color: palette.hovered, scale: [1.12, 1.12] },
-          pressed: { color: palette.secondary },
+          base: {
+            color: palette.primary,
+            cornerRadius: [0.08, 0.08] as const,
+            borderWidth: 0.01,
+            borderColor: palette.secondary,
+            glow: {
+              color: palette.secondary,
+              intensity: scene.skin === "neon" ? 0.18 : 0,
+              radius: 0.025,
+              falloff: 2,
+            },
+          },
+          hovered: {
+            color: palette.hovered,
+            scale: [1.12, 1.12],
+            cornerRadius: [0.08, 0.08] as const,
+            borderWidth: 0.01,
+            borderColor: palette.secondary,
+          },
+          pressed: {
+            color: palette.secondary,
+            cornerRadius: [0.08, 0.08] as const,
+            borderWidth: 0.01,
+            borderColor: palette.secondary,
+          },
         },
-        focusRing: { base: { color: palette.focus } },
+        focusRing: {
+          base: {
+            color: palette.focus,
+            borderWidth: 0.01,
+            borderColor: palette.focus,
+          },
+        },
       },
     }),
     [scene.font, palette],
@@ -261,14 +317,17 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
               onScalarCommit={(event) => scene.setGain(event.value)}
             />
           </Stack>
-          <Artwork
-            width={5.04}
-            height={0.1}
-            margin={[0, 0.03, 0, 0.03]}
-            asset={drawing("slider-scale")}
-            color={palette.muted}
-            enabled={false}
-          />
+          <Stack width={5.1} height={0.1} enabled={false}>
+            {Array.from({ length: 25 }, (_, index) => (
+              <Shape
+                key={index}
+                x={0.03 + index * 0.21}
+                width={0.012}
+                height={index % 4 === 0 ? 0.09 : 0.045}
+                material={{ color: palette.muted }}
+              />
+            ))}
+          </Stack>
         </Column>
         <Padding width={0.22} height={0.9} />
         <Label
@@ -294,23 +353,73 @@ function Scan({
   palette: Palette;
   waveform: WaveformRefs;
 }) {
+  const capsule = [0.24, 0.24] as const;
   const theme = useMemo<GuiControlTheme>(
     () => ({
       font: scene.font,
       parts: {
         background: {
-          base: { color: palette.primary },
-          checked: { asset: drawing("switch-on") },
-          unchecked: { asset: drawing("switch-off"), color: palette.muted },
-          hovered: { color: palette.hovered },
-          pressed: { color: palette.secondary },
+          base: {
+            color: palette.panel,
+            cornerRadius: capsule,
+            borderWidth: 0.012,
+            borderColor: palette.muted,
+          },
+          checked: {
+            color: palette.button,
+            cornerRadius: capsule,
+            borderWidth: 0.012,
+            borderColor: palette.secondary,
+            gradient: {
+              kind: "linear" as const,
+              start: [0, 0] as const,
+              end: [1, 0] as const,
+              color0: palette.secondary,
+              color1: palette.button,
+            },
+            glow: {
+              color: palette.secondary,
+              intensity: scene.skin === "neon" ? 0.18 : 0,
+              radius: 0.035,
+              falloff: 2,
+            },
+          },
+          unchecked: {
+            color: palette.panel,
+            cornerRadius: capsule,
+            borderWidth: 0.012,
+            borderColor: palette.muted,
+          },
+          hovered: {
+            color: palette.hovered,
+            cornerRadius: capsule,
+            borderWidth: 0.012,
+            borderColor: palette.secondary,
+          },
+          pressed: {
+            color: palette.secondary,
+            cornerRadius: capsule,
+            borderWidth: 0.012,
+            borderColor: palette.secondary,
+          },
         },
         icon: {
-          base: { opacity: 0 },
-          checked: { opacity: 0 },
-          unchecked: { opacity: 0 },
+          base: {
+            cornerRadius: [0.12, 0.12],
+            borderWidth: 0.014,
+            borderColor: palette.primary,
+          },
+          checked: { color: palette.primary, opacity: 1 },
+          unchecked: { color: [0, 0, 0, 0], opacity: 1 },
         },
-        focusRing: { base: { color: palette.focus } },
+        focusRing: {
+          base: {
+            color: palette.focus,
+            cornerRadius: capsule,
+            borderWidth: 0.01,
+            borderColor: palette.focus,
+          },
+        },
       },
     }),
     [scene.font, palette],
@@ -338,9 +447,9 @@ function Scan({
           />
         </Align>
         <Padding width={0.3} height={0.66} />
-        <Align width={3.54} height={0.66} alignX={0} alignY={0}>
+        <Padding width={3.54} height={0.66} padding={[0.1, 0, 0.1, 0]}>
           <Waveform scene={scene} palette={palette} nodes={waveform} />
-        </Align>
+        </Padding>
       </Row>
     </Frame>
   );
@@ -354,67 +463,80 @@ function PulseAndSkins({
   palette: Palette;
 }) {
   const pulseTheme = useMemo(
-    () =>
-      controlTheme(
-        scene,
-        palette,
-        scene.skin === "ember" ? "pulse-button-ember" : "pulse-button",
-      ),
+    () => shapeControlTheme(scene, palette, true),
     [scene.font, scene.motions, scene.skin, palette],
   );
-  const auroraTheme = useMemo(
-    () => controlTheme(scene, palette, "pulse-button"),
-    [scene.font, scene.motions, scene.skin, palette],
-  );
-  const emberTheme = useMemo(
-    () => controlTheme(scene, palette, "pulse-button-ember"),
+  const skinTheme = useMemo(
+    () => shapeControlTheme(scene, palette),
     [scene.font, scene.motions, scene.skin, palette],
   );
   return (
     <Column width={LEFT_WIDTH} height={1.32}>
-      <Button
-        key="pulse"
-        width={LEFT_WIDTH}
-        height={0.84}
-        padding={[0.17, 0.2, 0.17, 1.08]}
-        label="PULSE"
-        fontSize={0.42}
-        theme={pulseTheme}
-        opacity={scene.prepared ? 1 : 0}
-        onPress={scene.pulse}
-      />
+      <Stack width={LEFT_WIDTH} height={0.84}>
+        <Button
+          key="pulse"
+          width={LEFT_WIDTH}
+          height={0.84}
+          padding={[0.17, 0.2, 0.17, 1.08]}
+          label="PULSE"
+          fontSize={0.42}
+          theme={pulseTheme}
+          opacity={scene.prepared ? 1 : 0}
+          onPress={scene.pulse}
+        />
+        <Align width={0.9} height={0.84} alignX={0} alignY={0} enabled={false}>
+          <Icon
+            font={scene.font}
+            glyph={GUI_ICONS.pulse}
+            size={0.45}
+            color={palette.primary}
+          />
+        </Align>
+      </Stack>
       <Row width={LEFT_WIDTH} height={0.38} margin={[0.1, 0, 0, 0]}>
         <Label
           scene={scene}
           text="SKIN"
-          width={0.7}
+          width={0.48}
           height={0.38}
           size={0.17}
           color={palette.muted}
         />
-        <Button
-          key="skin-aurora"
-          width={1.22}
-          height={0.38}
-          padding={[0.085, 0.06, 0.085, 0.38]}
-          label="AURORA"
-          fontSize={0.16}
-          theme={auroraTheme}
-          opacity={scene.prepared ? 1 : 0}
-          onPress={() => scene.selectSkin("aurora")}
-        />
-        <Padding width={0.1} height={0.38} />
-        <Button
-          key="skin-ember"
-          width={1.22}
-          height={0.38}
-          padding={[0.085, 0.06, 0.085, 0.38]}
-          label="EMBER"
-          fontSize={0.16}
-          theme={emberTheme}
-          opacity={scene.prepared ? 1 : 0}
-          onPress={() => scene.selectSkin("ember")}
-        />
+        <Padding width={0.06} height={0.38} />
+        {(["aurora", "ember", "neon"] as const).map((skin) => (
+          <Stack
+            key={skin}
+            width={0.86}
+            height={0.38}
+            margin={[0, skin === "neon" ? 0 : 0.06, 0, 0]}
+          >
+            <Button
+              key={`skin-${skin}`}
+              width={0.86}
+              height={0.38}
+              padding={[0.085, 0.04, 0.085, 0.27]}
+              label={skin.toUpperCase()}
+              fontSize={0.15}
+              theme={skinTheme}
+              opacity={scene.prepared ? 1 : 0}
+              onPress={() => scene.selectSkin(skin)}
+            />
+            <Align
+              width={0.25}
+              height={0.38}
+              alignX={0}
+              alignY={0}
+              enabled={false}
+            >
+              <Icon
+                font={scene.font}
+                glyph={GUI_ICONS[skin]}
+                size={0.17}
+                color={palette.secondary}
+              />
+            </Align>
+          </Stack>
+        ))}
       </Row>
     </Column>
   );
@@ -428,12 +550,7 @@ function Telemetry({
   palette: Palette;
 }) {
   return (
-    <Frame
-      width={RIGHT_WIDTH}
-      height={1.32}
-      palette={palette}
-      asset="telemetry-frame"
-    >
+    <Frame width={RIGHT_WIDTH} height={1.32} palette={palette}>
       <Column width={3.4} height={1.32} padding={[0.04, 0.16, 0.04, 0.16]}>
         <Label
           scene={scene}
@@ -504,17 +621,22 @@ export function ProjectorDashboard({
 }) {
   const palette = PALETTES[scene.skin];
   const inputTheme = useMemo(
-    () => controlTheme(scene, palette, "control-outline"),
+    () => shapeControlTheme(scene, palette),
     [scene.font, scene.motions, scene.skin, palette],
   );
   return (
     <Stack width={SURFACE_WIDTH} height={SURFACE_HEIGHT}>
-      <Artwork
-        width={SURFACE_WIDTH}
-        height={SURFACE_HEIGHT}
-        asset={drawing("panel-fill")}
-        color={palette.shell}
-        enabled={false}
+      <Shape
+        x={0.03}
+        y={0.03}
+        width={SURFACE_WIDTH - 0.06}
+        height={SURFACE_HEIGHT - 0.06}
+        material={{
+          color: palette.shell,
+          cornerRadius: [0.17, 0.17],
+          borderWidth: 0.014,
+          borderColor: palette.primary,
+        }}
       />
       <Column
         width={SURFACE_WIDTH}
@@ -523,12 +645,11 @@ export function ProjectorDashboard({
       >
         <Row width={CONTENT_WIDTH} height={0.57}>
           <Align width={0.48} height={0.57} alignX={-1} alignY={0}>
-            <Artwork
-              width={0.32}
-              height={0.32}
-              asset={scene.mark}
+            <Icon
+              font={scene.font}
+              glyph={GUI_ICONS.cube}
+              size={0.36}
               color={palette.secondary}
-              enabled={false}
             />
           </Align>
           <Label
@@ -540,12 +661,11 @@ export function ProjectorDashboard({
             color={palette.primary}
           />
           <Align width={0.67} height={0.57} alignX={1} alignY={0}>
-            <Artwork
-              width={0.55}
-              height={0.24}
-              asset={drawing("link-status")}
+            <Icon
+              font={scene.font}
+              glyph={GUI_ICONS.signal}
+              size={0.3}
               color={palette.primary}
-              enabled={false}
             />
           </Align>
         </Row>
@@ -596,14 +716,6 @@ export function ProjectorDashboard({
           />
         </Row>
       </Column>
-      <Artwork
-        width={SURFACE_WIDTH}
-        height={SURFACE_HEIGHT}
-        asset={drawing("panel-frame")}
-        color={palette.primary}
-        opacity={0.86}
-        enabled={false}
-      />
     </Stack>
   );
 }

@@ -525,7 +525,7 @@ layouts! {
     ];
     "snapshot-value-bytes" [Base] => [
         field!("tag", Variant => "snapshot-value"),
-        field!("value", Bytes, 65536),
+        field!("value", Bytes, 1048576),
     ];
 
     "request-begin-batch" [Base] => [

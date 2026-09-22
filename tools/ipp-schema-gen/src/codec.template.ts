@@ -858,7 +858,9 @@ function readComponent(r: Reader): ComponentSnapshot {
         kind === WIRE.SNAPSHOT_VALUE_BYTES &&
         !dynamicDescriptors
       ) {
-        dynamicDescriptors = decodeDynamicDescriptors(r.raw(r.count(65536)));
+        dynamicDescriptors = decodeDynamicDescriptors(
+          r.raw(r.count(MAX_MESSAGE_BYTES)),
+        );
         continue;
       }
       const property = dynamicDescriptors?.get(offset);
@@ -885,7 +887,7 @@ function readComponent(r: Reader): ComponentSnapshot {
     else if (kind === WIRE.SNAPSHOT_VALUE_U64) fields[entry[0]] = r.u64();
     else if (kind === WIRE.SNAPSHOT_VALUE_STRING) fields[entry[0]] = r.string();
     else if (kind === WIRE.SNAPSHOT_VALUE_BYTES)
-      fields[entry[0]] = r.raw(r.count(65536));
+      fields[entry[0]] = r.raw(r.count(MAX_MESSAGE_BYTES));
     else if (kind === WIRE.SNAPSHOT_VALUE_ENTITY) {
       if (r.u8() !== WIRE.SNAPSHOT_REF_HANDLE)
         fail("unresolved inspected alias");

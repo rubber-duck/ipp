@@ -41,6 +41,18 @@ struct DeviceState {
     shadow_pass: Cell<bool>,
     #[cfg(feature = "shadows")]
     fail_shadow_draw: Cell<bool>,
+    #[cfg(feature = "surfaces")]
+    analytic_glyph_draws: Cell<u32>,
+    #[cfg(feature = "gui")]
+    glyph_batch_uploads: Cell<u32>,
+    #[cfg(feature = "gui")]
+    atlas_populations: Cell<u32>,
+    #[cfg(feature = "gui")]
+    atlas_target_bound: Cell<bool>,
+    #[cfg(feature = "gui")]
+    fail_atlas_begin: RefCell<Option<RenderError>>,
+    #[cfg(feature = "gui")]
+    fail_atlas_end: RefCell<Option<RenderError>>,
 }
 
 struct TestDevice(Rc<DeviceState>);
@@ -62,7 +74,7 @@ impl RenderDevice for TestDevice {
     type GlyphAtlasPage = ();
 
     #[cfg(feature = "gui")]
-    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+    fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
 
@@ -220,6 +232,81 @@ impl RenderDevice for TestDevice {
             ))
         } else {
             Ok(())
+        }
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_path_instances(
+        &mut self,
+        _: &(),
+        _: &(),
+        _: &[ipp_render_gl::SurfacePathInstance],
+        _: &[f32; 16],
+        _: &[f32; 4],
+        _: u32,
+    ) -> Result<(), RenderError> {
+        self.0
+            .analytic_glyph_draws
+            .set(self.0.analytic_glyph_draws.get() + 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_batch(&mut self, _: &[ipp_render_gl::GlyphVertex]) -> Result<(), RenderError> {
+        self.0
+            .glyph_batch_uploads
+            .set(self.0.glyph_batch_uploads.get() + 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn update_glyph_batch(
+        &mut self,
+        _: &mut (),
+        _: &[ipp_render_gl::GlyphVertex],
+    ) -> Result<(), RenderError> {
+        self.0
+            .glyph_batch_uploads
+            .set(self.0.glyph_batch_uploads.get() + 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn draw_glyph_batch(
+        &mut self,
+        _: &(),
+        _: &(),
+        _: &(),
+        _: &[f32; 16],
+        _: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn create_glyph_atlas_page(&mut self, _: u32, _: u32) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn begin_glyph_atlas_page(&mut self, _: &()) -> Result<(), RenderError> {
+        self.0
+            .atlas_populations
+            .set(self.0.atlas_populations.get() + 1);
+        if let Some(error) = self.0.fail_atlas_begin.borrow().clone() {
+            return Err(error);
+        }
+
+        assert!(!self.0.atlas_target_bound.replace(true));
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        self.0.atlas_target_bound.set(false);
+        match self.0.fail_atlas_end.borrow().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 
@@ -1172,4 +1259,188 @@ fn atlas_allocation_failure_keeps_lighting_and_does_not_retry_every_frame() {
     }
     assert_eq!(state.shadow_attempts.get(), 1);
     assert_eq!(state.live_shadow_maps.get(), 0);
+}
+
+/// One text Surface in front of the default camera, with its font resolved.
+#[cfg(feature = "gui")]
+fn text_surface_scene(
+    host: &mut ipp_core::HostRuntime,
+) -> (
+    RenderService<TestDevice>,
+    Rc<DeviceState>,
+    ipp_core::WorldId,
+    EntityId,
+) {
+    use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
+    use ipp_core::{PositionedGlyph, Surface, SurfaceItemContent, SurfaceItemStyle};
+
+    host.data_sources_mut()
+        .register_stream("fixture://")
+        .unwrap();
+    let (mut world, renderer, state) = setup(host);
+    let world_id = world.id();
+
+    // A 1 m em five metres away projects to about 24 px: an atlas band, not analytic.
+    let mut surface = Surface::default();
+    surface
+        .insert_item(
+            0,
+            SurfaceItemContent::GlyphRun(vec![PositionedGlyph {
+                glyph_id: 0,
+                position: [0.0; 2],
+                color: None,
+            }]),
+            SurfaceItemStyle {
+                position: [0.5, 0.5],
+                font_size: 1.0,
+                asset: Some(AssetSource {
+                    kind: FONT_TYPE,
+                    uri: "fixture:///font.ippf".into(),
+                    variant: 0,
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let entity = create(
+        &mut world,
+        vec![
+            ComponentValue::Transform(Transform::default()),
+            ComponentValue::Surface(surface),
+            ComponentValue::BoundingGeometry(Default::default()),
+        ],
+    );
+    drop(world);
+
+    for _ in 0..16 {
+        host.progress_assets();
+        for request in host.take_resource_requests() {
+            host.complete_resource(request.id, Ok(surface_font()))
+                .unwrap();
+        }
+        let mut world = host.world_mut(world_id).unwrap();
+        update(&mut world).unwrap();
+        if world
+            .surface_render_items()
+            .first()
+            .is_some_and(|item| item.primitives.len() == 1)
+        {
+            return (renderer, state, world_id, entity);
+        }
+    }
+    panic!("text Surface font did not resolve");
+}
+
+#[cfg(feature = "gui")]
+fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
+    world
+        .enqueue(Batch {
+            id: world.tick() + 1,
+            operations: vec![Command::InsertComponentValue {
+                entity: EntityRef::Handle(entity),
+                value: ComponentValue::Transform(Transform {
+                    z,
+                    ..Transform::default()
+                }),
+            }],
+        })
+        .unwrap();
+    update(world).unwrap();
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, entity) = text_surface_scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((cold.glyph_populates, cold.gui_batches), (1, 1), "{cold:?}");
+    let uploads = state.glyph_batch_uploads.get();
+    let populations = state.atlas_populations.get();
+
+    // Behind the camera for one frame: nothing is submitted and nothing is released.
+    place(&mut world, entity, 10.0);
+    let culled = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(
+        (culled.draw_calls, culled.gui_batches),
+        (0, 0),
+        "{culled:?}"
+    );
+    assert_eq!(culled.glyph_pages, 1);
+    assert!(culled.gui_resident_bytes > 0);
+
+    place(&mut world, entity, 0.0);
+    let visible = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(visible.gui_batches, 1, "{visible:?}");
+    assert_eq!(visible.uploaded_bytes, 0);
+    assert_eq!(visible.gui_rebuilds, 0);
+    assert_eq!(visible.gui_allocations, 0);
+    assert_eq!(visible.glyph_misses, 0);
+    assert_eq!(visible.glyph_populates, 0);
+    assert_eq!(state.glyph_batch_uploads.get(), uploads);
+    assert_eq!(state.atlas_populations.get(), populations);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn recoverable_glyph_population_failure_keeps_analytic_text_and_backs_off() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    state
+        .fail_atlas_begin
+        .replace(Some(RenderError::RenderDevice(
+            "injected atlas failure".into(),
+        )));
+    let failed = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(failed.glyph_population_failures, 1, "{failed:?}");
+    assert_eq!((failed.glyph_populates, failed.gui_batches), (0, 0));
+    assert_eq!((failed.draw_calls, failed.failed_draw_calls), (1, 0));
+    assert_eq!(state.analytic_glyph_draws.get(), 1);
+    assert!(!state.atlas_target_bound.get());
+
+    // The glyph waits before retrying, so a persistent failure is not paid every frame.
+    state.fail_atlas_begin.replace(None);
+    let waiting = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(waiting.glyph_population_failures, 0);
+    assert_eq!(waiting.draw_calls, 1);
+    assert_eq!(state.atlas_populations.get(), 1);
+    assert_eq!(state.analytic_glyph_draws.get(), 2);
+
+    let populated = (0..8)
+        .map(|_| render_frame(&mut renderer, &mut world, 100, 100).unwrap())
+        .find(|stats| stats.glyph_populates == 1)
+        .expect("backed-off glyph is populated again");
+    assert_eq!(populated.gui_batches, 1);
+    assert_eq!(state.atlas_populations.get(), 2);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    state
+        .fail_atlas_begin
+        .replace(Some(RenderError::ContextLost));
+    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    assert_eq!(error, RenderError::ContextLost.to_string());
+    assert!(!state.atlas_target_bound.get());
+
+    // A failure to restore the host target must fail the frame, not hide as a miss.
+    state.fail_atlas_begin.replace(None);
+    state.fail_atlas_end.replace(Some(RenderError::RenderDevice(
+        "injected atlas restore failure".into(),
+    )));
+    let attempts = state.atlas_populations.get();
+    let error = (0..8)
+        .find_map(|_| render_frame(&mut renderer, &mut world, 100, 100).err())
+        .expect("retried population reports the restore failure");
+    assert!(error.contains("injected atlas restore failure"), "{error}");
+    assert_eq!(state.atlas_populations.get(), attempts + 1);
 }

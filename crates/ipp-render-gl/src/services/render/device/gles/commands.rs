@@ -283,7 +283,7 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     #[cfg(feature = "gui")]
-    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+    fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         &page.texture
     }
 

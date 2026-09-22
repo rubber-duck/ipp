@@ -539,7 +539,6 @@ fn ready_asset_replaces_drawing_while_missing_retains_prior() {
         opacity: None,
         scale: None,
         asset: Some(asset_source("new-draw")),
-        focus_border_color: None,
         corner_radius: None,
         border_width: None,
         border_color: None,
@@ -602,7 +601,6 @@ fn glyph_fonts_never_remeasure_for_skins() {
         opacity: None,
         scale: None,
         asset: Some(asset_source("other-font")),
-        focus_border_color: None,
         corner_radius: None,
         border_width: None,
         border_color: None,
@@ -714,11 +712,13 @@ fn focus_ring_paints_without_a_background_primitive() {
         style,
         border_width,
         border_color,
+        fill,
         ..
     } = &painted[0]
     else {
         panic!("focused background-free node must emit a ring box")
     };
+    assert_eq!(*fill, crate::GuiShapeFill::Solid([0.0; 4]));
     assert_eq!(*border_width, FOCUS_BORDER_WIDTH);
     assert_eq!(*border_color, [0.8, 0.3, 0.1, 1.0]);
     assert!(matches!(
@@ -728,6 +728,27 @@ fn focus_ring_paints_without_a_background_primitive() {
             ..
         })
     ));
+
+    // An authored border colour strokes the ring in preference to the
+    // colour lane, and the ring interior stays transparent.
+    set_part_lane(
+        &mut root,
+        1,
+        "focusRing",
+        "border_color",
+        DynamicValue::Vec4([0.1, 0.9, 0.2, 1.0]),
+    );
+    let painted = skinned_primitives_for_view(&view, &root, &cursors, &MapResolver::empty());
+    let SurfaceRenderPrimitive::Box {
+        border_color,
+        fill,
+        ..
+    } = &painted[0]
+    else {
+        panic!("focused background-free node must emit a ring box")
+    };
+    assert_eq!(*border_color, [0.1, 0.9, 0.2, 1.0]);
+    assert_eq!(*fill, crate::GuiShapeFill::Solid([0.0; 4]));
 }
 
 #[test]
@@ -1319,7 +1340,6 @@ fn drawing_and_bitmap_parts_reject_incompatible_skin_asset_kinds() {
         opacity: None,
         scale: None,
         asset: Some(asset),
-        focus_border_color: None,
         corner_radius: None,
         border_width: None,
         border_color: None,
@@ -1858,6 +1878,231 @@ fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
             radius: 0.05,
             falloff: 1.5,
         })
+    );
+}
+
+/// Background box for node 1 as layout emits it before skinning.
+fn background_box() -> SurfaceRenderPrimitive {
+    SurfaceRenderPrimitive::Box {
+        style: SurfacePrimitiveStyle {
+            identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+                root_incarnation: 7,
+                node: GuiNodeId(1),
+                lifetime: 1,
+                part: GuiPrimitivePart::Background,
+            }),
+            position: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: 1.0,
+            clip: None,
+        },
+        size: [2.0, 1.0],
+        corner_radius: [0.0, 0.0],
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        fill: GuiShapeFill::Solid([0.0, 0.0, 0.0, 1.0]),
+        glow: None,
+    }
+}
+
+#[test]
+fn solid_state_replaces_inherited_gradient_while_glow_lanes_stay_independent() {
+    let mut root = GuiRoot::default();
+    set_part_color(&mut root, 1, "background", [0.1, 0.2, 0.3, 1.0]);
+    for (lane, value) in [
+        ("fill_mode", DynamicValue::F32(1.0)),
+        ("gradient_color0", DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0])),
+        ("gradient_color1", DynamicValue::Vec4([0.0, 0.0, 1.0, 1.0])),
+        ("glow_intensity", DynamicValue::F32(0.5)),
+        ("glow_radius", DynamicValue::F32(0.04)),
+    ] {
+        set_part_lane(&mut root, 1, "background", lane, value);
+    }
+    set_part_color(&mut root, 1, "background_hovered", [0.0, 1.0, 0.0, 1.0]);
+    set_part_color(&mut root, 1, "background_disabled", [0.4, 0.4, 0.4, 0.5]);
+    set_part_lane(
+        &mut root,
+        1,
+        "background_disabled",
+        "fill_mode",
+        DynamicValue::F32(0.0),
+    );
+    set_part_color(&mut root, 1, "background_pressed", [0.9, 0.8, 0.1, 1.0]);
+    set_part_lane(
+        &mut root,
+        1,
+        "background_pressed",
+        "fill_mode",
+        DynamicValue::F32(0.0),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background_pressed",
+        "glow_intensity",
+        DynamicValue::F32(0.0),
+    );
+
+    let node = evaluated_node(1, GuiEvaluatedContent::Container);
+    let paint = |interaction: GuiInteractionState| {
+        let appearance = resolve_appearance(&root, &node, &interaction, "background").unwrap();
+        let SurfaceRenderPrimitive::Box {
+            fill,
+            glow,
+            ..
+        } = apply_appearance_to_primitive(&background_box(), &appearance)
+        else {
+            panic!("expected box");
+        };
+        (fill, glow)
+    };
+    let gradient = GuiShapeFill::LinearGradient {
+        start: [0.0, 0.0],
+        end: [1.0, 1.0],
+        start_color: [1.0, 0.0, 0.0, 1.0],
+        end_color: [0.0, 0.0, 1.0, 1.0],
+    };
+    let base_glow = Some(GuiShapeGlow {
+        color: [1.0, 1.0, 1.0, 1.0],
+        intensity: 0.5,
+        radius: 0.04,
+        falloff: 1.0,
+    });
+
+    // A colour-only state inherits the base fill mode, so the gradient hides it.
+    let hovered = GuiInteractionState {
+        hovered: true,
+        ..GuiInteractionState::idle()
+    };
+    assert_eq!(paint(hovered), (gradient, base_glow));
+
+    // Explicit solid mode paints the state colour; glow is a separate lane.
+    let disabled = GuiInteractionState {
+        disabled: true,
+        ..GuiInteractionState::idle()
+    };
+    assert_eq!(
+        paint(disabled),
+        (GuiShapeFill::Solid([0.4, 0.4, 0.4, 0.5]), base_glow)
+    );
+
+    // Zero intensity is how a state suppresses an inherited glow.
+    let pressed = GuiInteractionState {
+        pressed: true,
+        ..GuiInteractionState::idle()
+    };
+    assert_eq!(
+        paint(pressed),
+        (GuiShapeFill::Solid([0.9, 0.8, 0.1, 1.0]), None)
+    );
+}
+
+#[test]
+fn sampled_colour_reaches_solid_fill_and_focus_stroke_but_not_gradient_stops() {
+    let mut authored = GuiRoot::default();
+    set_part_color(&mut authored, 1, "background", [0.0, 1.0, 0.0, 1.0]);
+    set_part_color(&mut authored, 1, "focusRing", [1.0, 1.0, 1.0, 1.0]);
+
+    // AnimationSystem writes mid-transition samples into the effective base lanes.
+    let mut effective = authored.clone();
+    set_part_color(&mut effective, 1, "background", [0.25, 0.5, 0.25, 1.0]);
+    set_part_color(&mut effective, 1, "focusRing", [0.5, 0.5, 0.5, 1.0]);
+
+    let node = evaluated_node(1, GuiEvaluatedContent::Container);
+    let view = test_view(vec![node.clone()]);
+    let cursors = GuiSkinCursors {
+        focus: Some(GuiInputFocus {
+            target: skin_target(view.entity, 1),
+            session: 1,
+        }),
+        ..Default::default()
+    };
+    let interaction = cursors.interaction_for(skin_target(view.entity, 1), true);
+    let paint = |authored: &GuiRoot| {
+        let overrides: BTreeMap<_, _> = [GuiPrimitivePart::Background, GuiPrimitivePart::FocusRing]
+            .into_iter()
+            .map(|part| {
+                let desired =
+                    resolve_paint_appearance(authored, &node, &interaction, part).unwrap();
+                let id = GuiPrimitiveId {
+                    root_incarnation: 7,
+                    node: GuiNodeId(1),
+                    lifetime: 1,
+                    part,
+                };
+                (
+                    id,
+                    appearance_with_effective_numeric(desired, &effective, GuiNodeId(1), part),
+                )
+            })
+            .collect();
+
+        skinned_primitives_for_view_with_overrides(
+            &view,
+            authored,
+            &cursors,
+            &MapResolver::empty(),
+            &mut BTreeMap::new(),
+            &overrides,
+        )
+    };
+
+    let painted = paint(&authored);
+    assert_eq!(painted.len(), 2);
+    let SurfaceRenderPrimitive::Box {
+        style,
+        fill,
+        ..
+    } = &painted[0]
+    else {
+        panic!("expected background box");
+    };
+    assert_eq!(style.color, [0.25, 0.5, 0.25, 1.0]);
+    assert_eq!(*fill, GuiShapeFill::Solid([0.25, 0.5, 0.25, 1.0]));
+    let SurfaceRenderPrimitive::Box {
+        border_color,
+        fill,
+        ..
+    } = &painted[1]
+    else {
+        panic!("expected focus ring box");
+    };
+    assert_eq!(*border_color, [0.5, 0.5, 0.5, 1.0]);
+    assert_eq!(*fill, GuiShapeFill::Solid([0.0; 4]));
+
+    // Gradient stops are separate unanimated lanes: sampling the colour lane
+    // leaves an authored gradient unchanged.
+    set_part_lane(
+        &mut authored,
+        1,
+        "background",
+        "fill_mode",
+        DynamicValue::F32(1.0),
+    );
+    set_part_lane(
+        &mut authored,
+        1,
+        "background",
+        "gradient_color1",
+        DynamicValue::Vec4([0.0, 0.0, 1.0, 1.0]),
+    );
+    let painted = paint(&authored);
+    let SurfaceRenderPrimitive::Box {
+        fill,
+        ..
+    } = &painted[0]
+    else {
+        panic!("expected background box");
+    };
+    assert_eq!(
+        *fill,
+        GuiShapeFill::LinearGradient {
+            start: [0.0, 0.0],
+            end: [1.0, 1.0],
+            start_color: [0.0, 1.0, 0.0, 1.0],
+            end_color: [0.0, 0.0, 1.0, 1.0],
+        }
     );
 }
 

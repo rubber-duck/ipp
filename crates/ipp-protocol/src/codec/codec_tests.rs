@@ -314,19 +314,21 @@ fn inspection_encodes_current_resource_statuses_after_entities() {
 #[test]
 fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
     let mut material = ipp_core::components::CustomMaterial::default();
-    for index in 0..257 {
+    for index in 0..3000 {
         material
             .properties
             .set(
-                &format!("property_{index}"),
+                &format!("node_{index}_background_corner_radius"),
                 ipp_core::DynamicValue::F32(index as f32),
             )
             .unwrap();
     }
-    let field_count = ComponentValue::CustomMaterial(material.clone())
-        .fields()
-        .len();
+    let fields = ComponentValue::CustomMaterial(material.clone()).fields();
+    let field_count = fields.len();
     assert!(field_count > 256);
+    assert!(fields.iter().any(|(_, value)| {
+        matches!(value, ResolvedValue::Bytes(bytes) if bytes.len() > 65_536)
+    }));
 
     let bytes = encode_response(&Response {
         session: 7,
@@ -355,6 +357,15 @@ fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
         field_count
     );
     assert!(bytes.len() < MAX_MESSAGE_BYTES);
+}
+
+#[test]
+fn large_inspected_byte_fields_still_obey_the_message_budget() {
+    let mut writer = Writer(Vec::new());
+    assert_eq!(
+        writer.resolved_field(0, ResolvedValue::Bytes(vec![0; MAX_MESSAGE_BYTES])),
+        Err(ProtocolError::Limit("message")),
+    );
 }
 
 #[test]

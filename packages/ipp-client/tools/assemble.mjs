@@ -42,10 +42,13 @@ export async function assembleBrowserHost(
     meshPoses = false,
     particles = false,
     surfaces = false,
+    gui = false,
   } = {},
 ) {
   if (shadows && !rendering)
     throw new Error("Shadows require a rendered browser host");
+  // GUI presentation extends Surface rendering; its bridge assumes Surface imports.
+  if (gui && !surfaces) throw new Error("GUI requires the Surface capability");
   // Reusing an output directory without rendering must remove its GPU bridge.
   if (!rendering)
     for (const name of ["render-worker.js", "webgl.js"])
@@ -93,6 +96,7 @@ export async function assembleBrowserHost(
         IPP_MESH_POSES: String(meshPoses),
         IPP_PARTICLES: String(particles),
         IPP_SURFACES: String(surfaces),
+        IPP_GUI: String(gui),
       },
       minifySyntax: true,
     });

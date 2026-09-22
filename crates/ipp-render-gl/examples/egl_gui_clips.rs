@@ -654,6 +654,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     batch_vertices.extend_from_slice(&border_verts);
 
+    // A small glowing outline uses a full quad, so the shader must keep its
+    // hollow center clear independently of the sparse-outline optimization.
+    let hollow_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        position: [3.4, 1.75],
+        ..border_style
+    };
+    let hollow_vertices = ipp_render_gl::gui_batch::generate_box_vertices(
+        &hollow_style,
+        &[0.4, 0.4],
+        &[0.05, 0.05],
+        0.02,
+        &[1.0, 0.5, 0.0, 1.0],
+        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
+        Some(&glow),
+    );
+    assert_eq!(hollow_vertices.len(), 6);
+    batch_vertices.extend_from_slice(&hollow_vertices);
+
     let batch = device.create_gui_batch(&batch_vertices)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     device.draw_gui_batch(&box_program, &batch, &MVP, &ROOT)?;
@@ -698,7 +716,81 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         8,
         "border-only edge strip",
     )?;
+    check(
+        &materials_frame,
+        288,
+        156,
+        BLACK,
+        0,
+        "outer glow preserves the hollow outline center",
+    )?;
+    let halo_pixel = pixel(&materials_frame, 264, 156);
+    assert!(halo_pixel[1] > 30 && halo_pixel[0] < 10 && halo_pixel[2] < 10);
     device.delete_gui_batch(batch);
+    // A one-pixel rail and one-pixel hollow border must retain their contrast.
+    // The halo belongs outside that crisp silhouette, with no tinted center or
+    // extra blur of the opaque rail. Pixel-aligned probes are independent of
+    // the shader's distance/coverage implementation.
+    let rail_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        position: [0.5, 0.5],
+        ..glow_style
+    };
+    let rail = ipp_render_gl::gui_batch::generate_box_vertices(
+        &rail_style,
+        &[1.0, 0.0125],
+        &[0.0, 0.0],
+        0.0,
+        &[0.0; 4],
+        &ipp_core::systems::surface::GuiShapeFill::Solid([1.0; 4]),
+        Some(&glow),
+    );
+    let outline_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
+        position: [2.0, 0.5],
+        ..rail_style
+    };
+    let outline = ipp_render_gl::gui_batch::generate_box_vertices(
+        &outline_style,
+        &[1.0, 0.5],
+        &[0.0, 0.0],
+        0.0125,
+        &[1.0; 4],
+        &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
+        Some(&glow),
+    );
+    let sharp_batch = device.create_gui_batch(&[rail, outline].concat())?;
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    device.draw_gui_batch(&box_program, &sharp_batch, &MVP, &ROOT)?;
+    let sharp = capture(&mut device, "boxes-sharp-edges-and-glow")?;
+    check(&sharp, 80, 40, [255; 4], 4, "one-pixel rail stays opaque")?;
+    check(
+        &sharp,
+        200,
+        40,
+        [255; 4],
+        4,
+        "one-pixel border stays opaque",
+    )?;
+    check(
+        &sharp,
+        200,
+        41,
+        BLACK,
+        4,
+        "border stops at its inner contour",
+    )?;
+    check(&sharp, 200, 60, BLACK, 0, "halo leaves hollow center clear")?;
+    let mut previous = 255;
+    for y in (27..40).rev() {
+        let halo = pixel(&sharp, 80, y);
+        assert!(
+            halo[0] <= 4 && halo[2] <= 4,
+            "rail fill leaked into halo: {halo:?}"
+        );
+        assert!(halo[1] <= previous, "halo must fade away from the rail");
+        previous = halo[1];
+    }
+    check(&sharp, 80, 27, BLACK, 0, "halo has bounded extent")?;
+    device.delete_gui_batch(sharp_batch);
     device.delete_program(box_program);
 
     let path_program = device.create_program(
@@ -791,7 +883,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut glyph_batch = device.create_glyph_batch(&glyph_vertices)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    let atlas_tex = *device.glyph_atlas_texture(&page);
+    let atlas_tex = *ipp_render_gl::GlesRenderDevice::glyph_atlas_texture(&page);
     device.draw_glyph_batch(&text_program, &glyph_batch, &atlas_tex, &MVP, &ROOT)?;
     let text_batch_frame = capture(&mut device, "glyph-batch")?;
     check(

@@ -33,12 +33,15 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "surfaces")]
         let surface_items = world.surface_render_items();
         self.debug.retain(world.debug_render_items());
+        #[cfg(feature = "gui")]
+        self.prepare_glyph_demand(world, surface_items, (width, height));
 
         self.device
             .borrow_mut()
             .begin_frame(width, height, &BACKGROUND)?;
         // Always release draw bindings, including when upload/draw fails.
-        let result = self.draw_items(
+        #[cfg_attr(not(feature = "gui"), allow(unused_mut))]
+        let mut result = self.draw_items(
             world,
             items,
             #[cfg(feature = "surfaces")]
@@ -47,6 +50,9 @@ impl<D: RenderDevice> RenderService<D> {
             height,
         );
         let finish = self.device.borrow_mut().end_frame();
+        #[cfg(feature = "gui")]
+        self.finish_retained_surfaces(world.id(), surface_items, result.as_mut().ok());
+
         let stats = result?;
         finish?;
         Ok(stats)
@@ -109,18 +115,13 @@ impl<D: RenderDevice> RenderService<D> {
         height: u32,
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderStats, RenderError> {
+        // `render` publishes retained GUI residency after every completed frame.
         if world.active_camera().is_none() {
             #[cfg(feature = "shadows")]
             self.clear_shadows();
             return Ok(RenderStats {
                 uploaded_bytes: self.uploaded.replace(0),
                 debug_resident_bytes: self.debug.resident_bytes() as u32,
-                #[cfg(feature = "gui")]
-                gui_resident_bytes: self.gui_batch_cache.resident_bytes() as u32,
-                #[cfg(feature = "gui")]
-                glyph_pages: self.glyph_atlas.page_count(),
-                #[cfg(feature = "gui")]
-                glyph_resident_bytes: self.glyph_atlas.resident_bytes(),
                 ..RenderStats::default()
             });
         }
@@ -133,16 +134,15 @@ impl<D: RenderDevice> RenderService<D> {
                     uploaded_bytes: self.uploaded.replace(0),
                     invalid_camera: true,
                     debug_resident_bytes: self.debug.resident_bytes() as u32,
-                    #[cfg(feature = "gui")]
-                    gui_resident_bytes: self.gui_batch_cache.resident_bytes() as u32,
-                    #[cfg(feature = "gui")]
-                    glyph_pages: self.glyph_atlas.page_count(),
-                    #[cfg(feature = "gui")]
-                    glyph_resident_bytes: self.glyph_atlas.resident_bytes(),
                     ..RenderStats::default()
                 });
             }
         };
+        // From here every visible Surface reaches submission unless the frame fails.
+        #[cfg(feature = "gui")]
+        {
+            self.submitted_surfaces = Some(Default::default());
+        }
         #[cfg(feature = "particles")]
         if self.particle_quad.is_none()
             && items
@@ -225,6 +225,10 @@ impl<D: RenderDevice> RenderService<D> {
                     Item::Surface(item) => {
                         if !world.geometry_visible(item.entity, &frustum) {
                             continue;
+                        }
+                        #[cfg(feature = "gui")]
+                        if let Some(submitted) = &mut self.submitted_surfaces {
+                            submitted.insert(item.entity);
                         }
                         self.draw_surface(
                             world,
@@ -470,20 +474,6 @@ impl<D: RenderDevice> RenderService<D> {
                 .saturating_add(self.uploaded.replace(0));
 
             stats.debug_resident_bytes = self.debug.resident_bytes() as u32;
-
-            #[cfg(feature = "gui")]
-            {
-                let live_surfaces: std::collections::BTreeSet<ipp_core::EntityId> =
-                    surfaces.iter().map(|s| s.entity).collect();
-                self.gui_batch_cache.finish_frame(
-                    &mut *self.device.borrow_mut(),
-                    &live_surfaces,
-                    &mut stats,
-                );
-                self.glyph_batch_cache.finish_frame();
-                stats.glyph_pages = self.glyph_atlas.page_count();
-                stats.glyph_resident_bytes = self.glyph_atlas.resident_bytes();
-            }
 
             Ok(stats)
         })();

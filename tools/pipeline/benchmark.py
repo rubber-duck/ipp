@@ -122,6 +122,31 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
 
     if args.frames < 1 or args.group < 1:
         raise ValueError("Frames and controller group size must be positive")
+    if getattr(args, "scene", "stress") == "retained-gui":
+        if args.backend != "browser":
+            raise ValueError("The retained GUI workload uses the browser backend")
+        dependencies = (
+            "build:typescript",
+            "build:surface-fixtures",
+            "build:browser:render-surfaces",
+            "build:browser:headless-gui",
+        )
+        if args.build_only:
+            return list(dependencies)
+        tasks["benchmark:retained-gui"] = Task(
+            "benchmark:retained-gui",
+            "Compare analytic and retained Surface text through completed browser frames",
+            (
+                node(),
+                "dist/tests/performance/retained-gui.js",
+                str(args.frames),
+                args.output or "target/performance/retained-gui",
+            ),
+            () if args.reuse_build else dependencies,
+            ("node", "npm", "browser"),
+            timeout=7200,
+        )
+        return ["benchmark:retained-gui"]
     if sum((args.culling_views, args.draw_sweep, args.render_profile)) > 1:
         raise ValueError("Select one native benchmark scenario")
     if args.backend == "browser" and (

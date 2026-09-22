@@ -2,12 +2,15 @@
 //! CPU coverage evaluation, and retained text batch caching.
 
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::{
-    ATLAS_PAGE_SIZE, GlyphAtlas, GlyphBatchRenderCache, GlyphKey, GlyphVertex, MAX_ATLAS_PAGES,
-    RESOLUTION_BANDS, evaluate_glyph_coverage, select_resolution_band,
+    ATLAS_PAGE_SIZE, GlyphAtlas, GlyphBatchRenderCache, GlyphKey, GlyphSurfaceDemand, GlyphVertex,
+    MAX_ATLAS_PAGES, POPULATE_RETRY_TICKS, RESOLUTION_BANDS, evaluate_glyph_coverage,
+    select_resolution_band,
 };
+use crate::services::render::gui_batch::RetainedSurfaceSubmission;
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::surface::{
@@ -22,6 +25,7 @@ struct MockAtlasDevice {
     draws: Vec<(usize, [f32; 4])>,
     created_pages: Vec<u32>,
     deleted_pages: Vec<u32>,
+    sampled_pages: Vec<u32>,
     next_id: usize,
 }
 
@@ -192,11 +196,12 @@ impl RenderDevice for MockAtlasDevice {
         &mut self,
         _program: &Self::Program,
         batch: &Self::GlyphBatch,
-        _atlas: &Self::Texture,
+        atlas: &Self::Texture,
         _mvp: &[f32; 16],
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
         self.draws.push((batch.id, *clip));
+        self.sampled_pages.push(*atlas);
         Ok(())
     }
 
@@ -223,9 +228,19 @@ impl RenderDevice for MockAtlasDevice {
         Ok(())
     }
 
-    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
+    fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
         page
     }
+}
+
+/// Demand of one submitted Surface, the only Surface in its World.
+fn submitted(
+    keys: impl IntoIterator<Item = GlyphKey>,
+) -> BTreeMap<ipp_core::EntityId, GlyphSurfaceDemand> {
+    BTreeMap::from([(
+        ipp_core::EntityId::from_bits(1),
+        GlyphSurfaceDemand::Submitted(keys.into_iter().collect()),
+    )])
 }
 
 #[test]
@@ -695,12 +710,390 @@ fn retained_text_batches_pruned_on_finish_frame() {
         cache.resident_bytes(),
         6 * std::mem::size_of::<GlyphVertex>()
     );
-    cache.finish_frame();
+    let live = BTreeSet::from([entity]);
+    let submission = RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &live,
+    };
+    cache.finish_frame(Some(&submission));
 
-    // Frame 2: text run is NOT drawn
-    cache.finish_frame();
+    // Frame 2: the submitted Surface no longer draws this run
+    cache.finish_frame(Some(&submission));
 
     // Unreferenced run is pruned and deleted on GPU
     assert_eq!(cache.resident_bytes(), 0);
     assert_eq!(device.borrow().deleted_batches.len(), 1);
+}
+
+#[test]
+fn page_crossings_preserve_painter_order_and_release_all_buffers() {
+    let device = Rc::new(RefCell::new(MockAtlasDevice::default()));
+    let mut atlas = GlyphAtlas::new(device.clone());
+    let font = AssetKey {
+        slot: 1,
+        generation: 1,
+    };
+    for id in [1, 2] {
+        atlas
+            .allocate_slot(
+                GlyphKey {
+                    font_key: font,
+                    glyph_id: id,
+                    resolution_band: 32,
+                },
+                500,
+                500,
+                [0.0, 0.0, 500.0, 500.0],
+            )
+            .unwrap();
+    }
+    let pages = device.borrow().created_pages.clone();
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Authored(ipp_core::SurfaceItemId(1)),
+        position: [0.0; 2],
+        scale: [1.0; 2],
+        color: [1.0; 4],
+        opacity: 1.0,
+        clip: None,
+    };
+    let glyphs: Vec<_> = [1, 2, 1]
+        .into_iter()
+        .map(|glyph_id| SurfaceGlyph {
+            glyph_id,
+            position: [0.0; 2],
+            color: None,
+        })
+        .collect();
+    let mut cache = GlyphBatchRenderCache::new(device.clone());
+    let draw = |cache: &mut GlyphBatchRenderCache<_>, stats: &mut RenderStats| {
+        cache
+            .draw_text_run(
+                &1,
+                &atlas,
+                ipp_core::EntityId::from_bits(1),
+                [0.0, 0.0, 10.0, 10.0],
+                &style,
+                font,
+                0.1,
+                1000,
+                &glyphs,
+                32,
+                &[1.0; 16],
+                stats,
+            )
+            .unwrap();
+    };
+    draw(&mut cache, &mut RenderStats::default());
+    assert_eq!(
+        device.borrow().sampled_pages,
+        [pages[0], pages[1], pages[0]]
+    );
+    let mut warm = RenderStats::default();
+    draw(&mut cache, &mut warm);
+    assert_eq!(warm.uploaded_bytes, 0);
+    assert_eq!(warm.gui_batches, 3);
+    drop(cache);
+    assert_eq!(device.borrow().deleted_batches.len(), 3);
+    drop(atlas);
+    assert_eq!(device.borrow().deleted_pages.len(), 2);
+}
+
+#[test]
+fn atlas_demand_retirement_preserves_other_worlds_and_reclaims_pressure() {
+    let device = Rc::new(RefCell::new(MockAtlasDevice::default()));
+    let mut atlas = GlyphAtlas::new(device.clone());
+    let key = |id| GlyphKey {
+        font_key: AssetKey {
+            slot: 1,
+            generation: 1,
+        },
+        glyph_id: id,
+        resolution_band: 32,
+    };
+    let a = ipp_core::WorldId(1);
+    let b = ipp_core::WorldId(2);
+    for id in 0..4 {
+        atlas
+            .allocate_slot(key(id), 500, 500, [0.0, 0.0, 500.0, 500.0])
+            .unwrap();
+    }
+    atlas.live_keys.insert(
+        a,
+        BTreeMap::from([(ipp_core::EntityId::from_bits(1), (0..4).map(key).collect())]),
+    );
+    atlas.prepare_world(b, submitted([key(1)]));
+    assert_eq!(atlas.page_count(), 4);
+    atlas.forget_world(a);
+    assert_eq!(atlas.page_count(), 1);
+    assert!(atlas.get(&key(1)).is_some());
+    atlas
+        .allocate_slot(key(8), 500, 500, [0.0, 0.0, 500.0, 500.0])
+        .unwrap();
+    atlas.forget_world(b);
+    assert_eq!(atlas.resident_bytes(), 0);
+}
+
+#[test]
+fn projected_glyph_quality_accounts_for_perspective_and_rotation() {
+    use super::projected_glyph_height;
+    let mut m = [0.0; 16];
+    m[0] = 1.0;
+    m[5] = 1.0;
+    m[10] = 1.0;
+    m[15] = 4.0;
+    assert_eq!(projected_glyph_height(&m, [0.0; 2], 0.2, (800, 600)), 15.0);
+    m[15] = 2.0;
+    assert_eq!(projected_glyph_height(&m, [0.0; 2], 0.2, (800, 600)), 30.0);
+    m[5] = 0.0;
+    m[4] = 1.0;
+    assert_eq!(projected_glyph_height(&m, [0.0; 2], 0.2, (800, 600)), 40.0);
+    assert_eq!(select_resolution_band(f32::NAN), None);
+}
+
+#[test]
+fn atlas_pressure_reclaims_a_partially_live_page_before_reusing_uvs() {
+    let device = Rc::new(RefCell::new(MockAtlasDevice::default()));
+    let mut atlas = GlyphAtlas::new(device.clone());
+    let key = |id| GlyphKey {
+        font_key: AssetKey {
+            slot: 1,
+            generation: 1,
+        },
+        glyph_id: id,
+        resolution_band: 32,
+    };
+    // Two entries per page. Retain one entry on every page: none is wholly dead.
+    for id in 0..8 {
+        atlas
+            .allocate_slot(key(id), 500, 240, [0.0, 0.0, 500.0, 240.0])
+            .unwrap();
+    }
+    let live: BTreeSet<_> = [0, 2, 4, 6].into_iter().map(key).collect();
+    atlas.prepare_world(ipp_core::WorldId(1), submitted(live.clone()));
+    assert_eq!(atlas.page_count(), 4);
+    let epoch = atlas.epoch;
+    assert!(atlas.allocate_slot(key(9), 500, 240, [0.0; 4]).is_err());
+    atlas.prepare_world(ipp_core::WorldId(1), submitted(live));
+    assert_eq!(atlas.page_count(), 3);
+    assert_ne!(atlas.epoch, epoch);
+    assert!(atlas.get(&key(0)).is_none());
+    assert!(atlas.get(&key(2)).is_some());
+    atlas.allocate_slot(key(9), 500, 240, [0.0; 4]).unwrap();
+    assert_eq!(atlas.page_count(), 4);
+}
+
+#[test]
+fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() {
+    let device = Rc::new(RefCell::new(MockAtlasDevice::default()));
+    let mut atlas = GlyphAtlas::new(device.clone());
+    let font = AssetKey {
+        slot: 1,
+        generation: 1,
+    };
+    atlas
+        .allocate_slot(
+            GlyphKey {
+                font_key: font,
+                glyph_id: 1,
+                resolution_band: 32,
+            },
+            20,
+            20,
+            [0.0, 0.0, 500.0, 500.0],
+        )
+        .unwrap();
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Authored(ipp_core::SurfaceItemId(1)),
+        position: [0.0; 2],
+        scale: [1.0; 2],
+        color: [1.0; 4],
+        opacity: 1.0,
+        clip: None,
+    };
+    let mut glyphs = vec![
+        SurfaceGlyph {
+            glyph_id: 1,
+            position: [0.0; 2],
+            color: None
+        };
+        600
+    ];
+    glyphs.extend(vec![
+        SurfaceGlyph {
+            glyph_id: 1,
+            position: [20.0; 2],
+            color: None
+        };
+        600
+    ]);
+    let mut cache = GlyphBatchRenderCache::new(device.clone());
+    let mut stats = RenderStats::default();
+    cache
+        .draw_text_run(
+            &1,
+            &atlas,
+            ipp_core::EntityId::from_bits(1),
+            [0.0, 0.0, 10.0, 10.0],
+            &style,
+            font,
+            0.1,
+            1000,
+            &glyphs,
+            32,
+            &[1.0; 16],
+            &mut stats,
+        )
+        .unwrap();
+    assert_eq!(stats.gui_batches, 3);
+    assert_eq!(stats.triangles, 1200);
+    assert!(
+        device
+            .borrow()
+            .created_batches
+            .iter()
+            .all(|(_, vertices)| *vertices <= 256 * 6)
+    );
+    assert_eq!(
+        cache.resident_bytes(),
+        600 * 6 * std::mem::size_of::<GlyphVertex>()
+    );
+}
+
+#[test]
+fn culled_surface_keeps_glyph_runs_and_atlas_demand() {
+    let device = Rc::new(RefCell::new(MockAtlasDevice::default()));
+    let mut atlas = GlyphAtlas::new(device.clone());
+    let mut cache = GlyphBatchRenderCache::new(device.clone());
+    let font = AssetKey {
+        slot: 1,
+        generation: 1,
+    };
+    let key = GlyphKey {
+        font_key: font,
+        glyph_id: 1,
+        resolution_band: 32,
+    };
+    atlas
+        .allocate_slot(key, 20, 20, [0.0, 0.0, 500.0, 500.0])
+        .unwrap();
+
+    let world = ipp_core::WorldId(1);
+    let entity = ipp_core::EntityId::from_bits(1);
+    let live = BTreeSet::from([entity]);
+    let style = SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Authored(ipp_core::SurfaceItemId(1)),
+        position: [0.0; 2],
+        scale: [1.0; 2],
+        color: [1.0; 4],
+        opacity: 1.0,
+        clip: None,
+    };
+    let glyphs = [SurfaceGlyph {
+        glyph_id: 1,
+        position: [0.0; 2],
+        color: None,
+    }];
+    let draw = |cache: &mut GlyphBatchRenderCache<_>, atlas: &GlyphAtlas<_>| {
+        let mut stats = RenderStats::default();
+        cache
+            .draw_text_run(
+                &1,
+                atlas,
+                entity,
+                [0.0, 0.0, 10.0, 10.0],
+                &style,
+                font,
+                0.1,
+                1000,
+                &glyphs,
+                32,
+                &[1.0; 16],
+                &mut stats,
+            )
+            .unwrap();
+        stats
+    };
+
+    atlas.prepare_world(world, submitted([key]));
+    draw(&mut cache, &atlas);
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &live,
+    }));
+    let epoch = atlas.epoch;
+
+    // Culled for one frame: demand, entries and retained runs all survive.
+    atlas.prepare_world(
+        world,
+        BTreeMap::from([(entity, GlyphSurfaceDemand::Culled)]),
+    );
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &BTreeSet::new(),
+    }));
+    assert_eq!(atlas.epoch, epoch);
+    assert!(atlas.get(&key).is_some());
+    assert!(device.borrow().deleted_pages.is_empty());
+    assert!(device.borrow().deleted_batches.is_empty());
+
+    atlas.prepare_world(world, submitted([key]));
+    let visible_again = draw(&mut cache, &atlas);
+    assert_eq!(visible_again.uploaded_bytes, 0);
+    assert_eq!(visible_again.gui_rebuilds, 0);
+    assert_eq!(visible_again.gui_allocations, 0);
+    assert_eq!(device.borrow().created_batches.len(), 1);
+
+    // Destroying the Surface releases both its demand and its runs.
+    atlas.prepare_world(world, BTreeMap::new());
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &BTreeSet::new(),
+        submitted: &BTreeSet::new(),
+    }));
+    assert_eq!(atlas.page_count(), 0);
+    assert_eq!(cache.resident_bytes(), 0);
+}
+
+#[test]
+fn failed_population_backs_off_without_invalidating_retained_runs() {
+    let device = Rc::new(RefCell::new(MockAtlasDevice::default()));
+    let mut atlas = GlyphAtlas::new(device.clone());
+    let key = |glyph_id| GlyphKey {
+        font_key: AssetKey {
+            slot: 1,
+            generation: 1,
+        },
+        glyph_id,
+        resolution_band: 32,
+    };
+    let world = ipp_core::WorldId(1);
+    atlas.allocate_slot(key(1), 20, 20, [0.0; 4]).unwrap();
+    atlas.prepare_world(world, submitted([key(1), key(2)]));
+    let epoch = atlas.epoch;
+
+    atlas.allocate_slot(key(2), 20, 20, [0.0; 4]).unwrap();
+    atlas.abandon_population(key(2));
+    assert!(atlas.get(&key(2)).is_none());
+    assert!(atlas.get(&key(1)).is_some());
+    assert_eq!(atlas.epoch, epoch, "populated runs keep their UVs");
+
+    let deferred_publications = |atlas: &mut GlyphAtlas<_>| {
+        let mut publications = 0;
+        while atlas.population_deferred(&key(2)) {
+            atlas.prepare_world(world, submitted([key(1), key(2)]));
+            publications += 1;
+        }
+        publications
+    };
+    assert_eq!(deferred_publications(&mut atlas), POPULATE_RETRY_TICKS);
+
+    // A repeated failure doubles the wait instead of retrying every frame.
+    atlas.abandon_population(key(2));
+    assert_eq!(deferred_publications(&mut atlas), 2 * POPULATE_RETRY_TICKS);
+
+    // Success, or losing demand, clears the back-off state.
+    atlas.abandon_population(key(2));
+    atlas.prepare_world(world, submitted([key(1)]));
+    assert!(!atlas.population_deferred(&key(2)));
+    assert!(atlas.population_backoff.is_empty());
+    assert_eq!(atlas.epoch, epoch);
 }

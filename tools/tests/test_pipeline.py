@@ -84,6 +84,14 @@ class PlanningTests(unittest.TestCase):
         ids = [task.id for task in selected.tasks]
         self.assertIn("build:performance-native", ids)
         self.assertIn("benchmark:scene", ids)
+        retained = plan("benchmark", "browser", "--scene", "retained-gui")
+        retained_ids = [task.id for task in retained.tasks]
+        self.assertIn("benchmark:retained-gui", retained_ids)
+        self.assertIn("build:browser:headless-gui", retained_ids)
+        self.assertIn("build:browser:render-surfaces", retained_ids)
+        self.assertNotIn("build:blender-fixtures", retained_ids)
+        with self.assertRaises(ValueError):
+            plan("benchmark", "native", "--scene", "retained-gui")
         for profile in ("repository", "native", "integration"):
             tasks = catalog("/example/egl")
             regression = select(tasks, regression_ids(tasks, profile))
@@ -188,6 +196,19 @@ class PlanningTests(unittest.TestCase):
                     set(suite_ids(["blender", "particles-blender"])).issubset(ids)
                 )
                 self.assertIn("test:dist/tests/render/particles-blender.test.js", ids)
+
+    def test_retained_gui_participant_changes_select_the_suite(self):
+        for source in (
+            "crates/ipp-render-gl/src/services/render/glyph_atlas.rs",
+            "crates/ipp-core/src/world/systems/surface/mod.rs",
+            "crates/ipp-core/src/services/asset_management/mod.rs",
+            "packages/ipp-client/src/render-worker.ts",
+            "examples/surface-terminal/workload.ts",
+            "tests/browser/environment.ts",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(set(suite_ids(["retained-gui"])).issubset(ids))
 
     def test_source_owner_requires_a_directory_boundary(self):
         with self.assertRaisesRegex(ValueError, "--suite"):

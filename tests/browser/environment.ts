@@ -63,6 +63,8 @@ export interface BrowserHarnessConfiguration {
   readonly evidenceParent?: string;
   readonly deviceScaleFactor?: number;
   readonly hasTouch?: boolean;
+  /** Whether the build presents frames; defaults to render-prefixed build names. */
+  readonly rendering?: boolean;
   readonly logLevel?: "trace" | "debug" | "info" | "warn" | "error" | "off";
   /** Gate actual HTTP responses; aborts when the requesting client disconnects. */
   readonly beforeArtifactResponse?: (
@@ -293,6 +295,7 @@ class LoopbackArtifactServer {
 
 class BrowserEnvironment {
   readonly #configuration: BrowserHarnessConfiguration;
+  readonly #rendering: boolean;
   readonly #evidence: EvidenceRecorder;
   readonly #server: LoopbackArtifactServer;
   readonly #drivers: Pick<HarnessDriver, "close">[] = [];
@@ -309,6 +312,8 @@ class BrowserEnvironment {
     evidence: EvidenceRecorder,
   ) {
     this.#configuration = configuration;
+    this.#rendering =
+      configuration.rendering ?? configuration.build.name.startsWith("render");
     this.#evidence = evidence;
     this.#server = new LoopbackArtifactServer(
       configuration.workspace,
@@ -333,9 +338,7 @@ class BrowserEnvironment {
     this.#configuration.onStartup?.("server-ready", origin);
     checkActive();
     this.#launching = chromium.launch({
-      ...browserLaunchOptions(
-        this.#configuration.build.name.startsWith("render"),
-      ),
+      ...browserLaunchOptions(this.#rendering),
       timeout:
         this.#configuration.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
     });
@@ -383,13 +386,11 @@ class BrowserEnvironment {
     const urls = this.#urls(origin);
     await this.#evidence.record("browser_ready", {
       chromium: browser.version(),
-      launchOptions: browserLaunchOptions(
-        this.#configuration.build.name.startsWith("render"),
-      ),
+      launchOptions: browserLaunchOptions(this.#rendering),
       page: page.url(),
       urls,
       deviceScaleFactor: await page.evaluate(() => window.devicePixelRatio),
-      renderingClaimed: this.#configuration.build.name.startsWith("render"),
+      renderingClaimed: this.#rendering,
     });
     return { page, urls };
   }
@@ -530,7 +531,7 @@ class BrowserEnvironment {
       architecture: process.arch,
       playwright: "1.63.0",
       builds,
-      renderingClaimed: this.#configuration.build.name.startsWith("render"),
+      renderingClaimed: this.#rendering,
     });
   }
 }

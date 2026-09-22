@@ -240,6 +240,102 @@ fn stack_overlays_with_reverse_painter_hits() {
 }
 
 #[test]
+fn stack_margins_place_descendants_and_preserve_clipped_hit_bounds() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let mut tree = TreeBuilder::new();
+    let root = tree.add(
+        None,
+        GuiNodeContent::Container(GuiContainerKind::Stack),
+        sized(4.0, 2.0),
+    );
+    let offset = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeStyle {
+            margin: Some([0.3, -1.2, -0.3, 1.2]),
+            ..sized(1.0, 0.4)
+        },
+    );
+    let child = tree.add(
+        Some(offset),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        sized(1.0, 0.4),
+    );
+    let clipped = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            margin: Some([0.0, 0.25, 0.0, -0.25]),
+            ..sized(0.5, 0.5)
+        },
+    );
+    let inset = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            margin: Some([1.0, 0.5, 0.5, 0.5]),
+            enabled: false,
+            ..sized(4.0, 2.0)
+        },
+    );
+    let root_tree = tree.build();
+    let mut cache = GuiLayoutCache::default();
+    let view = cache.evaluate(entity(), &request(&root_tree, 1), &resolver);
+
+    assert_rect(node_by_id(view, offset).rect, [1.2, 0.3, 1.0, 0.4]);
+    assert_rect(node_by_id(view, child).rect, [1.2, 0.3, 1.0, 0.4]);
+    assert_rect(node_by_id(view, clipped).rect, [-0.25, 0.0, 0.5, 0.5]);
+    assert_rect(node_by_id(view, inset).rect, [0.5, 1.0, 3.0, 0.5]);
+    assert_eq!(view.hit_test([1.5, 0.5]).unwrap().node, child);
+    assert_eq!(view.hit_test([0.1, 0.1]).unwrap().node, clipped);
+    assert!(view.hit_test([-0.1, 0.1]).is_none());
+}
+
+#[test]
+fn stack_aligns_centre_and_end_children_within_their_margin_boxes() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let mut tree = TreeBuilder::new();
+    let root = tree.add(
+        None,
+        GuiNodeContent::Container(GuiContainerKind::Stack),
+        sized(4.0, 2.0),
+    );
+    let centred = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            margin: Some([0.2, 0.3, 0.1, 0.5]),
+            align_x: Some(0.0),
+            align_y: Some(1.0),
+            ..sized(1.0, 0.4)
+        },
+    );
+    let overhanging = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            margin: Some([0.0, -0.2, 0.0, 0.0]),
+            align_x: Some(1.0),
+            ..sized(1.0, 0.4)
+        },
+    );
+    let root_tree = tree.build();
+    let mut cache = GuiLayoutCache::default();
+    let view = cache.evaluate(entity(), &request(&root_tree, 1), &resolver);
+
+    // The 1.8 x 0.7 margin box centres horizontally and ends vertically:
+    // x = 0.5 + (4.0 - 1.8) / 2, y = 0.2 + (2.0 - 0.7).
+    assert_rect(node_by_id(view, centred).rect, [1.6, 1.5, 1.0, 0.4]);
+
+    // A negative end margin shrinks the margin box to 0.8, so end alignment
+    // places the node 0.2 past the Stack's right edge.
+    assert_rect(node_by_id(view, overhanging).rect, [3.2, 0.0, 1.0, 0.4]);
+    assert_rect(node_by_id(view, root).rect, [0.0, 0.0, 4.0, 2.0]);
+}
+
+#[test]
 fn text_leaf_measures_and_paints_glyphs() {
     let font = test_font();
     let resolver = TestResolver::with_font(&font);

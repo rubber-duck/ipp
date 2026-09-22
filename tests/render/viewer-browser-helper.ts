@@ -70,7 +70,7 @@ function selectGuiNode(
   return matches[0]!;
 }
 
-async function galleryGuiContext(flush = true) {
+async function galleryGuiContext(flush = true, completeInspection = false) {
   const handle = requireCanvas();
   if (flush) await handle.flush();
   const client = handle.client as GuiWorldClient & SurfaceWorldClient;
@@ -93,13 +93,40 @@ async function galleryGuiContext(flush = true) {
     maxDepth: 32,
     limit: 256,
   });
+  if (completeInspection) {
+    // Decorative strips can exceed one inspection page. Fetch incomplete
+    // subtrees through the public bounded query, retaining every icon and shape.
+    const nodes = new Map(detailed.nodes.map((node) => [node.id, node]));
+    const queried = new Set<number>();
+    for (let page = 0; ; page++) {
+      const incomplete = [...nodes.values()].find((node) =>
+        node.children.some((id) => !nodes.has(id)),
+      );
+      if (!incomplete) break;
+      if (page >= 16) throw new Error("GUI inspection did not converge");
+      const nodeId = queried.has(incomplete.id)
+        ? incomplete.children.find((id) => !nodes.has(id))!
+        : incomplete.id;
+      queried.add(nodeId);
+      const subtree = await client.inspectGui({
+        entity: entity.id,
+        nodeId,
+        maxDepth: 32,
+        limit: 256,
+      });
+      if (subtree.rootIncarnation !== detailed.rootIncarnation)
+        throw new Error("GUI root changed during inspection");
+      for (const node of subtree.nodes) nodes.set(node.id, node);
+    }
+    detailed.nodes = [...nodes.values()];
+  }
   return { handle, client, inspection, entity, surface, semantic, detailed };
 }
 
 /** Public GUI observations plus proof that GuiRoot is the sole Surface producer. */
 export async function galleryGuiState(flush = true) {
   const { client, entity, surface, semantic, detailed } =
-    await galleryGuiContext(flush);
+    await galleryGuiContext(flush, true);
   const bytes = surface.fields.items;
   if (!(bytes instanceof Uint8Array))
     throw new Error("GUI demo Surface items are not encoded bytes");
@@ -157,19 +184,26 @@ export async function galleryGuiPoint(
 
 /** Read one evaluated named skin-part property for a semantic GUI node. */
 export async function galleryGuiPartValue(
-  selector: GalleryGuiSelector,
+  entityId: bigint,
+  nodeId: number,
   part: string,
   property: GuiPartProperty,
 ) {
-  const { client, entity, semantic } = await galleryGuiContext();
-  const node = selectGuiNode(semantic, selector);
-  const root = entity.effective.find(
+  // Timed hover probes read one entity, without traversing unrelated resources
+  // or decorative nodes after the input burst has already begun.
+  const client = requireCanvas().client;
+  const inspection = await client.inspectPage({
+    collection: "entities",
+    target: entityId,
+    limit: 1,
+  });
+  const root = inspection.entities[0]?.effective.find(
     ({ component }) => component === client.components.GuiRoot!.id,
   );
   if (!root) throw new Error("Missing effective GUI demo GuiRoot");
-  const value = root.properties?.[guiPartProperty(node.id, part, property)];
+  const value = root.properties?.[guiPartProperty(nodeId, part, property)];
   if (!value)
-    throw new Error(`Missing ${node.id}:${part}:${property} GUI part value`);
+    throw new Error(`Missing ${nodeId}:${part}:${property} GUI part value`);
   return value;
 }
 
@@ -311,6 +345,59 @@ export async function galleryGuiAction(
     maxDepth: 32,
     limit: 256,
   });
+}
+
+/** Observe the production input path during sustained DOM input, without gating it. */
+export function observeGalleryGuiInput() {
+  const client = requireCanvas().client as GuiWorldClient;
+  const submit = client.submitGuiInput;
+  const pending = new Set<Promise<unknown>>();
+  const observation = {
+    sent: 0,
+    completed: 0,
+    peakPending: 0,
+    errors: [] as string[],
+  };
+  client.submitGuiInput = function (input) {
+    observation.sent++;
+    const result = submit.call(this, input);
+    pending.add(result);
+    observation.peakPending = Math.max(observation.peakPending, pending.size);
+    void result.then(
+      () => {
+        observation.completed++;
+        pending.delete(result);
+      },
+      (error: unknown) => {
+        observation.errors.push(
+          error instanceof Error ? error.message : String(error),
+        );
+        pending.delete(result);
+      },
+    );
+    return result;
+  };
+  finishGuiInputObservation = async () => {
+    client.submitGuiInput = submit;
+    await Promise.allSettled([...pending]);
+    finishGuiInputObservation = undefined;
+    return observation;
+  };
+}
+
+let finishGuiInputObservation:
+  | (() => Promise<{
+      sent: number;
+      completed: number;
+      peakPending: number;
+      errors: string[];
+    }>)
+  | undefined;
+
+export async function finishGalleryGuiInputObservation() {
+  if (!finishGuiInputObservation)
+    throw new Error("GUI input observation was not started");
+  return finishGuiInputObservation();
 }
 
 /** Execute the gallery's actual generated camera query path for geometry assertions. */

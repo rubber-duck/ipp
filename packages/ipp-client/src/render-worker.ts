@@ -24,6 +24,15 @@ interface RenderHostExports {
   ipp_render_draw_calls(): number;
   ipp_render_triangles(): number;
   ipp_render_uploaded_bytes(): number;
+  ipp_render_gui_batches?(): number;
+  ipp_render_gui_rebuilds?(): number;
+  ipp_render_gui_allocations?(): number;
+  ipp_render_gui_resident_bytes?(): number;
+  ipp_render_glyph_misses?(): number;
+  ipp_render_glyph_populates?(): number;
+  ipp_render_glyph_population_failures?(): number;
+  ipp_render_glyph_pages?(): number;
+  ipp_render_glyph_resident_bytes?(): number;
   ipp_render_failed_draw_calls(): number;
   ipp_render_invalid_camera(): number;
   ipp_render_unshadowed_lights(): number;
@@ -216,6 +225,16 @@ export class RenderWorkerService {
           uploadedBytes: runtime.ipp_render_uploaded_bytes(),
           totalUploadedBytes: this.totalUploadedBytes,
           failedDrawCalls: runtime.ipp_render_failed_draw_calls(),
+          guiBatches: runtime.ipp_render_gui_batches?.() ?? 0,
+          guiRebuilds: runtime.ipp_render_gui_rebuilds?.() ?? 0,
+          guiAllocations: runtime.ipp_render_gui_allocations?.() ?? 0,
+          guiResidentBytes: runtime.ipp_render_gui_resident_bytes?.() ?? 0,
+          glyphMisses: runtime.ipp_render_glyph_misses?.() ?? 0,
+          glyphPopulates: runtime.ipp_render_glyph_populates?.() ?? 0,
+          glyphPopulationFailures:
+            runtime.ipp_render_glyph_population_failures?.() ?? 0,
+          glyphPages: runtime.ipp_render_glyph_pages?.() ?? 0,
+          glyphResidentBytes: runtime.ipp_render_glyph_resident_bytes?.() ?? 0,
           invalidCamera: runtime.ipp_render_invalid_camera() !== 0,
           unshadowedLights: runtime.ipp_render_unshadowed_lights(),
           ingress: { ...this.ingress },

@@ -136,7 +136,14 @@ export interface GuiStyleProps {
   readonly maxHeight?: number | undefined;
   /** Content padding [top, right, bottom, left] in local metres. */
   readonly padding?: readonly [number, number, number, number] | undefined;
-  /** Outer margin [top, right, bottom, left] in local metres. */
+  /** Outer margin [top, right, bottom, left] in local metres, interpreted by
+   * the parent container. Row and Column reserve main-axis margins; on the
+   * cross axis only the leading margin offsets the child, without adding
+   * to the container's size. Stack reserves all four edges, aligns the
+   * margin box and fits its size to it. Padding, Align, SizedBox and
+   * ScrollView ignore child margins; a root node is only offset by its top
+   * and left margins. Any finite value is accepted: negative margins move a
+   * child outward or overlap siblings, and ancestor clips still apply. */
   readonly margin?: readonly [number, number, number, number] | undefined;
   readonly flex?: number | undefined;
   readonly alignX?: number | undefined;

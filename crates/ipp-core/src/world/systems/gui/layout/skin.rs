@@ -264,6 +264,10 @@ pub struct GuiPartStyle {
     /// Optional straight linear RGBA border color.
     pub border_color: Option<[f32; 4]>,
     /// Optional fill mode: 0.0 = solid, 1.0 = linear gradient, 2.0 = radial gradient.
+    ///
+    /// Solid paints the colour lane. Like every lane, the mode resolves
+    /// independently through the candidate chain, so a state that paints its
+    /// own colour over an inherited gradient declares mode 0 explicitly.
     pub fill_mode: Option<f32>,
     /// Optional gradient start point (or radial center) in local shape metres.
     pub gradient_start: Option<[f32; 2]>,
@@ -558,15 +562,19 @@ pub struct GuiSkinnedAppearance {
     pub scale: Option<[f32; 2]>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
-    /// Focus-ring color when this is the focus-ring part.
-    pub focus_border_color: Option<[f32; 4]>,
     /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
     pub corner_radius: Option<[f32; 2]>,
     /// Optional border width in local Surface metres.
     pub border_width: Option<f32>,
     /// Optional straight linear RGBA border color.
     pub border_color: Option<[f32; 4]>,
-    /// Optional shape fill material.
+    /// Optional linear or radial gradient fill.
+    ///
+    /// Solid fills are not duplicated here: a box without a gradient paints
+    /// the `color` lane, and a focus ring without a border colour strokes it.
+    /// Both therefore observe the colour AnimationSystem samples during a
+    /// transition. Gradient stops are separate, unanimated material lanes; a
+    /// missing stop takes the destination colour when the gradient resolves.
     pub fill: Option<GuiShapeFill>,
     /// Optional local glow.
     pub glow: Option<GuiShapeGlow>,
@@ -614,7 +622,8 @@ pub fn resolve_appearance(
                 end_color,
             })
         }
-        _ => lanes.color.map(GuiShapeFill::Solid),
+        // Solid mode paints the colour lane when the primitive is styled.
+        _ => None,
     };
 
     let glow = if lanes.glow_intensity.is_some_and(|i| i > 0.0)
@@ -638,9 +647,6 @@ pub fn resolve_appearance(
         opacity: lanes.opacity,
         scale: lanes.scale,
         asset: lanes.asset,
-        focus_border_color: (base_part == GuiPrimitivePart::FocusRing.as_str())
-            .then_some(lanes.color)
-            .flatten(),
         corner_radius: lanes.corner_radius,
         border_width: lanes.border_width,
         border_color: lanes.border_color,
@@ -754,6 +760,9 @@ pub fn resolve_state_part_motion(
 }
 
 /// Replace destination numeric lanes with effective animated base lanes.
+///
+/// Solid fills and focus-ring strokes read the colour lane when applied, so
+/// replacing `color` here is sufficient for them to paint the sampled value.
 pub(crate) fn appearance_with_effective_numeric(
     mut appearance: GuiSkinnedAppearance,
     effective_root: &GuiRoot,
@@ -806,6 +815,8 @@ pub fn apply_appearance_to_primitive(
         {
             *border_color = c;
         }
+        // A gradient replaces the fill; otherwise the colour lane is the
+        // solid fill, including its sampled value mid-transition.
         if let Some(f) = appearance.fill.filter(|f| f.is_valid()) {
             *fill = f;
         } else if let Some(c) = appearance
@@ -1455,7 +1466,7 @@ fn focus_ring_primitive(
         )
     })?;
     let color = appearance
-        .focus_border_color
+        .border_color
         .or(appearance.color)
         .unwrap_or(FOCUS_BORDER_COLOR);
     Some(SurfaceRenderPrimitive::Box {

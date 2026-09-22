@@ -576,7 +576,7 @@ def build_floor():
 
 
 def rounded_profile(half_size, corner_span):
-    """Sample the GUI SVG's quadratic corners, preserving its straight sections."""
+    """Sample quadratic corners of the rounded panel outline, keeping straight edges."""
     width, height = half_size
     rx, ry = corner_span
     corners = [

@@ -1,4 +1,4 @@
-"""Build the world gallery's GUI demo vector assets."""
+"""Build curve waveform assets and index the GUI demo projector resources."""
 
 from __future__ import annotations
 
@@ -6,30 +6,23 @@ import argparse
 import json
 from pathlib import Path
 
+
 try:
     from tools.convert_surface_asset import convert_svg
-except ModuleNotFoundError:  # Direct execution from the tools directory.
+except ModuleNotFoundError:
     from convert_surface_asset import convert_svg
 
 
 def build_gallery_gui_assets(output_directory: Path) -> None:
-    example_directory = (
-        Path(__file__).resolve().parents[1]
-        / "examples"
-        / "world-gallery"
-        / "worlds"
-        / "gui"
-    )
-    source_directory = example_directory / "authoring" / "svg"
-    sources = sorted(source_directory.glob("*.svg"), key=lambda path: path.name)
-    if not sources:
-        raise FileNotFoundError(f"no SVG assets found in {source_directory}")
     output_directory.mkdir(parents=True, exist_ok=True)
-    drawings: dict[str, str] = {}
-    for source in sources:
-        name = source.stem
+    source_directory = (
+        Path(__file__).resolve().parent.parent
+        / "examples/world-gallery/worlds/gui/authoring/svg"
+    )
+    drawings = {}
+    for name in ("waveform-grid", "waveform", "waveform-pulse"):
         drawing = f"{name}.ippd"
-        convert_svg(source, output_directory / drawing, 0.001)
+        convert_svg(source_directory / f"{name}.svg", output_directory / drawing, 0.001)
         drawings[name] = drawing
     projector_output = output_directory / "projector"
     projector: dict[str, str] = {}

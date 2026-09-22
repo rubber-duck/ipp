@@ -615,5 +615,21 @@
       "tests/integration/",
       "tests/browser/"
     ]
+  },
+  "retained-gui": {
+    "description": "Analytic and retained terminal frames, warm uploads, streaming, glyph reuse and recovery",
+    "files": [
+      "dist/tests/render/retained-gui.test.js"
+    ],
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-render-gl/src/services/render/",
+      "crates/ipp-core/src/services/asset_management/",
+      "packages/ipp-client/src/",
+      "examples/surface-terminal/",
+      "assets/fonts/",
+      "licences/fonts/",
+      "tests/browser/"
+    ]
   }
 }

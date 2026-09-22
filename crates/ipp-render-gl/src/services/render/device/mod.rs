@@ -427,7 +427,10 @@ pub trait RenderDevice: 'static {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
 
-    /// Replace complete batch contents via GPU storage replacement (orphaning).
+    /// Replace complete batch contents through GPU storage replacement.
+    ///
+    /// Queued draws keep the previous storage, though allocation may still stall.
+    /// On failure the contents are unknown and callers release the batch.
     #[cfg(feature = "gui")]
     fn update_gui_batch(
         &mut self,
@@ -464,7 +467,10 @@ pub trait RenderDevice: 'static {
         ))
     }
 
-    /// Replace complete batch contents via GPU storage replacement (orphaning).
+    /// Replace complete batch contents through GPU storage replacement.
+    ///
+    /// Queued draws keep the previous storage, though allocation may still stall.
+    /// On failure the contents are unknown and callers release the batch.
     #[cfg(feature = "gui")]
     fn update_glyph_batch(
         &mut self,
@@ -523,7 +529,7 @@ pub trait RenderDevice: 'static {
 
     /// Borrow the atlas page's underlying color texture for sampling.
     #[cfg(feature = "gui")]
-    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture;
+    fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture;
 
     /// Replace the transient instance stream; empty restores ordinary draws.
     #[cfg(feature = "particles")]

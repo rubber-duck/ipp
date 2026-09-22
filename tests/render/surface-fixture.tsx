@@ -1,4 +1,14 @@
-import { createRoot, type ReactWorldRoot } from "@ipp/react";
+import {
+  createRoot,
+  Entity,
+  Surface,
+  Transform,
+  type ReactWorldRoot,
+} from "@ipp/react";
+import {
+  terminalWorkloadItems,
+  type TerminalWorkload,
+} from "../../examples/surface-terminal/workload.js";
 import {
   clientAssetSource,
   entityLocalToSurfaceContent,
@@ -38,6 +48,7 @@ let assets: TerminalAssets;
 let terminal: bigint;
 let camera: bigint;
 let metrics: { units: number; ascender: number; line: number };
+let workloadGlyphs: number[];
 const frames = new Map<string, FrameCapture>();
 const references = new Map<string, HTMLCanvasElement>();
 const failures: unknown[] = [];
@@ -105,6 +116,7 @@ export async function initialize(config: {
   const glyphs = await (
     await fetch("/target/surface-assets/glyphs.json")
   ).json();
+  workloadGlyphs = Object.values(glyphs);
   const lifecycle = await exerciseSurfaceLifecycle(client, assets, glyphs.A);
   successfulBatch(
     await client.batch([
@@ -167,6 +179,7 @@ export async function capture(label: string) {
     height: frame.height,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
+    backend: frame.backend,
     textPixels,
     background: sample(frame.width >> 1, Math.round(frame.height * 0.875)),
     corner: sample(0, 0),
@@ -175,6 +188,43 @@ export async function capture(label: string) {
       Math.round(frame.height * 0.35),
     ),
   };
+}
+
+/** The same application fixture runs against analytic and retained builds. */
+export async function workload(
+  config: Omit<TerminalWorkload, "glyphs"> & {
+    panels?: number;
+    angle?: number;
+    width?: number;
+    height?: number;
+  },
+) {
+  client.presentation!.resize(config.width ?? 640, config.height ?? 480);
+  await root.render(
+    Array.from({ length: config.panels ?? 1 }, (_, index) => (
+      <Entity key={index} id={`workload-${index}`}>
+        <Transform
+          bound={false}
+          x={index * 0.1}
+          z={-index * 0.02}
+          ry={config.angle ?? 0}
+        />
+        <Surface
+          bound={false}
+          width={3.8}
+          height={2.4}
+          items={terminalWorkloadItems(assets, {
+            ...config,
+            glyphs: workloadGlyphs,
+          })}
+        />
+      </Entity>
+    )),
+  );
+}
+
+export async function clearWorkload() {
+  await root.render(null);
 }
 
 export async function referenceText(label: string) {

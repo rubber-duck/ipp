@@ -66,6 +66,7 @@ pub struct RenderStats {
     pub triangles: u32,
     /// Vertex/index/pixel uploads accounted by this submission, including pending
     /// shared service work once. Later worlds do not recount the same allocation.
+    /// Analytic Surface glyph instance streams count on every draw that uploads them.
     pub uploaded_bytes: u32,
     /// Instances skipped because their mesh could not acquire GPU residency.
     /// CPU geometry remains usable; resource reload permits another upload.
@@ -92,7 +93,8 @@ pub struct RenderStats {
     /// Number of GPU batch buffers allocated or replaced during this frame.
     #[cfg(feature = "gui")]
     pub gui_allocations: u32,
-    /// Total resident bytes occupied by retained GUI batch GPU buffers.
+    /// Resident bytes of retained GUI box and glyph batch GPU buffers across every
+    /// World presented through this context.
     #[cfg(feature = "gui")]
     pub gui_resident_bytes: u32,
     /// Glyph atlas cache misses during this submission.
@@ -101,10 +103,14 @@ pub struct RenderStats {
     /// Glyph atlas entries rasterized or populated during this submission.
     #[cfg(feature = "gui")]
     pub glyph_populates: u32,
-    /// Number of resident glyph atlas pages.
+    /// Recoverable glyph atlas allocation or rasterization failures during this
+    /// submission. Each glyph backs off and its text uses analytic glyphs meanwhile.
+    #[cfg(feature = "gui")]
+    pub glyph_population_failures: u32,
+    /// Number of resident glyph atlas pages shared by every World on this context.
     #[cfg(feature = "gui")]
     pub glyph_pages: u32,
-    /// Total resident bytes occupied by glyph atlas page textures.
+    /// Total resident bytes occupied by the shared glyph atlas page textures.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
 }
@@ -149,13 +155,16 @@ pub struct RenderService<D: RenderDevice> {
     #[cfg(feature = "gui")]
     surface_box_program: Option<D::Program>,
     #[cfg(feature = "gui")]
-    pub(super) gui_batch_cache: super::gui_batch::GuiBatchRenderCache<D>,
+    gui_batch_cache: BTreeMap<ipp_core::WorldId, super::gui_batch::GuiBatchRenderCache<D>>,
     #[cfg(feature = "gui")]
     surface_text_program: Option<D::Program>,
     #[cfg(feature = "gui")]
     pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
     #[cfg(feature = "gui")]
-    pub(super) glyph_batch_cache: super::glyph_atlas::GlyphBatchRenderCache<D>,
+    glyph_batch_cache: BTreeMap<ipp_core::WorldId, super::glyph_atlas::GlyphBatchRenderCache<D>>,
+    /// Surfaces the current frame submitted; `None` until submission reaches them.
+    #[cfg(feature = "gui")]
+    submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

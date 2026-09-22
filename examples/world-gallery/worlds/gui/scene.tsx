@@ -36,7 +36,6 @@ import GLOW_SHADER from "./projector-glow.glsl";
 import METAL_SHADER from "./projector-metal.glsl";
 
 import {
-  dashboardResourceSources,
   PALETTES,
   ProjectorDashboard,
   SURFACE_WIDTH,
@@ -47,18 +46,18 @@ import {
   BoundWaveformAnimations,
   useWaveformNode,
   waveformClips,
+  waveformResourceSources,
   type WaveformMotionAssets,
 } from "./waveform.js";
 
 const FONT_URL = "/target/font-assets/shure-tech-mono.ippf";
-const ASSET_ROOT = "/target/gallery-gui-assets/";
 const INITIAL_GAIN = 0.64;
 const INITIAL_CALLSIGN = "VESPER-7";
 const INITIAL_AUTOSCAN = true;
 const MAX_EVENTS = 14;
 const STAGING_X = 1_000;
 
-export type GuiDemoSkin = "aurora" | "ember";
+export type GuiDemoSkin = "aurora" | "ember" | "neon";
 
 const INITIAL_EVENTS = [
   "06 // DEEP ARRAY LINK STABLE",
@@ -72,6 +71,7 @@ const INITIAL_EVENTS = [
 interface MotionAssets extends ProjectorMotionAssets, WaveformMotionAssets {
   readonly aurora: ClientAssetSource;
   readonly ember: ClientAssetSource;
+  readonly neon: ClientAssetSource;
 }
 
 interface MotionOwnership {
@@ -95,7 +95,6 @@ export interface GuiSceneState {
   readonly events: readonly string[];
   readonly motions?: MotionAssets;
   readonly beamSection?: ProjectorBeamSection;
-  readonly mark: ClientAssetSource;
   readonly font: ClientAssetSource;
   readonly onCommit: () => void;
   readonly pulse: () => void;
@@ -225,7 +224,7 @@ async function createMotionAssets(
     throw new Error("The gallery GUI profile does not expose CustomMaterial");
   const created: ClientAssetSource[] = [];
   try {
-    for (const name of ["aurora", "ember"] as const) {
+    for (const name of ["aurora", "ember", "neon"] as const) {
       const bytes = client.encodeAnimationClip(
         skinMotion(component, PALETTES[name]),
       );
@@ -261,9 +260,10 @@ async function createMotionAssets(
     return {
       aurora: created[0]!,
       ember: created[1]!,
-      scan: created[2]!,
-      wavePulse: created[3]!,
-      dust: created[4]!,
+      neon: created[2]!,
+      scan: created[3]!,
+      wavePulse: created[4]!,
+      dust: created[5]!,
       guiComponent: component,
       materialComponent: material,
     };
@@ -284,6 +284,7 @@ async function releaseMotionOwnership(
     [
       ownership.assets.aurora,
       ownership.assets.ember,
+      ownership.assets.neon,
       ownership.assets.scan,
       ownership.assets.wavePulse,
       ownership.assets.dust,
@@ -519,10 +520,10 @@ export function useGuiScene(
       client,
       [
         absoluteAsset(17, FONT_URL),
-        absoluteAsset(18, `${ASSET_ROOT}gui-mark.ippd`),
-        ...dashboardResourceSources(),
+        ...waveformResourceSources(),
         motions.aurora,
         motions.ember,
+        motions.neon,
         motions.scan,
         motions.wavePulse,
         motions.dust,
@@ -681,7 +682,6 @@ export function useGuiScene(
     events,
     ...(motions ? { motions } : {}),
     ...(beamSection ? { beamSection } : {}),
-    mark: absoluteAsset(18, `${ASSET_ROOT}gui-mark.ippd`),
     font: absoluteAsset(17, FONT_URL),
     onCommit,
     pulse,

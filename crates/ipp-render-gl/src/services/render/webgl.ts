@@ -6,6 +6,7 @@ declare const IPP_SKELETAL_ANIMATION: boolean;
 declare const IPP_MESH_POSES: boolean;
 declare const IPP_PARTICLES: boolean;
 declare const IPP_SURFACES: boolean;
+declare const IPP_GUI: boolean;
 
 /** Host bindings for the Rust GL device. No scene data or draw preparation lives here. */
 export interface WebGlHostExports {
@@ -179,6 +180,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     : undefined;
   let glyphAtlasTarget:
     | {
+        width: number;
+        height: number;
         framebuffer: WebGLFramebuffer | null;
         readFramebuffer: WebGLFramebuffer | null;
         viewport: Int32Array;
@@ -1256,8 +1259,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               );
               gl.uniform4f(
                 parameterLocation(program, "u_viewport"),
-                gl.drawingBufferWidth,
-                gl.drawingBufferHeight,
+                IPP_GUI && glyphAtlasTarget
+                  ? glyphAtlasTarget.width
+                  : gl.drawingBufferWidth,
+                IPP_GUI && glyphAtlasTarget
+                  ? glyphAtlasTarget.height
+                  : gl.drawingBufferHeight,
                 0,
                 0,
               );
@@ -1371,8 +1378,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               );
               gl.uniform4f(
                 parameterLocation(program, "u_viewport"),
-                gl.drawingBufferWidth,
-                gl.drawingBufferHeight,
+                IPP_GUI && glyphAtlasTarget
+                  ? glyphAtlasTarget.width
+                  : gl.drawingBufferWidth,
+                IPP_GUI && glyphAtlasTarget
+                  ? glyphAtlasTarget.height
+                  : gl.drawingBufferHeight,
                 0,
                 0,
               );
@@ -1448,6 +1459,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               return 1;
             });
           },
+        }
+      : {}),
+    // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
+    ...(IPP_GUI
+      ? {
           draw_surface_box(
             programHandle: number,
             mvpPointer: number,
@@ -1504,10 +1520,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               const color = floats(colorPointer >>> 0, 4);
               const border = floats(borderPointer >>> 0, 4);
               const shape = floats(shapePointer >>> 0, 4);
-              const x0 = placement[0];
-              const y0 = placement[1];
-              const x1 = placement[0] + placement[2];
-              const y1 = placement[1] + placement[3];
+              const x0 =
+                Math.min(placement[0]!, placement[0]! + placement[2]!) - 0.002;
+              const y0 =
+                Math.min(placement[1]!, placement[1]! + placement[3]!) - 0.002;
+              const x1 =
+                Math.max(placement[0]!, placement[0]! + placement[2]!) + 0.002;
+              const y1 =
+                Math.max(placement[1]!, placement[1]! + placement[3]!) + 0.002;
               const quadVertices = new Float32Array(204);
               const corners = [
                 [x0, y0],
@@ -1519,28 +1539,28 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               ];
               for (let i = 0; i < 6; i++) {
                 const off = i * 34;
-                quadVertices[off] = corners[i][0];
-                quadVertices[off + 1] = corners[i][1];
-                quadVertices[off + 2] = placement[0];
-                quadVertices[off + 3] = placement[1];
-                quadVertices[off + 4] = placement[2];
-                quadVertices[off + 5] = placement[3];
-                quadVertices[off + 6] = shape[0];
-                quadVertices[off + 7] = shape[1];
-                quadVertices[off + 8] = shape[2];
-                quadVertices[off + 9] = shape[3];
-                quadVertices[off + 10] = color[0];
-                quadVertices[off + 11] = color[1];
-                quadVertices[off + 12] = color[2];
-                quadVertices[off + 13] = color[3];
-                quadVertices[off + 14] = color[0];
-                quadVertices[off + 15] = color[1];
-                quadVertices[off + 16] = color[2];
-                quadVertices[off + 17] = color[3];
-                quadVertices[off + 18] = border[0];
-                quadVertices[off + 19] = border[1];
-                quadVertices[off + 20] = border[2];
-                quadVertices[off + 21] = border[3];
+                quadVertices[off] = corners[i]![0]!;
+                quadVertices[off + 1] = corners[i]![1]!;
+                quadVertices[off + 2] = placement[0]!;
+                quadVertices[off + 3] = placement[1]!;
+                quadVertices[off + 4] = placement[2]!;
+                quadVertices[off + 5] = placement[3]!;
+                quadVertices[off + 6] = shape[0]!;
+                quadVertices[off + 7] = shape[1]!;
+                quadVertices[off + 8] = shape[2]!;
+                quadVertices[off + 9] = shape[3]!;
+                quadVertices[off + 10] = color[0]!;
+                quadVertices[off + 11] = color[1]!;
+                quadVertices[off + 12] = color[2]!;
+                quadVertices[off + 13] = color[3]!;
+                quadVertices[off + 14] = color[0]!;
+                quadVertices[off + 15] = color[1]!;
+                quadVertices[off + 16] = color[2]!;
+                quadVertices[off + 17] = color[3]!;
+                quadVertices[off + 18] = border[0]!;
+                quadVertices[off + 19] = border[1]!;
+                quadVertices[off + 20] = border[2]!;
+                quadVertices[off + 21] = border[3]!;
                 // quadVertices[off + 22..off + 25] are gradient_coords (zeros)
                 // quadVertices[off + 26..off + 29] are material_params:
                 // fill_type = 0.0, glow_intensity = 0.0, glow_radius = 0.0, glow_falloff = 1.0
@@ -1552,6 +1572,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.bindBuffer(gl.ARRAY_BUFFER, null);
               useProgram(program.object);
               matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              gl.uniform4f(
+                parameterLocation(program, "u_viewport"),
+                gl.drawingBufferWidth,
+                gl.drawingBufferHeight,
+                0,
+                0,
+              );
               vector4Uniform(
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
@@ -1602,7 +1629,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               bindVertexArray(null);
               gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-              const handle = nextHandle();
+              try {
+                check();
+              } catch (error) {
+                gl.deleteVertexArray(vao);
+                gl.deleteBuffer(vbo);
+                throw error;
+              }
+              const handle = id();
               guiBatches!.set(handle, {
                 vao,
                 vbo,
@@ -1625,14 +1659,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 vertexPointer >>> 0,
                 (vertexCount >>> 0) * 34,
               );
-              // Orphaning permits driver storage retirement but does not guarantee
-              // stall-free allocation. Replacing with NULL first signals the driver
-              // to unbind the previous storage block from pending GPU reads, then
-              // reallocating uploads the complete batch contents without partial overwrites.
+              // Replace the complete store; GL preserves any previous storage
+              // needed by queued draws. The driver may still stall to allocate.
               gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
               gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
               gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              check();
               batch.count = vertexCount >>> 0;
               batch.bytes = byteLength;
               return 1;
@@ -1671,6 +1703,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               }
               useProgram(program.object);
               matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              gl.uniform4f(
+                parameterLocation(program, "u_viewport"),
+                gl.drawingBufferWidth,
+                gl.drawingBufferHeight,
+                0,
+                0,
+              );
               vector4Uniform(
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
@@ -1712,7 +1751,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               bindVertexArray(null);
               gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-              const handle = nextHandle();
+              try {
+                check();
+              } catch (error) {
+                gl.deleteVertexArray(vao);
+                gl.deleteBuffer(vbo);
+                throw error;
+              }
+              const handle = id();
               glyphBatches!.set(handle, {
                 vao,
                 vbo,
@@ -1736,9 +1782,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 (vertexCount >>> 0) * 8,
               );
               gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
               gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
               gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              check();
               batch.count = vertexCount >>> 0;
               batch.bytes = byteLength;
               return 1;
@@ -1859,19 +1905,23 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevDraw);
               gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevRead);
               gl.viewport(
-                prevViewport[0],
-                prevViewport[1],
-                prevViewport[2],
-                prevViewport[3],
+                prevViewport[0]!,
+                prevViewport[1]!,
+                prevViewport[2]!,
+                prevViewport[3]!,
               );
-              if (!complete) {
+              try {
+                if (!complete)
+                  throw new Error("Glyph atlas framebuffer incomplete");
+                check();
+              } catch (error) {
                 gl.deleteTexture(texture);
                 gl.deleteFramebuffer(framebuffer);
-                throw new Error("Glyph atlas framebuffer incomplete");
+                throw error;
               }
-              const textureHandle = nextHandle();
+              const textureHandle = id();
               textures.set(textureHandle, texture);
-              const pageHandle = nextHandle();
+              const pageHandle = id();
               glyphAtlasPages!.set(pageHandle, {
                 texture: textureHandle,
                 framebuffer,
@@ -1898,6 +1948,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               const page = glyphAtlasPages!.get(pageHandle >>> 0);
               if (!page) throw new Error("Stale glyph atlas page handle");
               glyphAtlasTarget = {
+                width: page.width,
+                height: page.height,
                 framebuffer: gl.getParameter(
                   gl.DRAW_FRAMEBUFFER_BINDING,
                 ) as WebGLFramebuffer | null,
@@ -1923,13 +1975,16 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   glyphAtlasTarget.readFramebuffer,
                 );
                 gl.viewport(
-                  glyphAtlasTarget.viewport[0],
-                  glyphAtlasTarget.viewport[1],
-                  glyphAtlasTarget.viewport[2],
-                  glyphAtlasTarget.viewport[3],
+                  glyphAtlasTarget.viewport[0]!,
+                  glyphAtlasTarget.viewport[1]!,
+                  glyphAtlasTarget.viewport[2]!,
+                  glyphAtlasTarget.viewport[3]!,
                 );
                 glyphAtlasTarget = undefined;
               }
+              // Atlas draws skip per-draw checks; a failed population must not be
+              // kept as populated coverage.
+              check();
               return 1;
             });
           },
@@ -2570,6 +2625,19 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.deleteFramebuffer(map.framebuffer);
           }
         if (IPP_SHADOWS) shadows!.clear();
+        if (IPP_GUI) {
+          for (const batch of [
+            ...guiBatches!.values(),
+            ...glyphBatches!.values(),
+          ]) {
+            gl.deleteVertexArray(batch.vao);
+            gl.deleteBuffer(batch.vbo);
+          }
+          for (const page of glyphAtlasPages!.values())
+            gl.deleteFramebuffer(page.framebuffer);
+          gl.deleteVertexArray(surfaceBoxQuadVao);
+          gl.deleteBuffer(surfaceBoxQuadVbo);
+        }
         for (const texture of textures.values()) gl.deleteTexture(texture);
         if (IPP_SURFACES)
           for (const path of surfacePaths.values()) {
@@ -2585,6 +2653,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         surfaceQuadVao = null;
         for (const program of programs.values())
           gl.deleteProgram(program.object);
+      }
+      if (IPP_GUI) {
+        guiBatches!.clear();
+        glyphBatches!.clear();
+        glyphAtlasPages!.clear();
+        glyphAtlasTarget = undefined;
+        surfaceBoxQuadVao = null;
+        surfaceBoxQuadVbo = null;
       }
       meshes.clear();
       textures.clear();

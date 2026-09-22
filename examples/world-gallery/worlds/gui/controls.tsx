@@ -21,11 +21,11 @@ export function GuiControls({ scene }: GuiControlsProps) {
         aria-pressed={scene.vectorOnly}
         onClick={scene.toggleVectorOnly}
       >
-        {scene.vectorOnly ? "Restore full scene" : "Show vector panel only"}
+        {scene.vectorOnly ? "Restore full scene" : "Isolate GUI panel only"}
       </button>
       <p>
-        Compare the FPS readout at the same camera angle. Vector panel only
-        leaves the GUI Surface and camera mounted.
+        Compare the FPS readout at the same camera angle. Isolates the whole GUI
+        Surface and camera without projector geometry.
       </p>
       <dl className="selection-summary">
         <div>

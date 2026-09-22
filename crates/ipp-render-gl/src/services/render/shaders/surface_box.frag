@@ -50,16 +50,18 @@ void main() {
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
     if (clip_coverage <= 0.0) discard;
 
-    vec2 half_size = v_placement.zw * 0.5;
-    vec2 center = v_placement.xy + half_size;
+    vec2 half_size = abs(v_placement.zw) * 0.5;
+    vec2 center = v_placement.xy + v_placement.zw * 0.5;
     // Clamp each explicit radius to the corresponding placed half size.
     vec2 corner = min(max(v_shape.xy, vec2(0.0)), half_size);
     vec2 offset = v_surface_position - center;
     float outer = sd_round_box(offset, half_size, corner);
-    float edge = max(fwidth(outer), 1.0 / 65536.0);
+    // The distance spans one pixel across this footprint. A two-footprint
+    // smoothstep blurs subpixel rails and borders into the surrounding halo.
+    float edge = max(length(vec2(dFdx(outer), dFdy(outer))), 1.0 / 65536.0);
 
     // Shape interior coverage [0.0, 1.0]
-    float shape_cov = 1.0 - smoothstep(-edge, edge, outer);
+    float shape_cov = clamp(0.5 - outer / edge, 0.0, 1.0);
 
     // Outer glow evaluation
     float glow_alpha = 0.0;
@@ -71,7 +73,8 @@ void main() {
         if (dist_outside < glow_radius) {
             float norm = clamp(1.0 - dist_outside / glow_radius, 0.0, 1.0);
             float factor = (abs(v_material_params.w - 1.0) < 1e-5) ? norm : pow(norm, v_material_params.w);
-            glow_alpha = clamp(v_glow_color.a * glow_intensity * factor, 0.0, 1.0);
+            // An outer halo must not fill a transparent shape or focus ring.
+            glow_alpha = clamp(v_glow_color.a * glow_intensity * factor, 0.0, 1.0) * (1.0 - shape_cov);
         }
     }
 
@@ -94,23 +97,26 @@ void main() {
     }
 
     // Border evaluation
-    float border_mix = 0.0;
+    float fill_cov = shape_cov;
     if (v_shape.z > 0.0) {
         vec2 inner_half = max(half_size - v_shape.z, vec2(0.0));
         vec2 inner_corner = max(corner - v_shape.z, vec2(0.0));
         float inner = sd_round_box(offset, inner_half, inner_corner);
-        border_mix = smoothstep(-edge, edge, inner);
+        float inner_edge = max(length(vec2(dFdx(inner), dFdy(inner))), 1.0 / 65536.0);
+        fill_cov = min(shape_cov, clamp(0.5 - inner / inner_edge, 0.0, 1.0));
     }
 
     // Composite straight fill and border colors
-    float fill_a = fill_color.a * (1.0 - border_mix);
-    float border_a = v_border_color.a * border_mix;
+    // Coverage of the ring is the difference of its two contours. Multiplying
+    // two antialias ramps loses contrast when a border is narrower than a pixel.
+    float fill_a = fill_color.a * fill_cov;
+    float border_a = v_border_color.a * (shape_cov - fill_cov);
     float shape_base_alpha = fill_a + border_a;
     vec3 shape_rgb = vec3(0.0);
     if (shape_base_alpha > 1e-5) {
         shape_rgb = (fill_color.rgb * fill_a + v_border_color.rgb * border_a) / shape_base_alpha;
     }
-    float shape_alpha = shape_base_alpha * shape_cov;
+    float shape_alpha = shape_base_alpha;
 
     // Composite shape and outer glow in straight linear RGBA
     float combined_alpha = shape_alpha + glow_alpha * (1.0 - shape_alpha);

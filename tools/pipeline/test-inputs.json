@@ -844,5 +844,18 @@
       "npm",
       "browser"
     ]
+  },
+  "dist/tests/render/retained-gui.test.js": {
+    "builds": [
+      "typescript",
+      "surface-fixtures",
+      "browser:render-surfaces",
+      "browser:headless-gui"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
   }
 }

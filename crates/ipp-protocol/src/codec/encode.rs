@@ -254,7 +254,12 @@ impl Writer {
             ResolvedValue::U32(v) => self.u32(v)?,
             ResolvedValue::U64(v) => self.u64(v)?,
             ResolvedValue::String(v) => self.string(&v)?,
-            ResolvedValue::Bytes(v) => self.bytes(&v)?,
+            ResolvedValue::Bytes(v) => {
+                // Dense GUI descriptor tables may exceed an authored byte value.
+                // Inspection remains bounded by the complete response budget.
+                self.count(v.len(), MAX_MESSAGE_BYTES)?;
+                self.raw(&v)?;
+            }
             ResolvedValue::Entity(id) => {
                 self.u8(REF_HANDLE)?;
                 self.u64(id.to_bits())?;

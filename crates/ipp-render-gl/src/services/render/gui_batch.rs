@@ -4,6 +4,8 @@
 //! geometry and GPU batches keyed by live primitive identity and content revision.
 //! Warm unchanged frames upload zero geometry bytes. Changing a control rebuilds
 //! only the affected batch, uploading its complete contents via storage replacement.
+//! Culled Surfaces keep their retained work; destruction, or a submission that no
+//! longer uses a batch, releases it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +44,28 @@ pub struct GuiBoxVertex {
     pub material_params: [f32; 4],
     /// Glow straight linear RGBA.
     pub glow_color: [f32; 4],
+}
+
+// GLES attribute strides and the WebGL bridge read exactly this many bytes per vertex.
+const _: () = assert!(std::mem::size_of::<GuiBoxVertex>() == 136);
+
+/// Surface participation in one completed frame, deciding which retained work is stale.
+///
+/// Destroyed Surfaces release everything. A submitted Surface drew every primitive it
+/// still owns, so its unused work is stale. Live Surfaces skipped by culling keep their
+/// retained work for the frame they become visible again.
+pub struct RetainedSurfaceSubmission<'a> {
+    /// Every live Surface entity in the World.
+    pub live: &'a BTreeSet<ipp_core::EntityId>,
+    /// Surfaces whose primitives this frame submitted.
+    pub submitted: &'a BTreeSet<ipp_core::EntityId>,
+}
+
+impl RetainedSurfaceSubmission<'_> {
+    /// Whether work retained for `entity` is stale, given whether this frame used it.
+    pub fn is_stale(&self, entity: ipp_core::EntityId, used: bool) -> bool {
+        !self.live.contains(&entity) || (!used && self.submitted.contains(&entity))
+    }
 }
 
 /// Compatibility partition distinguishing frequently changing cursor/control work
@@ -141,7 +165,10 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
 
     /// Clear all retained GPU batches and CPU geometry cache entries.
     pub fn clear(&mut self) {
-        self.retained_batches.clear();
+        let mut device = self.device.borrow_mut();
+        for (_, batch) in std::mem::take(&mut self.retained_batches) {
+            device.delete_gui_batch(batch.gpu);
+        }
         self.cpu_primitives.clear();
         self.scratch_vertices.clear();
         self.used_batches.clear();
@@ -217,8 +244,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             style.identity.hash(&mut batch_hasher);
             batch_hasher.write_u64(prim_hash);
 
-            let vertices = match self.cpu_primitives.get(&prim_key) {
-                Some(cached) if cached.hash == prim_hash => &cached.vertices,
+            match self.cpu_primitives.get(&prim_key) {
+                Some(cached) if cached.hash == prim_hash => {}
                 _ => {
                     let quad = generate_box_vertices(
                         style,
@@ -237,11 +264,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                         },
                     );
                     stats.gui_rebuilds += 1;
-                    &self.cpu_primitives.get(&prim_key).unwrap().vertices
                 }
             };
-
-            self.scratch_vertices.extend_from_slice(vertices);
         }
 
         let batch_hash = batch_hasher.finish();
@@ -258,10 +282,30 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 return Ok(());
             }
 
+            for primitive in boxes {
+                self.scratch_vertices.extend_from_slice(
+                    &self.cpu_primitives[&PrimitiveKey {
+                        entity,
+                        identity: primitive.style().identity,
+                    }]
+                        .vertices,
+                );
+            }
+
             // Batch is dirty: replace GPU storage with complete contents.
-            self.device
+            let replaced = self
+                .device
                 .borrow_mut()
-                .update_gui_batch(&mut retained.gpu, &self.scratch_vertices)?;
+                .update_gui_batch(&mut retained.gpu, &self.scratch_vertices);
+            if let Err(error) = replaced {
+                // A failed replacement leaves the storage contents unknown. Release the
+                // batch so no later frame draws it with stale counts or vertices.
+                if let Some(batch) = self.retained_batches.remove(&batch_key) {
+                    self.device.borrow_mut().delete_gui_batch(batch.gpu);
+                }
+                return Err(error);
+            }
+
             let bytes = self.scratch_vertices.len() * std::mem::size_of::<GuiBoxVertex>();
             retained.hash = batch_hash;
             retained.clip = clip;
@@ -269,6 +313,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             retained.vertex_count = self.scratch_vertices.len();
 
             stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
+            stats.gui_allocations += 1;
             self.device
                 .borrow_mut()
                 .draw_gui_batch(program, &retained.gpu, mvp, &clip)?;
@@ -276,6 +321,16 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             stats.triangles += (retained.vertex_count / 3) as u32;
             stats.gui_batches += 1;
             return Ok(());
+        }
+
+        for primitive in boxes {
+            self.scratch_vertices.extend_from_slice(
+                &self.cpu_primitives[&PrimitiveKey {
+                    entity,
+                    identity: primitive.style().identity,
+                }]
+                    .vertices,
+            );
         }
 
         // New batch allocation.
@@ -289,9 +344,14 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
         stats.gui_allocations += 1;
 
-        self.device
+        let result = self
+            .device
             .borrow_mut()
-            .draw_gui_batch(program, &gpu, mvp, &clip)?;
+            .draw_gui_batch(program, &gpu, mvp, &clip);
+        if let Err(error) = result {
+            self.device.borrow_mut().delete_gui_batch(gpu);
+            return Err(error);
+        }
         stats.draw_calls += 1;
         stats.triangles += (vertex_count / 3) as u32;
         stats.gui_batches += 1;
@@ -310,46 +370,46 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         Ok(())
     }
 
-    /// End-of-frame maintenance: prune unreferenced batches and account resident memory.
-    pub fn finish_frame(
-        &mut self,
-        device: &mut D,
-        live_surfaces: &BTreeSet<ipp_core::EntityId>,
-        stats: &mut RenderStats,
-    ) {
-        // Prune batches: remove batches belonging to destroyed surfaces or unreferenced
-        // within an active surface that was rendered.
-        let dead_keys: Vec<GuiBatchKey> = self
-            .retained_batches
-            .keys()
-            .copied()
-            .filter(|key| !live_surfaces.contains(&key.entity) || !self.used_batches.contains(key))
-            .collect();
+    /// End-of-frame maintenance: release stale GPU batches and CPU geometry.
+    ///
+    /// `surfaces` is `None` when submission did not complete. Unused keys then cannot be
+    /// told apart from undrawn ones, so every retained batch is kept.
+    pub fn finish_frame(&mut self, surfaces: Option<&RetainedSurfaceSubmission<'_>>) {
+        if let Some(surfaces) = surfaces {
+            let stale: Vec<GuiBatchKey> = self
+                .retained_batches
+                .keys()
+                .copied()
+                .filter(|key| surfaces.is_stale(key.entity, self.used_batches.contains(key)))
+                .collect();
 
-        for key in dead_keys {
-            if let Some(batch) = self.retained_batches.remove(&key) {
-                device.delete_gui_batch(batch.gpu);
+            let mut device = self.device.borrow_mut();
+            for key in stale {
+                if let Some(batch) = self.retained_batches.remove(&key) {
+                    device.delete_gui_batch(batch.gpu);
+                }
             }
+
+            self.cpu_primitives.retain(|key, _| {
+                !surfaces.is_stale(key.entity, self.used_primitives.contains(key))
+            });
         }
 
-        // Prune dead CPU primitive geometries.
-        self.cpu_primitives.retain(|key, _| {
-            live_surfaces.contains(&key.entity) && self.used_primitives.contains(key)
-        });
-
-        // Reset per-frame tracking.
         self.used_batches.clear();
         self.used_primitives.clear();
+    }
+}
 
-        // Calculate total resident bytes for GUI batches.
-        stats.gui_resident_bytes = self.resident_bytes() as u32;
+impl<D: RenderDevice> Drop for GuiBatchRenderCache<D> {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 
 /// Compute explicit vertices for a box with counter-clockwise front winding.
 ///
-/// Returns 6 vertices for standard filled/glow quads, or 24 vertices (4 edge strips)
-/// for large border-only shapes to minimize interior fragment fill-rate.
+/// Returns 6 vertices for filled/small quads, or 24 vertices (4 edge strips)
+/// for large hollow shapes, including their outer glow, to skip empty interiors.
 pub fn generate_box_vertices(
     style: &SurfacePrimitiveStyle,
     size: &[f32; 2],
@@ -456,10 +516,10 @@ pub fn generate_box_vertices(
         0.002
     };
 
-    let x0 = pos[0] - pad;
-    let y0 = pos[1] - pad;
-    let x1 = pos[0] + placed_size[0] + pad;
-    let y1 = pos[1] + placed_size[1] + pad;
+    let x0 = pos[0].min(pos[0] + placed_size[0]) - pad;
+    let y0 = pos[1].min(pos[1] + placed_size[1]) - pad;
+    let x1 = pos[0].max(pos[0] + placed_size[0]) + pad;
+    let y1 = pos[1].max(pos[1] + placed_size[1]) + pad;
 
     let make_vertex = |x: f32, y: f32| -> GuiBoxVertex {
         GuiBoxVertex {
@@ -486,13 +546,12 @@ pub fn generate_box_vertices(
     };
 
     let is_border_only = border_width > 0.0
-        && glow_radius <= 0.0
         && matches!(fill, GuiShapeFill::Solid(col) if col[3] <= 0.0 || style.opacity <= 0.0);
 
     let strip_thickness = border_width.max(corner_radius[0]).max(corner_radius[1]) + pad;
     let can_use_strips = is_border_only
-        && placed_size[0] >= 3.0 * strip_thickness
-        && placed_size[1] >= 3.0 * strip_thickness;
+        && placed_size[0].abs() >= 3.0 * strip_thickness
+        && placed_size[1].abs() >= 3.0 * strip_thickness;
 
     if can_use_strips {
         let mut vertices = Vec::with_capacity(24);
@@ -520,7 +579,11 @@ pub fn generate_box_vertices(
     }
 }
 
-/// Hash all evaluated geometry and material lanes of a box primitive.
+/// Hash every evaluated input that [`generate_box_vertices`] reads.
+///
+/// The style colour lane is excluded: boxes paint only their fill, border and glow,
+/// and solid fills already carry the evaluated colour. A colour transition on a
+/// gradient box therefore changes no vertex and uploads nothing.
 pub fn hash_box_inputs(
     style: &SurfacePrimitiveStyle,
     size: &[f32; 2],
@@ -536,10 +599,6 @@ pub fn hash_box_inputs(
     hasher.write_u32(style.position[1].to_bits());
     hasher.write_u32(style.scale[0].to_bits());
     hasher.write_u32(style.scale[1].to_bits());
-
-    for lane in style.color {
-        hasher.write_u32(lane.to_bits());
-    }
     hasher.write_u32(style.opacity.to_bits());
 
     hasher.write_u32(size[0].to_bits());

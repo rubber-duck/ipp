@@ -273,3 +273,111 @@ pub extern "C" fn ipp_render_unshadowed_lights() -> u32 {
             .map_or(0, |presentation| presentation.stats.unshadowed_lights)
     })
 }
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_gui_batches() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.gui_batches)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_gui_rebuilds() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.gui_rebuilds)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_gui_allocations() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.gui_allocations)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_gui_resident_bytes() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.gui_resident_bytes)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_glyph_misses() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.glyph_misses)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_glyph_populates() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.glyph_populates)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_glyph_population_failures() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary.presentation().map_or(0, |presentation| {
+            presentation.stats.glyph_population_failures
+        })
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_glyph_pages() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.glyph_pages)
+    })
+}
+
+/// Read-only retained Surface work from the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "gui")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_glyph_resident_bytes() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary.presentation().map_or(0, |presentation| {
+            presentation.stats.glyph_resident_bytes as u32
+        })
+    })
+}

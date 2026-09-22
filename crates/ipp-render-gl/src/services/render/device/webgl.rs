@@ -207,6 +207,9 @@ unsafe extern "C" {
     fn update_gui_batch(batch_handle: u32, vertex_ptr: *const f32, vertex_count: u32) -> u32;
 
     #[cfg(feature = "gui")]
+    fn delete_gui_batch(batch_handle: u32);
+
+    #[cfg(feature = "gui")]
     fn draw_gui_batch(program: u32, batch_handle: u32, mvp: *const f32, clip: *const f32) -> u32;
 
     #[cfg(feature = "gui")]
@@ -318,6 +321,13 @@ impl WebGlRenderDevice {
     }
 }
 
+/// Context-local atlas target and its distinct sampleable texture handle.
+#[cfg(feature = "gui")]
+pub struct WebGlGlyphAtlasPage {
+    target: u32,
+    texture: u32,
+}
+
 impl RenderDevice for WebGlRenderDevice {
     fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
         // SAFETY: The bridge copies a scalar diagnostic setting, retaining no pointers.
@@ -345,7 +355,7 @@ impl RenderDevice for WebGlRenderDevice {
     type GlyphBatch = u32;
 
     #[cfg(feature = "gui")]
-    type GlyphAtlasPage = u32;
+    type GlyphAtlasPage = WebGlGlyphAtlasPage;
 
     fn set_lighting(
         &mut self,
@@ -632,6 +642,11 @@ impl RenderDevice for WebGlRenderDevice {
     ) -> Result<Self::GuiBatch, RenderError> {
         let count = u32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 136-byte
+        // `#[repr(C)]` vertices. The bridge bounds-checks and copies exactly
+        // `count * 136` bytes, the slice length, into GL before returning. It keeps
+        // no view of WASM memory and cannot reenter Rust, so the shared borrow is not
+        // aliased mutably or invalidated during the call.
         let id = unsafe { create_gui_batch(vertices.as_ptr().cast(), count) };
         if id == 0 {
             Err(self.error())
@@ -648,11 +663,17 @@ impl RenderDevice for WebGlRenderDevice {
     ) -> Result<(), RenderError> {
         let count = u32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 136-byte
+        // `#[repr(C)]` vertices. The bridge rejects stale batch handles, then
+        // bounds-checks and copies exactly `count * 136` bytes, the slice length,
+        // before returning. It keeps no view of WASM memory and cannot reenter Rust.
         self.check(unsafe { update_gui_batch(*batch, vertices.as_ptr().cast(), count) })
     }
 
     #[cfg(feature = "gui")]
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
+        // SAFETY: Only a scalar handle crosses the boundary; no Rust memory is borrowed.
+        // The bridge ignores unknown handles and cannot reenter Rust.
         unsafe { delete_gui_batch(batch) };
     }
 
@@ -664,6 +685,9 @@ impl RenderDevice for WebGlRenderDevice {
         mvp: &[f32; 16],
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
+        // SAFETY: `mvp` (16 f32) and `clip` (4 f32) are live borrowed arrays that the
+        // bridge reads as uniforms before returning; program and batch handles are
+        // validated. No view of WASM memory is kept and the bridge cannot reenter Rust.
         self.check(unsafe { draw_gui_batch(program.id, *batch, mvp.as_ptr(), clip.as_ptr()) })
     }
 
@@ -674,6 +698,11 @@ impl RenderDevice for WebGlRenderDevice {
     ) -> Result<Self::GlyphBatch, RenderError> {
         let count = u32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 32-byte
+        // `#[repr(C)]` vertices. The bridge bounds-checks and copies exactly
+        // `count * 32` bytes, the slice length, into GL before returning. It keeps no
+        // view of WASM memory and cannot reenter Rust, so the shared borrow is not
+        // aliased mutably or invalidated during the call.
         let id = unsafe { create_glyph_batch(vertices.as_ptr().cast(), count) };
         if id == 0 {
             Err(self.error())
@@ -690,11 +719,17 @@ impl RenderDevice for WebGlRenderDevice {
     ) -> Result<(), RenderError> {
         let count = u32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 32-byte
+        // `#[repr(C)]` vertices. The bridge rejects stale batch handles, then
+        // bounds-checks and copies exactly `count * 32` bytes, the slice length,
+        // before returning. It keeps no view of WASM memory and cannot reenter Rust.
         self.check(unsafe { update_glyph_batch(*batch, vertices.as_ptr().cast(), count) })
     }
 
     #[cfg(feature = "gui")]
     fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
+        // SAFETY: Only a scalar handle crosses the boundary; no Rust memory is borrowed.
+        // The bridge ignores unknown handles and cannot reenter Rust.
         unsafe { delete_glyph_batch(batch) };
     }
 
@@ -707,6 +742,10 @@ impl RenderDevice for WebGlRenderDevice {
         mvp: &[f32; 16],
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
+        // SAFETY: `mvp` (16 f32) and `clip` (4 f32) are live borrowed arrays that the
+        // bridge reads as uniforms before returning; program, batch and atlas texture
+        // handles are validated. No view of WASM memory is kept and the bridge cannot
+        // reenter Rust.
         self.check(unsafe {
             draw_glyph_batch(program.id, *batch, *atlas, mvp.as_ptr(), clip.as_ptr())
         })
@@ -718,32 +757,46 @@ impl RenderDevice for WebGlRenderDevice {
         width: u32,
         height: u32,
     ) -> Result<Self::GlyphAtlasPage, RenderError> {
+        // SAFETY: Only scalar dimensions cross the boundary; no Rust memory is borrowed.
+        // The bridge returns zero on failure and cannot reenter Rust.
         let id = unsafe { create_glyph_atlas_page(width, height) };
         if id == 0 {
             Err(self.error())
         } else {
-            Ok(id)
+            Ok(WebGlGlyphAtlasPage {
+                target: id,
+                // SAFETY: This just-created page owns the returned context-local
+                // texture handle; the scalar lookup borrows no Rust memory.
+                texture: unsafe { glyph_atlas_texture(id) },
+            })
         }
     }
 
     #[cfg(feature = "gui")]
     fn delete_glyph_atlas_page(&mut self, page: Self::GlyphAtlasPage) {
-        unsafe { delete_glyph_atlas_page(page) };
+        // SAFETY: Only the scalar target handle crosses the boundary; the bridge also
+        // releases the page's texture handle, ignores unknown handles and cannot
+        // reenter Rust. No Rust memory is borrowed.
+        unsafe { delete_glyph_atlas_page(page.target) };
     }
 
     #[cfg(feature = "gui")]
     fn begin_glyph_atlas_page(&mut self, page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
-        self.check(unsafe { begin_glyph_atlas_page(*page) })
+        // SAFETY: Only the scalar target handle crosses the boundary; the bridge rejects
+        // stale handles and cannot reenter Rust. No Rust memory is borrowed.
+        self.check(unsafe { begin_glyph_atlas_page(page.target) })
     }
 
     #[cfg(feature = "gui")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        // SAFETY: The import takes no arguments and borrows no Rust memory; it restores
+        // bridge-owned bindings, checks GL errors and cannot reenter Rust.
         self.check(unsafe { end_glyph_atlas_page() })
     }
 
     #[cfg(feature = "gui")]
-    fn glyph_atlas_texture<'a>(&'a self, page: &'a Self::GlyphAtlasPage) -> &'a Self::Texture {
-        page
+    fn glyph_atlas_texture(page: &Self::GlyphAtlasPage) -> &Self::Texture {
+        &page.texture
     }
 
     #[cfg(feature = "particles")]

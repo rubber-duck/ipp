@@ -9,6 +9,7 @@ import type {
   GuiSemanticTree,
   Inspection,
 } from "@ipp/client";
+import { GUI_ICONS } from "../../examples/world-gallery/worlds/gui/presentation.js";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { responseGate } from "../browser/response-gate.js";
 import {
@@ -100,11 +101,16 @@ function waveformAnimation(inspection: Inspection, pulse = false) {
   return controller;
 }
 
-function waveformNode(state: GalleryGuiState, asset = "waveform") {
-  const node = state.detailed.nodes.find(({ style }) =>
-    style.asset?.source.endsWith(`/${asset}.ippd`),
+function waveformViewport(state: GalleryGuiState) {
+  const node = state.detailed.nodes.find(
+    ({ content, style }) =>
+      content.kind === "container" &&
+      content.containerKind === "scrollView" &&
+      style.enabled === false &&
+      Math.abs((style.width ?? 0) - 3.54) < 1e-5 &&
+      Math.abs((style.height ?? 0) - 0.46) < 1e-5,
   );
-  assert.ok(node, `missing ${asset} drawing`);
+  assert.ok(node, "missing retained waveform viewport");
   return node;
 }
 
@@ -192,9 +198,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
   timeout: 240_000,
 }, async (context) => {
   const cancelFont = responseGate();
-  const cancelDrawing = responseGate();
+  const cancelMesh = responseGate();
   const readyFont = responseGate();
-  const readyDrawing = responseGate();
+  const readyMesh = responseGate();
   let responseMode: "failure" | "cancel" | "ready" | "pass" = "pass";
   let failedRequest!: () => void;
   const failureRequested = new Promise<void>((resolve) => {
@@ -209,16 +215,16 @@ test("Gallery runs a real GUI demo and cleans it up", {
         initialPage: "gui",
         beforeResponse: async (url, signal) => {
           const font = url.pathname.endsWith("/shure-tech-mono.ippf");
-          const drawing = url.pathname.endsWith("/gui-mark.ippd");
-          if (!font && !drawing) return;
+          const mesh = url.pathname.endsWith(PROJECTOR_MESH_SOURCES[0]);
+          if (!font && !mesh) return;
           if (responseMode === "failure") {
             failedRequest();
             return { status: 503, body: "GUI demo resource unavailable\n" };
           }
           if (responseMode === "cancel") {
-            await (font ? cancelFont : cancelDrawing).hold(signal);
+            await (font ? cancelFont : cancelMesh).hold(signal);
           } else if (responseMode === "ready") {
-            await (font ? readyFont : readyDrawing).hold(signal);
+            await (font ? readyFont : readyMesh).hold(signal);
           }
           return undefined;
         },
@@ -265,7 +271,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       };
       const waveformRegion = async () => {
         const state = await waitForGui();
-        const grid = waveformNode(state, "waveform-grid");
+        const grid = waveformViewport(state);
         const [x, y, width, height] = state.semantic.nodes.find(
           ({ id }) => id === grid.id,
         )!.bounds;
@@ -294,7 +300,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         }>("compareViewerCaptureRegion", before, after, await waveformRegion());
       const outerWaveformPixels = async (label: string) => {
         const state = await waitForGui();
-        const grid = waveformNode(state, "waveform-grid");
+        const grid = waveformViewport(state);
         const [x, y, width, height] = state.semantic.nodes.find(
           ({ id }) => id === grid.id,
         )!.bounds;
@@ -315,7 +321,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       };
       const sampleWaveformBaseline = async (label: string) => {
         const state = await waitForGui();
-        const grid = waveformNode(state, "waveform-grid");
+        const grid = waveformViewport(state);
         const [x, y, width, height] = state.semantic.nodes.find(
           ({ id }) => id === grid.id,
         )!.bounds;
@@ -338,7 +344,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       };
       const sampleSineExtrema = async (label: string) => {
         const state = await waitForGui();
-        const grid = waveformNode(state, "waveform-grid");
+        const grid = waveformViewport(state);
         const [x, y, width, height] = state.semantic.nodes.find(
           ({ id }) => id === grid.id,
         )!.bounds;
@@ -507,7 +513,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
 
       responseMode = "cancel";
       await startGui();
-      await Promise.all([cancelFont.requested, cancelDrawing.requested]);
+      await Promise.all([cancelFont.requested, cancelMesh.requested]);
       const cancelledStage = await waitForGui();
       assert.ok(
         cancelledStage.semantic.nodes
@@ -529,15 +535,15 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "loading",
       );
       await g.navigate("shapes");
-      await Promise.all([cancelFont.aborted, cancelDrawing.aborted]);
+      await Promise.all([cancelFont.aborted, cancelMesh.aborted]);
       cancelFont.release();
-      cancelDrawing.release();
+      cancelMesh.release();
       await g.waitFor(guiSourcesGone);
 
       responseMode = "ready";
       const startupStarted = performance.now();
       await startGui();
-      await Promise.all([readyFont.requested, readyDrawing.requested]);
+      await Promise.all([readyFont.requested, readyMesh.requested]);
       assert.equal(
         await g.page.getByRole("button", { name: "Reset camera" }).count(),
         1,
@@ -581,12 +587,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "starting",
       );
 
-      readyDrawing.release();
+      readyMesh.release();
       await g.waitFor(
         (inspection) =>
           inspection.resources.some(
             ({ source, status }) =>
-              source.endsWith("/gui-mark.ippd") && status === "loaded",
+              source.endsWith(PROJECTOR_MESH_SOURCES[0]) && status === "loaded",
           ) &&
           inspection.resources.some(
             ({ source, status }) =>
@@ -600,7 +606,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const essentialResources = resourcesReady.resources.filter(
         ({ source }) =>
           source.endsWith("/shure-tech-mono.ippf") ||
-          source.endsWith("/gui-mark.ippd"),
+          source.endsWith(PROJECTOR_MESH_SOURCES[0]),
       );
       assert.equal(essentialResources.length, 2);
       assert.ok(essentialResources.every(({ status }) => status === "loaded"));
@@ -707,7 +713,10 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(initial.entityComponents.includes("GuiRoot"));
       const paintedBackgrounds = initial.detailed.nodes
         .map(({ style }) => style)
-        .filter(({ backgroundColor }) => backgroundColor !== undefined);
+        .filter(
+          ({ backgroundColor, enabled }) =>
+            backgroundColor !== undefined && enabled !== false,
+        );
       assert.ok(paintedBackgrounds.length >= 3);
       assert.ok(
         paintedBackgrounds.every(
@@ -732,6 +741,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.deepEqual(buttons.map(({ name }) => name).sort(), [
         "AURORA",
         "EMBER",
+        "NEON",
         "PULSE",
       ]);
       assert.deepEqual(controlValue(initial.semantic, "checkbox"), {
@@ -824,21 +834,36 @@ test("Gallery runs a real GUI demo and cleans it up", {
             status === "loaded",
         ),
       );
-      assert.ok(
-        overview.inspection.resources.some(
-          ({ kind, source, status }) =>
-            kind === 18 &&
-            source.endsWith("/gui-mark.ippd") &&
-            status === "loaded",
-        ),
+      assert.deepEqual(
+        overview.inspection.resources
+          .filter(({ kind }) => kind === 18)
+          .map(({ source }) => source.split("/").pop())
+          .sort(),
+        ["waveform-grid.ippd", "waveform-pulse.ippd", "waveform.ippd"],
+        "complex waveform curves share Surface drawing resources",
       );
+      assert.equal(
+        initial.detailed.nodes.filter(
+          ({ content }) => content.kind === "drawing",
+        ).length,
+        3,
+        "waveform geometry must not expand into hundreds of GUI nodes",
+      );
+      assert.ok(Number(overview.frame.backend.guiBatches) > 0);
+      assert.ok(Number(overview.frame.backend.glyphPages) > 0);
+      const glyphTexts = initial.detailed.nodes.flatMap(({ content }) =>
+        content.kind === "text" ? [content.text] : [],
+      );
+      for (const icon of Object.values(GUI_ICONS))
+        assert.ok(glyphTexts.includes(icon), `missing Nerd Font icon ${icon}`);
+
       assert.equal(
         overview.inspection.resources.filter(
           ({ kind, source, status }) =>
             kind === 10 && source.includes("generated-") && status === "loaded",
         ).length,
-        5,
-        "skin, waveform and projector motion clips must all be resident",
+        6,
+        "three skins, waveform and projector motion clips must all be resident",
       );
       assert.ok(overview.frame.drawCalls > 0 && overview.frame.triangles > 0);
       assert.equal(overview.frame.backend.failedDrawCalls, 0);
@@ -1214,10 +1239,15 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await g.call("controlGalleryAnimation", activeWavePulse.id, {
         action: "play",
       });
+      // inspect() collects independently timed entity and controller pages.
+      // Await the rendered property as well as the later controller page so
+      // the assertion cannot compare samples from opposite sides of a tick.
       const advancedPulse = await g.waitFor(
         (inspection) =>
           waveformAnimation(inspection, true).time >
-          capturedWavePulse.time + 0.12,
+            capturedWavePulse.time + 0.12 &&
+          waveformX(inspection, true) <
+            waveformX(pulseFrame.inspection, true) - 0.3,
       );
       assert.equal(waveformAnimation(advancedPulse).state, "playing");
       assert.equal(waveformAnimation(advancedPulse, true).state, "playing");
@@ -1420,6 +1450,50 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(skinDifference.meanAbsoluteChannelDifference > 1);
       assert.equal(emberFrame.frame.backend.failedDrawCalls, 0);
       assert.deepEqual(emberFrame.inspection.renderDiagnostics, []);
+
+      // Neon reskins the same controls through shape-material lanes instead
+      // of drawing assets, preserving node identity and focus throughout.
+      const neon = await g.call<GuiSemanticTree>(
+        "galleryGuiAction",
+        { role: "button", name: "NEON" },
+        { kind: "press" },
+      );
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-skin")?.textContent === "neon",
+      );
+      const neonState = await waitForGui();
+      assertRetainedGuiNodes(identityBeforeSkin, neonState.semantic, true);
+      assert.deepEqual(neon.focused, identityBeforeSkin.focused);
+      assert.deepEqual(neonState.semantic.focused, identityBeforeSkin.focused);
+      const neonFrame = await g.capture("gui-demo-neon-active");
+      const neonCore = dynamicProperty(
+        neonFrame.inspection,
+        "gui-projector-core",
+        "accent",
+      );
+      assert.notDeepEqual(
+        neonCore,
+        emberCore,
+        "Neon did not recolor the projector cube",
+      );
+      assert.equal(
+        waveformAnimation(neonFrame.inspection).id,
+        projectorBeforeSkin.scanController,
+        "reskin replaced the waveform scan controller",
+      );
+      assert.equal(
+        waveformAnimation(neonFrame.inspection, true).id,
+        projectorBeforeSkin.wavePulseController,
+        "reskin replaced the waveform pulse controller",
+      );
+      const neonDifference = await g.difference(
+        "gui-demo-ember-active",
+        "gui-demo-neon-active",
+      );
+      assert.ok(neonDifference.changedPixels > 1_000);
+      assert.ok(neonDifference.meanAbsoluteChannelDifference > 1);
+      assert.equal(neonFrame.frame.backend.failedDrawCalls, 0);
+      assert.deepEqual(neonFrame.inspection.renderDiagnostics, []);
 
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
       const scroll = await g.call<ProjectedGuiNode>("galleryGuiScrollPoint");

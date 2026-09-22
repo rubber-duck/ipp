@@ -62,6 +62,7 @@ const PANEL_CENTER: Point = PROJECTOR_CENTER.map(
 const ACCENTS: Readonly<Record<GuiDemoSkin, Color>> = {
   aurora: [0.18, 0.86, 1],
   ember: [1, 0.34, 0.08],
+  neon: [0.25, 1, 0.92],
 };
 
 export const PROJECTOR_MESH_SOURCES = [

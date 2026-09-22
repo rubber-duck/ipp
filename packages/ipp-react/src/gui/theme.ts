@@ -23,7 +23,9 @@ export type GuiThemePartName = (typeof GUI_THEME_PARTS)[number];
 export type GuiThemeState = "idle" | "hovered" | "pressed" | "disabled";
 export type GuiThemeVariant = "checked" | "unchecked";
 
-/** Two-stop linear or radial gradient in local shape space. */
+/** Two-stop linear or radial gradient in local shape space. Stops are
+ * static material lanes: transitions animate the lane colour, not the
+ * stops, and a missing stop takes the lane colour of the resolved state. */
 export interface GuiThemeGradient {
   readonly kind: "linear" | "radial";
   readonly start?: readonly [number, number] | undefined;
@@ -33,7 +35,9 @@ export interface GuiThemeGradient {
   readonly color1?: readonly [number, number, number, number] | undefined;
 }
 
-/** Localized glow around the outer shape boundary. */
+/** Localized glow around the outer shape boundary. Glow lanes inherit from
+ * less specific lanes independently of the fill; a state removes an
+ * inherited glow with `intensity: 0`. */
 export interface GuiThemeGlow {
   readonly color?: readonly [number, number, number, number] | undefined;
   readonly intensity?: number | undefined;
@@ -44,6 +48,10 @@ export interface GuiThemeGlow {
 /** One authored runtime part. Checked/unchecked lanes are written for every
  * interaction state so core can apply its normal candidate precedence. */
 export interface GuiThemeLaneStyle {
+  /** Linear RGBA. Without a gradient, the part paints this colour as a
+   * solid fill. When the part declares a gradient in another lane, a
+   * state or variant lane that sets `color` without its own `gradient`
+   * selects a solid fill instead of inheriting that gradient. */
   readonly color?: readonly [number, number, number, number] | undefined;
   readonly opacity?: number | undefined;
   readonly scale?: readonly [number, number] | undefined;
@@ -400,6 +408,7 @@ function dynamicLanes(
   node: number,
   part: string,
   lanes: GuiThemeLaneStyle,
+  solidOverGradient: boolean,
 ): void {
   const set = (lane: GuiPartProperty, value: DynamicValue): void => {
     result[guiPartProperty(node, part, lane)] = value;
@@ -439,6 +448,10 @@ function dynamicLanes(
         kind: "vec4",
         value: [...lanes.gradient.color1],
       });
+  } else if (solidOverGradient && lanes.color !== undefined) {
+    // Core resolves the fill mode like any other lane; an explicit solid
+    // mode keeps this colour from hiding under a less specific gradient.
+    set("fill_mode", { kind: "f32", value: 0 });
   }
   if (lanes.glow !== undefined) {
     if (lanes.glow.color !== undefined)
@@ -487,18 +500,29 @@ export function guiThemeProperties(
   for (const partName of GUI_THEME_PARTS) {
     const part = theme.parts[partName];
     if (part === undefined) continue;
+    const hasGradient = [
+      part.base,
+      ...states.map((state) => part[state]),
+      ...variants.map((variant) => part[variant]),
+    ].some((lanes) => lanes?.gradient !== undefined);
     if (part.base !== undefined)
-      dynamicLanes(result, node, partName, part.base);
+      dynamicLanes(result, node, partName, part.base, false);
     for (const state of states) {
       const lanes = part[state];
       if (lanes !== undefined)
-        dynamicLanes(result, node, `${partName}_${state}`, lanes);
+        dynamicLanes(result, node, `${partName}_${state}`, lanes, hasGradient);
     }
     for (const variant of variants) {
       const lanes = part[variant];
       if (lanes === undefined) continue;
       for (const state of states)
-        dynamicLanes(result, node, `${partName}_${state}_${variant}`, lanes);
+        dynamicLanes(
+          result,
+          node,
+          `${partName}_${state}_${variant}`,
+          lanes,
+          hasGradient,
+        );
     }
   }
   return result;

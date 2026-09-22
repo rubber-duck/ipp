@@ -256,7 +256,7 @@ export function Gallery() {
               </h2>
               <p>
                 {worldError ??
-                  "Preparing the font, GUI mark, skins and controls."}
+                  "Preparing the font, waveform drawings, skins and controls."}
               </p>
             </div>
           )}

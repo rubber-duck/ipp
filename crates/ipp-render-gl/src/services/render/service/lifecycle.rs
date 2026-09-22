@@ -26,15 +26,15 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             surface_box_program: None,
             #[cfg(feature = "gui")]
-            gui_batch_cache: super::super::gui_batch::GuiBatchRenderCache::new(device.clone()),
+            gui_batch_cache: BTreeMap::new(),
             #[cfg(feature = "gui")]
             surface_text_program: None,
             #[cfg(feature = "gui")]
             glyph_atlas: super::super::glyph_atlas::GlyphAtlas::new(device.clone()),
             #[cfg(feature = "gui")]
-            glyph_batch_cache: super::super::glyph_atlas::GlyphBatchRenderCache::new(
-                device.clone(),
-            ),
+            glyph_batch_cache: BTreeMap::new(),
+            #[cfg(feature = "gui")]
+            submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
             #[cfg(feature = "particles")]
@@ -256,6 +256,12 @@ impl<D: RenderDevice> RenderService<D> {
     /// Drop renderer-only history when a World is destroyed or detached from presentation.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
         self.light_selections.remove(&world);
+        #[cfg(feature = "gui")]
+        {
+            self.gui_batch_cache.remove(&world);
+            self.glyph_batch_cache.remove(&world);
+            self.glyph_atlas.forget_world(world);
+        }
     }
 
     /// Linked programs actually demanded in this graphics context.

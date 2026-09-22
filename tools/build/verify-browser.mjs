@@ -119,14 +119,31 @@ const reports = [];
     meshPoses,
     particles,
     surfaces,
+    gui,
   });
   if (rendering) {
     const bridge = await readFile(resolve(directory, "webgl.js"), "utf8");
+    assert.equal(
+      bridge.includes("IPP_GUI"),
+      false,
+      "GUI capability leaked into the bridge as an unresolved global",
+    );
     assert.equal(
       bridge.includes("draw_surface_path"),
       surfaces,
       "Surface bridge dispatch differs from selected capability",
     );
+    for (const name of [
+      "draw_surface_box",
+      "create_gui_batch",
+      "create_glyph_batch",
+      "create_glyph_atlas_page",
+    ])
+      assert.equal(
+        bridge.includes(name),
+        gui,
+        `GUI bridge dispatch ${name} differs from selected capability`,
+      );
     assert.equal(
       bridge.includes("set_lighting"),
       true,
@@ -292,6 +309,16 @@ const reports = [];
     runtimeBytes.includes(Buffer.from("v_surface_position")),
     rendering && surfaces,
     "Surface shaders differ from selected capability",
+  );
+  assert.equal(
+    glImports.some((entry) => entry.name === "create_gui_batch"),
+    rendering && gui,
+    "GUI batch imports differ from selected capability",
+  );
+  assert.equal(
+    typeof runtime.ipp_render_glyph_population_failures === "function",
+    rendering && gui,
+    "retained GUI diagnostics differ from selected capability",
   );
   assert.equal(
     glImports.some((entry) => entry.name === "set_skin_palette"),

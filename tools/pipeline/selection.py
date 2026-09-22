@@ -33,6 +33,11 @@ def changed_files(base: str | None = None) -> list[str]:
     return sorted(set(os.fsdecode(tracked + untracked).split("\0")) - {""})
 
 
+def owns(root: str, path: str) -> bool:
+    """Directory roots end with a slash; any other root names one file."""
+    return path.startswith(root) if root.endswith("/") else path == root
+
+
 def affected(
     paths: list[str], explicit_suites: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -51,14 +56,15 @@ def affected(
             ids.append("check:format-js")
         if suffix == ".md":
             continue
+        # Declared owners add to the conservative area rules below; a file
+        # without either still needs an explicit suite.
         owners = [
             name
             for name, suite in SUITES.items()
-            if any(path.startswith(root) for root in suite.get("sourceRoots", []))
+            if any(owns(root, path) for root in suite.get("sourceRoots", []))
         ]
         if owners:
             ids.extend(suite_ids(owners))
-            continue
         if path.startswith(("tools/pipeline/", "tools/tests/", ".github/")) or path in (
             "tools/ipp.py",
             "mypy.ini",
@@ -74,7 +80,7 @@ def affected(
             compiled = f"dist/{path[:-3]}.js" if path.endswith(".ts") else path
             if any(compiled in suite.get("files", []) for suite in SUITES.values()):
                 ids.append(f"test:{compiled}")
-            else:
+            elif not owners:
                 uncertain.append(path)
         elif path in (
             "package.json",
@@ -87,7 +93,7 @@ def affected(
             ids.extend(suite_ids(["runner"]))
         elif path.startswith(("tools/check_", "tools/repository_structure")):
             ids.append("check:repository")
-        else:
+        elif not owners:
             uncertain.append(path)
     if uncertain and not explicit_suites:
         raise ValueError(

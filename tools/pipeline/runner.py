@@ -56,6 +56,8 @@ def execute(
             "BLENDER_BIN": blender(),
             "NODE_BIN": node(),
             "PYTHON_BIN": sys.executable,
+            # Evidence written by a step can name the run that produced it.
+            "IPP_PIPELINE_RUN": str(log.parent),
         }
         windows = sys.platform == "win32"
         command = (

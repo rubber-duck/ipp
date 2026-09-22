@@ -6,9 +6,12 @@ export interface TerminalWorkload {
   rows: number;
   columns: number;
   sequence: number;
-  mode: "idle" | "typing" | "scroll" | "full";
+  /** `unseen` shows a window of `unseenGlyphs` that slides by half a screen
+   * per sequence step, so each step introduces glyphs not shown before. */
+  mode: "idle" | "typing" | "scroll" | "full" | "unseen";
   cursor: boolean;
   glyphs: readonly number[];
+  unseenGlyphs?: readonly number[] | undefined;
 }
 
 /** Rows have stable identities; typing changes only the final visible row. */
@@ -17,6 +20,8 @@ export function terminalWorkloadItems(
   workload: TerminalWorkload,
 ): SurfaceItemProps[] {
   const { rows, columns, sequence, mode, cursor, glyphs } = workload;
+  const unseen = workload.unseenGlyphs ?? [];
+  const slide = Math.floor((rows * columns) / 2);
   if (
     !Number.isInteger(rows) ||
     rows < 1 ||
@@ -26,7 +31,8 @@ export function terminalWorkloadItems(
     columns > 160 ||
     !Number.isSafeInteger(sequence) ||
     sequence < 0 ||
-    glyphs.length === 0
+    glyphs.length === 0 ||
+    (mode === "unseen" && sequence * slide + rows * columns > unseen.length)
   )
     throw new Error("Invalid terminal workload dimensions or sequence");
   const line = 2.1 / rows;
@@ -39,6 +45,11 @@ export function terminalWorkloadItems(
       content: {
         kind: "glyphRun",
         glyphs: Array.from({ length: columns }, (_, column) => {
+          if (mode === "unseen")
+            return {
+              glyphId: unseen[sequence * slide + row * columns + column]!,
+              position: [column * advance, 0],
+            };
           const edit =
             mode === "full" ||
             mode === "scroll" ||

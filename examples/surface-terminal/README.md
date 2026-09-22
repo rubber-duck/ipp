@@ -10,4 +10,4 @@ Editable SVG sources live in [authoring/svg](authoring/svg) under [CC0](authorin
 
 ## Workload measurements
 
-The positioned-text workload supports visible row/column counts, typing, blink, scrolling and full replacement. See the [retained rendering measurements](../../tests/performance/retained-gui.md) for the maintained browser command, diagnostics and physical-device procedure.
+The positioned-text workload supports visible row/column counts, typing, blink, scrolling, full replacement and a sliding window of glyphs not shown before. The asset build exports the printable ASCII and unseen glyph sets it draws from. See the [retained rendering measurements](../../tests/performance/retained-gui.md) for the maintained browser command, diagnostics and physical-device procedure.

@@ -111,12 +111,16 @@ def validate_catalog() -> None:
         )
     for name, suite in SUITES.items():
         for root in suite.get("sourceRoots", []):
+            # A trailing slash owns a directory; otherwise the root is one file.
             if (
                 not isinstance(root, str)
-                or not root.endswith("/")
                 or Path(root).is_absolute()
                 or ".." in Path(root).parts
-                or not (ROOT / root).is_dir()
+                or not (
+                    (ROOT / root).is_dir()
+                    if root.endswith("/")
+                    else (ROOT / root).is_file()
+                )
             ):
                 raise ValueError(f"Suite {name} has invalid source root: {root!r}")
         for path in suite.get("files", []):

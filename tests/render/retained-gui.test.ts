@@ -2,8 +2,8 @@ import test from "node:test";
 import { resolve } from "node:path";
 import { runRetainedGui } from "./retained-gui-environment.js";
 
-test("retained text remains bounded through streaming, shared panels and recovery", {
-  timeout: 180000,
+test("retained text and GUI shapes stay bounded, evict under atlas pressure and match analytic frames", {
+  timeout: 600000,
 }, async (context) => {
   await runRetainedGui(
     context.signal,

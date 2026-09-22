@@ -1,9 +1,19 @@
-import { writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { arch, cpus, hostname, platform, release, totalmem } from "node:os";
 import { resolve } from "node:path";
 import { runBrowserEnvironment } from "../browser/environment.js";
-import { invoke, writeDataUrl } from "./evidence.js";
+import { invoke } from "./evidence.js";
 import {
-  assertEquivalentTextCoverage,
+  differenceImage,
+  encodePng,
+  type RgbaFrame,
+} from "./retained-gui-images.js";
+import {
+  assertBuildComparisons,
+  COMPARISON_TOLERANCE,
+  compareBuildFrames,
   exerciseRetainedGui,
   type RetainedGuiReport,
   type WorkloadFrame,
@@ -15,14 +25,58 @@ const BUILDS = [
   { name: "headless-gui", retained: true },
 ] as const;
 
+/** Source, machine and pipeline identity that make retained evidence comparable. */
+function runIdentity(workspace: string, iterations: number) {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: workspace,
+      maxBuffer: 1 << 28,
+    });
+  const status = git("status", "--porcelain=v1", "-z").toString();
+  const changes = createHash("sha256")
+    .update(git("diff", "HEAD", "--binary"))
+    .update(status)
+    .digest("hex");
+  const processors = cpus();
+  return {
+    source: {
+      revision: git("rev-parse", "HEAD").toString().trim(),
+      uncommittedChanges: status.length > 0,
+      // Tracked diff and untracked names; equal only for the same edits.
+      changesSha256: status.length > 0 ? changes : null,
+    },
+    machine: {
+      hostname: hostname(),
+      platform: platform(),
+      release: release(),
+      arch: arch(),
+      cpu: processors[0]?.model ?? null,
+      logicalCpus: processors.length,
+      memoryBytes: totalmem(),
+      node: process.version,
+    },
+    pipelineRun: process.env.IPP_PIPELINE_RUN ?? null,
+    startedAt: new Date().toISOString(),
+    streamingUpdates: iterations,
+  };
+}
+
 export async function runRetainedGui(
   signal: AbortSignal,
   iterations: number,
   output: string,
 ) {
+  const workspace = process.cwd();
+  const identity = runIdentity(workspace, iterations);
   const reports: Array<
-    { build: string; evidence: string } & RetainedGuiReport
+    {
+      build: string;
+      evidence: string;
+      browser: string | null;
+      backend: Record<string, unknown>;
+    } & RetainedGuiReport
   > = [];
+  const frames = new Map<string, Map<string, RgbaFrame>>();
   for (const { name, retained } of BUILDS) {
     const directory = resolve("target/browser-build", name);
     const build = {
@@ -32,10 +86,12 @@ export async function runRetainedGui(
       exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
+    const captured = new Map<string, RgbaFrame>();
+    frames.set(name, captured);
     await runBrowserEnvironment(
       `retained-gui-${name}`,
       {
-        workspace: process.cwd(),
+        workspace,
         build,
         mismatchBuild: build,
         rendering: true,
@@ -61,20 +117,35 @@ export async function runRetainedGui(
           const report = await exerciseRetainedGui(
             {
               call,
-              capture: async (label) => {
-                const result = await call<WorkloadFrame>("capture", [label]);
-                const path = resolve(env.evidence.directory, `${label}.png`);
-                // Record the artifact path; PNG data URLs would exhaust the event log.
+              capture: async (label, next = false) => {
+                const result = await call<WorkloadFrame>("capture", [
+                  label,
+                  { next },
+                ]);
+                // Keep pixels for cross-build comparison and record the artifact path;
+                // PNG data would exhaust the event log.
                 await env.execute(`write ${label}.png`, [label], async () => {
-                  await writeDataUrl(
-                    path,
-                    await invoke<string>(env.page, module, "captureDataUrl", [
-                      label,
-                    ]),
-                  );
+                  const { width, height, pixels } = await invoke<{
+                    width: number;
+                    height: number;
+                    pixels: string;
+                  }>(env.page, module, "capturePixels", [label]);
+                  const frame = {
+                    width,
+                    height,
+                    pixels: new Uint8Array(Buffer.from(pixels, "base64")),
+                  };
+                  captured.set(label, frame);
+                  const path = resolve(env.evidence.directory, `${label}.png`);
+                  await writeFile(path, encodePng(frame));
                   return path;
                 });
                 return result;
+              },
+              pixels: (label) => {
+                const frame = captured.get(label);
+                if (!frame) throw new Error(`No capture labelled ${label}`);
+                return frame;
               },
             },
             retained,
@@ -83,6 +154,12 @@ export async function runRetainedGui(
           reports.push({
             build: name,
             evidence: env.evidence.directory,
+            browser: env.page.context().browser()?.version() ?? null,
+            backend: Object.fromEntries(
+              Object.entries(report.warm.backend).filter(
+                ([, value]) => typeof value === "string",
+              ),
+            ),
             ...report,
           });
           await writeFile(
@@ -95,11 +172,67 @@ export async function runRetainedGui(
       },
     );
   }
+
+  // Every label both builds captured is compared, with review artifacts kept
+  // for passing and failing labels alike.
+  const comparisons = compareBuildFrames(
+    frames.get("render-surfaces")!,
+    frames.get("headless-gui")!,
+  );
+  const directory = resolve(output, "comparisons");
+  await mkdir(directory, { recursive: true });
+  for (const { label } of comparisons) {
+    const expected = frames.get("render-surfaces")!.get(label)!;
+    const actual = frames.get("headless-gui")!.get(label)!;
+    await Promise.all([
+      writeFile(
+        resolve(directory, `${label}-expected.png`),
+        encodePng(expected),
+      ),
+      writeFile(resolve(directory, `${label}-actual.png`), encodePng(actual)),
+      writeFile(
+        resolve(directory, `${label}-diff.png`),
+        encodePng(
+          differenceImage(
+            expected,
+            actual,
+            COMPARISON_TOLERANCE.channelThreshold,
+          ),
+        ),
+      ),
+    ]);
+  }
+  const [analytic, retained] = reports;
   await writeFile(
     resolve(output, "comparison.json"),
-    JSON.stringify(reports, null, 2),
+    JSON.stringify(
+      {
+        identity,
+        quality: {
+          devicePixelRatio: retained!.devicePixelRatio,
+          viewports: retained!.viewports,
+          terminal: retained!.terminal,
+          atlas: {
+            rows: retained!.atlas.rows,
+            columns: retained!.atlas.columns,
+            pageBudget: retained!.atlas.pageBudget,
+          },
+        },
+        tolerance: COMPARISON_TOLERANCE,
+        comparisons: comparisons.map((comparison) => ({
+          ...comparison,
+          artifacts: ["expected", "actual", "diff"].map(
+            (kind) => `comparisons/${comparison.label}-${kind}.png`,
+          ),
+        })),
+        builds: reports,
+      },
+      null,
+      2,
+    ),
   );
-  const [analytic, retained] = reports;
-  assertEquivalentTextCoverage(analytic!, retained!);
+  assertBuildComparisons(comparisons);
+  if (analytic!.devicePixelRatio !== retained!.devicePixelRatio)
+    throw new Error("Analytic and retained builds used different DPR");
   return reports;
 }

@@ -263,6 +263,10 @@
   },
   "browser": {
     "description": "Chromium worker/WASM transport and lifecycle",
+    "sourceRoots": [
+      "crates/ipp-wasm/src/services/",
+      "tools/build/verify-browser.mjs"
+    ],
     "files": [
       "dist/tests/browser/browser.test.js",
       "dist/tests/browser/lifecycle.test.js"
@@ -343,6 +347,9 @@
   },
   "render": {
     "description": "Resources, gallery controls and actual WebGL frames",
+    "sourceRoots": [
+      "crates/ipp-wasm/src/services/"
+    ],
     "files": [
       "dist/tests/render/render.test.js",
       "dist/tests/render/fixture.test.js",
@@ -407,12 +414,21 @@
   },
   "gallery-gui": {
     "description": "GUI demo controls, native input, skins, scrolling, rendering and lifecycle cleanup",
+    "sourceRoots": [
+      "examples/world-gallery/worlds/gui/",
+      "packages/ipp-react/src/gui/theme.ts",
+      "packages/ipp-client/tools/assemble.mjs",
+      "tools/build/verify-browser.mjs"
+    ],
     "files": [
       "dist/tests/render/gallery-gui.test.js"
     ]
   },
   "gallery-gui-camera": {
     "description": "Runtime-routed Surface GUI and background camera gestures",
+    "sourceRoots": [
+      "examples/world-gallery/worlds/gui/"
+    ],
     "files": [
       "dist/tests/render/gallery-gui-camera.test.js"
     ]
@@ -508,6 +524,17 @@
   },
   "surfaces": {
     "description": "Quadratic text/drawings, RGBA bitmaps, item lifecycle and real native/worker presentation",
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-render-gl/src/services/render/",
+      "crates/ipp-core/src/services/asset_management/",
+      "examples/surface-terminal/",
+      "tests/surface_assets/",
+      "assets/fonts/",
+      "licences/fonts/",
+      "tools/build_surface_assets.py",
+      "tests/render/surface-fixture.tsx"
+    ],
     "files": [
       "dist/tests/integration/surface.test.js",
       "dist/tests/render/surface.test.js"
@@ -532,15 +559,6 @@
           "python-tools"
         ]
       }
-    ],
-    "sourceRoots": [
-      "crates/ipp-core/src/world/systems/surface/",
-      "crates/ipp-render-gl/src/services/render/",
-      "crates/ipp-core/src/services/asset_management/",
-      "examples/surface-terminal/",
-      "tests/surface_assets/",
-      "assets/fonts/",
-      "licences/fonts/"
     ]
   },
   "gui": {
@@ -617,10 +635,7 @@
     ]
   },
   "retained-gui": {
-    "description": "Analytic and retained terminal frames, warm uploads, streaming, glyph reuse and recovery",
-    "files": [
-      "dist/tests/render/retained-gui.test.js"
-    ],
+    "description": "Analytic and retained frames with per-label diffs, atlas growth and eviction, bounded uploads, GUI shapes, rear views and recovery",
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/surface/",
       "crates/ipp-render-gl/src/services/render/",
@@ -629,7 +644,20 @@
       "examples/surface-terminal/",
       "assets/fonts/",
       "licences/fonts/",
-      "tests/browser/"
+      "tests/browser/",
+      "crates/ipp-wasm/src/services/render.rs",
+      "packages/ipp-client/tools/assemble.mjs",
+      "packages/ipp-react/src/gui/theme.ts",
+      "tools/build/verify-browser.mjs",
+      "tools/build_surface_assets.py",
+      "tests/render/retained-gui-environment.ts",
+      "tests/render/retained-gui-images.ts",
+      "tests/render/retained-gui-scenario.ts",
+      "tests/render/surface-fixture.tsx",
+      "tests/performance/retained-gui.ts"
+    ],
+    "files": [
+      "dist/tests/render/retained-gui.test.js"
     ]
   }
 }

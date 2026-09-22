@@ -147,12 +147,18 @@ def parser() -> argparse.ArgumentParser:
     )
     common(benchmarking)
     benchmarking.add_argument("backend", choices=("native", "browser"))
-    benchmarking.add_argument("--preset", choices=("smoke", "full"), default="smoke")
+    # Stress defaults are applied by the planner so other scenes can reject them.
+    benchmarking.add_argument("--preset", choices=("smoke", "full"))
     benchmarking.add_argument(
         "--scene", choices=("stress", "retained-gui"), default="stress"
     )
-    benchmarking.add_argument("--frames", type=int, default=60)
-    benchmarking.add_argument("--group", type=int, default=64)
+    benchmarking.add_argument(
+        "--frames",
+        type=int,
+        default=60,
+        help="stress frames, or streaming updates for --scene retained-gui",
+    )
+    benchmarking.add_argument("--group", type=int)
     benchmarking.add_argument("--output")
     benchmarking.add_argument("--scene-dir")
     benchmarking.add_argument("--bundle-dir")

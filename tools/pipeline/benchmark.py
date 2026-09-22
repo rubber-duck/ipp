@@ -23,6 +23,23 @@ FEATURES = [
     "particles",
 ]
 DIRECTORY = ROOT / "target/performance-build"
+# Blender stress-scene options that the retained GUI scene rejects explicitly.
+RETAINED_GUI_UNSUPPORTED = (
+    "preset",
+    "group",
+    "scene_dir",
+    "bundle_dir",
+    "geometry_index",
+    "instrumented",
+    "reuse_scene",
+    "reuse_import",
+    "allow_software",
+    "skip_moving",
+    "culling_views",
+    "draw_sweep",
+    "render_profile",
+    "compare_culling",
+)
 
 
 def digest(path: Path) -> str:
@@ -120,11 +137,22 @@ def register(tasks: dict[str, Task]) -> None:
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
 
-    if args.frames < 1 or args.group < 1:
-        raise ValueError("Frames and controller group size must be positive")
     if getattr(args, "scene", "stress") == "retained-gui":
         if args.backend != "browser":
             raise ValueError("The retained GUI workload uses the browser backend")
+        # --frames counts streaming updates; stress-scene options have no effect here.
+        unsupported = [
+            f"--{name.replace('_', '-')}"
+            for name in RETAINED_GUI_UNSUPPORTED
+            if getattr(args, name) not in (None, False)
+        ]
+        if unsupported:
+            raise ValueError(
+                "The retained GUI benchmark does not accept stress-scene options: "
+                + ", ".join(unsupported)
+            )
+        if args.frames < 1:
+            raise ValueError("Retained GUI streaming updates must be positive")
         dependencies = (
             "build:typescript",
             "build:surface-fixtures",
@@ -147,6 +175,10 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
             timeout=7200,
         )
         return ["benchmark:retained-gui"]
+    args.preset = args.preset or "smoke"
+    args.group = 64 if args.group is None else args.group
+    if args.frames < 1 or args.group < 1:
+        raise ValueError("Frames and controller group size must be positive")
     if sum((args.culling_views, args.draw_sweep, args.render_profile)) > 1:
         raise ValueError("Select one native benchmark scenario")
     if args.backend == "browser" and (

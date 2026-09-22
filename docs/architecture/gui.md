@@ -24,7 +24,9 @@ Constraint layout shares the [Surface content convention](rendering.md#surface-p
 
 Animation precedes layout. Layout properties cause reflow; visual translation/scale move paint and hit regions together. Retained output changes only with relevant inputs. Camera-only changes update projection and placement without remeasuring text or reflowing the tree.
 
-Paint and hit testing share evaluated layout, visual transforms and intersected rectangular clips. GUI prepares ordered curves, glyphs, bitmaps and parameterized rectangle/rounded-box backgrounds through the shared Surface preparation boundary. RenderService owns coverage, GPU packing and compatible contiguous batching under ordinary scene depth, transparency and colour rules. Missing resources affect their dependent work, and normal asset readiness/recovery rebuilds it.
+Paint and hit testing share evaluated layout, visual transforms and intersected rectangular clips. GUI prepares ordered parameterized shapes, glyphs, complex drawings and bitmaps through the shared Surface preparation boundary. Ordinary controls prefer [rounded-rectangle materials and retained presentation](rendering.md#gui-shapes-and-retained-presentation); RenderService owns coverage, GPU packing, glyph reuse and compatible contiguous batching under ordinary scene depth, transparency and colour rules. Layout supplies shape dimensions independently of corner and border dimensions. Decorative glow affects paint bounds only; it does not create a larger hit target. Missing resources affect their dependent work, and normal asset readiness/recovery rebuilds it.
+
+[Optional Surface texture caching](rendering.md#optional-surface-texture-caching) operates on evaluated paint under the rendering quality policy. It does not throttle GUI evaluation or input; focus and active interaction select current direct presentation so controls do not remain visually delayed by a distant cache's refresh cadence.
 
 ## Evaluation and input
 
@@ -42,7 +44,7 @@ Text measurement and rendering share immutable font metrics and original glyph i
 
 Committed text is distinct from provisional composition. The platform adapter owns native focus, clipboard, IME, candidate placement and trusted-gesture soft-keyboard access; its temporary native buffer synchronizes through revision- and focus-fenced edits. Platform failure does not transfer text authority to the DOM or imply a successful edit.
 
-Skins declare stable named parts and ordinary immutable curve/font/bitmap/animation references. Slider fill and thumb follow the same committed value and rail geometry within the runtime. Resolve disabled over pressed over hovered over idle, with checked/value variants and a separate focus channel. Each property group has one resolved animation owner; overlapping skin channels do not compete to write the same property. Existing AnimationSystem transitions supply interruption continuity. Ready skin replacement preserves node identity, focus and values; pending replacements retain usable prior appearance.
+Skins declare stable named parts with parameterized shape materials and ordinary immutable curve/font/bitmap/animation references. Material values use the existing typed-property and animation ownership rather than a separate styling evaluator. Slider fill and thumb follow the same committed value and rail geometry within the runtime. Resolve disabled over pressed over hovered over idle, with checked/value variants and a separate focus channel. Each property group has one resolved animation owner; overlapping skin channels do not compete to write the same property. Existing AnimationSystem transitions supply interruption continuity. Ready skin replacement preserves node identity, focus and values; pending replacements retain usable prior appearance.
 
 ## Client and persistence boundaries
 

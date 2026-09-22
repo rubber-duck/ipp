@@ -6,8 +6,15 @@
 //! only the affected batch, uploading its complete contents via storage replacement.
 //! Culled Surfaces keep their retained work; destruction, or a submission that no
 //! longer uses a batch, releases it.
+//!
+//! Batch boundaries within a run of compatible boxes follow primitive identities rather
+//! than positions, so inserting, removing or resizing a box rebuilds only its own batch.
+//! A box whose geometry changed recently is volatile and batches apart from stable
+//! boxes, so an animated control re-uploads only its own small batch each frame. The
+//! clip is a draw-time uniform: clip-only changes reuse vertex storage.
 
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -117,6 +124,22 @@ pub struct PrimitiveKey {
     pub identity: SurfacePrimitiveIdentity,
 }
 
+/// Boxes one retained batch holds at most.
+const MAX_BATCH_BOXES: usize = 128;
+
+/// Boxes a batch holds before an identity boundary may end it.
+const MIN_BATCH_BOXES: usize = 4;
+
+/// On average one primitive identity in this many starts a new batch.
+const BATCH_BOUNDARY_PERIOD: u64 = 32;
+
+/// Frames a box stays volatile after its geometry last changed. Longer than a caret
+/// blink period, so blinking and repeated transitions stay in their own batch.
+const VOLATILE_FRAMES: u64 = 120;
+
+/// Consecutive volatile boxes one batch holds at most.
+const MAX_VOLATILE_BATCH_BOXES: usize = 8;
+
 /// Cached CPU geometry for one box primitive.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CachedPrimitiveGeometry {
@@ -124,20 +147,31 @@ pub struct CachedPrimitiveGeometry {
     pub hash: u64,
     /// Explicit vertices forming triangles (counter-clockwise front face).
     pub vertices: Vec<GuiBoxVertex>,
+    /// Frame before which the box stays volatile after a geometry change.
+    volatile_until: u64,
+    /// Frame that last submitted the box.
+    seen: u64,
 }
 
 /// Retained GPU batch holding a device buffer handle and revision metadata.
 pub struct RetainedGuiBatch<D: RenderDevice> {
     /// Context-owned GPU batch buffer.
     pub gpu: D::GuiBatch,
-    /// Effective clip rectangle in Surface metres.
-    pub clip: SurfaceClipRect,
-    /// Combined content hash of all constituent primitives and clip.
+    /// Combined content hash of the constituent primitives; the clip is excluded.
     pub hash: u64,
     /// Allocated GPU bytes.
     pub bytes: usize,
     /// Total vertex count.
     pub vertex_count: usize,
+    /// Frame that last drew the batch.
+    seen: u64,
+}
+
+/// One box of the run being batched.
+struct RunBox {
+    identity: SurfacePrimitiveIdentity,
+    hash: u64,
+    volatile: bool,
 }
 
 /// Renderer-owned retained cache of CPU geometry and GPU batches.
@@ -146,8 +180,8 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     retained_batches: BTreeMap<GuiBatchKey, RetainedGuiBatch<D>>,
     cpu_primitives: BTreeMap<PrimitiveKey, CachedPrimitiveGeometry>,
     scratch_vertices: Vec<GuiBoxVertex>,
-    used_batches: BTreeSet<GuiBatchKey>,
-    used_primitives: BTreeSet<PrimitiveKey>,
+    run_boxes: Vec<RunBox>,
+    frame: u64,
 }
 
 impl<D: RenderDevice> GuiBatchRenderCache<D> {
@@ -158,8 +192,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             retained_batches: BTreeMap::new(),
             cpu_primitives: BTreeMap::new(),
             scratch_vertices: Vec::new(),
-            used_batches: BTreeSet::new(),
-            used_primitives: BTreeSet::new(),
+            run_boxes: Vec::new(),
+            frame: 0,
         }
     }
 
@@ -171,8 +205,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         }
         self.cpu_primitives.clear();
         self.scratch_vertices.clear();
-        self.used_batches.clear();
-        self.used_primitives.clear();
+        self.run_boxes.clear();
     }
 
     /// Total resident bytes occupied by retained GPU batch allocations.
@@ -180,7 +213,10 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         self.retained_batches.values().map(|b| b.bytes).sum()
     }
 
-    /// Submit one batch of compatible box primitives.
+    /// Submit one contiguous run of compatible box primitives as bounded batches.
+    ///
+    /// Stable boxes split at identity-selected boundaries; volatile boxes form their own
+    /// small batches. Each batch replaces its complete storage only when its boxes change.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_box_batch(
         &mut self,
@@ -192,25 +228,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         mvp: &[f32; 16],
         stats: &mut RenderStats,
     ) -> Result<(), RenderError> {
-        if boxes.is_empty() {
-            return Ok(());
-        }
-
-        let initial_identity = boxes[0].style().identity;
-        let batch_key = GuiBatchKey {
-            entity,
-            initial_primitive: initial_identity,
-            part_class,
-        };
-
-        self.used_batches.insert(batch_key);
-        self.scratch_vertices.clear();
-
-        let mut batch_hasher = std::collections::hash_map::DefaultHasher::new();
-        for coord in clip {
-            batch_hasher.write_u32(coord.to_bits());
-        }
-
+        // Refresh every box's geometry and volatility before choosing batch boundaries.
+        self.run_boxes.clear();
         for &primitive in boxes {
             let SurfaceRenderPrimitive::Box {
                 style,
@@ -225,13 +244,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 continue;
             };
 
-            let prim_key = PrimitiveKey {
-                entity,
-                identity: style.identity,
-            };
-            self.used_primitives.insert(prim_key);
-
-            let prim_hash = hash_box_inputs(
+            let hash = hash_box_inputs(
                 style,
                 size,
                 corner_radius,
@@ -240,80 +253,150 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 fill,
                 glow.as_ref(),
             );
-
-            style.identity.hash(&mut batch_hasher);
-            batch_hasher.write_u64(prim_hash);
-
-            match self.cpu_primitives.get(&prim_key) {
-                Some(cached) if cached.hash == prim_hash => {}
-                _ => {
-                    let quad = generate_box_vertices(
-                        style,
-                        size,
-                        corner_radius,
-                        *border_width,
-                        border_color,
-                        fill,
-                        glow.as_ref(),
-                    );
-                    self.cpu_primitives.insert(
-                        prim_key,
-                        CachedPrimitiveGeometry {
-                            hash: prim_hash,
-                            vertices: quad,
-                        },
-                    );
+            let generate = || {
+                generate_box_vertices(
+                    style,
+                    size,
+                    corner_radius,
+                    *border_width,
+                    border_color,
+                    fill,
+                    glow.as_ref(),
+                )
+            };
+            let key = PrimitiveKey {
+                entity,
+                identity: style.identity,
+            };
+            let cached = match self.cpu_primitives.entry(key) {
+                Entry::Occupied(entry) => {
+                    let cached = entry.into_mut();
+                    if cached.hash != hash {
+                        cached.hash = hash;
+                        cached.vertices = generate();
+                        cached.volatile_until = self.frame + VOLATILE_FRAMES;
+                        stats.gui_rebuilds += 1;
+                    }
+                    cached
+                }
+                Entry::Vacant(entry) => {
                     stats.gui_rebuilds += 1;
+                    entry.insert(CachedPrimitiveGeometry {
+                        hash,
+                        vertices: generate(),
+                        volatile_until: 0,
+                        seen: self.frame,
+                    })
                 }
             };
+            cached.seen = self.frame;
+
+            self.run_boxes.push(RunBox {
+                identity: style.identity,
+                hash,
+                volatile: cached.volatile_until > self.frame,
+            });
         }
 
-        let batch_hash = batch_hasher.finish();
-
-        if let Some(retained) = self.retained_batches.get_mut(&batch_key) {
-            if retained.hash == batch_hash {
-                // Batch is completely warm and unchanged: zero geometry bytes uploaded!
-                self.device
-                    .borrow_mut()
-                    .draw_gui_batch(program, &retained.gpu, mvp, &clip)?;
-                stats.draw_calls += 1;
-                stats.triangles += (retained.vertex_count / 3) as u32;
-                stats.gui_batches += 1;
-                return Ok(());
+        let mut start = 0;
+        for index in 1..=self.run_boxes.len() {
+            if index < self.run_boxes.len() && !self.starts_batch(start, index) {
+                continue;
             }
 
-            for primitive in boxes {
+            self.draw_run_batch(program, entity, clip, part_class, start..index, mvp, stats)?;
+            start = index;
+        }
+
+        Ok(())
+    }
+
+    /// Whether the box at `index` starts a new batch after the batch starting at `start`.
+    fn starts_batch(&self, start: usize, index: usize) -> bool {
+        let length = index - start;
+        let current = &self.run_boxes[index];
+        if current.volatile != self.run_boxes[index - 1].volatile {
+            return true;
+        }
+        if current.volatile {
+            return length >= MAX_VOLATILE_BATCH_BOXES;
+        }
+
+        length >= MAX_BATCH_BOXES
+            || (length >= MIN_BATCH_BOXES && identity_starts_batch(current.identity))
+    }
+
+    /// Draw one batch of the current run, replacing its storage only when it changed.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_run_batch(
+        &mut self,
+        program: &D::Program,
+        entity: ipp_core::EntityId,
+        clip: SurfaceClipRect,
+        part_class: GuiPartClass,
+        range: std::ops::Range<usize>,
+        mvp: &[f32; 16],
+        stats: &mut RenderStats,
+    ) -> Result<(), RenderError> {
+        let boxes = &self.run_boxes[range];
+        let batch_key = GuiBatchKey {
+            entity,
+            initial_primitive: boxes[0].identity,
+            part_class,
+        };
+
+        let mut batch_hasher = std::collections::hash_map::DefaultHasher::new();
+        for run_box in boxes {
+            run_box.identity.hash(&mut batch_hasher);
+            batch_hasher.write_u64(run_box.hash);
+        }
+        let batch_hash = batch_hasher.finish();
+
+        self.scratch_vertices.clear();
+        let unchanged = self
+            .retained_batches
+            .get(&batch_key)
+            .is_some_and(|retained| retained.hash == batch_hash);
+        if !unchanged {
+            for run_box in boxes {
                 self.scratch_vertices.extend_from_slice(
                     &self.cpu_primitives[&PrimitiveKey {
                         entity,
-                        identity: primitive.style().identity,
+                        identity: run_box.identity,
                     }]
                         .vertices,
                 );
             }
+        }
 
-            // Batch is dirty: replace GPU storage with complete contents.
-            let replaced = self
-                .device
-                .borrow_mut()
-                .update_gui_batch(&mut retained.gpu, &self.scratch_vertices);
-            if let Err(error) = replaced {
-                // A failed replacement leaves the storage contents unknown. Release the
-                // batch so no later frame draws it with stale counts or vertices.
-                if let Some(batch) = self.retained_batches.remove(&batch_key) {
-                    self.device.borrow_mut().delete_gui_batch(batch.gpu);
+        if let Some(retained) = self.retained_batches.get_mut(&batch_key) {
+            retained.seen = self.frame;
+
+            if !unchanged {
+                // Batch is dirty: replace GPU storage with complete contents.
+                let replaced = self
+                    .device
+                    .borrow_mut()
+                    .update_gui_batch(&mut retained.gpu, &self.scratch_vertices);
+                if let Err(error) = replaced {
+                    // A failed replacement leaves the storage contents unknown. Release the
+                    // batch so no later frame draws it with stale counts or vertices.
+                    if let Some(batch) = self.retained_batches.remove(&batch_key) {
+                        self.device.borrow_mut().delete_gui_batch(batch.gpu);
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+
+                let bytes = self.scratch_vertices.len() * std::mem::size_of::<GuiBoxVertex>();
+                retained.hash = batch_hash;
+                retained.bytes = bytes;
+                retained.vertex_count = self.scratch_vertices.len();
+
+                stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
+                stats.gui_allocations += 1;
             }
 
-            let bytes = self.scratch_vertices.len() * std::mem::size_of::<GuiBoxVertex>();
-            retained.hash = batch_hash;
-            retained.clip = clip;
-            retained.bytes = bytes;
-            retained.vertex_count = self.scratch_vertices.len();
-
-            stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
-            stats.gui_allocations += 1;
+            // An unchanged batch uploads zero geometry bytes, whatever its clip.
             self.device
                 .borrow_mut()
                 .draw_gui_batch(program, &retained.gpu, mvp, &clip)?;
@@ -321,16 +404,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             stats.triangles += (retained.vertex_count / 3) as u32;
             stats.gui_batches += 1;
             return Ok(());
-        }
-
-        for primitive in boxes {
-            self.scratch_vertices.extend_from_slice(
-                &self.cpu_primitives[&PrimitiveKey {
-                    entity,
-                    identity: primitive.style().identity,
-                }]
-                    .vertices,
-            );
         }
 
         // New batch allocation.
@@ -360,10 +433,10 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             batch_key,
             RetainedGuiBatch {
                 gpu,
-                clip,
                 hash: batch_hash,
                 bytes,
                 vertex_count,
+                seen: self.frame,
             },
         );
 
@@ -376,11 +449,12 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     /// told apart from undrawn ones, so every retained batch is kept.
     pub fn finish_frame(&mut self, surfaces: Option<&RetainedSurfaceSubmission<'_>>) {
         if let Some(surfaces) = surfaces {
+            let frame = self.frame;
             let stale: Vec<GuiBatchKey> = self
                 .retained_batches
-                .keys()
-                .copied()
-                .filter(|key| surfaces.is_stale(key.entity, self.used_batches.contains(key)))
+                .iter()
+                .filter(|(key, batch)| surfaces.is_stale(key.entity, batch.seen == frame))
+                .map(|(key, _)| *key)
                 .collect();
 
             let mut device = self.device.borrow_mut();
@@ -390,14 +464,20 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 }
             }
 
-            self.cpu_primitives.retain(|key, _| {
-                !surfaces.is_stale(key.entity, self.used_primitives.contains(key))
-            });
+            self.cpu_primitives
+                .retain(|key, cached| !surfaces.is_stale(key.entity, cached.seen == frame));
         }
 
-        self.used_batches.clear();
-        self.used_primitives.clear();
+        self.frame += 1;
     }
+}
+
+/// Whether a stable box identity may start a batch. Boundaries depend only on
+/// identities, so edits elsewhere in a run keep the batches that do not contain them.
+fn identity_starts_batch(identity: SurfacePrimitiveIdentity) -> bool {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    identity.hash(&mut hasher);
+    hasher.finish().is_multiple_of(BATCH_BOUNDARY_PERIOD)
 }
 
 impl<D: RenderDevice> Drop for GuiBatchRenderCache<D> {

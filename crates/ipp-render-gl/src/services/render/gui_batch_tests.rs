@@ -6,8 +6,8 @@ use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use super::{
-    GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, RetainedSurfaceSubmission,
-    generate_box_vertices,
+    GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
+    VOLATILE_FRAMES, generate_box_vertices,
 };
 use crate::{GlyphVertex, RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
@@ -700,8 +700,11 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
         stats2.gui_rebuilds, 1,
         "only the modified primitive geometry rebuilds"
     );
-    assert_eq!(stats2.gui_allocations, 1);
-    assert_eq!(device.borrow().updated_batches.len(), 1);
+    // The changed box turns volatile and leaves its stable neighbour's batch: that
+    // batch replaces its storage without it, and the changed box gets its own batch.
+    assert_eq!(stats2.gui_allocations, 2);
+    assert_eq!(device.borrow().updated_batches, [(1, 6)]);
+    assert_eq!(device.borrow().created_batches.len(), 2);
     let expected_bytes = 12 * std::mem::size_of::<GuiBoxVertex>() as u32;
     assert_eq!(stats2.uploaded_bytes, expected_bytes);
 }
@@ -1046,4 +1049,216 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
     draw(&mut cache, &moved).unwrap();
     assert_eq!(device.borrow().created_batches.len(), 2);
     assert_eq!(device.borrow().draws.last().unwrap().0, 2);
+}
+
+/// Bytes of one filled box quad.
+const BOX_BYTES: u32 = 6 * std::mem::size_of::<GuiBoxVertex>() as u32;
+
+/// A long run of small filled boxes, one per GUI node.
+fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<SurfaceRenderPrimitive> {
+    nodes
+        .map(|node| {
+            let mut primitive = sample_box_primitive(
+                node,
+                1,
+                GuiPrimitivePart::Background,
+                [node as f32 * 0.01, 0.0],
+                [0.005, 0.005],
+                None,
+            );
+            if let SurfaceRenderPrimitive::Box {
+                border_width,
+                ..
+            } = &mut primitive
+            {
+                *border_width = 0.0;
+            }
+            primitive
+        })
+        .collect()
+}
+
+fn set_fill(primitive: &mut SurfaceRenderPrimitive, red: f32) {
+    if let SurfaceRenderPrimitive::Box {
+        fill,
+        ..
+    } = primitive
+    {
+        *fill = GuiShapeFill::Solid([red, 0.4, 0.6, 1.0]);
+    }
+}
+
+/// Submit one complete frame of a single visible Surface.
+fn draw_run_frame(
+    cache: &mut GuiBatchRenderCache<MockGuiDevice>,
+    boxes: &[SurfaceRenderPrimitive],
+    clip: SurfaceClipRect,
+) -> RenderStats {
+    let entity = ipp_core::EntityId::from_bits(1);
+    let refs: Vec<_> = boxes.iter().collect();
+    let mut stats = RenderStats::default();
+    cache
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            GuiPartClass::Background,
+            &refs,
+            &[0.0; 16],
+            &mut stats,
+        )
+        .unwrap();
+    let live = BTreeSet::from([entity]);
+    cache.finish_frame(Some(&RetainedSurfaceSubmission {
+        live: &live,
+        submitted: &live,
+    }));
+    stats
+}
+
+const RUN_CLIP: SurfaceClipRect = [0.0, 0.0, 8.0, 2.0];
+
+#[test]
+fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let boxes = box_run(1..=400);
+
+    let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert!(cold.gui_batches >= 4, "{cold:?}");
+    assert_eq!(cold.uploaded_bytes, 400 * BOX_BYTES);
+    assert!(
+        device
+            .borrow()
+            .created_batches
+            .iter()
+            .all(|(_, vertices)| *vertices <= MAX_BATCH_BOXES * 6)
+    );
+
+    let warm = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert_eq!((warm.uploaded_bytes, warm.gui_allocations), (0, 0));
+    assert_eq!(warm.gui_batches, cold.gui_batches);
+}
+
+#[test]
+fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
+    let first_batches = |device: &Rc<RefCell<MockGuiDevice>>, count: usize| {
+        device.borrow().created_batches[..count]
+            .iter()
+            .map(|(_, vertices)| *vertices as u32 / 6)
+            .sum::<u32>()
+    };
+
+    // Resizing the first box rebuilds only its own batch.
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let mut boxes = box_run(1..=400);
+    let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    let created = device.borrow().created_batches.len();
+    if let SurfaceRenderPrimitive::Box {
+        size,
+        ..
+    } = &mut boxes[0]
+    {
+        *size = [0.008, 0.008];
+    }
+    let resized = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert_eq!(resized.gui_rebuilds, 1);
+    assert!(
+        resized.uploaded_bytes <= first_batches(&device, 1) * BOX_BYTES,
+        "{resized:?}"
+    );
+    assert!(
+        device.borrow().updated_batches.len() + device.borrow().created_batches.len() - created
+            <= 2
+    );
+    assert!(resized.gui_batches <= cold.gui_batches + 1);
+
+    // Inserting a box before the first one creates at most the batches around it.
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let mut boxes = box_run(1..=400);
+    draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    let created = device.borrow().created_batches.len();
+    let bound = (first_batches(&device, 2) + 1) * BOX_BYTES;
+    boxes.insert(0, box_run(1000..=1000).remove(0));
+    let inserted = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert_eq!(inserted.gui_rebuilds, 1);
+    assert!(inserted.uploaded_bytes <= bound, "{inserted:?}");
+    assert!(device.borrow().updated_batches.is_empty());
+    assert!(device.borrow().created_batches.len() - created <= 2);
+    assert!(device.borrow().deleted_batches.len() <= 2);
+
+    // Removing an early box likewise leaves every later batch untouched.
+    boxes.remove(3);
+    let created = device.borrow().created_batches.len();
+    let removed = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert!(removed.uploaded_bytes <= bound, "{removed:?}");
+    assert!(
+        device.borrow().updated_batches.len() + device.borrow().created_batches.len() - created
+            <= 2
+    );
+}
+
+#[test]
+fn animating_one_box_in_a_large_run_uploads_only_that_box_each_frame() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let mut boxes = box_run(1..=400);
+    let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+
+    // The first animated frame moves the box out of its batch: bounded by that batch.
+    set_fill(&mut boxes[200], 0.0);
+    let split = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert!(
+        split.uploaded_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES,
+        "{split:?}"
+    );
+    assert!(split.gui_batches <= cold.gui_batches + 2);
+
+    // Every later frame replaces only the animated box's own batch.
+    for frame in 1..=30 {
+        set_fill(&mut boxes[200], frame as f32 / 30.0);
+        let animated = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+        assert_eq!(animated.uploaded_bytes, BOX_BYTES, "frame {frame}");
+        assert_eq!((animated.gui_rebuilds, animated.gui_allocations), (1, 1));
+        assert_eq!(animated.gui_batches, split.gui_batches);
+    }
+
+    // At rest the box rejoins its neighbours once, after which frames upload nothing.
+    let mut rest_bytes = 0;
+    for _ in 0..VOLATILE_FRAMES + 2 {
+        rest_bytes += draw_run_frame(&mut cache, &boxes, RUN_CLIP).uploaded_bytes;
+    }
+    assert!(rest_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES);
+    let settled = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    assert_eq!(settled.uploaded_bytes, 0);
+    assert_eq!(settled.gui_batches, cold.gui_batches);
+}
+
+#[test]
+fn clip_only_changes_reuse_vertex_storage() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let boxes = box_run(1..=40);
+    draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+    let created = device.borrow().created_batches.len();
+
+    let scrolled = [0.5, 0.0, 3.0, 1.0];
+    let stats = draw_run_frame(&mut cache, &boxes, scrolled);
+    assert_eq!(
+        (
+            stats.uploaded_bytes,
+            stats.gui_rebuilds,
+            stats.gui_allocations
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(device.borrow().created_batches.len(), created);
+    assert!(device.borrow().updated_batches.is_empty());
+    assert!(
+        device.borrow().draws[created..]
+            .iter()
+            .all(|(_, clip)| *clip == scrolled)
+    );
 }

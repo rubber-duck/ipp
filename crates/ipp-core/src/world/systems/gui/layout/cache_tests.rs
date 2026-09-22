@@ -150,6 +150,64 @@ fn skin_part_edits_advance_paint_without_reflow_or_remeasure() {
 }
 
 #[test]
+fn material_part_edits_advance_paint_without_reflow_or_remeasure() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let mut tree = TreeBuilder::new();
+    let root = tree.add(
+        None,
+        GuiNodeContent::Container(GuiContainerKind::Column),
+        text_style(),
+    );
+    let leaf = tree.add(
+        Some(root),
+        GuiNodeContent::Text("A".to_owned()),
+        text_style(),
+    );
+    let mut root_tree = tree.build();
+    let glow_intensity = GuiRoot::part_property_name(leaf, "background", "glow_intensity").unwrap();
+    root_tree
+        .properties
+        .set(&glow_intensity, DynamicValue::F32(1.0))
+        .unwrap();
+
+    let mut cache = GuiLayoutCache::default();
+    let first = cache
+        .evaluate(entity(), &request(&root_tree, 1), &resolver)
+        .clone();
+
+    // Change material lane: glow_intensity advances paint revision without reflow.
+    root_tree
+        .properties
+        .set(&glow_intensity, DynamicValue::F32(2.5))
+        .unwrap();
+
+    let second = cache
+        .evaluate(entity(), &request(&root_tree, 2), &resolver)
+        .clone();
+    assert_eq!(second.layout_revision, first.layout_revision);
+    assert_eq!(second.paint_revision, first.paint_revision + 1);
+    assert_eq!(second.reflow_count, 1);
+    assert_eq!(second.remeasure_count, 1);
+
+    // Change gradient color lane advances paint revision without reflow.
+    let grad_color = GuiRoot::part_property_name(leaf, "background", "gradient_color0").unwrap();
+    root_tree
+        .properties
+        .set(&grad_color, DynamicValue::Vec4([0.2, 0.4, 0.6, 1.0]))
+        .unwrap();
+
+    let third = cache
+        .evaluate(entity(), &request(&root_tree, 3), &resolver)
+        .clone();
+    assert_eq!(third.layout_revision, first.layout_revision);
+    assert_eq!(third.paint_revision, second.paint_revision + 1);
+    assert_eq!(third.reflow_count, 1);
+    assert_eq!(third.remeasure_count, 1);
+    let _ = root;
+}
+
+#[test]
 fn insert_and_reorder_invalidate_dependents() {
     let font = test_font();
     let resolver = TestResolver::with_font(&font);

@@ -432,6 +432,7 @@ export interface GuiTextFocusState {
 }
 
 export type GuiProperty =
+  | "enabled"
   | "width"
   | "height"
   | "min_width"
@@ -451,7 +452,29 @@ export type GuiProperty =
   | "position"
   | "scale";
 
-export type GuiPartProperty = "color" | "opacity" | "scale" | "asset";
+export type GuiPartProperty =
+  | "color"
+  | "opacity"
+  | "scale"
+  | "asset"
+  | "corner_radius"
+  | "border_width"
+  | "border_color"
+  | "fill_mode"
+  | "gradient_start"
+  | "gradient_end"
+  | "gradient_color0"
+  | "gradient_color1"
+  | "gradient_radius"
+  | "glow_color"
+  | "glow_intensity"
+  | "glow_radius"
+  | "glow_falloff"
+  | "motion"
+  | "duration"
+  | "easing"
+  | "track"
+  | "time";
 
 /** Target name for ordinary property animation and StateOverlay commands on a node style. */
 export function guiProperty(id: GuiNodeId, property: GuiProperty): string {

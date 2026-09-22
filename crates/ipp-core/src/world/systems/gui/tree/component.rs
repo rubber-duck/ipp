@@ -30,14 +30,28 @@ const GUI_NODE_PROPERTIES: [(&str, Kind); 19] = [
 ];
 
 /// Named skin-part lanes and their exact storage types.
-const GUI_PART_PROPERTIES: [(&str, Kind); 9] = [
-    ("color", Kind::Vec4),
+/// Ordered by descending suffix length so longer composite suffixes match first.
+pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 22] = [
+    ("gradient_color0", Kind::Vec4),
+    ("gradient_color1", Kind::Vec4),
+    ("gradient_radius", Kind::F32),
+    ("glow_intensity", Kind::F32),
+    ("gradient_start", Kind::Vec2),
+    ("corner_radius", Kind::Vec2),
+    ("gradient_end", Kind::Vec2),
+    ("border_color", Kind::Vec4),
+    ("border_width", Kind::F32),
+    ("glow_falloff", Kind::F32),
+    ("glow_radius", Kind::F32),
+    ("glow_color", Kind::Vec4),
+    ("fill_mode", Kind::F32),
+    ("duration", Kind::F32),
     ("opacity", Kind::F32),
+    ("easing", Kind::F32),
+    ("motion", Kind::Asset),
+    ("color", Kind::Vec4),
     ("scale", Kind::Vec2),
     ("asset", Kind::Asset),
-    ("motion", Kind::Asset),
-    ("duration", Kind::F32),
-    ("easing", Kind::F32),
     ("track", Kind::F32),
     ("time", Kind::F32),
 ];
@@ -439,10 +453,16 @@ fn property_lane(name: &str) -> Option<(GuiNodeId, &str, Kind)> {
     }
     let id = GuiNodeId(id.parse().ok()?);
     match lane.strip_prefix("part_") {
-        Some(part) => {
-            let (part, suffix) = part.rsplit_once('_')?;
-            let kind = lane_kind(&GUI_PART_PROPERTIES, suffix)?;
-            valid_part_name(part).then_some((id, suffix, kind))
+        Some(part_and_suffix) => {
+            for &(suffix, kind) in &GUI_PART_PROPERTIES {
+                if let Some(part) = part_and_suffix.strip_suffix(suffix)
+                    && let Some(part) = part.strip_suffix('_')
+                    && valid_part_name(part)
+                {
+                    return Some((id, suffix, kind));
+                }
+            }
+            None
         }
         None => Some((id, lane, lane_kind(&GUI_NODE_PROPERTIES, lane)?)),
     }
@@ -486,14 +506,24 @@ pub(crate) fn validate_property_value(name: &str, value: &DynamicValue) -> Resul
                     "track" => skin_motion_base_track(*value).is_some(),
                     "width" | "height" | "min_width" | "min_height" | "max_width"
                     | "max_height" | "flex" => *value >= 0.0,
+                    "border_width" | "gradient_radius" | "glow_intensity" | "glow_radius"
+                    | "glow_falloff" => *value >= 0.0,
+                    "fill_mode" => matches!(*value, 0.0 | 1.0 | 2.0),
                     _ => true,
                 }
         }
-        DynamicValue::Vec2(value) => value.iter().all(|value| value.is_finite()),
+        DynamicValue::Vec2(value) => {
+            value.iter().all(|v| v.is_finite())
+                && match lane {
+                    "corner_radius" => value.iter().all(|v| *v >= 0.0),
+                    _ => true,
+                }
+        }
         DynamicValue::Vec4(value) => {
             value.iter().all(|value| value.is_finite())
                 && match lane {
-                    "color" | "background_color" => {
+                    "color" | "background_color" | "border_color" | "gradient_color0"
+                    | "gradient_color1" | "glow_color" => {
                         value.iter().all(|value| (0.0..=1.0).contains(value))
                     }
                     "padding" => value.iter().all(|value| *value >= 0.0),

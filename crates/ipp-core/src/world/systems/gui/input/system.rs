@@ -2798,6 +2798,8 @@ impl GuiInputSystem {
                     corner_radius: [0.0, 0.0],
                     border_width: 0.0,
                     border_color: [0.0, 0.0, 0.0, 0.0],
+                    fill: crate::systems::surface::GuiShapeFill::Solid(color),
+                    glow: None,
                 });
             }
         }

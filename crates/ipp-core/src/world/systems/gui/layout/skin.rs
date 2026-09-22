@@ -15,8 +15,8 @@ use crate::systems::gui::{
     GuiNodeId, GuiResourceResolver, GuiRoot, MAX_LAYOUT_DEPTH,
 };
 use crate::systems::surface::{
-    GuiPrimitiveId, GuiPrimitivePart, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
-    SurfaceRenderPrimitive, gui_logical_to_surface_content,
+    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfacePrimitiveIdentity,
+    SurfacePrimitiveStyle, SurfaceRenderPrimitive, gui_logical_to_surface_content,
 };
 use crate::{DynamicValue, EntityId};
 
@@ -257,6 +257,32 @@ pub struct GuiPartStyle {
     pub scale: Option<[f32; 2]>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
+    /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
+    pub corner_radius: Option<[f32; 2]>,
+    /// Optional border width in local Surface metres.
+    pub border_width: Option<f32>,
+    /// Optional straight linear RGBA border color.
+    pub border_color: Option<[f32; 4]>,
+    /// Optional fill mode: 0.0 = solid, 1.0 = linear gradient, 2.0 = radial gradient.
+    pub fill_mode: Option<f32>,
+    /// Optional gradient start point (or radial center) in local shape metres.
+    pub gradient_start: Option<[f32; 2]>,
+    /// Optional gradient end point in local shape metres.
+    pub gradient_end: Option<[f32; 2]>,
+    /// Optional gradient stop 0 straight linear RGBA color.
+    pub gradient_color0: Option<[f32; 4]>,
+    /// Optional gradient stop 1 straight linear RGBA color.
+    pub gradient_color1: Option<[f32; 4]>,
+    /// Optional radial gradient radius in local shape metres.
+    pub gradient_radius: Option<f32>,
+    /// Optional straight linear RGBA glow color.
+    pub glow_color: Option<[f32; 4]>,
+    /// Optional glow intensity multiplier (>= 0.0).
+    pub glow_intensity: Option<f32>,
+    /// Optional outward glow radius in local Surface metres (>= 0.0).
+    pub glow_radius: Option<f32>,
+    /// Optional glow falloff exponent (>= 0.0).
+    pub glow_falloff: Option<f32>,
 }
 
 impl GuiPartStyle {
@@ -266,6 +292,19 @@ impl GuiPartStyle {
             && self.opacity.is_none()
             && self.scale.is_none()
             && self.asset.is_none()
+            && self.corner_radius.is_none()
+            && self.border_width.is_none()
+            && self.border_color.is_none()
+            && self.fill_mode.is_none()
+            && self.gradient_start.is_none()
+            && self.gradient_end.is_none()
+            && self.gradient_color0.is_none()
+            && self.gradient_color1.is_none()
+            && self.gradient_radius.is_none()
+            && self.glow_color.is_none()
+            && self.glow_intensity.is_none()
+            && self.glow_radius.is_none()
+            && self.glow_falloff.is_none()
     }
 }
 
@@ -281,6 +320,14 @@ fn valid_opacity(value: f32) -> bool {
 
 fn valid_scale(value: [f32; 2]) -> bool {
     value.iter().all(|v| v.is_finite())
+}
+
+fn valid_non_negative_f32(value: f32) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+fn valid_non_negative_vec2(value: [f32; 2]) -> bool {
+    value.iter().all(|v| v.is_finite() && *v >= 0.0)
 }
 
 /// Read valid lanes for one exact named part.
@@ -312,6 +359,84 @@ pub fn part_style(root: &GuiRoot, node: GuiNodeId, part: &str) -> GuiPartStyle {
     {
         style.asset = Some(source);
     }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "corner_radius")
+        && let Some(DynamicValue::Vec2(cr)) = root.properties.get(&name)
+        && valid_non_negative_vec2(cr)
+    {
+        style.corner_radius = Some(cr);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "border_width")
+        && let Some(DynamicValue::F32(bw)) = root.properties.get(&name)
+        && valid_non_negative_f32(bw)
+    {
+        style.border_width = Some(bw);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "border_color")
+        && let Some(DynamicValue::Vec4(bc)) = root.properties.get(&name)
+        && valid_color(bc)
+    {
+        style.border_color = Some(bc);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "fill_mode")
+        && let Some(DynamicValue::F32(fm)) = root.properties.get(&name)
+        && matches!(fm, 0.0 | 1.0 | 2.0)
+    {
+        style.fill_mode = Some(fm);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_start")
+        && let Some(DynamicValue::Vec2(gs)) = root.properties.get(&name)
+        && valid_scale(gs)
+    {
+        style.gradient_start = Some(gs);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_end")
+        && let Some(DynamicValue::Vec2(ge)) = root.properties.get(&name)
+        && valid_scale(ge)
+    {
+        style.gradient_end = Some(ge);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_color0")
+        && let Some(DynamicValue::Vec4(c0)) = root.properties.get(&name)
+        && valid_color(c0)
+    {
+        style.gradient_color0 = Some(c0);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_color1")
+        && let Some(DynamicValue::Vec4(c1)) = root.properties.get(&name)
+        && valid_color(c1)
+    {
+        style.gradient_color1 = Some(c1);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_radius")
+        && let Some(DynamicValue::F32(gr)) = root.properties.get(&name)
+        && valid_non_negative_f32(gr)
+    {
+        style.gradient_radius = Some(gr);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_color")
+        && let Some(DynamicValue::Vec4(gc)) = root.properties.get(&name)
+        && valid_color(gc)
+    {
+        style.glow_color = Some(gc);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_intensity")
+        && let Some(DynamicValue::F32(gi)) = root.properties.get(&name)
+        && valid_non_negative_f32(gi)
+    {
+        style.glow_intensity = Some(gi);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_radius")
+        && let Some(DynamicValue::F32(gr)) = root.properties.get(&name)
+        && valid_non_negative_f32(gr)
+    {
+        style.glow_radius = Some(gr);
+    }
+    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_falloff")
+        && let Some(DynamicValue::F32(gf)) = root.properties.get(&name)
+        && valid_non_negative_f32(gf)
+    {
+        style.glow_falloff = Some(gf);
+    }
     style
 }
 
@@ -333,6 +458,19 @@ pub fn resolve_state_part_style(
         merged.opacity = merged.opacity.or(next.opacity);
         merged.scale = merged.scale.or(next.scale);
         merged.asset = merged.asset.or(next.asset);
+        merged.corner_radius = merged.corner_radius.or(next.corner_radius);
+        merged.border_width = merged.border_width.or(next.border_width);
+        merged.border_color = merged.border_color.or(next.border_color);
+        merged.fill_mode = merged.fill_mode.or(next.fill_mode);
+        merged.gradient_start = merged.gradient_start.or(next.gradient_start);
+        merged.gradient_end = merged.gradient_end.or(next.gradient_end);
+        merged.gradient_color0 = merged.gradient_color0.or(next.gradient_color0);
+        merged.gradient_color1 = merged.gradient_color1.or(next.gradient_color1);
+        merged.gradient_radius = merged.gradient_radius.or(next.gradient_radius);
+        merged.glow_color = merged.glow_color.or(next.glow_color);
+        merged.glow_intensity = merged.glow_intensity.or(next.glow_intensity);
+        merged.glow_radius = merged.glow_radius.or(next.glow_radius);
+        merged.glow_falloff = merged.glow_falloff.or(next.glow_falloff);
     }
     merged
 }
@@ -422,6 +560,16 @@ pub struct GuiSkinnedAppearance {
     pub asset: Option<AssetSource>,
     /// Focus-ring color when this is the focus-ring part.
     pub focus_border_color: Option<[f32; 4]>,
+    /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
+    pub corner_radius: Option<[f32; 2]>,
+    /// Optional border width in local Surface metres.
+    pub border_width: Option<f32>,
+    /// Optional straight linear RGBA border color.
+    pub border_color: Option<[f32; 4]>,
+    /// Optional shape fill material.
+    pub fill: Option<GuiShapeFill>,
+    /// Optional local glow.
+    pub glow: Option<GuiShapeGlow>,
 }
 
 /// Resolve one stable primitive part without coupling it to sibling parts.
@@ -435,6 +583,53 @@ pub fn resolve_appearance(
     let state = interaction.state();
     let variant = variant_for_content(&node.content);
     let lanes = resolve_state_part_style(root, node.node, base_part, state, variant);
+    let fill = match lanes.fill_mode {
+        Some(1.0) => {
+            let start = lanes.gradient_start.unwrap_or([0.0, 0.0]);
+            let end = lanes.gradient_end.unwrap_or([1.0, 1.0]);
+            let start_color = lanes
+                .gradient_color0
+                .or(lanes.color)
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let end_color = lanes.gradient_color1.unwrap_or(start_color);
+            Some(GuiShapeFill::LinearGradient {
+                start,
+                end,
+                start_color,
+                end_color,
+            })
+        }
+        Some(2.0) => {
+            let center = lanes.gradient_start.unwrap_or([0.5, 0.5]);
+            let radius = lanes.gradient_radius.unwrap_or(0.5);
+            let start_color = lanes
+                .gradient_color0
+                .or(lanes.color)
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let end_color = lanes.gradient_color1.unwrap_or(start_color);
+            Some(GuiShapeFill::RadialGradient {
+                center,
+                radius,
+                start_color,
+                end_color,
+            })
+        }
+        _ => lanes.color.map(GuiShapeFill::Solid),
+    };
+
+    let glow = if lanes.glow_intensity.is_some_and(|i| i > 0.0)
+        && lanes.glow_radius.is_some_and(|r| r > 0.0)
+    {
+        Some(GuiShapeGlow {
+            color: lanes.glow_color.unwrap_or([1.0, 1.0, 1.0, 1.0]),
+            intensity: lanes.glow_intensity.unwrap_or(1.0),
+            radius: lanes.glow_radius.unwrap_or(0.0),
+            falloff: lanes.glow_falloff.unwrap_or(1.0),
+        })
+    } else {
+        None
+    };
+
     Some(GuiSkinnedAppearance {
         state,
         focused: interaction.focused,
@@ -446,6 +641,11 @@ pub fn resolve_appearance(
         focus_border_color: (base_part == GuiPrimitivePart::FocusRing.as_str())
             .then_some(lanes.color)
             .flatten(),
+        corner_radius: lanes.corner_radius,
+        border_width: lanes.border_width,
+        border_color: lanes.border_color,
+        fill,
+        glow,
     })
 }
 
@@ -572,12 +772,53 @@ pub fn apply_appearance_to_primitive(
     primitive: &SurfaceRenderPrimitive,
     appearance: &GuiSkinnedAppearance,
 ) -> SurfaceRenderPrimitive {
-    crate::systems::surface::surface_primitive_with_skin_style(
+    let mut next = crate::systems::surface::surface_primitive_with_skin_style(
         primitive,
         appearance.color,
         appearance.opacity,
         appearance.scale,
-    )
+    );
+    #[cfg(feature = "gui")]
+    if let SurfaceRenderPrimitive::Box {
+        corner_radius,
+        border_width,
+        border_color,
+        fill,
+        glow,
+        ..
+    } = &mut next
+    {
+        if let Some(r) = appearance
+            .corner_radius
+            .filter(|r| r.iter().all(|v| v.is_finite() && *v >= 0.0))
+        {
+            *corner_radius = r;
+        }
+        if let Some(w) = appearance
+            .border_width
+            .filter(|w| w.is_finite() && *w >= 0.0)
+        {
+            *border_width = w;
+        }
+        if let Some(c) = appearance
+            .border_color
+            .filter(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+        {
+            *border_color = c;
+        }
+        if let Some(f) = appearance.fill.filter(|f| f.is_valid()) {
+            *fill = f;
+        } else if let Some(c) = appearance
+            .color
+            .filter(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+        {
+            *fill = GuiShapeFill::Solid(c);
+        }
+        if let Some(g) = appearance.glow.filter(|g| g.is_valid()) {
+            *glow = Some(g);
+        }
+    }
+    next
 }
 
 /// Swap drawing/bitmap resources only; measured glyph fonts never change here.
@@ -1094,6 +1335,8 @@ fn synthetic_control_part(
             corner_radius: [corner_radius, corner_radius],
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 0.0],
+            fill: GuiShapeFill::Solid(color),
+            glow: None,
         },
         resource_required,
     })
@@ -1230,9 +1473,11 @@ fn focus_ring_primitive(
             clip,
         },
         size: [node.rect[2] / units, node.rect[3] / units],
-        corner_radius: [0.0, 0.0],
-        border_width: FOCUS_BORDER_WIDTH,
+        corner_radius: appearance.corner_radius.unwrap_or([0.0, 0.0]),
+        border_width: appearance.border_width.unwrap_or(FOCUS_BORDER_WIDTH),
         border_color: color,
+        fill: appearance.fill.unwrap_or(GuiShapeFill::Solid([0.0; 4])),
+        glow: appearance.glow,
     })
 }
 

@@ -14,8 +14,8 @@ pub use items::{
 };
 #[cfg(feature = "gui")]
 pub use rendering::{
-    GuiPrimitiveId, GuiPrimitivePart, gui_logical_to_surface_content,
-    surface_content_to_gui_logical,
+    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, gui_logical_to_surface_content,
+    surface_content_to_gui_logical, surface_primitive_paint_bounds,
 };
 pub use rendering::{
     SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,

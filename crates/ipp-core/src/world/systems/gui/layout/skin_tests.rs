@@ -540,6 +540,11 @@ fn ready_asset_replaces_drawing_while_missing_retains_prior() {
         scale: None,
         asset: Some(asset_source("new-draw")),
         focus_border_color: None,
+        corner_radius: None,
+        border_width: None,
+        border_color: None,
+        fill: None,
+        glow: None,
     };
     let replaced =
         apply_asset_to_primitive(drawing.clone(), &appearance, &MapResolver::with("new-draw"));
@@ -598,6 +603,11 @@ fn glyph_fonts_never_remeasure_for_skins() {
         scale: None,
         asset: Some(asset_source("other-font")),
         focus_border_color: None,
+        corner_radius: None,
+        border_width: None,
+        border_color: None,
+        fill: None,
+        glow: None,
     };
     let kept = apply_asset_to_primitive(glyphs, &appearance, &MapResolver::with("other-font"));
     match kept {
@@ -1310,6 +1320,11 @@ fn drawing_and_bitmap_parts_reject_incompatible_skin_asset_kinds() {
         scale: None,
         asset: Some(asset),
         focus_border_color: None,
+        corner_radius: None,
+        border_width: None,
+        border_color: None,
+        fill: None,
+        glow: None,
     };
 
     let kept_drawing = apply_asset_to_primitive(
@@ -1666,4 +1681,205 @@ fn retained_skin_resource_is_fenced_by_root_incarnation_and_named_part() {
             .keys()
             .any(|(_, id)| { id.root_incarnation == 8 && id.part == GuiPrimitivePart::Icon })
     );
+}
+
+#[test]
+fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
+    let mut root = GuiRoot::default();
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "corner_radius",
+        DynamicValue::Vec2([0.05, 0.08]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "border_width",
+        DynamicValue::F32(0.01),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "border_color",
+        DynamicValue::Vec4([0.2, 0.4, 0.8, 1.0]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "fill_mode",
+        DynamicValue::F32(1.0),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "gradient_start",
+        DynamicValue::Vec2([0.0, 0.0]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "gradient_end",
+        DynamicValue::Vec2([1.0, 1.0]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "gradient_color0",
+        DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "gradient_color1",
+        DynamicValue::Vec4([0.0, 0.0, 1.0, 1.0]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "glow_color",
+        DynamicValue::Vec4([1.0, 0.5, 0.0, 1.0]),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "glow_intensity",
+        DynamicValue::F32(2.0),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "glow_radius",
+        DynamicValue::F32(0.05),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "background",
+        "glow_falloff",
+        DynamicValue::F32(1.5),
+    );
+
+    let node = evaluated_node(1, GuiEvaluatedContent::Container);
+    let appearance = resolve_appearance(
+        &root,
+        &node,
+        &GuiInteractionState::idle(),
+        GuiPrimitivePart::Background.as_str(),
+    )
+    .unwrap();
+
+    assert_eq!(appearance.corner_radius, Some([0.05, 0.08]));
+    assert_eq!(appearance.border_width, Some(0.01));
+    assert_eq!(appearance.border_color, Some([0.2, 0.4, 0.8, 1.0]));
+    assert_eq!(
+        appearance.fill,
+        Some(GuiShapeFill::LinearGradient {
+            start: [0.0, 0.0],
+            end: [1.0, 1.0],
+            start_color: [1.0, 0.0, 0.0, 1.0],
+            end_color: [0.0, 0.0, 1.0, 1.0],
+        })
+    );
+    assert_eq!(
+        appearance.glow,
+        Some(GuiShapeGlow {
+            color: [1.0, 0.5, 0.0, 1.0],
+            intensity: 2.0,
+            radius: 0.05,
+            falloff: 1.5,
+        })
+    );
+
+    let box_primitive = SurfaceRenderPrimitive::Box {
+        style: SurfacePrimitiveStyle {
+            identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+                root_incarnation: 1,
+                node: GuiNodeId(1),
+                lifetime: 0,
+                part: GuiPrimitivePart::Background,
+            }),
+            position: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: 1.0,
+            clip: None,
+        },
+        size: [2.0, 1.0],
+        corner_radius: [0.0, 0.0],
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        fill: GuiShapeFill::Solid([0.0, 0.0, 0.0, 1.0]),
+        glow: None,
+    };
+
+    let applied = apply_appearance_to_primitive(&box_primitive, &appearance);
+    let SurfaceRenderPrimitive::Box {
+        corner_radius,
+        border_width,
+        border_color,
+        fill,
+        glow,
+        size,
+        ..
+    } = applied
+    else {
+        panic!("expected box");
+    };
+    assert_eq!(size, [2.0, 1.0]);
+    assert_eq!(corner_radius, [0.05, 0.08]);
+    assert_eq!(border_width, 0.01);
+    assert_eq!(border_color, [0.2, 0.4, 0.8, 1.0]);
+    assert_eq!(
+        fill,
+        GuiShapeFill::LinearGradient {
+            start: [0.0, 0.0],
+            end: [1.0, 1.0],
+            start_color: [1.0, 0.0, 0.0, 1.0],
+            end_color: [0.0, 0.0, 1.0, 1.0],
+        }
+    );
+    assert_eq!(
+        glow,
+        Some(GuiShapeGlow {
+            color: [1.0, 0.5, 0.0, 1.0],
+            intensity: 2.0,
+            radius: 0.05,
+            falloff: 1.5,
+        })
+    );
+}
+
+#[test]
+fn shape_glow_does_not_expand_hit_target() {
+    let mut node = evaluated_node(1, GuiEvaluatedContent::Container);
+    node.rect = [10.0, 10.0, 100.0, 50.0];
+    node.clip = Some([0.0, 0.0, 200.0, 200.0]);
+    let view = test_view(vec![node]);
+
+    // Points inside rect hit
+    assert_eq!(
+        view.hit_test([15.0, 15.0]).map(|h| h.node),
+        Some(GuiNodeId(1))
+    );
+    assert_eq!(
+        view.hit_test([109.0, 59.0]).map(|h| h.node),
+        Some(GuiNodeId(1))
+    );
+
+    // Points outside rect in the glow margin never hit (hit testing is layout-owned)
+    assert!(view.hit_test([8.0, 10.0]).is_none());
+    assert!(view.hit_test([112.0, 50.0]).is_none());
+    assert!(view.hit_test([50.0, 62.0]).is_none());
 }

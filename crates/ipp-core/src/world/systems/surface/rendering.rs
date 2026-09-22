@@ -243,7 +243,225 @@ pub enum SurfaceRenderPrimitive {
         border_width: f32,
         /// Straight linear RGBA border color.
         border_color: [f32; 4],
+        /// Shape fill: solid linear RGBA or two-stop linear/radial gradient.
+        fill: GuiShapeFill,
+        /// Optional localized glow around the outer shape boundary.
+        glow: Option<GuiShapeGlow>,
     },
+}
+
+/// Fill material for a GUI shape or box primitive.
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GuiShapeFill {
+    /// Solid straight linear RGBA fill.
+    Solid([f32; 4]),
+    /// Two-stop linear gradient in local shape space.
+    LinearGradient {
+        /// Start point in local shape metres (from top-left [0, 0]).
+        start: [f32; 2],
+        /// End point in local shape metres (from top-left [0, 0]).
+        end: [f32; 2],
+        /// Start stop straight linear RGBA color.
+        start_color: [f32; 4],
+        /// End stop straight linear RGBA color.
+        end_color: [f32; 4],
+    },
+    /// Two-stop radial gradient in local shape space.
+    RadialGradient {
+        /// Center in local shape metres (from top-left [0, 0]).
+        center: [f32; 2],
+        /// Outer radius in local shape metres.
+        radius: f32,
+        /// Center stop straight linear RGBA color.
+        start_color: [f32; 4],
+        /// Outer stop straight linear RGBA color.
+        end_color: [f32; 4],
+    },
+}
+
+#[cfg(feature = "gui")]
+impl Default for GuiShapeFill {
+    fn default() -> Self {
+        Self::Solid([0.0, 0.0, 0.0, 0.0])
+    }
+}
+
+#[cfg(feature = "gui")]
+impl GuiShapeFill {
+    /// Return whether all coordinates, radii, and color lanes are finite and within bounds.
+    pub fn is_valid(&self) -> bool {
+        match self {
+            Self::Solid(color) => color
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+            Self::LinearGradient {
+                start,
+                end,
+                start_color,
+                end_color,
+            } => {
+                start.iter().all(|v| v.is_finite())
+                    && end.iter().all(|v| v.is_finite())
+                    && start_color
+                        .iter()
+                        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    && end_color
+                        .iter()
+                        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            }
+            Self::RadialGradient {
+                center,
+                radius,
+                start_color,
+                end_color,
+            } => {
+                center.iter().all(|v| v.is_finite())
+                    && radius.is_finite()
+                    && *radius >= 0.0
+                    && start_color
+                        .iter()
+                        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    && end_color
+                        .iter()
+                        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            }
+        }
+    }
+
+    /// Whether this gradient is degenerate (zero length or zero radius).
+    ///
+    /// Degenerate linear gradients (start == end) safely evaluate to `start_color`.
+    /// Degenerate radial gradients (radius <= 0) safely evaluate to `start_color`.
+    pub fn is_degenerate(&self) -> bool {
+        match self {
+            Self::Solid(_) => false,
+            Self::LinearGradient {
+                start,
+                end,
+                ..
+            } => {
+                let dx = end[0] - start[0];
+                let dy = end[1] - start[1];
+                dx * dx + dy * dy <= 1e-12
+            }
+            Self::RadialGradient {
+                radius,
+                ..
+            } => *radius <= 1e-6,
+        }
+    }
+
+    /// Evaluate the fill color at a local shape space position [x, y] in metres.
+    ///
+    /// Degenerate linear gradients (zero distance between start and end) and
+    /// degenerate radial gradients (zero radius) evaluate to `start_color`.
+    pub fn sample(&self, point: [f32; 2]) -> [f32; 4] {
+        match self {
+            Self::Solid(color) => *color,
+            Self::LinearGradient {
+                start,
+                end,
+                start_color,
+                end_color,
+            } => {
+                let d = [end[0] - start[0], end[1] - start[1]];
+                let len_sq = d[0] * d[0] + d[1] * d[1];
+                if len_sq <= 1e-12 {
+                    return *start_color;
+                }
+                let p = [point[0] - start[0], point[1] - start[1]];
+                let t = ((p[0] * d[0] + p[1] * d[1]) / len_sq).clamp(0.0, 1.0);
+                interpolate_color(*start_color, *end_color, t)
+            }
+            Self::RadialGradient {
+                center,
+                radius,
+                start_color,
+                end_color,
+            } => {
+                if *radius <= 1e-6 {
+                    return *start_color;
+                }
+                let d = [point[0] - center[0], point[1] - center[1]];
+                let dist = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                let t = (dist / radius).clamp(0.0, 1.0);
+                interpolate_color(*start_color, *end_color, t)
+            }
+        }
+    }
+}
+
+/// Localized glow/halo around the outer shape boundary.
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuiShapeGlow {
+    /// Straight linear RGBA color of the glow.
+    pub color: [f32; 4],
+    /// Glow intensity multiplier (>= 0.0).
+    pub intensity: f32,
+    /// Outward glow radius in local Surface metres (>= 0.0).
+    pub radius: f32,
+    /// Falloff rate or exponent (>= 0.0).
+    pub falloff: f32,
+}
+
+#[cfg(feature = "gui")]
+impl GuiShapeGlow {
+    /// Return whether all color lanes, intensity, radius and falloff are finite and >= 0.0.
+    pub fn is_valid(&self) -> bool {
+        self.color
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            && self.intensity.is_finite()
+            && self.intensity >= 0.0
+            && self.radius.is_finite()
+            && self.radius >= 0.0
+            && self.falloff.is_finite()
+            && self.falloff >= 0.0
+    }
+
+    /// Bounded outer cutoff distance beyond the outer shape contour in metres.
+    ///
+    /// Outside this distance, the glow contribution is strictly zero.
+    pub fn cutoff_distance(&self) -> f32 {
+        if self.intensity <= 0.0 || self.radius <= 0.0 {
+            0.0
+        } else {
+            self.radius
+        }
+    }
+
+    /// Sample the glow intensity at a distance `d >= 0.0` outside the shape edge.
+    /// Returns straight linear RGBA with alpha attenuated by distance falloff.
+    pub fn sample_intensity(&self, distance_outside: f32) -> [f32; 4] {
+        if distance_outside <= 0.0 {
+            let a = (self.color[3] * self.intensity).clamp(0.0, 1.0);
+            return [self.color[0], self.color[1], self.color[2], a];
+        }
+        let cutoff = self.cutoff_distance();
+        if cutoff <= 0.0 || distance_outside >= cutoff {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        let norm = (1.0 - distance_outside / cutoff).clamp(0.0, 1.0);
+        let factor = if self.falloff == 1.0 {
+            norm
+        } else {
+            norm.powf(self.falloff)
+        };
+        let a = (self.color[3] * self.intensity * factor).clamp(0.0, 1.0);
+        [self.color[0], self.color[1], self.color[2], a]
+    }
+}
+
+#[cfg(feature = "gui")]
+fn interpolate_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
 }
 
 /// One evaluated Surface submission, independent of mesh submissions.
@@ -361,6 +579,8 @@ pub fn surface_primitive_visible(
             corner_radius,
             border_width,
             border_color,
+            fill,
+            glow,
         } => {
             if !size.iter().all(|value| value.is_finite() && *value > 0.0)
                 || !corner_radius
@@ -371,6 +591,8 @@ pub fn surface_primitive_visible(
                 || !border_color
                     .iter()
                     .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+                || !fill.is_valid()
+                || glow.as_ref().is_some_and(|g| !g.is_valid())
             {
                 return false;
             }
@@ -380,6 +602,77 @@ pub fn surface_primitive_visible(
     };
 
     primitive_effective_clip(style, surface_size).is_some()
+}
+
+/// Conservative axis-aligned paint bounding rectangle `[min_x, min_y, max_x, max_y]` in
+/// Surface content metres.
+///
+/// Accounts for shape dimensions, corner antialiasing padding, localized glow expansion,
+/// and parent clipping. Returns `None` if the primitive is empty, invalid, or completely
+/// clipped away by its parent clip rectangle.
+pub fn surface_primitive_paint_bounds(
+    primitive: &SurfaceRenderPrimitive,
+    surface_size: [f32; 2],
+) -> Option<SurfaceClipRect> {
+    if !surface_primitive_visible(primitive, surface_size) {
+        return None;
+    }
+    let clip = primitive_effective_clip(primitive.style(), surface_size)?;
+    let style = primitive.style();
+    let pos = style.position;
+    let scale = style.scale;
+
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = match primitive {
+        #[cfg(feature = "gui")]
+        SurfaceRenderPrimitive::Box {
+            size,
+            glow,
+            ..
+        } => {
+            let w = size[0] * scale[0].abs();
+            let h = size[1] * scale[1].abs();
+            let mut left = pos[0];
+            let mut top = pos[1];
+            if scale[0] < 0.0 {
+                left -= w;
+            }
+            if scale[1] < 0.0 {
+                top -= h;
+            }
+            let mut right = left + w;
+            let mut bottom = top + h;
+
+            // Antialiasing padding margin
+            let aa_pad = 0.001;
+            left -= aa_pad;
+            top -= aa_pad;
+            right += aa_pad;
+            bottom += aa_pad;
+
+            // Bounded glow cutoff expansion
+            if let Some(glow) = glow {
+                let cutoff = glow.cutoff_distance() * scale[0].abs().max(scale[1].abs());
+                left -= cutoff;
+                top -= cutoff;
+                right += cutoff;
+                bottom += cutoff;
+            }
+
+            (left, top, right, bottom)
+        }
+        _ => (clip[0], clip[1], clip[2], clip[3]),
+    };
+
+    min_x = min_x.max(clip[0]);
+    min_y = min_y.max(clip[1]);
+    max_x = max_x.min(clip[2]);
+    max_y = max_y.min(clip[3]);
+
+    if min_x >= max_x || min_y >= max_y {
+        None
+    } else {
+        Some([min_x, min_y, max_x, max_y])
+    }
 }
 
 /// Map a GUI logical point to Surface content coordinates.

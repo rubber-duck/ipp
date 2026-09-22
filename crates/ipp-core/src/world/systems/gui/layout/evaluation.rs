@@ -66,10 +66,11 @@ use crate::EntityId;
 use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetKey, AssetSource};
 use crate::systems::surface::{
-    GuiPrimitiveId, GuiPrimitivePart, SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity,
-    SurfacePrimitiveStyle, SurfaceRenderPrimitive, SurfaceRenderResource, TextFont, TextLayout,
-    TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, gui_logical_to_surface_content,
-    intersect_surface_clips, measure_text, surface_content_to_gui_logical,
+    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, SurfaceClipRect, SurfaceGlyph,
+    SurfacePrimitiveIdentity, SurfacePrimitiveStyle, SurfaceRenderPrimitive, SurfaceRenderResource,
+    TextFont, TextLayout, TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome,
+    gui_logical_to_surface_content, intersect_surface_clips, measure_text,
+    surface_content_to_gui_logical,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -684,6 +685,8 @@ impl GuiEvaluatedView {
                     corner_radius: [0.0, 0.0],
                     border_width: 0.0,
                     border_color: [0.0, 0.0, 0.0, 0.0],
+                    fill: GuiShapeFill::Solid(color),
+                    glow: None,
                 });
             }
 
@@ -2621,12 +2624,14 @@ fn hash_node_part_paint(
         .collect();
     for name in names {
         hasher.string(&name);
-        let Some(lane) = name.rsplit('_').next() else {
-            hasher.u32(u32::MAX);
-            continue;
-        };
-        match lane {
-            "color" => match root.properties.get(&name) {
+        let lane_kind = super::super::tree::component::GUI_PART_PROPERTIES
+            .iter()
+            .find_map(|(suffix, kind)| {
+                name.strip_suffix(suffix)
+                    .and_then(|part| part.ends_with('_').then_some(*kind))
+            });
+        match lane_kind {
+            Some(crate::DynamicPropertyKind::Vec4) => match root.properties.get(&name) {
                 Some(DynamicValue::Vec4(lanes)) => {
                     hasher.u32(1);
                     for lane in lanes {
@@ -2635,23 +2640,23 @@ fn hash_node_part_paint(
                 }
                 _ => hasher.u32(0),
             },
-            "opacity" => match root.properties.get(&name) {
+            Some(crate::DynamicPropertyKind::F32) => match root.properties.get(&name) {
                 Some(DynamicValue::F32(value)) => {
-                    hasher.u32(1);
+                    hasher.u32(2);
                     hasher.f32(value);
                 }
                 _ => hasher.u32(0),
             },
-            "scale" => match root.properties.get(&name) {
+            Some(crate::DynamicPropertyKind::Vec2) => match root.properties.get(&name) {
                 Some(DynamicValue::Vec2(lanes)) => {
-                    hasher.u32(1);
+                    hasher.u32(3);
                     for lane in lanes {
                         hasher.f32(lane);
                     }
                 }
                 _ => hasher.u32(0),
             },
-            "asset" => {
+            Some(crate::DynamicPropertyKind::Asset) => {
                 let source = root.properties.asset(&name).cloned();
                 hash_asset(hasher, &source);
                 match source

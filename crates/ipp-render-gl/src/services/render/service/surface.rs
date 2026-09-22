@@ -231,6 +231,7 @@ impl<D: RenderDevice> RenderService<D> {
                     corner_radius,
                     border_width,
                     border_color,
+                    ..
                 } => {
                     // The clip above is already non-empty; this re-check
                     // guards the device against invalid box dimensions in

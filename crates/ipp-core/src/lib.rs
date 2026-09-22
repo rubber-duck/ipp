@@ -70,8 +70,8 @@ pub use systems::surface::{
 
 #[cfg(feature = "gui")]
 pub use systems::surface::{
-    GuiPrimitiveId, GuiPrimitivePart, gui_logical_to_surface_content,
-    surface_content_to_gui_logical,
+    GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, gui_logical_to_surface_content,
+    surface_content_to_gui_logical, surface_primitive_paint_bounds,
 };
 
 #[cfg(feature = "gui")]

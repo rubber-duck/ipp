@@ -23,6 +23,24 @@ export type GuiThemePartName = (typeof GUI_THEME_PARTS)[number];
 export type GuiThemeState = "idle" | "hovered" | "pressed" | "disabled";
 export type GuiThemeVariant = "checked" | "unchecked";
 
+/** Two-stop linear or radial gradient in local shape space. */
+export interface GuiThemeGradient {
+  readonly kind: "linear" | "radial";
+  readonly start?: readonly [number, number] | undefined;
+  readonly end?: readonly [number, number] | undefined;
+  readonly radius?: number | undefined;
+  readonly color0?: readonly [number, number, number, number] | undefined;
+  readonly color1?: readonly [number, number, number, number] | undefined;
+}
+
+/** Localized glow around the outer shape boundary. */
+export interface GuiThemeGlow {
+  readonly color?: readonly [number, number, number, number] | undefined;
+  readonly intensity?: number | undefined;
+  readonly radius?: number | undefined;
+  readonly falloff?: number | undefined;
+}
+
 /** One authored runtime part. Checked/unchecked lanes are written for every
  * interaction state so core can apply its normal candidate precedence. */
 export interface GuiThemeLaneStyle {
@@ -30,6 +48,11 @@ export interface GuiThemeLaneStyle {
   readonly opacity?: number | undefined;
   readonly scale?: readonly [number, number] | undefined;
   readonly asset?: GuiAssetSource | undefined;
+  readonly cornerRadius?: readonly [number, number] | undefined;
+  readonly borderWidth?: number | undefined;
+  readonly borderColor?: readonly [number, number, number, number] | undefined;
+  readonly gradient?: GuiThemeGradient | undefined;
+  readonly glow?: GuiThemeGlow | undefined;
   /** Optional state-qualified transition into this appearance. */
   readonly transition?: GuiThemeTransition | undefined;
 }
@@ -101,7 +124,20 @@ export function validateThemeLaneStyle(
   if (typeof style !== "object" || style === null)
     throw new Error(`GUI theme ${what} must be an object`);
   for (const key of Object.keys(style))
-    if (!["color", "opacity", "scale", "asset", "transition"].includes(key))
+    if (
+      ![
+        "color",
+        "opacity",
+        "scale",
+        "asset",
+        "cornerRadius",
+        "borderWidth",
+        "borderColor",
+        "gradient",
+        "glow",
+        "transition",
+      ].includes(key)
+    )
       throw new Error(`GUI theme ${what} has unknown lane "${key}"`);
   if (
     style.color !== undefined &&
@@ -129,8 +165,146 @@ export function validateThemeLaneStyle(
   )
     throw new Error(`GUI theme ${what} scale must be two finite numbers`);
   if (style.asset !== undefined) validateAsset(style.asset, `${what}.asset`);
+  if (
+    style.cornerRadius !== undefined &&
+    (!Array.isArray(style.cornerRadius) ||
+      style.cornerRadius.length !== 2 ||
+      !style.cornerRadius.every(
+        (entry) =>
+          typeof entry === "number" && Number.isFinite(entry) && entry >= 0,
+      ))
+  )
+    throw new Error(
+      `GUI theme ${what} cornerRadius must be two non-negative finite numbers`,
+    );
+  if (
+    style.borderWidth !== undefined &&
+    (typeof style.borderWidth !== "number" ||
+      !Number.isFinite(style.borderWidth) ||
+      style.borderWidth < 0)
+  )
+    throw new Error(
+      `GUI theme ${what} borderWidth must be a non-negative finite number`,
+    );
+  if (
+    style.borderColor !== undefined &&
+    (!Array.isArray(style.borderColor) ||
+      style.borderColor.length !== 4 ||
+      !style.borderColor.every(
+        (entry) => typeof entry === "number" && inUnit(entry),
+      ))
+  )
+    throw new Error(
+      `GUI theme ${what} borderColor must be four finite numbers in 0..1`,
+    );
+  if (style.gradient !== undefined)
+    validateGradient(style.gradient, `${what}.gradient`);
+  if (style.glow !== undefined) validateGlow(style.glow, `${what}.glow`);
   if (style.transition !== undefined)
     validateTransition(style.transition, `${what}.transition`);
+}
+
+function validateGradient(gradient: GuiThemeGradient, what: string): void {
+  if (typeof gradient !== "object" || gradient === null)
+    throw new Error(`GUI theme ${what} must be an object`);
+  for (const key of Object.keys(gradient))
+    if (!["kind", "start", "end", "radius", "color0", "color1"].includes(key))
+      throw new Error(`GUI theme ${what} has unknown key "${key}"`);
+  if (gradient.kind !== "linear" && gradient.kind !== "radial")
+    throw new Error(`GUI theme ${what}.kind must be "linear" or "radial"`);
+  if (
+    gradient.start !== undefined &&
+    (!Array.isArray(gradient.start) ||
+      gradient.start.length !== 2 ||
+      !gradient.start.every(
+        (entry) => typeof entry === "number" && Number.isFinite(entry),
+      ))
+  )
+    throw new Error(`GUI theme ${what}.start must be two finite numbers`);
+  if (
+    gradient.end !== undefined &&
+    (!Array.isArray(gradient.end) ||
+      gradient.end.length !== 2 ||
+      !gradient.end.every(
+        (entry) => typeof entry === "number" && Number.isFinite(entry),
+      ))
+  )
+    throw new Error(`GUI theme ${what}.end must be two finite numbers`);
+  if (
+    gradient.radius !== undefined &&
+    (typeof gradient.radius !== "number" ||
+      !Number.isFinite(gradient.radius) ||
+      gradient.radius < 0)
+  )
+    throw new Error(
+      `GUI theme ${what}.radius must be a non-negative finite number`,
+    );
+  if (
+    gradient.color0 !== undefined &&
+    (!Array.isArray(gradient.color0) ||
+      gradient.color0.length !== 4 ||
+      !gradient.color0.every(
+        (entry) => typeof entry === "number" && inUnit(entry),
+      ))
+  )
+    throw new Error(
+      `GUI theme ${what}.color0 must be four finite numbers in 0..1`,
+    );
+  if (
+    gradient.color1 !== undefined &&
+    (!Array.isArray(gradient.color1) ||
+      gradient.color1.length !== 4 ||
+      !gradient.color1.every(
+        (entry) => typeof entry === "number" && inUnit(entry),
+      ))
+  )
+    throw new Error(
+      `GUI theme ${what}.color1 must be four finite numbers in 0..1`,
+    );
+}
+
+function validateGlow(glow: GuiThemeGlow, what: string): void {
+  if (typeof glow !== "object" || glow === null)
+    throw new Error(`GUI theme ${what} must be an object`);
+  for (const key of Object.keys(glow))
+    if (!["color", "intensity", "radius", "falloff"].includes(key))
+      throw new Error(`GUI theme ${what} has unknown key "${key}"`);
+  if (
+    glow.color !== undefined &&
+    (!Array.isArray(glow.color) ||
+      glow.color.length !== 4 ||
+      !glow.color.every((entry) => typeof entry === "number" && inUnit(entry)))
+  )
+    throw new Error(
+      `GUI theme ${what}.color must be four finite numbers in 0..1`,
+    );
+  if (
+    glow.intensity !== undefined &&
+    (typeof glow.intensity !== "number" ||
+      !Number.isFinite(glow.intensity) ||
+      glow.intensity < 0)
+  )
+    throw new Error(
+      `GUI theme ${what}.intensity must be a non-negative finite number`,
+    );
+  if (
+    glow.radius !== undefined &&
+    (typeof glow.radius !== "number" ||
+      !Number.isFinite(glow.radius) ||
+      glow.radius < 0)
+  )
+    throw new Error(
+      `GUI theme ${what}.radius must be a non-negative finite number`,
+    );
+  if (
+    glow.falloff !== undefined &&
+    (typeof glow.falloff !== "number" ||
+      !Number.isFinite(glow.falloff) ||
+      glow.falloff < 0)
+  )
+    throw new Error(
+      `GUI theme ${what}.falloff must be a non-negative finite number`,
+    );
 }
 
 function validateTransition(
@@ -238,6 +412,44 @@ function dynamicLanes(
     set("scale", { kind: "vec2", value: [...lanes.scale] });
   if (lanes.asset !== undefined)
     set("asset", { kind: "asset", value: { ...lanes.asset } });
+  if (lanes.cornerRadius !== undefined)
+    set("corner_radius", { kind: "vec2", value: [...lanes.cornerRadius] });
+  if (lanes.borderWidth !== undefined)
+    set("border_width", { kind: "f32", value: lanes.borderWidth });
+  if (lanes.borderColor !== undefined)
+    set("border_color", { kind: "vec4", value: [...lanes.borderColor] });
+  if (lanes.gradient !== undefined) {
+    set("fill_mode", {
+      kind: "f32",
+      value: lanes.gradient.kind === "radial" ? 2 : 1,
+    });
+    if (lanes.gradient.start !== undefined)
+      set("gradient_start", { kind: "vec2", value: [...lanes.gradient.start] });
+    if (lanes.gradient.end !== undefined)
+      set("gradient_end", { kind: "vec2", value: [...lanes.gradient.end] });
+    if (lanes.gradient.radius !== undefined)
+      set("gradient_radius", { kind: "f32", value: lanes.gradient.radius });
+    if (lanes.gradient.color0 !== undefined)
+      set("gradient_color0", {
+        kind: "vec4",
+        value: [...lanes.gradient.color0],
+      });
+    if (lanes.gradient.color1 !== undefined)
+      set("gradient_color1", {
+        kind: "vec4",
+        value: [...lanes.gradient.color1],
+      });
+  }
+  if (lanes.glow !== undefined) {
+    if (lanes.glow.color !== undefined)
+      set("glow_color", { kind: "vec4", value: [...lanes.glow.color] });
+    if (lanes.glow.intensity !== undefined)
+      set("glow_intensity", { kind: "f32", value: lanes.glow.intensity });
+    if (lanes.glow.radius !== undefined)
+      set("glow_radius", { kind: "f32", value: lanes.glow.radius });
+    if (lanes.glow.falloff !== undefined)
+      set("glow_falloff", { kind: "f32", value: lanes.glow.falloff });
+  }
   const transition = lanes.transition;
   if (transition !== undefined) {
     const prefix = `node_${node}_part_${part}`;

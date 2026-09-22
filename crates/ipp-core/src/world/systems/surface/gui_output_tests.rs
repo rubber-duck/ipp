@@ -262,6 +262,8 @@ fn gui_box(
         corner_radius,
         border_width,
         border_color,
+        fill: GuiShapeFill::Solid([1.0, 1.0, 1.0, 1.0]),
+        glow: None,
     }
 }
 
@@ -436,6 +438,8 @@ fn scrolled_kinds() -> Vec<SurfaceRenderPrimitive> {
             corner_radius: [0.0, 0.0],
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 0.0],
+            fill: GuiShapeFill::Solid([1.0, 1.0, 1.0, 1.0]),
+            glow: None,
         },
         SurfaceRenderPrimitive::Glyphs {
             style,
@@ -551,5 +555,143 @@ fn scroll_translation_fences_lifetime_and_ignores_unshifted_paint() {
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &wild),
         base
+    );
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn shape_materials_gradient_sampling_and_degenerate_handling() {
+    let solid = GuiShapeFill::Solid([0.2, 0.4, 0.6, 1.0]);
+    assert!(!solid.is_degenerate());
+    assert_eq!(solid.sample([0.5, 0.5]), [0.2, 0.4, 0.6, 1.0]);
+
+    let linear = GuiShapeFill::LinearGradient {
+        start: [0.0, 0.0],
+        end: [1.0, 0.0],
+        start_color: [1.0, 0.0, 0.0, 1.0],
+        end_color: [0.0, 1.0, 0.0, 1.0],
+    };
+    assert!(!linear.is_degenerate());
+    assert_eq!(linear.sample([0.0, 0.0]), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(linear.sample([1.0, 0.0]), [0.0, 1.0, 0.0, 1.0]);
+    let mid = linear.sample([0.5, 0.0]);
+    assert!((mid[0] - 0.5).abs() < 1e-5);
+    assert!((mid[1] - 0.5).abs() < 1e-5);
+
+    let degen_linear = GuiShapeFill::LinearGradient {
+        start: [0.5, 0.5],
+        end: [0.5, 0.5],
+        start_color: [1.0, 0.0, 0.0, 1.0],
+        end_color: [0.0, 1.0, 0.0, 1.0],
+    };
+    assert!(degen_linear.is_degenerate());
+    assert_eq!(degen_linear.sample([0.1, 0.2]), [1.0, 0.0, 0.0, 1.0]);
+
+    let radial = GuiShapeFill::RadialGradient {
+        center: [0.5, 0.5],
+        radius: 0.5,
+        start_color: [1.0, 1.0, 1.0, 1.0],
+        end_color: [0.0, 0.0, 0.0, 1.0],
+    };
+    assert!(!radial.is_degenerate());
+    assert_eq!(radial.sample([0.5, 0.5]), [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(radial.sample([1.0, 0.5]), [0.0, 0.0, 0.0, 1.0]);
+
+    let degen_radial = GuiShapeFill::RadialGradient {
+        center: [0.5, 0.5],
+        radius: 0.0,
+        start_color: [1.0, 1.0, 1.0, 1.0],
+        end_color: [0.0, 0.0, 0.0, 1.0],
+    };
+    assert!(degen_radial.is_degenerate());
+    assert_eq!(degen_radial.sample([0.2, 0.3]), [1.0, 1.0, 1.0, 1.0]);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn shape_materials_glow_falloff_and_cutoff() {
+    let glow = GuiShapeGlow {
+        color: [1.0, 0.5, 0.0, 1.0],
+        intensity: 2.0,
+        radius: 0.1,
+        falloff: 1.0,
+    };
+    assert!(glow.is_valid());
+    assert_eq!(glow.cutoff_distance(), 0.1);
+
+    let edge = glow.sample_intensity(0.0);
+    assert_eq!(edge[0], 1.0);
+    assert_eq!(edge[1], 0.5);
+    assert_eq!(edge[3], 1.0);
+
+    let mid = glow.sample_intensity(0.05);
+    assert!((mid[3] - 1.0).abs() < 1e-4);
+
+    let beyond = glow.sample_intensity(0.1);
+    assert_eq!(beyond, [0.0, 0.0, 0.0, 0.0]);
+    let far = glow.sample_intensity(0.2);
+    assert_eq!(far, [0.0, 0.0, 0.0, 0.0]);
+
+    let zero_glow = GuiShapeGlow {
+        color: [1.0, 1.0, 1.0, 1.0],
+        intensity: 0.0,
+        radius: 0.1,
+        falloff: 1.0,
+    };
+    assert_eq!(zero_glow.cutoff_distance(), 0.0);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn shape_paint_bounds_incorporates_dimensions_aa_and_glow_expansion() {
+    let surface_size = [5.0, 5.0];
+    let primitive = SurfaceRenderPrimitive::Box {
+        style: SurfacePrimitiveStyle {
+            identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+                root_incarnation: 1,
+                node: crate::systems::gui::GuiNodeId(1),
+                lifetime: 0,
+                part: GuiPrimitivePart::Background,
+            }),
+            position: [1.0, 1.0],
+            scale: [1.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            opacity: 1.0,
+            clip: Some([0.0, 0.0, 4.0, 4.0]),
+        },
+        size: [2.0, 1.0],
+        corner_radius: [0.1, 0.1],
+        border_width: 0.02,
+        border_color: [0.0, 0.0, 0.0, 1.0],
+        fill: GuiShapeFill::Solid([1.0, 1.0, 1.0, 1.0]),
+        glow: Some(GuiShapeGlow {
+            color: [1.0, 0.0, 0.0, 1.0],
+            intensity: 1.0,
+            radius: 0.2,
+            falloff: 1.0,
+        }),
+    };
+
+    let bounds = surface_primitive_paint_bounds(&primitive, surface_size).unwrap();
+    assert!((bounds[0] - 0.799).abs() < 1e-4);
+    assert!((bounds[1] - 0.799).abs() < 1e-4);
+    assert!((bounds[2] - 3.201).abs() < 1e-4);
+    assert!((bounds[3] - 2.201).abs() < 1e-4);
+
+    let clipped_primitive = SurfaceRenderPrimitive::Box {
+        style: SurfacePrimitiveStyle {
+            clip: Some([0.0, 0.0, 0.5, 0.5]),
+            ..*primitive.style()
+        },
+        size: [2.0, 1.0],
+        corner_radius: [0.1, 0.1],
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        fill: GuiShapeFill::Solid([1.0, 1.0, 1.0, 1.0]),
+        glow: None,
+    };
+    assert_eq!(
+        surface_primitive_paint_bounds(&clipped_primitive, surface_size),
+        None
     );
 }

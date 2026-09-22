@@ -457,3 +457,148 @@ test("content kinds map to control roles, names and actions", () => {
   assert.equal(nameForContent(textInputContent({})), undefined);
   assert.equal(nameForContent(checkboxContent(true)), undefined);
 });
+
+test("shape material declarations author the rendering contract and validate closed", () => {
+  const properties = guiThemeProperties(7, {
+    parts: {
+      background: {
+        base: {
+          cornerRadius: [0.05, 0.05],
+          borderWidth: 0.01,
+          borderColor: [0.2, 0.4, 0.8, 1],
+          gradient: {
+            kind: "linear",
+            start: [0, 0],
+            end: [1, 1],
+            color0: [1, 0, 0, 1],
+            color1: [0, 0, 1, 1],
+          },
+          glow: {
+            color: [1, 0.5, 0, 0.8],
+            intensity: 1.5,
+            radius: 0.02,
+            falloff: 2.0,
+          },
+        },
+        hovered: {
+          gradient: {
+            kind: "radial",
+            start: [0.5, 0.5],
+            radius: 0.75,
+            color0: [1, 1, 0, 1],
+            color1: [0, 1, 0, 1],
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(properties.node_7_part_background_corner_radius, {
+    kind: "vec2",
+    value: [0.05, 0.05],
+  });
+  assert.deepEqual(properties.node_7_part_background_border_width, {
+    kind: "f32",
+    value: 0.01,
+  });
+  assert.deepEqual(properties.node_7_part_background_border_color, {
+    kind: "vec4",
+    value: [0.2, 0.4, 0.8, 1],
+  });
+  assert.deepEqual(properties.node_7_part_background_fill_mode, {
+    kind: "f32",
+    value: 1,
+  });
+  assert.deepEqual(properties.node_7_part_background_gradient_start, {
+    kind: "vec2",
+    value: [0, 0],
+  });
+  assert.deepEqual(properties.node_7_part_background_gradient_end, {
+    kind: "vec2",
+    value: [1, 1],
+  });
+  assert.deepEqual(properties.node_7_part_background_gradient_color0, {
+    kind: "vec4",
+    value: [1, 0, 0, 1],
+  });
+  assert.deepEqual(properties.node_7_part_background_gradient_color1, {
+    kind: "vec4",
+    value: [0, 0, 1, 1],
+  });
+  assert.deepEqual(properties.node_7_part_background_glow_color, {
+    kind: "vec4",
+    value: [1, 0.5, 0, 0.8],
+  });
+  assert.deepEqual(properties.node_7_part_background_glow_intensity, {
+    kind: "f32",
+    value: 1.5,
+  });
+  assert.deepEqual(properties.node_7_part_background_glow_radius, {
+    kind: "f32",
+    value: 0.02,
+  });
+  assert.deepEqual(properties.node_7_part_background_glow_falloff, {
+    kind: "f32",
+    value: 2.0,
+  });
+
+  assert.deepEqual(properties.node_7_part_background_hovered_fill_mode, {
+    kind: "f32",
+    value: 2,
+  });
+  assert.deepEqual(properties.node_7_part_background_hovered_gradient_start, {
+    kind: "vec2",
+    value: [0.5, 0.5],
+  });
+  assert.deepEqual(properties.node_7_part_background_hovered_gradient_radius, {
+    kind: "f32",
+    value: 0.75,
+  });
+
+  assert.throws(
+    () =>
+      guiThemeProperties(7, {
+        parts: { background: { base: { cornerRadius: [-1, 0] } } },
+      }),
+    /cornerRadius must be two non-negative finite numbers/,
+  );
+  assert.throws(
+    () =>
+      guiThemeProperties(7, {
+        parts: { background: { base: { borderWidth: -0.5 } } },
+      }),
+    /borderWidth must be a non-negative finite number/,
+  );
+  assert.throws(
+    () =>
+      guiThemeProperties(7, {
+        parts: { background: { base: { borderColor: [1, 1, 2, 1] } } },
+      }),
+    /borderColor must be four finite numbers in 0..1/,
+  );
+  assert.throws(
+    () =>
+      guiThemeProperties(7, {
+        parts: {
+          background: { base: { gradient: { kind: "invalid" as never } } },
+        },
+      }),
+    /kind must be "linear" or "radial"/,
+  );
+  assert.throws(
+    () =>
+      guiThemeProperties(7, {
+        parts: {
+          background: { base: { gradient: { kind: "radial", radius: -1 } } },
+        },
+      }),
+    /radius must be a non-negative finite number/,
+  );
+  assert.throws(
+    () =>
+      guiThemeProperties(7, {
+        parts: { background: { base: { glow: { intensity: -1 } } } },
+      }),
+    /intensity must be a non-negative finite number/,
+  );
+});

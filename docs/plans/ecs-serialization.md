@@ -8,6 +8,8 @@ Extend stable typed storage, generational identities and metadata indexes togeth
 
 Use ordinary Rust types, derives and an explicit registry. Share validation and lifecycle handling across authored writes and structural animation; compile real-time numeric writes at binding boundaries under the runtime contract. Extend dynamic properties through the same paths, preserving property-level invalidation and sparse restoration. Measure mutation cost on representative Worlds before adding caches or alternate storage.
 
+Component ownership lives in [`ipp_core::components`](../../crates/ipp-core/src/components/mod.rs): `schema`, `registry`, and `dynamic_properties` are the canonical paths, alongside lifecycle, primitives, and storage; crate-root re-exports cover value types only. World-side component-state behavior lives in [`world/component_state`](../../crates/ipp-core/src/world/component_state/mod.rs), split by phase (`access`, `staging`, `mutation`, `observations`), with `component_binding` and `component_query` as private world-root helpers.
+
 ## Target contracts and generation
 
 Extend [executed-target export](../../tools/ipp-schema-gen/README.md), keeping schema work outside evaluation. Verify repeatable generation and capability omission, then connect matching generated clients to real Hosts. Compiler fixtures cover field access; executed targets prove layout.

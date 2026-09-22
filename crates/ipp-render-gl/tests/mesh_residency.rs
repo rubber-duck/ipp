@@ -53,6 +53,12 @@ struct DeviceState {
     fail_atlas_begin: RefCell<Option<RenderError>>,
     #[cfg(feature = "gui")]
     fail_atlas_end: RefCell<Option<RenderError>>,
+    #[cfg(feature = "gui")]
+    atlas_restores: Cell<u32>,
+    #[cfg(feature = "gui")]
+    atlas_pages_created: Cell<u32>,
+    #[cfg(feature = "gui")]
+    fail_glyph_batch: RefCell<Option<RenderError>>,
 }
 
 struct TestDevice(Rc<DeviceState>);
@@ -245,6 +251,11 @@ impl RenderDevice for TestDevice {
         _: &[f32; 4],
         _: u32,
     ) -> Result<(), RenderError> {
+        #[cfg(feature = "gui")]
+        assert!(
+            !self.0.atlas_target_bound.get(),
+            "the main pass never draws into an atlas page"
+        );
         self.0
             .analytic_glyph_draws
             .set(self.0.analytic_glyph_draws.get() + 1);
@@ -256,7 +267,10 @@ impl RenderDevice for TestDevice {
         self.0
             .glyph_batch_uploads
             .set(self.0.glyph_batch_uploads.get() + 1);
-        Ok(())
+        match self.0.fail_glyph_batch.borrow().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     #[cfg(feature = "gui")]
@@ -268,7 +282,10 @@ impl RenderDevice for TestDevice {
         self.0
             .glyph_batch_uploads
             .set(self.0.glyph_batch_uploads.get() + 1);
-        Ok(())
+        match self.0.fail_glyph_batch.borrow().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     #[cfg(feature = "gui")]
@@ -280,14 +297,22 @@ impl RenderDevice for TestDevice {
         _: &[f32; 16],
         _: &[f32; 4],
     ) -> Result<(), RenderError> {
+        assert!(
+            !self.0.atlas_target_bound.get(),
+            "the main pass never draws into an atlas page"
+        );
         Ok(())
     }
 
     #[cfg(feature = "gui")]
     fn create_glyph_atlas_page(&mut self, _: u32, _: u32) -> Result<(), RenderError> {
+        self.0
+            .atlas_pages_created
+            .set(self.0.atlas_pages_created.get() + 1);
         Ok(())
     }
 
+    /// Consecutive begins switch pages; one end restores the host target.
     #[cfg(feature = "gui")]
     fn begin_glyph_atlas_page(&mut self, _: &()) -> Result<(), RenderError> {
         self.0
@@ -297,12 +322,13 @@ impl RenderDevice for TestDevice {
             return Err(error);
         }
 
-        assert!(!self.0.atlas_target_bound.replace(true));
+        self.0.atlas_target_bound.set(true);
         Ok(())
     }
 
     #[cfg(feature = "gui")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
+        self.0.atlas_restores.set(self.0.atlas_restores.get() + 1);
         self.0.atlas_target_bound.set(false);
         match self.0.fail_atlas_end.borrow().clone() {
             Some(error) => Err(error),
@@ -1271,6 +1297,21 @@ fn text_surface_scene(
     ipp_core::WorldId,
     EntityId,
 ) {
+    text_run_scene(host, surface_font(), &[0])
+}
+
+/// A glyph run of `glyph_ids`, one centimetre apart, in the given font.
+#[cfg(feature = "gui")]
+fn text_run_scene(
+    host: &mut ipp_core::HostRuntime,
+    font: Vec<u8>,
+    glyph_ids: &[u32],
+) -> (
+    RenderService<TestDevice>,
+    Rc<DeviceState>,
+    ipp_core::WorldId,
+    EntityId,
+) {
     use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
     use ipp_core::{PositionedGlyph, Surface, SurfaceItemContent, SurfaceItemStyle};
 
@@ -1285,11 +1326,17 @@ fn text_surface_scene(
     surface
         .insert_item(
             0,
-            SurfaceItemContent::GlyphRun(vec![PositionedGlyph {
-                glyph_id: 0,
-                position: [0.0; 2],
-                color: None,
-            }]),
+            SurfaceItemContent::GlyphRun(
+                glyph_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &glyph_id)| PositionedGlyph {
+                        glyph_id,
+                        position: [0.01 * index as f32, 0.0],
+                        color: None,
+                    })
+                    .collect(),
+            ),
             SurfaceItemStyle {
                 position: [0.5, 0.5],
                 font_size: 1.0,
@@ -1312,10 +1359,17 @@ fn text_surface_scene(
     );
     drop(world);
 
+    resolve_text(host, world_id, &font);
+    (renderer, state, world_id, entity)
+}
+
+/// Complete font requests until the text Surface prepares its glyph run.
+#[cfg(feature = "gui")]
+fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldId, font: &[u8]) {
     for _ in 0..16 {
         host.progress_assets();
         for request in host.take_resource_requests() {
-            host.complete_resource(request.id, Ok(surface_font()))
+            host.complete_resource(request.id, Ok(font.to_vec()))
                 .unwrap();
         }
         let mut world = host.world_mut(world_id).unwrap();
@@ -1325,7 +1379,7 @@ fn text_surface_scene(
             .first()
             .is_some_and(|item| item.primitives.len() == 1)
         {
-            return (renderer, state, world_id, entity);
+            return;
         }
     }
     panic!("text Surface font did not resolve");
@@ -1443,4 +1497,175 @@ fn glyph_population_context_loss_and_restore_failures_fail_the_frame() {
         .expect("retried population reports the restore failure");
     assert!(error.contains("injected atlas restore failure"), "{error}");
     assert_eq!(state.atlas_populations.get(), attempts + 1);
+}
+
+/// An IPPF font of `count` identical triangle glyphs whose bounds span `extent` units.
+#[cfg(feature = "gui")]
+fn glyph_font(count: u32, units_per_em: u32, extent: f32) -> Vec<u8> {
+    let mut bytes = b"IPPF".to_vec();
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend(units_per_em.to_le_bytes());
+    for value in [800.0_f32, -200.0, 0.0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for value in [count, 0, 0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for _ in 0..count {
+        for value in [600.0_f32, 0.0, 0.0, 0.0, extent, extent] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(1_u32.to_le_bytes());
+        triangle_contour(&mut bytes);
+    }
+    bytes
+}
+
+/// Host recovery after context loss: release context state, then restore resources.
+#[cfg(feature = "gui")]
+fn recover_context(
+    renderer: &mut RenderService<TestDevice>,
+    host: &mut ipp_core::HostRuntime,
+    world_id: ipp_core::WorldId,
+    font: &[u8],
+) {
+    renderer.set_asset_context_active(false);
+    renderer.unload_host(host);
+    host.flush_resource_lifecycle();
+    renderer.set_asset_context_active(true);
+    resolve_text(host, world_id, font);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
+    let mut host = ipp_core::HostRuntime::new();
+    // Each glyph fills more than half a page, so three glyphs need three pages.
+    let (mut renderer, state, world_id, _) =
+        text_run_scene(&mut host, glyph_font(3, 10, 130.0), &[0, 1, 2]);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(
+        (cold.glyph_misses, cold.glyph_populates),
+        (3, 3),
+        "{cold:?}"
+    );
+    assert_eq!(cold.glyph_pages, 3);
+    assert_eq!(
+        state.atlas_populations.get(),
+        3,
+        "one target switch per page"
+    );
+    assert_eq!(
+        state.atlas_restores.get(),
+        1,
+        "the host target is restored once"
+    );
+    assert_eq!(cold.gui_batches, 3, "one glyph batch per page");
+    assert_eq!(state.analytic_glyph_draws.get(), 0);
+
+    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
+    assert_eq!((warm.uploaded_bytes, warm.gui_rebuilds), (0, 0));
+    assert_eq!(warm.gui_batches, 3);
+    assert_eq!(state.atlas_populations.get(), 3);
+    assert_eq!(state.atlas_restores.get(), 1);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn population_budget_defers_misses_and_resumes_next_frame() {
+    let budget = ipp_render_gl::glyph_atlas::MAX_POPULATES_PER_FRAME as u32;
+    let ids: Vec<u32> = (0..budget + 8).collect();
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) =
+        text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    // The budget stops population; the incomplete run stays analytic this frame.
+    let first = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(first.glyph_misses, budget + 8, "{first:?}");
+    assert_eq!(first.glyph_populates, budget);
+    assert_eq!(first.gui_batches, 0);
+    assert_eq!(state.analytic_glyph_draws.get(), 1);
+
+    // The next frame populates the remainder and switches the run to the atlas.
+    let second = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((second.glyph_misses, second.glyph_populates), (8, 8));
+    assert_eq!(second.gui_batches, 1);
+    assert_eq!(state.analytic_glyph_draws.get(), 1);
+
+    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
+    assert_eq!(warm.uploaded_bytes, 0);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    state
+        .fail_atlas_begin
+        .replace(Some(RenderError::ContextLost));
+    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    assert_eq!(error, RenderError::ContextLost.to_string());
+    assert_eq!(
+        state.analytic_glyph_draws.get(),
+        0,
+        "loss never falls back to analytic text"
+    );
+    assert!(!state.atlas_target_bound.get());
+    drop(world);
+
+    state.fail_atlas_begin.replace(None);
+    recover_context(&mut renderer, &mut host, world_id, &surface_font());
+    let pages = state.atlas_pages_created.get();
+    let mut world = host.world_mut(world_id).unwrap();
+    let recovered = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(
+        (recovered.glyph_populates, recovered.gui_batches),
+        (1, 1),
+        "{recovered:?}"
+    );
+    assert_eq!(recovered.glyph_population_failures, 0);
+    assert_eq!(recovered.glyph_pages, 1);
+    assert_eq!(
+        state.atlas_pages_created.get(),
+        pages + 1,
+        "a fresh page after recovery"
+    );
+    assert_eq!(state.analytic_glyph_draws.get(), 0);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn context_loss_during_glyph_batch_upload_reaches_recovery() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    state
+        .fail_glyph_batch
+        .replace(Some(RenderError::ContextLost));
+    let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
+    assert_eq!(error, RenderError::ContextLost.to_string());
+    assert_eq!(state.analytic_glyph_draws.get(), 0);
+    drop(world);
+
+    state.fail_glyph_batch.replace(None);
+    recover_context(&mut renderer, &mut host, world_id, &surface_font());
+    let mut world = host.world_mut(world_id).unwrap();
+    let recovered = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(
+        (recovered.glyph_populates, recovered.gui_batches),
+        (1, 1),
+        "{recovered:?}"
+    );
+    assert_eq!(recovered.gui_resident_bytes, 6 * 32);
+    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));
 }

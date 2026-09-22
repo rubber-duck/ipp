@@ -1810,16 +1810,23 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             return status(() => {
               const page = glyphAtlasPages!.get(pageHandle >>> 0);
               if (!page) throw new Error("Stale glyph atlas page handle");
+              // Switching between pages keeps the host target saved by the first begin.
               glyphAtlasTarget = {
                 width: page.width,
                 height: page.height,
-                framebuffer: gl.getParameter(
-                  gl.DRAW_FRAMEBUFFER_BINDING,
-                ) as WebGLFramebuffer | null,
-                readFramebuffer: gl.getParameter(
-                  gl.READ_FRAMEBUFFER_BINDING,
-                ) as WebGLFramebuffer | null,
-                viewport: gl.getParameter(gl.VIEWPORT) as Int32Array,
+                framebuffer: glyphAtlasTarget
+                  ? glyphAtlasTarget.framebuffer
+                  : (gl.getParameter(
+                      gl.DRAW_FRAMEBUFFER_BINDING,
+                    ) as WebGLFramebuffer | null),
+                readFramebuffer: glyphAtlasTarget
+                  ? glyphAtlasTarget.readFramebuffer
+                  : (gl.getParameter(
+                      gl.READ_FRAMEBUFFER_BINDING,
+                    ) as WebGLFramebuffer | null),
+                viewport: glyphAtlasTarget
+                  ? glyphAtlasTarget.viewport
+                  : (gl.getParameter(gl.VIEWPORT) as Int32Array),
               };
               gl.bindFramebuffer(gl.FRAMEBUFFER, page.framebuffer);
               gl.viewport(0, 0, page.width, page.height);

@@ -87,7 +87,8 @@ pub struct RenderStats {
     /// Batches submitted for GUI primitives.
     #[cfg(feature = "gui")]
     pub gui_batches: u32,
-    /// Number of GUI batches rebuilt due to primitive change or creation.
+    /// GUI box primitives whose CPU geometry was regenerated, plus glyph batches
+    /// rebuilt after a text edit or the retirement of an atlas page they sampled.
     #[cfg(feature = "gui")]
     pub gui_rebuilds: u32,
     /// Number of GPU batch buffers allocated or replaced during this frame.
@@ -97,16 +98,24 @@ pub struct RenderStats {
     /// World presented through this context.
     #[cfg(feature = "gui")]
     pub gui_resident_bytes: u32,
-    /// Glyph atlas cache misses during this submission.
+    /// Distinct glyph atlas entries that visible text demanded but did not find
+    /// during this submission, including entries the population budget or a failure
+    /// back-off defers to a later frame.
     #[cfg(feature = "gui")]
     pub glyph_misses: u32,
-    /// Glyph atlas entries rasterized or populated during this submission.
+    /// Glyph atlas entries rasterized during this submission, at most
+    /// [`crate::glyph_atlas::MAX_POPULATES_PER_FRAME`], before the main pass.
     #[cfg(feature = "gui")]
     pub glyph_populates: u32,
     /// Recoverable glyph atlas allocation or rasterization failures during this
     /// submission. Each glyph backs off and its text uses analytic glyphs meanwhile.
     #[cfg(feature = "gui")]
     pub glyph_population_failures: u32,
+    /// Glyph atlas pages retired since the previous completed submission: idle past
+    /// the configured limit, reclaimed under allocation pressure or released when no
+    /// World demands any glyph. Context loss is not counted.
+    #[cfg(feature = "gui")]
+    pub glyph_page_retirements: u32,
     /// Number of resident glyph atlas pages shared by every World on this context.
     #[cfg(feature = "gui")]
     pub glyph_pages: u32,
@@ -162,6 +171,9 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
     #[cfg(feature = "gui")]
     glyph_batch_cache: BTreeMap<ipp_core::WorldId, super::glyph_atlas::GlyphBatchRenderCache<D>>,
+    /// Glyph misses, population queue and outcomes of the current World frame.
+    #[cfg(feature = "gui")]
+    glyph_frame: super::glyph_atlas::GlyphFrameWork,
     /// Surfaces the current frame submitted; `None` until submission reaches them.
     #[cfg(feature = "gui")]
     submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,

@@ -449,13 +449,16 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "gui")]
     fn delete_glyph_atlas_page(&mut self, _page: Self::GlyphAtlasPage) {}
 
-    /// Save the current draw target and bind the atlas page framebuffer and viewport.
+    /// Bind the atlas page framebuffer and viewport.
+    ///
+    /// The first begin saves the host draw target. Further begins before
+    /// [`Self::end_glyph_atlas_page`] switch pages and keep that saved target.
     #[cfg(feature = "gui")]
     fn begin_glyph_atlas_page(&mut self, _page: &Self::GlyphAtlasPage) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("glyph atlas unavailable".into()))
     }
 
-    /// Restore the host draw target and viewport.
+    /// Restore the host draw target and viewport saved by the first begin.
     #[cfg(feature = "gui")]
     fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("glyph atlas unavailable".into()))

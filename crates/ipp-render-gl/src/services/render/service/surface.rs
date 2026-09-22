@@ -125,114 +125,96 @@ impl<D: RenderDevice> RenderService<D> {
                     font_size,
                     glyphs,
                 } => {
-                    #[cfg(feature = "gui")]
-                    let drawn_via_atlas = {
-                        let vp = world.render_viewport().unwrap_or((800, 600));
-                        let nominal_px_height = super::super::glyph_atlas::projected_glyph_height(
-                            &mvp,
-                            style.position,
-                            *font_size * style.scale[1],
-                            vp,
-                        );
-                        let band_opt =
-                            super::super::glyph_atlas::select_resolution_band(nominal_px_height);
-
-                        if let Some(band) = band_opt {
-                            self.draw_glyphs_via_atlas(
-                                world,
-                                item.entity,
-                                style,
-                                font.key,
-                                *font_size,
-                                glyphs,
-                                band,
-                                &mvp,
-                                clip,
-                                stats,
-                            )?
-                        } else {
-                            false
-                        }
+                    let Some(data) = world
+                        .asset_resources()
+                        .get(font.key)
+                        .and_then(|resource| resource.data())
+                        .and_then(|asset| {
+                            asset
+                                .as_any()
+                                .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
+                        })
+                    else {
+                        stats.failed_draw_calls += 1;
+                        continue;
                     };
 
-                    #[cfg(not(feature = "gui"))]
-                    let drawn_via_atlas = false;
+                    #[cfg(feature = "gui")]
+                    {
+                        let run = super::super::glyph_atlas::TextRun {
+                            entity: item.entity,
+                            style,
+                            clip,
+                            font_key: font.key,
+                            font_size: *font_size,
+                            units_per_em: data.font.units_per_em(),
+                            glyphs,
+                        };
+                        if self.draw_glyphs_via_atlas(world.id(), &run, &mvp, stats)? {
+                            continue;
+                        }
+                    }
 
-                    if !drawn_via_atlas {
-                        let Some(data) = world
-                            .asset_resources()
-                            .get(font.key)
-                            .and_then(|resource| resource.data())
-                            .and_then(|asset| {
-                                asset
-                                    .as_any()
-                                    .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
-                            })
-                        else {
-                            stats.failed_draw_calls += 1;
+                    let unit = *font_size / data.font.units_per_em() as f32;
+                    let Some(path) = data.path.as_ref() else {
+                        continue;
+                    };
+                    instances.clear();
+                    if !ipp_core::render_buffer_reuse_enabled() {
+                        *instances = Vec::new();
+                    }
+                    for glyph in glyphs {
+                        let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
                             continue;
                         };
-                        let unit = *font_size / data.font.units_per_em() as f32;
-                        let Some(path) = data.path.as_ref() else {
+                        if range.curve_range[1] == 0 {
                             continue;
-                        };
-                        instances.clear();
-                        if !ipp_core::render_buffer_reuse_enabled() {
-                            *instances = Vec::new();
                         }
-                        for glyph in glyphs {
-                            let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
-                                continue;
-                            };
-                            if range.curve_range[1] == 0 {
-                                continue;
-                            }
-                            let bounds = data.glyph_bounds[glyph.glyph_id as usize];
-                            #[cfg(feature = "gui")]
-                            if !super::super::glyph_atlas::glyph_intersects_clip(
-                                style, glyph, bounds, unit, clip,
-                            ) {
-                                continue;
-                            }
-                            let tint = glyph.color.unwrap_or(style.color);
-                            let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
-                            let placement = [
-                                style.position[0] + glyph.position[0] * style.scale[0],
-                                style.position[1] + glyph.position[1] * style.scale[1],
-                                style.scale[0] * unit,
-                                style.scale[1] * unit,
-                            ];
-                            instances.push(super::super::device::SurfacePathInstance {
-                                bounds,
-                                placement,
-                                color,
-                                descriptor: range,
-                            });
+                        let bounds = data.glyph_bounds[glyph.glyph_id as usize];
+                        #[cfg(feature = "gui")]
+                        if !super::super::glyph_atlas::glyph_intersects_clip(
+                            style, glyph, bounds, unit, clip,
+                        ) {
+                            continue;
                         }
-                        if !instances.is_empty() {
-                            if self.surface_instance_program.is_none() {
-                                self.surface_instance_program =
-                                    Some(self.device.borrow_mut().create_program(
-                                        include_str!("../shaders/surface_instanced.vert"),
-                                        include_str!("../shaders/surface.frag"),
-                                    )?);
-                            }
-                            self.device.borrow_mut().draw_surface_path_instances(
-                                self.surface_instance_program.as_ref().unwrap(),
-                                path,
-                                instances,
-                                &mvp,
-                                &clip,
-                                0,
-                            )?;
-                            stats.draw_calls += 1;
-                            stats.triangles += instances.len() as u32 * 2;
-                            // The device packs sixteen f32 lanes per analytic
-                            // instance and uploads that stream on every draw.
-                            stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(
-                                (instances.len() * 16 * std::mem::size_of::<f32>()) as u32,
-                            );
+                        let tint = glyph.color.unwrap_or(style.color);
+                        let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
+                        let placement = [
+                            style.position[0] + glyph.position[0] * style.scale[0],
+                            style.position[1] + glyph.position[1] * style.scale[1],
+                            style.scale[0] * unit,
+                            style.scale[1] * unit,
+                        ];
+                        instances.push(super::super::device::SurfacePathInstance {
+                            bounds,
+                            placement,
+                            color,
+                            descriptor: range,
+                        });
+                    }
+                    if !instances.is_empty() {
+                        if self.surface_instance_program.is_none() {
+                            self.surface_instance_program =
+                                Some(self.device.borrow_mut().create_program(
+                                    include_str!("../shaders/surface_instanced.vert"),
+                                    include_str!("../shaders/surface.frag"),
+                                )?);
                         }
+                        self.device.borrow_mut().draw_surface_path_instances(
+                            self.surface_instance_program.as_ref().unwrap(),
+                            path,
+                            instances,
+                            &mvp,
+                            &clip,
+                            0,
+                        )?;
+                        stats.draw_calls += 1;
+                        stats.triangles += instances.len() as u32 * 2;
+                        // The device packs sixteen f32 lanes per analytic
+                        // instance and uploads that stream on every draw.
+                        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(
+                            (instances.len() * 16 * std::mem::size_of::<f32>()) as u32,
+                        );
                     }
                 }
                 ipp_core::SurfaceRenderPrimitive::Drawing {
@@ -370,36 +352,39 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(())
     }
 
-    /// Publish glyph atlas demand before drawing, using the frame's culling decisions.
+    /// Publish this World's glyph demand before drawing, using the frame's culling decisions.
     ///
-    /// Without a usable camera no Surface is submitted, so the previous demand stays.
+    /// Visible runs update their bands and demand and queue missing entries; culled
+    /// Surfaces keep theirs. Unchanged runs only hash their inputs.
     #[cfg(feature = "gui")]
     pub(super) fn prepare_glyph_demand(
         &mut self,
         world: &WorldContext<'_>,
         items: &[ipp_core::SurfaceRenderItem],
+        view_projection: [f32; 16],
         viewport: (u32, u32),
     ) {
-        use super::super::glyph_atlas::{
-            GlyphKey, GlyphSurfaceDemand, glyph_intersects_clip, projected_glyph_height,
-            select_resolution_band,
-        };
+        use super::super::glyph_atlas::{GlyphBatchRenderCache, TextRun, projected_glyph_height};
 
-        let Ok(camera) = world.prepare_camera(viewport.0, viewport.1) else {
-            return;
-        };
-        let frustum = ipp_core::systems::geometry::frustum_planes(camera.view_projection);
-        let mut surfaces = std::collections::BTreeMap::new();
+        let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
+        let atlas = &mut self.glyph_atlas;
+        let work = &mut self.glyph_frame;
+        let device = &self.device;
+        let cache = self
+            .glyph_batch_cache
+            .entry(world.id())
+            .or_insert_with(|| GlyphBatchRenderCache::new(device.clone()));
+        atlas.begin_publication();
+        cache.begin_publication();
 
         for item in items {
             // Culled Surfaces keep their retained runs, so they keep their entries too.
             if !world.geometry_visible(item.entity, &frustum) {
-                surfaces.insert(item.entity, GlyphSurfaceDemand::Culled);
+                cache.keep_surface(item.entity);
                 continue;
             }
 
-            let mvp = camera::multiply(camera.view_projection, item.model);
-            let mut keys = std::collections::BTreeSet::new();
+            let mvp = camera::multiply(view_projection, item.model);
             for primitive in &item.primitives {
                 let ipp_core::SurfaceRenderPrimitive::Glyphs {
                     style,
@@ -411,14 +396,6 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
                 let Some(clip) = ipp_core::primitive_effective_clip(style, item.clip_size) else {
-                    continue;
-                };
-                let Some(band) = select_resolution_band(projected_glyph_height(
-                    &mvp,
-                    style.position,
-                    *font_size * style.scale[1],
-                    viewport,
-                )) else {
                     continue;
                 };
                 let Some(data) = world
@@ -433,40 +410,281 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
 
-                for glyph in glyphs {
-                    if data
-                        .glyph_bounds
-                        .get(glyph.glyph_id as usize)
-                        .is_some_and(|bounds| {
-                            glyph_intersects_clip(
-                                style,
-                                glyph,
-                                *bounds,
-                                *font_size / data.font.units_per_em() as f32,
-                                clip,
-                            )
-                        })
-                    {
-                        keys.insert(GlyphKey {
-                            font_key: font.key,
-                            glyph_id: glyph.glyph_id,
-                            resolution_band: band,
-                        });
+                let run = TextRun {
+                    entity: item.entity,
+                    style,
+                    clip,
+                    font_key: font.key,
+                    font_size: *font_size,
+                    units_per_em: data.font.units_per_em(),
+                    glyphs,
+                };
+                let height = projected_glyph_height(
+                    &mvp,
+                    style.position,
+                    *font_size * style.scale[1],
+                    viewport,
+                );
+                // Glyphs without curves, such as spaces, need no coverage entry.
+                let bounds = |glyph_id: u32| {
+                    data.ranges
+                        .get(glyph_id as usize)
+                        .filter(|range| range.curve_range[1] != 0)
+                        .and_then(|_| data.glyph_bounds.get(glyph_id as usize).copied())
+                };
+                cache.publish_run(atlas, &run, height, bounds, work);
+            }
+        }
+
+        cache.end_publication(atlas);
+        atlas.release_if_unused();
+    }
+
+    /// Rasterize this frame's queued glyph misses before the main pass.
+    ///
+    /// Every slot is allocated first, then each atlas page is bound once and the host
+    /// target restored once. Recoverable allocation or rasterization failures discard
+    /// the entry, back the glyph off and keep its text analytic. Context loss, and any
+    /// failure to restore the host target, fail the frame so recovery or the
+    /// draw-failure path runs.
+    #[cfg(feature = "gui")]
+    pub(super) fn populate_glyph_misses(
+        &mut self,
+        world: &WorldContext<'_>,
+    ) -> Result<(), RenderError> {
+        let queue = self.glyph_frame.take_queue();
+        let result = if queue.is_empty() {
+            Ok(())
+        } else {
+            self.populate_glyphs(world, &queue)
+        };
+        self.glyph_frame.restore_queue(queue);
+        result
+    }
+
+    #[cfg(feature = "gui")]
+    fn populate_glyphs(
+        &mut self,
+        world: &WorldContext<'_>,
+        queue: &[super::super::glyph_atlas::GlyphKey],
+    ) -> Result<(), RenderError> {
+        struct PlannedGlyph<'a, P> {
+            key: super::super::glyph_atlas::GlyphKey,
+            page: usize,
+            path: &'a P,
+            range: super::super::device::SurfacePathDescriptor,
+            bounds: [f32; 4],
+            placement: [f32; 4],
+            clip: [f32; 4],
+        }
+
+        if self.surface_program.is_none() {
+            self.surface_program = Some(self.device.borrow_mut().create_program(
+                include_str!("../shaders/surface.vert"),
+                include_str!("../shaders/surface.frag"),
+            )?);
+        }
+
+        // Allocate every slot before binding any page, so each page binds once.
+        let mut planned = Vec::with_capacity(queue.len());
+        for &key in queue {
+            let Some(data) = world
+                .asset_resources()
+                .get(key.font_key)
+                .and_then(|resource| resource.data())
+                .and_then(|asset| {
+                    asset
+                        .as_any()
+                        .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
+                })
+            else {
+                continue;
+            };
+            let (Some(path), Some(&range), Some(&bounds)) = (
+                data.path.as_ref(),
+                data.ranges.get(key.glyph_id as usize),
+                data.glyph_bounds.get(key.glyph_id as usize),
+            ) else {
+                continue;
+            };
+
+            // Align to full texels and include an antialias texel inside the slot. UV
+            // bounds and placed geometry then describe the same area.
+            let scale = f32::from(key.resolution_band) / data.font.units_per_em() as f32;
+            let raster_bounds = [
+                ((bounds[0] * scale).floor() - 1.0) / scale,
+                ((bounds[1] * scale).floor() - 1.0) / scale,
+                ((bounds[2] * scale).ceil() + 1.0) / scale,
+                ((bounds[3] * scale).ceil() + 1.0) / scale,
+            ];
+            let px_w = ((raster_bounds[2] - raster_bounds[0]) * scale).round() as u32;
+            let px_h = ((raster_bounds[3] - raster_bounds[1]) * scale).round() as u32;
+
+            match self
+                .glyph_atlas
+                .allocate_slot(key, px_w, px_h, raster_bounds)
+            {
+                Ok(([slot_x, slot_y], page, _)) => planned.push(PlannedGlyph {
+                    key,
+                    page,
+                    path,
+                    range,
+                    bounds,
+                    placement: [
+                        slot_x as f32 - raster_bounds[0] * scale,
+                        slot_y as f32 - raster_bounds[1] * scale,
+                        scale,
+                        scale,
+                    ],
+                    clip: [
+                        slot_x as f32,
+                        slot_y as f32,
+                        (slot_x + px_w) as f32,
+                        (slot_y + px_h) as f32,
+                    ],
+                }),
+                Err(error) => {
+                    if let Err(lost) = self.glyph_population_failed(key, error) {
+                        for glyph in &planned {
+                            self.glyph_atlas.discard_population(glyph.key);
+                        }
+                        return Err(lost);
                     }
                 }
             }
-            surfaces.insert(item.entity, GlyphSurfaceDemand::Submitted(keys));
         }
 
-        self.glyph_atlas.prepare_world(world.id(), surfaces);
+        if planned.is_empty() {
+            return Ok(());
+        }
+
+        // Stable: glyphs keep their queue order within each page.
+        planned.sort_by_key(|glyph| glyph.page);
+
+        let started = self.device.borrow_mut().set_surface_double_sided(true);
+        if let Err(error) = started {
+            let _ = self.device.borrow_mut().set_surface_double_sided(false);
+            for glyph in &planned {
+                self.glyph_atlas.discard_population(glyph.key);
+            }
+            return Err(error);
+        }
+
+        let page_dim = super::super::glyph_atlas::ATLAS_PAGE_SIZE as f32;
+        let atlas_mvp = [
+            2.0 / page_dim,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.0 / page_dim,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            -1.0,
+            1.0,
+            0.0,
+            1.0,
+        ];
+        let color = [1.0, 1.0, 1.0, 1.0];
+        let program = self.surface_program.as_ref().unwrap();
+        let mut outcomes = Vec::with_capacity(planned.len());
+        let mut lost = false;
+        let mut bound_page = None;
+
+        for glyph in &planned {
+            // Consecutive pages switch targets; the host target is saved only once.
+            if bound_page
+                .as_ref()
+                .is_none_or(|(page, _)| *page != glyph.page)
+            {
+                let begun = match self.glyph_atlas.page_handle(glyph.page) {
+                    Some(handle) => self.device.borrow_mut().begin_glyph_atlas_page(handle),
+                    None => Err(RenderError::RenderDevice("glyph atlas page missing".into())),
+                };
+                bound_page = Some((glyph.page, begun));
+            }
+
+            let begun = bound_page.as_ref().map(|(_, begun)| begun.clone());
+            let drawn = begun.unwrap_or(Ok(())).and_then(|()| {
+                self.device.borrow_mut().draw_surface_path(
+                    program,
+                    glyph.path,
+                    &glyph.bounds,
+                    glyph.range,
+                    &atlas_mvp,
+                    &glyph.placement,
+                    &glyph.clip,
+                    &color,
+                    0,
+                )
+            });
+            lost |= drawn == Err(RenderError::ContextLost);
+            outcomes.push(drawn);
+            if lost {
+                break;
+            }
+        }
+
+        // Restore the target even when beginning or drawing fails. GLES also reports
+        // errors of earlier unchecked draws here, so a restore failure fails the frame.
+        let restored = self.device.borrow_mut().end_glyph_atlas_page();
+        let unset = self.device.borrow_mut().set_surface_double_sided(false);
+
+        if lost
+            || restored == Err(RenderError::ContextLost)
+            || unset == Err(RenderError::ContextLost)
+        {
+            // Recovery clears the atlas; no unconfirmed entry may be sampled meanwhile.
+            for glyph in &planned {
+                self.glyph_atlas.discard_population(glyph.key);
+            }
+            return Err(RenderError::ContextLost);
+        }
+
+        if let Err(error) = restored {
+            // A failed entry must never be sampled as populated coverage.
+            for glyph in &planned {
+                self.glyph_atlas.abandon_population(glyph.key);
+            }
+            return Err(error);
+        }
+
+        for (glyph, outcome) in planned.iter().zip(outcomes) {
+            match outcome {
+                Ok(()) => self.glyph_frame.populates += 1,
+                Err(error) => self.glyph_population_failed(glyph.key, error)?,
+            }
+        }
+
+        unset
     }
 
-    /// Release retained Surface work a completed frame shows to be stale and publish
-    /// context-wide residency.
+    /// Discard a failed glyph entry, then propagate context loss or count the failure.
+    #[cfg(feature = "gui")]
+    fn glyph_population_failed(
+        &mut self,
+        key: super::super::glyph_atlas::GlyphKey,
+        error: RenderError,
+    ) -> Result<(), RenderError> {
+        self.glyph_atlas.abandon_population(key);
+        if error == RenderError::ContextLost {
+            return Err(error);
+        }
+
+        self.glyph_frame.failures += 1;
+        Ok(())
+    }
+
+    /// Publish context-wide retained Surface residency and this frame's glyph work.
     ///
-    /// Only a successful submission that reached its Surfaces can distinguish stale work
-    /// from work of culled Surfaces. Failed, cameraless and invalid-camera frames keep
-    /// everything, so a transient failure or pan never forces re-uploads.
+    /// Only a successful submission that reached its Surfaces can distinguish stale GUI
+    /// batches from those of culled Surfaces. Failed, cameraless and invalid-camera
+    /// frames keep everything, so a transient failure or pan never forces re-uploads.
+    /// Text runs follow the demand published before drawing.
     #[cfg(feature = "gui")]
     pub(super) fn finish_retained_surfaces(
         &mut self,
@@ -486,9 +704,6 @@ impl<D: RenderDevice> RenderService<D> {
         if let Some(cache) = self.gui_batch_cache.get_mut(&world) {
             cache.finish_frame(surfaces.as_ref());
         }
-        if let Some(cache) = self.glyph_batch_cache.get_mut(&world) {
-            cache.finish_frame(surfaces.as_ref());
-        }
 
         let Some(stats) = stats else {
             return;
@@ -503,6 +718,8 @@ impl<D: RenderDevice> RenderService<D> {
                     .map(|cache| cache.resident_bytes()),
             )
             .sum::<usize>() as u32;
+        self.glyph_frame.publish(stats);
+        stats.glyph_page_retirements = self.glyph_atlas.take_retired_pages();
         stats.glyph_pages = self.glyph_atlas.page_count();
         stats.glyph_resident_bytes = self.glyph_atlas.resident_bytes();
     }
@@ -535,111 +752,28 @@ impl<D: RenderDevice> RenderService<D> {
         let cache = self.gui_batch_cache.entry(world).or_insert_with(|| {
             super::super::gui_batch::GuiBatchRenderCache::new(self.device.clone())
         });
-        for chunk in boxes.chunks(128) {
-            cache.draw_box_batch(program, entity, batch_clip, part_class, chunk, mvp, stats)?;
-        }
+        // The cache splits the run into bounded batches with stable boundaries.
+        cache.draw_box_batch(program, entity, batch_clip, part_class, boxes, mvp, stats)?;
 
         boxes.clear();
 
         Ok(())
     }
 
+    /// Draw a published text run from its retained atlas batches.
+    ///
+    /// Returns `false` when the run has no band or a demanded glyph is not resident;
+    /// the caller then draws analytic glyphs.
     #[cfg(feature = "gui")]
-    #[allow(clippy::too_many_arguments)]
     fn draw_glyphs_via_atlas(
         &mut self,
-        world: &WorldContext<'_>,
-        entity: ipp_core::EntityId,
-        style: &ipp_core::systems::surface::SurfacePrimitiveStyle,
-        font_key: ipp_core::services::asset_management::AssetKey,
-        font_size: f32,
-        glyphs: &[ipp_core::systems::surface::SurfaceGlyph],
-        band: u16,
+        world: ipp_core::WorldId,
+        run: &super::super::glyph_atlas::TextRun<'_>,
         mvp: &[f32; 16],
-        clip: ipp_core::systems::surface::SurfaceClipRect,
         stats: &mut RenderStats,
     ) -> Result<bool, RenderError> {
-        let Some(data) = world
-            .asset_resources()
-            .get(font_key)
-            .and_then(|resource| resource.data())
-            .and_then(|asset| {
-                asset
-                    .as_any()
-                    .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
-            })
-        else {
+        if !self.glyph_batch_cache.contains_key(&world) {
             return Ok(false);
-        };
-
-        let Some(path) = data.path.as_ref() else {
-            return Ok(false);
-        };
-
-        let font_units_per_em = data.font.units_per_em();
-        let scale = band as f32 / font_units_per_em as f32;
-
-        let mut misses = std::collections::BTreeMap::new();
-        for glyph in glyphs {
-            if let Some(&range) = data.ranges.get(glyph.glyph_id as usize) {
-                if range.curve_range[1] == 0
-                    || !super::super::glyph_atlas::glyph_intersects_clip(
-                        style,
-                        glyph,
-                        data.glyph_bounds[glyph.glyph_id as usize],
-                        font_size / font_units_per_em as f32,
-                        clip,
-                    )
-                {
-                    continue;
-                }
-                let key = super::super::glyph_atlas::GlyphKey {
-                    font_key,
-                    glyph_id: glyph.glyph_id,
-                    resolution_band: band,
-                };
-                if self.glyph_atlas.get(&key).is_none() {
-                    misses.insert(glyph.glyph_id, range);
-                }
-            }
-        }
-
-        if !misses.is_empty() {
-            stats.glyph_misses += misses.len() as u32;
-
-            if self.surface_program.is_none() {
-                self.surface_program = Some(self.device.borrow_mut().create_program(
-                    include_str!("../shaders/surface.vert"),
-                    include_str!("../shaders/surface.frag"),
-                )?);
-            }
-
-            // Any glyph left unpopulated keeps the whole run on the analytic path.
-            let mut complete = true;
-            for (&glyph_id, &range) in &misses {
-                let key = super::super::glyph_atlas::GlyphKey {
-                    font_key,
-                    glyph_id,
-                    resolution_band: band,
-                };
-                if self.glyph_atlas.population_deferred(&key)
-                    || stats.glyph_populates as usize
-                        >= super::super::glyph_atlas::MAX_POPULATES_PER_FRAME
-                {
-                    complete = false;
-                    continue;
-                }
-
-                let bounds = data.glyph_bounds[glyph_id as usize];
-                if !self.populate_glyph(key, path, range, bounds, scale, stats)? {
-                    complete = false;
-                    break;
-                }
-            }
-
-            if !complete {
-                return Ok(false);
-            }
         }
 
         if self.surface_text_program.is_none() {
@@ -650,151 +784,10 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         let program = self.surface_text_program.as_ref().unwrap();
-        self.glyph_batch_cache
-            .entry(world.id())
-            .or_insert_with(|| {
-                super::super::glyph_atlas::GlyphBatchRenderCache::new(self.device.clone())
-            })
-            .draw_text_run(
-                program,
-                &self.glyph_atlas,
-                entity,
-                clip,
-                style,
-                font_key,
-                font_size,
-                font_units_per_em,
-                glyphs,
-                band,
-                mvp,
-                stats,
-            )?;
-
-        Ok(true)
-    }
-
-    /// Rasterize one glyph's coverage into a new atlas slot.
-    ///
-    /// Returns `Ok(false)` after a recoverable allocation or rasterization failure: the
-    /// unpopulated entry is discarded, the glyph backs off and its text stays analytic
-    /// for this frame. Context loss, and any failure to restore the host target, fail
-    /// the frame so recovery or the draw-failure path runs.
-    #[cfg(feature = "gui")]
-    fn populate_glyph(
-        &mut self,
-        key: super::super::glyph_atlas::GlyphKey,
-        path: &D::SurfacePath,
-        range: super::super::device::SurfacePathDescriptor,
-        bounds: [f32; 4],
-        scale: f32,
-        stats: &mut RenderStats,
-    ) -> Result<bool, RenderError> {
-        // Align to full texels and include an antialias texel inside the slot. UV
-        // bounds and placed geometry then describe the same area.
-        let raster_bounds = [
-            ((bounds[0] * scale).floor() - 1.0) / scale,
-            ((bounds[1] * scale).floor() - 1.0) / scale,
-            ((bounds[2] * scale).ceil() + 1.0) / scale,
-            ((bounds[3] * scale).ceil() + 1.0) / scale,
-        ];
-        let px_w = ((raster_bounds[2] - raster_bounds[0]) * scale).round() as u32;
-        let px_h = ((raster_bounds[3] - raster_bounds[1]) * scale).round() as u32;
-
-        let allocated = self
-            .glyph_atlas
-            .allocate_slot(key, px_w, px_h, raster_bounds);
-        let ([slot_x, slot_y], page_idx, _) = match allocated {
-            Ok(slot) => slot,
-            Err(error) => return self.glyph_population_failed(key, error, stats),
+        let Some(cache) = self.glyph_batch_cache.get_mut(&world) else {
+            return Ok(false);
         };
-        let Some(page_handle) = self.glyph_atlas.page_handle(page_idx) else {
-            let error = RenderError::RenderDevice("glyph atlas page missing".into());
-            return self.glyph_population_failed(key, error, stats);
-        };
-
-        let page_dim = super::super::glyph_atlas::ATLAS_PAGE_SIZE as f32;
-        let atlas_mvp = [
-            2.0 / page_dim,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            -2.0 / page_dim,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            -1.0,
-            1.0,
-            0.0,
-            1.0,
-        ];
-        let placement = [
-            slot_x as f32 - raster_bounds[0] * scale,
-            slot_y as f32 - raster_bounds[1] * scale,
-            scale,
-            scale,
-        ];
-        let atlas_clip = [
-            slot_x as f32,
-            slot_y as f32,
-            (slot_x + px_w) as f32,
-            (slot_y + px_h) as f32,
-        ];
-        let color = [1.0, 1.0, 1.0, 1.0];
-
-        let begun = self.device.borrow_mut().begin_glyph_atlas_page(page_handle);
-        let drawn = begun.and_then(|()| {
-            self.device.borrow_mut().draw_surface_path(
-                self.surface_program.as_ref().unwrap(),
-                path,
-                &bounds,
-                range,
-                &atlas_mvp,
-                &placement,
-                &atlas_clip,
-                &color,
-                0,
-            )
-        });
-        // Restore the target even when beginning or drawing fails. GLES also reports
-        // errors of earlier unchecked draws here, so a restore failure fails the frame.
-        let restored = self.device.borrow_mut().end_glyph_atlas_page();
-
-        match (drawn, restored) {
-            (Ok(()), Ok(())) => {
-                stats.glyph_populates += 1;
-                Ok(true)
-            }
-            (Err(RenderError::ContextLost), _) | (_, Err(RenderError::ContextLost)) => {
-                self.glyph_population_failed(key, RenderError::ContextLost, stats)
-            }
-            (_, Err(error)) => {
-                // A failed entry must never be sampled as populated coverage.
-                self.glyph_atlas.abandon_population(key);
-                Err(error)
-            }
-            (Err(error), Ok(())) => self.glyph_population_failed(key, error, stats),
-        }
-    }
-
-    /// Discard a failed glyph entry, then propagate context loss or count the failure.
-    #[cfg(feature = "gui")]
-    fn glyph_population_failed(
-        &mut self,
-        key: super::super::glyph_atlas::GlyphKey,
-        error: RenderError,
-        stats: &mut RenderStats,
-    ) -> Result<bool, RenderError> {
-        self.glyph_atlas.abandon_population(key);
-        if error == RenderError::ContextLost {
-            return Err(error);
-        }
-
-        stats.glyph_population_failures += 1;
-        Ok(false)
+        cache.draw_text_run(program, &self.glyph_atlas, run, mvp, stats)
     }
 }
 

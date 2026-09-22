@@ -38,7 +38,7 @@ pub use device::SurfacePathDescriptor;
 pub use device::SurfacePathInstance;
 pub use device::{PlatformRenderDevice, RenderDevice};
 #[cfg(feature = "gui")]
-pub use glyph_atlas::GlyphVertex;
+pub use glyph_atlas::{GlyphAtlasLimits, GlyphVertex};
 #[cfg(feature = "gui")]
 pub use gui_batch::{GuiBoxVertex, GuiPartClass};
 

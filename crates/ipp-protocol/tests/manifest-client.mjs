@@ -113,6 +113,21 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     ).limit,
     256,
   );
+  // The generated codec derives the message and inspected-byte bounds from the
+  // exported contract; they cannot drift from the Rust declarations.
+  const inspectedBytes = codec.WIRE_LAYOUTS["snapshot-value-bytes"].fields.find(
+    (field) => field.name === "value",
+  ).limit;
+  assert.equal(
+    codec.MAX_MESSAGE_BYTES,
+    Number(codec.WIRE_CONVENTIONS["max-message-bytes"]),
+  );
+  assert.equal(codec.INSPECTED_BYTES_LIMIT, inspectedBytes);
+  assert.equal(codec.INSPECTED_BYTES_LIMIT, codec.MAX_MESSAGE_BYTES);
+  assert.doesNotMatch(
+    codec.decodeResponse.toString() + codec.encodeRequest.toString(),
+    /1_?048_?576/,
+  );
   const covered = new Set();
   const tag = (name) => {
     covered.add(name);
@@ -1359,6 +1374,114 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     { ...dynamicInspection.body.entities[0].effective[0].properties },
     { x: { kind: "f32", value: 1 } },
   );
+  // Dense descriptor tables exceed the old 64 KiB byte bound. The effective
+  // snapshot refers to the base table instead of repeating it.
+  const denseNames = Array.from(
+    { length: 2500 },
+    (_, index) => `node_${index}_background_corner_radius`,
+  );
+  const encoder = new TextEncoder();
+  const denseTable = (() => {
+    const parts = [];
+    const u32 = (value) => {
+      const bytes = new Uint8Array(4);
+      new DataView(bytes.buffer).setUint32(0, value, true);
+      parts.push(bytes);
+    };
+    u32(0x80000001 + denseNames.length);
+    u32(denseNames.length);
+    denseNames.forEach((name, index) => {
+      const bytes = encoder.encode(name);
+      u32(bytes.length);
+      parts.push(bytes);
+      u32(0x80000001 + index);
+      parts.push(new Uint8Array([1]));
+    });
+    const table = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      table.set(part, at);
+      at += part.length;
+    }
+    return table;
+  })();
+  assert.ok(denseTable.length > 65536, `table has ${denseTable.length} bytes`);
+  const denseSnapshot = (descriptors, value) =>
+    layout("component", {
+      type_id: custom.id,
+      fields: [
+        ...Object.values(custom.fields).map((f) =>
+          snapshotField(f.offset, snapshotValue(kinds[f.kind], f.default)),
+        ),
+        snapshotField(0x80000000, descriptors),
+        ...denseNames.map((_, index) => {
+          const bytes = new Uint8Array(5);
+          bytes[0] = 1;
+          new DataView(bytes.buffer).setFloat32(1, value + index, true);
+          return snapshotField(
+            0x80000001 + index,
+            snapshotValue("dynamic", bytes),
+          );
+        }),
+      ],
+    });
+  const baseDescriptors = layout("snapshot-value-base-descriptors", {
+    tag: tag("SNAPSHOT_VALUE_BASE_DESCRIPTORS"),
+  });
+  const denseInspection = (base, effective) =>
+    layout("response-inspect", {
+      session: 7n,
+      request_id: 1001n,
+      tick: 40n,
+      tag: tag("RESPONSE_INSPECT"),
+      next: 0n,
+      time: 2.25,
+      entities: [
+        layout("entity", {
+          id: 0x100000001n,
+          metadata: metadata(null, []),
+          base,
+          effective,
+        }),
+      ],
+      resources: [],
+      controllers: [],
+      render_diagnostics: [],
+    }).bytes;
+  const denseBytes = denseInspection(
+    [denseSnapshot(snapshotValue("bytes", denseTable), 0)],
+    [denseSnapshot(baseDescriptors, 0.5)],
+  );
+  assert.ok(denseBytes.length < codec.MAX_MESSAGE_BYTES);
+  const dense = codec.decodeResponse(denseBytes, 7n).body.entities[0];
+  for (const [snapshot, offset] of [
+    [dense.base[0], 0],
+    [dense.effective[0], 0.5],
+  ]) {
+    assert.equal(Object.keys(snapshot.properties).length, denseNames.length);
+    assert.deepEqual(snapshot.properties[denseNames.at(-1)], {
+      kind: "f32",
+      value: denseNames.length - 1 + offset,
+    });
+  }
+  // A reference is valid only after a base table for the same component.
+  assert.throws(
+    () =>
+      codec.decodeResponse(
+        denseInspection([], [denseSnapshot(baseDescriptors, 0)]),
+        7n,
+      ),
+    /no base table/,
+  );
+  assert.throws(
+    () =>
+      codec.decodeResponse(
+        denseInspection([denseSnapshot(baseDescriptors, 0)], []),
+        7n,
+      ),
+    /invalid dynamic inspection/,
+  );
+
   const oversizedSnapshot = {
     layout: customSnapshot.layout,
     bytes: customSnapshot.bytes.slice(),

@@ -360,6 +360,108 @@ fn inspection_encodes_dynamic_components_beyond_static_field_limits() {
 }
 
 #[test]
+fn effective_inspection_refers_to_an_identical_base_descriptor_table() {
+    let mut material = ipp_core::components::CustomMaterial::default();
+    for index in 0..3000 {
+        material
+            .properties
+            .set(
+                &format!("node_{index}_background_corner_radius"),
+                ipp_core::DynamicValue::F32(index as f32),
+            )
+            .unwrap();
+    }
+    let table = descriptor_table(&material.properties);
+    assert!(table.len() > 65_536);
+
+    // An animated effective value keeps the same descriptor identities.
+    let mut animated = material.clone();
+    animated
+        .properties
+        .set(
+            "node_0_background_corner_radius",
+            ipp_core::DynamicValue::F32(9.0),
+        )
+        .unwrap();
+    let mut renamed = material.clone();
+    renamed
+        .properties
+        .set("extra", ipp_core::DynamicValue::F32(1.0))
+        .unwrap();
+    let encode = |base: Vec<ComponentValue>, effective: Vec<ComponentValue>| {
+        encode_response(&Response {
+            session: 7,
+            request_id: 1,
+            tick: 9,
+            body: ResponseBody::Inspect {
+                next: 0,
+                controllers: Vec::new(),
+                time: 0.5,
+                entities: vec![ipp_core::EntitySnapshot {
+                    id: EntityId::from_bits(42),
+                    metadata: EntityMetadata::default(),
+                    base,
+                    effective,
+                }],
+                resources: Vec::new(),
+                render_diagnostics: Vec::new(),
+            },
+        })
+        .unwrap()
+    };
+    let occurrences = |bytes: &[u8]| bytes.windows(table.len()).filter(|w| *w == table).count();
+
+    let base_only = encode(
+        vec![ComponentValue::CustomMaterial(material.clone())],
+        vec![],
+    );
+    let shared = encode(
+        vec![ComponentValue::CustomMaterial(material.clone())],
+        vec![ComponentValue::CustomMaterial(animated)],
+    );
+    assert_eq!(occurrences(&shared), 1);
+    // The effective copy adds its values and a one-byte reference, not a second table.
+    assert!(shared.len() - base_only.len() < base_only.len() - table.len());
+    let reference = [
+        DYNAMIC_METADATA_OFFSET.to_le_bytes().as_slice(),
+        &[SNAPSHOT_VALUE_BASE_DESCRIPTORS],
+    ]
+    .concat();
+    assert!(shared.windows(reference.len()).any(|w| w == reference));
+
+    // Different descriptors, or no base counterpart, still carry a complete table.
+    let changed = encode(
+        vec![ComponentValue::CustomMaterial(material.clone())],
+        vec![ComponentValue::CustomMaterial(renamed.clone())],
+    );
+    assert_eq!(occurrences(&changed), 1);
+    let renamed_table = descriptor_table(&renamed.properties);
+    assert!(
+        changed
+            .windows(renamed_table.len())
+            .any(|w| w == renamed_table)
+    );
+    let effective_only = encode(vec![], vec![ComponentValue::CustomMaterial(material)]);
+    assert_eq!(occurrences(&effective_only), 1);
+    assert!(
+        !effective_only
+            .windows(reference.len())
+            .any(|w| w == reference)
+    );
+}
+
+const DYNAMIC_METADATA_OFFSET: u32 = ipp_core::components::dynamic_properties::DYNAMIC_METADATA;
+
+fn descriptor_table(
+    properties: &ipp_core::components::dynamic_properties::DynamicProperties,
+) -> Vec<u8> {
+    match properties.field(DYNAMIC_METADATA_OFFSET) {
+        Ok(ResolvedValue::Bytes(table)) => table,
+        other => panic!("descriptor table unavailable: {other:?}"),
+    }
+}
+
+#[test]
 fn large_inspected_byte_fields_still_obey_the_message_budget() {
     let mut writer = Writer(Vec::new());
     assert_eq!(

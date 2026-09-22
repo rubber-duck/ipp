@@ -102,7 +102,50 @@ export type {
 } from "./client.js";
 export { RequestNotSentError, RequestRejectedError } from "./client.js";
 
-export const MAX_MESSAGE_BYTES = 1_048_576;
+/** One exported layout bound; the executed target contract is its only source. */
+function wireFieldLimit(layout: string, field: string): number {
+  const limit = (
+    WIRE_LAYOUTS as Readonly<
+      Record<
+        string,
+        { readonly fields: readonly { name: string; limit: number }[] }
+      >
+    >
+  )[layout]?.fields.find((candidate) => candidate.name === field)?.limit;
+  if (!Number.isSafeInteger(limit) || limit! <= 0)
+    throw new Error(`Generated contract omits the ${layout}.${field} bound`);
+  return limit!;
+}
+/** Complete application message budget declared by the target contract. */
+export const MAX_MESSAGE_BYTES = Number(WIRE_CONVENTIONS["max-message-bytes"]);
+if (!Number.isSafeInteger(MAX_MESSAGE_BYTES) || MAX_MESSAGE_BYTES <= 0)
+  throw new Error("Generated contract omits the message budget");
+/** Inspected byte fields, including named-property descriptor tables. */
+export const INSPECTED_BYTES_LIMIT = wireFieldLimit(
+  "snapshot-value-bytes",
+  "value",
+);
+// #if gui
+const GUI_EDITS_BYTES = wireFieldLimit("request-gui", "edits");
+const GUI_INPUT_BYTES = wireFieldLimit("request-gui-input", "input");
+const GUI_ACTION_BYTES = wireFieldLimit(
+  "request-gui-semantic-action",
+  "action",
+);
+const GUI_INSPECT_BYTES = wireFieldLimit("response-gui-inspect", "payload");
+const GUI_SNAPSHOT_BYTES = wireFieldLimit(
+  "response-gui-semantic-snapshot",
+  "snapshot",
+);
+const GUI_OBSERVATION_BYTES = wireFieldLimit(
+  "response-gui-observations",
+  "observations",
+);
+const GUI_UNHANDLED_BYTES = wireFieldLimit(
+  "response-gui-unhandled",
+  "unhandled",
+);
+// #endif
 /** Entity references and command builders; submit commands through client.batch(). */
 export const Entity = {
   handle(id: bigint): EntityRef {
@@ -531,7 +574,7 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
       w.u8(WIRE.REQUEST_GUI);
       w.boolean(body.batchId !== undefined);
       if (body.batchId !== undefined) w.u64(body.batchId);
-      w.count(bytes.length, 1048576);
+      w.count(bytes.length, GUI_EDITS_BYTES);
       w.raw(bytes);
       break;
     }
@@ -545,7 +588,7 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
     case "guiInput": {
       const bytes = encodeGuiInput(body.input);
       w.u8(WIRE.REQUEST_GUI_INPUT);
-      w.count(bytes.length, 1048576);
+      w.count(bytes.length, GUI_INPUT_BYTES);
       w.raw(bytes);
       break;
     }
@@ -559,7 +602,7 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
     case "guiSemanticAction": {
       const bytes = encodeGuiSemanticAction(body.action);
       w.u8(WIRE.REQUEST_GUI_SEMANTIC_ACTION);
-      w.count(bytes.length, 1048576);
+      w.count(bytes.length, GUI_ACTION_BYTES);
       w.raw(bytes);
       break;
     }
@@ -825,7 +868,16 @@ function readOutcome(r: Reader): BatchOutcome {
   }
 }
 const descriptors: readonly ComponentDescriptor[] = Object.values(components);
-function readComponent(r: Reader): ComponentSnapshot {
+/** Named-property descriptor tables decoded from one entity's base snapshot. */
+type BaseDescriptorTables = Map<
+  number,
+  ReturnType<typeof decodeDynamicDescriptors>
+>;
+function readComponent(
+  r: Reader,
+  baseTables: BaseDescriptorTables,
+  base: boolean,
+): ComponentSnapshot {
   const component = r.u16();
   const descriptor = descriptors.find((c) => c.id === component);
   if (!descriptor) return fail("unsupported component");
@@ -853,15 +905,21 @@ function readComponent(r: Reader): ComponentSnapshot {
     const offset = r.u32();
     const kind = r.u8();
     if (offset >= 0x80000000 && descriptor.dynamicProperties) {
-      if (
-        offset === 0x80000000 &&
-        kind === WIRE.SNAPSHOT_VALUE_BYTES &&
-        !dynamicDescriptors
-      ) {
-        dynamicDescriptors = decodeDynamicDescriptors(
-          r.raw(r.count(MAX_MESSAGE_BYTES)),
-        );
-        continue;
+      if (offset === 0x80000000 && !dynamicDescriptors) {
+        if (kind === WIRE.SNAPSHOT_VALUE_BYTES) {
+          dynamicDescriptors = decodeDynamicDescriptors(
+            r.raw(r.count(INSPECTED_BYTES_LIMIT)),
+          );
+          if (base) baseTables.set(component, dynamicDescriptors);
+          continue;
+        }
+        // An effective snapshot refers to its base table instead of repeating it.
+        if (kind === WIRE.SNAPSHOT_VALUE_BASE_DESCRIPTORS && !base) {
+          dynamicDescriptors =
+            baseTables.get(component) ??
+            fail("inspected descriptor reference has no base table");
+          continue;
+        }
       }
       const property = dynamicDescriptors?.get(offset);
       if (
@@ -887,7 +945,7 @@ function readComponent(r: Reader): ComponentSnapshot {
     else if (kind === WIRE.SNAPSHOT_VALUE_U64) fields[entry[0]] = r.u64();
     else if (kind === WIRE.SNAPSHOT_VALUE_STRING) fields[entry[0]] = r.string();
     else if (kind === WIRE.SNAPSHOT_VALUE_BYTES)
-      fields[entry[0]] = r.raw(r.count(MAX_MESSAGE_BYTES));
+      fields[entry[0]] = r.raw(r.count(INSPECTED_BYTES_LIMIT));
     else if (kind === WIRE.SNAPSHOT_VALUE_ENTITY) {
       if (r.u8() !== WIRE.SNAPSHOT_REF_HANDLE)
         fail("unresolved inspected alias");
@@ -1313,7 +1371,7 @@ export function decodeResponse(
         : { ok: true, applied, requests: 1 },
     };
   } else if (tag === WIRE.RESPONSE_GUI_INSPECT) {
-    const len = r.count(1048576);
+    const len = r.count(GUI_INSPECT_BYTES);
     body = {
       kind: "guiInspect",
       response: decodeGuiInspectResponse(r.raw(len)),
@@ -1343,19 +1401,19 @@ export function decodeResponse(
     }
     body = { kind: "guiInput", outcome };
   } else if (tag === WIRE.RESPONSE_GUI_SEMANTIC_SNAPSHOT) {
-    const len = r.count(1048576);
+    const len = r.count(GUI_SNAPSHOT_BYTES);
     body = {
       kind: "guiSemanticSnapshot",
       snapshot: decodeGuiSemanticSnapshot(r.raw(len)),
     };
   } else if (tag === WIRE.RESPONSE_GUI_OBSERVATIONS) {
-    const len = r.count(1048576);
+    const len = r.count(GUI_OBSERVATION_BYTES);
     body = {
       kind: "guiObservations",
       observations: readGuiObservations(r.raw(len)),
     };
   } else if (tag === WIRE.RESPONSE_GUI_UNHANDLED) {
-    const len = r.count(1048576);
+    const len = r.count(GUI_UNHANDLED_BYTES);
     body = {
       kind: "guiUnhandledInputs",
       inputs: readGuiUnhandledInputs(r.raw(len)),
@@ -1448,9 +1506,11 @@ export function decodeResponse(
       const metadata = readMetadata(r);
       const base: ComponentSnapshot[] = [];
       const effective: ComponentSnapshot[] = [];
+      const baseTables: BaseDescriptorTables = new Map();
       for (const list of [base, effective]) {
         const n = r.count(256);
-        for (let j = 0; j < n; j++) list.push(readComponent(r));
+        for (let j = 0; j < n; j++)
+          list.push(readComponent(r, baseTables, list === base));
       }
       entities.push({ id, metadata, base, effective });
     }

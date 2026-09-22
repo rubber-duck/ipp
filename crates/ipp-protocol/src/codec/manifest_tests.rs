@@ -1919,6 +1919,133 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         &mut covered,
     );
 
+    // Base and effective snapshots of one dynamic component share its descriptor table.
+    let mut material = ipp_core::components::CustomMaterial::default();
+    material
+        .properties
+        .set("tint", ipp_core::DynamicValue::F32(0.5))
+        .unwrap();
+    let mut animated = material.clone();
+    animated
+        .properties
+        .set("tint", ipp_core::DynamicValue::F32(0.75))
+        .unwrap();
+    let material_fixture = |component: &ipp_core::components::CustomMaterial, shared: bool| {
+        let fields = ComponentValue::CustomMaterial(component.clone())
+            .fields()
+            .into_iter()
+            .map(|(offset, value)| {
+                let value = match value {
+                    ResolvedValue::Bytes(_)
+                        if shared
+                            && offset
+                                == ipp_core::components::dynamic_properties::DYNAMIC_METADATA =>
+                    {
+                        manifest_layout(
+                            "snapshot-value-base-descriptors",
+                            [("tag", ManifestValue::Tag("SNAPSHOT_VALUE_BASE_DESCRIPTORS"))],
+                        )
+                    }
+                    ResolvedValue::Bytes(bytes) => manifest_typed_value(
+                        "snapshot-value-bytes",
+                        "SNAPSHOT_VALUE_BYTES",
+                        ManifestValue::Bytes(bytes),
+                    ),
+                    ResolvedValue::Dynamic(value) => manifest_typed_value(
+                        "snapshot-value-dynamic",
+                        "SNAPSHOT_VALUE_DYNAMIC",
+                        ManifestValue::Bytes(value.encode()),
+                    ),
+                    ResolvedValue::F32(value) => manifest_typed_value(
+                        "snapshot-value-f32",
+                        "SNAPSHOT_VALUE_F32",
+                        ManifestValue::F32(value),
+                    ),
+                    ResolvedValue::U32(value) => manifest_typed_value(
+                        "snapshot-value-u32",
+                        "SNAPSHOT_VALUE_U32",
+                        ManifestValue::U32(value),
+                    ),
+                    ResolvedValue::String(value) => manifest_typed_value(
+                        "snapshot-value-string",
+                        "SNAPSHOT_VALUE_STRING",
+                        ManifestValue::String(value),
+                    ),
+                    ResolvedValue::Bool(value) => manifest_typed_value(
+                        "snapshot-value-bool",
+                        "SNAPSHOT_VALUE_BOOL",
+                        ManifestValue::Bool(value),
+                    ),
+                    other => panic!("unexpected CustomMaterial snapshot value {other:?}"),
+                };
+                manifest_snapshot_field(offset, value)
+            })
+            .collect();
+        manifest_layout(
+            "component",
+            [
+                (
+                    "type_id",
+                    ManifestValue::U16(ComponentValue::CustomMaterial(component.clone()).type_id()),
+                ),
+                ("fields", ManifestValue::List(fields)),
+            ],
+        )
+    };
+    assert_manifest_response(
+        Response {
+            session: 7,
+            request_id: 22,
+            tick: 40,
+            body: ResponseBody::Inspect {
+                next: 0,
+                controllers: Vec::new(),
+                time: 2.25,
+                entities: vec![ipp_core::EntitySnapshot {
+                    id: entity,
+                    metadata: EntityMetadata::default(),
+                    base: vec![ComponentValue::CustomMaterial(material.clone())],
+                    effective: vec![ComponentValue::CustomMaterial(animated.clone())],
+                }],
+                resources: Vec::new(),
+                render_diagnostics: Vec::new(),
+            },
+        },
+        ManifestFixture::new(
+            "response-inspect",
+            [
+                ("session", ManifestValue::U64(7)),
+                ("request_id", ManifestValue::U64(22)),
+                ("tick", ManifestValue::U64(40)),
+                ("tag", ManifestValue::Tag("RESPONSE_INSPECT")),
+                ("time", ManifestValue::F64(2.25)),
+                ("next", ManifestValue::U64(0)),
+                (
+                    "entities",
+                    ManifestValue::List(vec![manifest_layout(
+                        "entity",
+                        [
+                            ("id", ManifestValue::U64(entity.to_bits())),
+                            ("metadata", manifest_metadata(None, &[])),
+                            (
+                                "base",
+                                ManifestValue::List(vec![material_fixture(&material, false)]),
+                            ),
+                            (
+                                "effective",
+                                ManifestValue::List(vec![material_fixture(&animated, true)]),
+                            ),
+                        ],
+                    )]),
+                ),
+                ("resources", ManifestValue::List(Vec::new())),
+                ("render_diagnostics", ManifestValue::List(Vec::new())),
+                ("controllers", ManifestValue::List(Vec::new())),
+            ],
+        ),
+        &mut covered,
+    );
+
     {
         let diagnostics = vec![
             ipp_core::StateOverlayLifecycleDiagnostic {

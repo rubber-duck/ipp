@@ -15,15 +15,23 @@ import {
 import { useMemo, type ReactNode } from "react";
 import type { GuiDemoSkin, GuiSceneState } from "./scene.js";
 import { Waveform, type WaveformRefs } from "./waveform.js";
-import { GUI_ICONS, Icon, Shape } from "./presentation.js";
+import { GUI_ICONS, IconCell, Shape } from "./presentation.js";
 
 export const SURFACE_WIDTH = 7.4;
 export const SURFACE_HEIGHT = 4.8;
 const CONTENT_WIDTH = 6.8;
 const LEFT_WIDTH = 3.24;
 const RIGHT_WIDTH = 3.4;
+const PULSE_HEIGHT = 0.84;
+const PULSE_ICON_CELL = 0.9;
+const SPAN_NARROW = 1.2;
+const SPAN_WIDE = 2.0;
 
 type Color = readonly [number, number, number, number];
+
+function dim(color: Color, factor: number): Color {
+  return [color[0] * factor, color[1] * factor, color[2] * factor, color[3]];
+}
 
 export interface Palette {
   readonly shell: Color;
@@ -100,26 +108,34 @@ function shapeControlTheme(
     borderWidth: 0.012,
     borderColor: palette.secondary,
   };
-  const fill = {
-    kind: "linear" as const,
-    start: [0, 0] as const,
-    end: [0, pulse ? 0.84 : 0.38] as const,
-    color0: pulse
-      ? ([
-          palette.button[0] * 0.15,
-          palette.button[1] * 0.15,
-          palette.button[2] * 0.15,
-          palette.button[3],
-        ] as Color)
-      : palette.panel,
-    color1: palette.shell,
-  };
+  // PULSE brightens radially around its icon cell; other controls shade from
+  // top to bottom. Stops use local metres, so resizing keeps their scale.
+  const fill = pulse
+    ? {
+        kind: "radial" as const,
+        start: [PULSE_ICON_CELL / 2, PULSE_HEIGHT / 2] as const,
+        radius: 1.7,
+        color0: dim(palette.button, 0.4),
+        color1: palette.shell,
+      }
+    : {
+        kind: "linear" as const,
+        start: [0, 0] as const,
+        end: [0, 0.38] as const,
+        color0: palette.panel,
+        color1: palette.shell,
+      };
   const halo = {
     color: palette.secondary,
     intensity: 0.18,
     radius: 0.035,
     falloff: 2,
   };
+  // Neon adds a resting halo; PULSE carries the widest one.
+  const restingGlow =
+    scene.skin !== "neon"
+      ? {}
+      : { glow: pulse ? { ...halo, intensity: 0.45, radius: 0.12 } : halo };
   return {
     font: scene.font,
     parts: {
@@ -128,7 +144,7 @@ function shapeControlTheme(
           ...state(palette.button, 0),
           ...edge,
           gradient: fill,
-          ...(scene.skin === "neon" ? { glow: halo } : {}),
+          ...restingGlow,
         },
         hovered: {
           ...state(palette.hovered, 0.1, 1.025),
@@ -141,23 +157,30 @@ function shapeControlTheme(
           ...edge,
           gradient: fill,
         },
+        // A solid dim fill without glow, matching the skin motion's
+        // disabled sample so the transition settles on the lane values.
         disabled: {
           ...state(palette.disabled, 0.3),
+          opacity: 0.45,
           cornerRadius: [0.05, 0.05] as const,
           borderWidth: 0.012,
           borderColor: palette.muted,
           glow: { intensity: 0 },
         },
       },
-      label: { base: { color: palette.primary } },
+      label: {
+        base: { color: palette.primary },
+        disabled: { color: palette.muted },
+      },
+      // A hollow stroke with its own halo; the ring never fills the control.
       focusRing: {
         base: {
           color: palette.focus,
           opacity: 1,
           cornerRadius: [0.06, 0.06] as const,
-          borderWidth: 0.01,
+          borderWidth: 0.024,
           borderColor: palette.focus,
-          glow: { ...halo, color: palette.focus },
+          glow: { ...halo, color: palette.focus, intensity: 0.4, radius: 0.07 },
         },
       },
     },
@@ -223,6 +246,52 @@ function Frame({
       }}
     >
       {children}
+    </Stack>
+  );
+}
+
+function spanWidthFor(scene: GuiSceneState): number {
+  return scene.wide ? SPAN_WIDE : SPAN_NARROW;
+}
+
+/** A resizable frame: SPAN toggles its width while corner radii, border
+ * width and the vertical gradient keep their authored metres. */
+function Span({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
+  return (
+    <Stack
+      width={spanWidthFor(scene)}
+      height={0.38}
+      alignY={0}
+      enabled={false}
+      backgroundColor={palette.panel}
+      theme={{
+        parts: {
+          background: {
+            base: {
+              color: palette.panel,
+              cornerRadius: [0.1, 0.1],
+              borderWidth: 0.014,
+              borderColor: palette.secondary,
+              gradient: {
+                kind: "linear",
+                start: [0, 0],
+                end: [0, 0.38],
+                color0: dim(palette.secondary, 0.3),
+                color1: palette.panel,
+              },
+            },
+          },
+        },
+      }}
+    >
+      <Align alignX={0} alignY={0} enabled={false}>
+        <Text
+          text={scene.wide ? "WIDE" : "NARROW"}
+          asset={scene.font}
+          fontSize={0.15}
+          color={palette.primary}
+        />
+      </Align>
     </Stack>
   );
 }
@@ -472,11 +541,11 @@ function PulseAndSkins({
   );
   return (
     <Column width={LEFT_WIDTH} height={1.32}>
-      <Stack width={LEFT_WIDTH} height={0.84}>
+      <Stack width={LEFT_WIDTH} height={PULSE_HEIGHT}>
         <Button
           key="pulse"
           width={LEFT_WIDTH}
-          height={0.84}
+          height={PULSE_HEIGHT}
           padding={[0.17, 0.2, 0.17, 1.08]}
           label="PULSE"
           fontSize={0.42}
@@ -484,14 +553,14 @@ function PulseAndSkins({
           opacity={scene.prepared ? 1 : 0}
           onPress={scene.pulse}
         />
-        <Align width={0.9} height={0.84} alignX={0} alignY={0} enabled={false}>
-          <Icon
-            font={scene.font}
-            glyph={GUI_ICONS.pulse}
-            size={0.45}
-            color={palette.primary}
-          />
-        </Align>
+        <IconCell
+          width={PULSE_ICON_CELL}
+          height={PULSE_HEIGHT}
+          font={scene.font}
+          glyph={GUI_ICONS.pulse}
+          size={0.45}
+          color={palette.primary}
+        />
       </Stack>
       <Row width={LEFT_WIDTH} height={0.38} margin={[0.1, 0, 0, 0]}>
         <Label
@@ -521,20 +590,14 @@ function PulseAndSkins({
               opacity={scene.prepared ? 1 : 0}
               onPress={() => scene.selectSkin(skin)}
             />
-            <Align
+            <IconCell
               width={0.25}
               height={0.38}
-              alignX={0}
-              alignY={0}
-              enabled={false}
-            >
-              <Icon
-                font={scene.font}
-                glyph={GUI_ICONS[skin]}
-                size={0.17}
-                color={palette.secondary}
-              />
-            </Align>
+              font={scene.font}
+              glyph={GUI_ICONS[skin]}
+              size={0.17}
+              color={palette.secondary}
+            />
           </Stack>
         ))}
       </Row>
@@ -624,6 +687,8 @@ export function ProjectorDashboard({
     () => shapeControlTheme(scene, palette),
     [scene.font, scene.motions, scene.skin, palette],
   );
+  // The spacer absorbs SPAN resizing, keeping the header controls in place.
+  const spanWidth = spanWidthFor(scene);
   return (
     <Stack width={SURFACE_WIDTH} height={SURFACE_HEIGHT}>
       <Shape
@@ -644,30 +709,47 @@ export function ProjectorDashboard({
         padding={[0.25, 0.3, 0.25, 0.3]}
       >
         <Row width={CONTENT_WIDTH} height={0.57}>
-          <Align width={0.48} height={0.57} alignX={-1} alignY={0}>
-            <Icon
-              font={scene.font}
-              glyph={GUI_ICONS.cube}
-              size={0.36}
-              color={palette.secondary}
-            />
-          </Align>
+          <IconCell
+            width={0.48}
+            height={0.57}
+            alignX={-1}
+            font={scene.font}
+            glyph={GUI_ICONS.cube}
+            size={0.36}
+            color={palette.secondary}
+          />
           <Label
             scene={scene}
             text="GUI DEMO"
-            width={5.65}
+            width={2.2}
             height={0.57}
             size={0.4}
             color={palette.primary}
           />
-          <Align width={0.67} height={0.57} alignX={1} alignY={0}>
-            <Icon
-              font={scene.font}
-              glyph={GUI_ICONS.signal}
-              size={0.3}
-              color={palette.primary}
-            />
-          </Align>
+          <Span scene={scene} palette={palette} />
+          <Padding width={SPAN_WIDE - spanWidth + 0.65} height={0.57} />
+          <Button
+            key="span"
+            width={0.8}
+            height={0.38}
+            alignY={0}
+            padding={[0.085, 0.1, 0.085, 0.16]}
+            label="SPAN"
+            fontSize={0.15}
+            theme={inputTheme}
+            opacity={scene.prepared ? 1 : 0}
+            onPress={scene.toggleSpan}
+          />
+          <Padding width={0.12} height={0.57} />
+          <IconCell
+            width={0.55}
+            height={0.57}
+            alignX={1}
+            font={scene.font}
+            glyph={GUI_ICONS.signal}
+            size={0.3}
+            color={palette.primary}
+          />
         </Row>
         <Padding width={CONTENT_WIDTH} height={0.12} />
         <Gain scene={scene} palette={palette} />
@@ -701,6 +783,20 @@ export function ProjectorDashboard({
             onTextCommit={(event) => scene.setCallsign(event.value)}
           />
           <Padding width={0.16} height={0.38} />
+          <Button
+            key="uplink"
+            width={1.0}
+            height={0.38}
+            padding={[0.085, 0.1, 0.085, 0.14]}
+            label="UPLINK"
+            fontSize={0.15}
+            theme={inputTheme}
+            // Uplink is available only while SCAN holds the waveform.
+            enabled={!scene.autoscan}
+            opacity={scene.prepared ? 1 : 0}
+            onPress={scene.uplink}
+          />
+          <Padding width={0.12} height={0.38} />
           <Label
             scene={scene}
             text={
@@ -708,7 +804,7 @@ export function ProjectorDashboard({
                 ? "ARRAY ONLINE  /  V.07"
                 : scene.lastCommand.toUpperCase()
             }
-            width={3.4}
+            width={2.28}
             height={0.38}
             size={0.15}
             color={palette.muted}

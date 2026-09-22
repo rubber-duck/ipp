@@ -1,5 +1,7 @@
 /** Shared retained decoration and verified glyphs from Shure Tech Mono Nerd Font. */
 import {
+  Align,
+  Padding,
   Stack,
   Text,
   type GuiNodeProps,
@@ -7,18 +9,26 @@ import {
 } from "@ipp/react/gui";
 import type { ClientAssetSource } from "@ipp/client";
 
+type Color = readonly [number, number, number, number];
+
 export const GUI_ICONS = {
-  cube: "\uf1b2", // nf-fa-cube
-  signal: "\uf012", // nf-fa-signal
-  pulse: "\ueb31", // nf-cod-pulse
-  aurora: "\uf2dc", // nf-fa-snowflake_o
-  ember: "\uf06d", // nf-fa-fire
-  neon: "\uf0e7", // nf-fa-flash
+  cube: "", // nf-fa-cube
+  signal: "", // nf-fa-signal
+  pulse: "", // nf-cod-pulse
+  aurora: "", // nf-fa-snowflake_o
+  ember: "", // nf-fa-fire
+  neon: "", // nf-fa-flash
 } as const;
 
+/**
+ * A non-interactive decoration box. `x` and `y` offset it from the start of
+ * its parent Stack by adding to the caller's leading margins, so the Stack
+ * extent, layout bounds and painted position agree.
+ */
 export function Shape({
   x = 0,
   y = 0,
+  margin = [0, 0, 0, 0],
   material,
   ...props
 }: GuiNodeProps & {
@@ -35,8 +45,7 @@ export function Shape({
     <Stack
       {...props}
       enabled={false}
-      // Counterbalanced margins place decorations without shrinking the stack.
-      margin={[y, -x, -y, x]}
+      margin={[margin[0] + y, margin[1], margin[2], margin[3] + x]}
       backgroundColor={color}
       theme={theme}
     />
@@ -52,7 +61,7 @@ export function Icon({
   font: ClientAssetSource;
   glyph: string;
   size: number;
-  color: readonly [number, number, number, number];
+  color: Color;
 }) {
   return (
     <Text
@@ -64,5 +73,33 @@ export function Icon({
       color={color}
       enabled={false}
     />
+  );
+}
+
+/**
+ * A glyph in a fixed, non-interactive cell. The Padding cell carries no align
+ * lanes, so its parent Stack, Row or Column places it at the start; the Align
+ * filling the cell positions the glyph, centred by default.
+ */
+export function IconCell({
+  width,
+  height,
+  alignX = 0,
+  ...icon
+}: {
+  width: number;
+  height: number;
+  alignX?: number;
+  font: ClientAssetSource;
+  glyph: string;
+  size: number;
+  color: Color;
+}) {
+  return (
+    <Padding width={width} height={height} enabled={false}>
+      <Align alignX={alignX} alignY={0} enabled={false}>
+        <Icon {...icon} />
+      </Align>
+    </Padding>
   );
 }

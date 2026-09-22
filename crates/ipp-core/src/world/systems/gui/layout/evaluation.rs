@@ -55,6 +55,24 @@
 //! in a Stack enlarges its constraints. Paint and hit regions remain
 //! subject to ancestor clips.
 //!
+//! ## Alignment
+//!
+//! Align positions its single child by its own align lanes, defaulting to
+//! the centre. Stack aligns each child's margin box within its settled
+//! extent, and Row and Column align each child on the cross axis within the
+//! largest child cross extent; both read the child's own align lanes and
+//! default to the start. An Align node placed in a Stack, Row or Column is
+//! therefore positioned by the same lanes that position its content.
+//!
+//! A container only knows a child's final slot after measuring the child's
+//! whole subtree, so alignment records a deferred translation for that
+//! child. A finishing pass applies the accumulated translations to every
+//! descendant's rectangle and content origin in painter order, then
+//! resolves clips from the final geometry: each ScrollView viewport moves
+//! with its subtree and intersects the fixed clip it inherits. Aligned
+//! subtrees therefore keep paint, semantic bounds and hit regions together,
+//! including under scaled or reflected placement, without remeasuring text.
+//!
 //! ## Retention
 //!
 //! [`GuiLayoutCache`] retains one [`GuiEvaluatedView`] per root entity,
@@ -95,6 +113,9 @@ use crate::systems::surface::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+#[path = "alignment_tests.rs"]
+mod alignment_tests;
 #[cfg(test)]
 #[path = "cache_tests.rs"]
 mod cache_tests;
@@ -989,6 +1010,22 @@ struct RetainedText {
     layout: TextLayout,
 }
 
+/// Evaluation-only placement facts kept parallel to the evaluator's records.
+///
+/// Containers only learn a child's final slot after measuring its subtree,
+/// so alignment defers the subtree translation here. The finishing pass
+/// applies accumulated translations to descendants and then resolves clips.
+#[derive(Clone, Copy, Debug, Default)]
+struct DeferredPlacement {
+    /// Final-logical translation of this record and its complete subtree.
+    shift: [f32; 2],
+    /// ScrollView viewport in final-logical coordinates before any deferred
+    /// translation; its descendants intersect their inherited clip with it.
+    viewport: Option<SurfaceClipRect>,
+    /// Placeholder for a node that could not lay out; paint stays suppressed.
+    placeholder: bool,
+}
+
 /// Single-pass constraint evaluator. Fixed children lay out first, then
 /// flex children share leftover space; diagnostics replace iteration.
 struct Evaluator<'a, 'r> {
@@ -997,6 +1034,8 @@ struct Evaluator<'a, 'r> {
     units: f32,
     diagnostics: Vec<GuiLayoutDiagnostic>,
     nodes: Vec<GuiEvaluatedNode>,
+    /// Deferred placement per record, index-aligned with `nodes`.
+    placements: Vec<DeferredPlacement>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
     remeasured: u64,
 }
@@ -1101,20 +1140,20 @@ fn apply_min_max(
 
     size.clamp(min, max)
 }
+
 impl<'a, 'r> Evaluator<'a, 'r> {
     /// Lay out one node. `constraints` arrive in node-local logical units,
-    /// `slot_final` is the node's layout origin in final-logical
-    /// coordinates (before its own visual offset), `acc` accumulates the
-    /// ancestors' visual scales per axis, and `clip` is the incoming
-    /// accumulated clip in final-logical coordinates. Returns the node's
-    /// node-local logical size.
+    /// `slot_final` is the node's provisional layout origin in final-logical
+    /// coordinates (before its own visual offset and any deferred alignment
+    /// translation), and `acc` accumulates the ancestors' visual scales per
+    /// axis. Clips resolve after placement. Returns the node's node-local
+    /// logical size.
     fn visit(
         &mut self,
         id: GuiNodeId,
         constraints: Constraints,
         slot_final: [f32; 2],
         acc: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> [f32; 2] {
         let Some(node) = self.root.nodes().node(id) else {
@@ -1128,7 +1167,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             self.push_unavailable(
                 node,
                 slot_final,
-                clip,
                 depth,
                 GuiLayoutDiagnostic::Unsupported {
                     node: Some(id),
@@ -1144,7 +1182,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             self.push_unavailable(
                 node,
                 slot_final,
-                clip,
                 depth,
                 GuiLayoutDiagnostic::SingularTransform {
                     node: id,
@@ -1207,7 +1244,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             fill,
             content_origin_final,
             acc_total,
-            clip,
             depth,
         );
 
@@ -1234,21 +1270,20 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             final_origin,
             [size[0] * acc_total[0], size[1] * acc_total[1]],
         );
-        let paint_suppressed = clip
-            .as_ref()
-            .is_some_and(|clip| crate::systems::surface::surface_clip_is_empty(*clip));
 
+        // Clip and paint suppression resolve after deferred alignment moves
+        // this subtree into its final slot.
         let record = GuiEvaluatedNode {
             node: id,
             lifetime: node.lifetime,
             depth,
             rect,
-            clip,
+            clip: None,
             content: outcome.content,
             enabled: style.enabled,
             visible: available && style.opacity > 0.0,
             available,
-            paint_suppressed,
+            paint_suppressed: false,
             visual_offset: offset,
             visual_scale: scale,
             acc_scale: acc_total,
@@ -1262,6 +1297,13 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         // only settle after children lay out. Insert this record before the
         // child records this visit just pushed.
         self.nodes.insert(child_base, record);
+        self.placements.insert(
+            child_base,
+            DeferredPlacement {
+                viewport: outcome.viewport,
+                ..DeferredPlacement::default()
+            },
+        );
 
         size
     }
@@ -1278,7 +1320,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         fill: [f32; 2],
         final_origin: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         match &node.content {
@@ -1290,7 +1331,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 fill,
                 final_origin,
                 acc_total,
-                clip,
                 depth,
             ),
             GuiNodeContent::Text(text) => {
@@ -1322,6 +1362,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     },
                     available: true,
                     content_extents: None,
+                    viewport: None,
                 }
             }
             GuiNodeContent::Image {
@@ -1349,6 +1390,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     },
                     available: true,
                     content_extents: None,
+                    viewport: None,
                 }
             }
             GuiNodeContent::Button {
@@ -1390,6 +1432,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     },
                     available: true,
                     content_extents: None,
+                    viewport: None,
                 }
             }
             GuiNodeContent::Slider {
@@ -1418,6 +1461,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     },
                     available: true,
                     content_extents: None,
+                    viewport: None,
                 }
             }
             GuiNodeContent::TextInput {
@@ -1579,19 +1623,22 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         &mut self,
         node: &GuiNode,
         slot_final: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
         diagnostic: GuiLayoutDiagnostic,
     ) {
         self.diagnostics.push(diagnostic);
         let style = self.root.style(node.id).unwrap_or_default();
         let enabled = style.enabled;
+        self.placements.push(DeferredPlacement {
+            placeholder: true,
+            ..DeferredPlacement::default()
+        });
         self.nodes.push(GuiEvaluatedNode {
             node: node.id,
             lifetime: node.lifetime,
             depth,
             rect: [slot_final[0], slot_final[1], 0.0, 0.0],
-            clip,
+            clip: None,
             content: GuiEvaluatedContent::Container,
             enabled,
             visible: false,
@@ -1610,12 +1657,14 @@ impl<'a, 'r> Evaluator<'a, 'r> {
 }
 
 /// Local content outcome: node-local logical size, retained payload,
-/// availability and optional scroll content extents.
+/// availability, optional scroll content extents and, for a ScrollView, its
+/// provisional final-logical viewport clip.
 struct ContentOutcome {
     size: [f32; 2],
     content: GuiEvaluatedContent,
     available: bool,
     content_extents: Option<[f32; 2]>,
+    viewport: Option<SurfaceClipRect>,
 }
 
 impl ContentOutcome {
@@ -1644,6 +1693,7 @@ impl ContentOutcome {
                     },
                     available: true,
                     content_extents: None,
+                    viewport: None,
                 }
             }
             LeafOutcome::Unavailable => Self {
@@ -1651,6 +1701,7 @@ impl ContentOutcome {
                 content: GuiEvaluatedContent::Container,
                 available: false,
                 content_extents: None,
+                viewport: None,
             },
         }
     }
@@ -1705,6 +1756,7 @@ impl LeafOutcome {
         Self::Unavailable
     }
 }
+
 // ---------------------------------------------------------------------------
 // Container layout: Row, Column, Stack, Padding, Align, SizedBox, ScrollView.
 // ---------------------------------------------------------------------------
@@ -1723,52 +1775,33 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         match kind {
             GuiContainerKind::Row => self.layout_flex(
                 node,
-                style,
                 true,
                 constraints,
                 fill,
                 origin_final,
                 acc_total,
-                clip,
                 depth,
             ),
             GuiContainerKind::Column => self.layout_flex(
                 node,
-                style,
                 false,
                 constraints,
                 fill,
                 origin_final,
                 acc_total,
-                clip,
                 depth,
             ),
-            GuiContainerKind::Stack => self.layout_stack(
-                node,
-                style,
-                constraints,
-                fill,
-                origin_final,
-                acc_total,
-                clip,
-                depth,
-            ),
-            GuiContainerKind::Padding => self.layout_single(
-                node,
-                style,
-                constraints,
-                fill,
-                origin_final,
-                acc_total,
-                clip,
-                depth,
-            ),
+            GuiContainerKind::Stack => {
+                self.layout_stack(node, constraints, fill, origin_final, acc_total, depth)
+            }
+            GuiContainerKind::Padding => {
+                self.layout_single(node, constraints, fill, origin_final, acc_total, depth)
+            }
             GuiContainerKind::Align => self.layout_align(
                 node,
                 style,
@@ -1776,28 +1809,14 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 fill,
                 origin_final,
                 acc_total,
-                clip,
                 depth,
             ),
-            GuiContainerKind::SizedBox => self.layout_sized_box(
-                node,
-                style,
-                constraints,
-                origin_final,
-                acc_total,
-                clip,
-                depth,
-            ),
-            GuiContainerKind::ScrollView => self.layout_scroll(
-                node,
-                style,
-                constraints,
-                fill,
-                origin_final,
-                acc_total,
-                clip,
-                depth,
-            ),
+            GuiContainerKind::SizedBox => {
+                self.layout_sized_box(node, style, constraints, origin_final, acc_total, depth)
+            }
+            GuiContainerKind::ScrollView => {
+                self.layout_scroll(node, constraints, fill, origin_final, acc_total, depth)
+            }
         }
     }
 
@@ -1807,6 +1826,39 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             origin_final[0] + local[0] * acc_total[0],
             origin_final[1] + local[1] * acc_total[1],
         ]
+    }
+
+    /// Visit one child, returning its node-local size and the index of the
+    /// record it retained, or None when the child produced no record.
+    fn visit_child(
+        &mut self,
+        id: GuiNodeId,
+        constraints: Constraints,
+        slot_final: [f32; 2],
+        acc: [f32; 2],
+        depth: u32,
+    ) -> ([f32; 2], Option<usize>) {
+        let index = self.nodes.len();
+        let size = self.visit(id, constraints, slot_final, acc, depth);
+        let retained = self
+            .nodes
+            .get(index)
+            .is_some_and(|record| record.node == id);
+
+        (size, retained.then_some(index))
+    }
+
+    /// Defer moving a child's complete subtree by a content-box-local
+    /// alignment offset. The finishing pass applies the translation to
+    /// every descendant and resolves clips against the final geometry, so
+    /// alignment never leaves descendants behind their aligned parent.
+    fn align_subtree(&mut self, index: Option<usize>, local: [f32; 2], acc_total: [f32; 2]) {
+        let Some(placement) = index.and_then(|index| self.placements.get_mut(index)) else {
+            return;
+        };
+
+        placement.shift[0] += local[0] * acc_total[0];
+        placement.shift[1] += local[1] * acc_total[1];
     }
 
     /// Outer margins of one child in logical units.
@@ -1840,18 +1892,17 @@ impl<'a, 'r> Evaluator<'a, 'r> {
 
     /// Row or Column layout. Fixed children measure first against remaining
     /// space; flex children then share the leftover proportionally. Cross
-    /// children align by their own align lane, defaulting to the start.
+    /// children align by their own align lane within the largest child
+    /// cross extent, defaulting to the start.
     #[allow(clippy::too_many_arguments)]
     fn layout_flex(
         &mut self,
         node: &GuiNode,
-        style: &GuiNodeStyle,
         horizontal: bool,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         let (max_main, max_cross) = if horizontal {
@@ -1877,7 +1928,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         let mut cursor = 0.0;
         let mut cross = 0.0f32;
         let mut available = true;
-        let mut placements: Vec<(GuiNodeId, [f32; 2])> = Vec::new();
+        let mut placed: Vec<FlexPlacement> = Vec::new();
 
         // Fixed children first, bounded by remaining main-axis space so
         // wrapping text observes the space it will actually occupy.
@@ -1903,12 +1954,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 [margin_cross_start, cursor + margin_main_start]
             };
-            let size = self.visit(
+            let (size, index) = self.visit_child(
                 child,
                 child_constraints,
                 Self::place(origin_final, slot_local, acc_total),
                 acc_total,
-                clip,
                 depth + 1,
             );
             let (main, cross_size) = if horizontal {
@@ -1916,7 +1966,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 (size[1], size[0])
             };
-            placements.push((child, slot_local));
+            placed.push(FlexPlacement {
+                child,
+                index,
+                cross: cross_size,
+            });
             cursor += margin_main_start + main + margin_main_end;
             cross = cross.max(cross_size);
             available &= self.child_available(child);
@@ -1968,12 +2022,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 [margin_cross_start, cursor + margin_main_start]
             };
-            let size = self.visit(
+            let (size, index) = self.visit_child(
                 child,
                 child_constraints,
                 Self::place(origin_final, slot_local, acc_total),
                 acc_total,
-                clip,
                 depth + 1,
             );
             let (main, cross_size) = if horizontal {
@@ -1981,21 +2034,33 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 (size[1], size[0])
             };
-            placements.push((child, slot_local));
+            placed.push(FlexPlacement {
+                child,
+                index,
+                cross: cross_size,
+            });
             cursor += margin_main_start + main + margin_main_end;
             cross = cross.max(cross_size);
             available &= self.child_available(child);
         }
 
         // Cross-axis alignment per child, from each child's own align lane.
-        self.align_cross(
-            &placements,
-            horizontal,
-            cross,
-            origin_final,
-            acc_total,
-            max_cross,
-        );
+        // The child's whole subtree moves with it.
+        for placement in placed {
+            let child_style = self.root.style(placement.child).unwrap_or_default();
+            let factor = if horizontal {
+                align_factor(child_style.align_y, -1.0)
+            } else {
+                align_factor(child_style.align_x, -1.0)
+            };
+            let shift = factor * (cross - placement.cross).max(0.0);
+            let local = if horizontal {
+                [0.0, shift]
+            } else {
+                [shift, 0.0]
+            };
+            self.align_subtree(placement.index, local, acc_total);
+        }
 
         let (main_size, cross_size) = if horizontal {
             (cursor, cross)
@@ -2006,12 +2071,12 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             fill_or_fit(main_size, fill[0]),
             fill_or_fit(cross_size, fill[1]),
         ];
-        let _ = style;
         ContentOutcome {
             size,
             content: GuiEvaluatedContent::Container,
             available,
             content_extents: None,
+            viewport: None,
         }
     }
 
@@ -2026,92 +2091,25 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             .is_none_or(|node| node.available)
     }
 
-    /// Reposition flex children along the cross axis by their align lanes.
-    /// Records are already retained; this rewrites their final rectangles
-    /// and content origins in place. `cross` is the settled content extent.
-    fn align_cross(
-        &mut self,
-        placements: &[(GuiNodeId, [f32; 2])],
-        horizontal: bool,
-        cross: f32,
-        origin_final: [f32; 2],
-        acc_total: [f32; 2],
-        _max_cross: f32,
-    ) {
-        for (child, slot_local) in placements {
-            let style = self.root.style(*child).unwrap_or_default();
-            let factor = if horizontal {
-                align_factor(style.align_y, -1.0)
-            } else {
-                align_factor(style.align_x, -1.0)
-            };
-            // The child record is the latest retained record for this id
-            // pushed by its visit above... but later siblings pushed after
-            // it, so search from the back for the deepest matching record
-            // belonging to this layout call. Simpler and exact: find the
-            // last record with this id; visits push exactly one record per
-            // node per layout, and no other layout of this node intervenes.
-            let Some(record) = self.nodes.iter_mut().rev().find(|node| node.node == *child) else {
-                continue;
-            };
-            // Current cross extent in local units, recovered from the
-            // retained final rectangle through the full scale chain.
-            let size_local = Self::record_local_extent(record, acc_total, horizontal);
-            let shift = factor * (cross - size_local).max(0.0);
-            let slot = if horizontal {
-                [slot_local[0], slot_local[1] + shift]
-            } else {
-                [slot_local[0] + shift, slot_local[1]]
-            };
-            let placed = Self::place(origin_final, slot, acc_total);
-            // Preserve the node's own visual offset already baked in.
-            let delta = [
-                placed[0] - (record.rect[0] - record.visual_offset[0]),
-                placed[1] - (record.rect[1] - record.visual_offset[1]),
-            ];
-            record.rect[0] += delta[0];
-            record.rect[1] += delta[1];
-            record.content_origin[0] += delta[0];
-            record.content_origin[1] += delta[1];
-        }
-    }
-
-    /// Local cross-axis extent of a retained record, recovered through the
-    /// full accumulated scale chain including the node's own visual scale.
-    fn record_local_extent(
-        record: &GuiEvaluatedNode,
-        acc_total: [f32; 2],
-        horizontal: bool,
-    ) -> f32 {
-        let (rect, acc, own) = if horizontal {
-            (record.rect[3], acc_total[1], record.visual_scale[1])
-        } else {
-            (record.rect[2], acc_total[0], record.visual_scale[0])
-        };
-        rect / (acc * own).abs().max(f32::MIN_POSITIVE)
-    }
-
     /// Stack layout: every child observes the content box minus its margins
-    /// and aligns within the settled extent. The stack fits outer child sizes.
-    #[allow(clippy::too_many_arguments)]
+    /// and aligns its margin box within the settled extent, moving its whole
+    /// subtree. The stack fits outer child sizes.
     fn layout_stack(
         &mut self,
         node: &GuiNode,
-        style: &GuiNodeStyle,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         let mut extent = [0.0f32, 0.0];
         let mut available = true;
-        let mut sizes: Vec<(GuiNodeId, [f32; 2])> = Vec::new();
+        let mut placed: Vec<(GuiNodeId, Option<usize>, [f32; 2])> = Vec::new();
         for &child in &node.children {
             let margin = self.child_margin(child);
             let outer = [margin[3] + margin[1], margin[0] + margin[2]];
-            let size = self.visit(
+            let (size, index) = self.visit_child(
                 child,
                 Constraints::loose(
                     (constraints.max_w - outer[0]).max(0.0),
@@ -2119,13 +2117,12 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 ),
                 Self::place(origin_final, [margin[3], margin[0]], acc_total),
                 acc_total,
-                clip,
                 depth + 1,
             );
             let size = [(size[0] + outer[0]).max(0.0), (size[1] + outer[1]).max(0.0)];
             extent[0] = extent[0].max(size[0]);
             extent[1] = extent[1].max(size[1]);
-            sizes.push((child, size));
+            placed.push((child, index, size));
             available &= self.child_available(child);
         }
 
@@ -2133,52 +2130,40 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             fill_or_fit(extent[0], fill[0]),
             fill_or_fit(extent[1], fill[1]),
         ];
-        for (child, child_size) in sizes {
-            let margin = self.child_margin(child);
+
+        // Children were visited at their leading margins; alignment only
+        // adds the offset of the margin box within the settled extent.
+        for (child, index, child_size) in placed {
             let child_style = self.root.style(child).unwrap_or_default();
             let fx = align_factor(child_style.align_x, -1.0);
             let fy = align_factor(child_style.align_y, -1.0);
-            let shift = [
-                margin[3] + fx * (size[0] - child_size[0]).max(0.0),
-                margin[0] + fy * (size[1] - child_size[1]).max(0.0),
+            let local = [
+                fx * (size[0] - child_size[0]).max(0.0),
+                fy * (size[1] - child_size[1]).max(0.0),
             ];
-            let placed = Self::place(origin_final, shift, acc_total);
-            if let Some(record) = self.nodes.iter_mut().rev().find(|node| node.node == child) {
-                let delta = [
-                    placed[0] - (record.rect[0] - record.visual_offset[0]),
-                    placed[1] - (record.rect[1] - record.visual_offset[1]),
-                ];
-                record.rect[0] += delta[0];
-                record.rect[1] += delta[1];
-                record.content_origin[0] += delta[0];
-                record.content_origin[1] += delta[1];
-            }
+            self.align_subtree(index, local, acc_total);
         }
 
-        let _ = style;
         ContentOutcome {
             size,
             content: GuiEvaluatedContent::Container,
             available,
             content_extents: None,
+            viewport: None,
         }
     }
 
     /// Padding and single-child pass-through: the first child fills the
     /// content box; extra children are ignored with a diagnostic.
-    #[allow(clippy::too_many_arguments)]
     fn layout_single(
         &mut self,
         node: &GuiNode,
-        style: &GuiNodeStyle,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
-        let _ = style;
         let mut children = node.children.iter();
         let Some(&child) = children.next() else {
             return ContentOutcome {
@@ -2186,6 +2171,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 content: GuiEvaluatedContent::Container,
                 available: true,
                 content_extents: None,
+                viewport: None,
             };
         };
         if children.next().is_some() {
@@ -2200,7 +2186,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             Constraints::loose(constraints.max_w, constraints.max_h),
             origin_final,
             acc_total,
-            clip,
             depth + 1,
         );
         let available = self.child_available(child);
@@ -2209,12 +2194,13 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             content: GuiEvaluatedContent::Container,
             available,
             content_extents: None,
+            viewport: None,
         }
     }
 
-    /// Align: the single child keeps its intrinsic size and is positioned
-    /// within the filled content box by the node's own align lanes,
-    /// defaulting to the center.
+    /// Align: the single child keeps its intrinsic size and its whole
+    /// subtree is positioned within the filled content box by the node's own
+    /// align lanes, defaulting to the center.
     #[allow(clippy::too_many_arguments)]
     fn layout_align(
         &mut self,
@@ -2224,7 +2210,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         let size = [fill_or_fit(0.0, fill[0]), fill_or_fit(0.0, fill[1])];
@@ -2235,10 +2220,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 content: GuiEvaluatedContent::Container,
                 available: true,
                 content_extents: None,
+                viewport: None,
             };
         };
 
-        let child_size = self.visit(
+        let (child_size, index) = self.visit_child(
             child,
             Constraints::loose(
                 size[0].min(constraints.max_w),
@@ -2246,38 +2232,27 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             ),
             origin_final,
             acc_total,
-            clip,
             depth + 1,
         );
         let fx = align_factor(style.align_x, 0.0);
         let fy = align_factor(style.align_y, 0.0);
-        let shift = [
+        let local = [
             fx * (size[0] - child_size[0]).max(0.0),
             fy * (size[1] - child_size[1]).max(0.0),
         ];
-        let placed = Self::place(origin_final, shift, acc_total);
-        if let Some(record) = self.nodes.iter_mut().rev().find(|node| node.node == child) {
-            let delta = [
-                placed[0] - (record.rect[0] - record.visual_offset[0]),
-                placed[1] - (record.rect[1] - record.visual_offset[1]),
-            ];
-            record.rect[0] += delta[0];
-            record.rect[1] += delta[1];
-            record.content_origin[0] += delta[0];
-            record.content_origin[1] += delta[1];
-        }
+        self.align_subtree(index, local, acc_total);
 
         ContentOutcome {
             size,
             content: GuiEvaluatedContent::Container,
             available: self.child_available(child),
             content_extents: None,
+            viewport: None,
         }
     }
 
     /// SizedBox: explicit lanes size the box; an unspecified axis fits the
     /// single child when present. The child observes tight box constraints.
-    #[allow(clippy::too_many_arguments)]
     fn layout_sized_box(
         &mut self,
         node: &GuiNode,
@@ -2285,7 +2260,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         constraints: Constraints,
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         let explicit_w = sanitized_bound(style.width, Some(node.id), &mut self.diagnostics);
@@ -2301,7 +2275,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         );
         let (child_size, available) = match child {
             Some(child) => {
-                let size = self.visit(child, probe, origin_final, acc_total, clip, depth + 1);
+                let size = self.visit(child, probe, origin_final, acc_total, depth + 1);
                 (size, self.child_available(child))
             }
             None => (ZERO_SIZE, true),
@@ -2316,26 +2290,34 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             content: GuiEvaluatedContent::Container,
             available,
             content_extents: None,
+            viewport: None,
         }
     }
 
     /// ScrollView: the viewport fills its constraints while the single
     /// content child measures with an unbounded height (vertical scroll).
-    /// Content is clipped to the viewport; extents are retained for the
-    /// scrolling behavior that owns offsets.
-    #[allow(clippy::too_many_arguments)]
+    /// The viewport clips its content once placement resolves; extents are
+    /// retained for the scrolling behavior that owns offsets.
     fn layout_scroll(
         &mut self,
         node: &GuiNode,
-        style: &GuiNodeStyle,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
-        clip: Option<SurfaceClipRect>,
         depth: u32,
     ) -> ContentOutcome {
         let viewport = [fill_or_fit(0.0, fill[0]), fill_or_fit(0.0, fill[1])];
+
+        // Viewport rectangle in provisional final-logical coordinates. It
+        // moves with any alignment of this subtree, and the finishing pass
+        // intersects it with the fixed clip the ScrollView inherits.
+        let viewport_clip = normalize_clip([
+            origin_final[0],
+            origin_final[1],
+            origin_final[0] + viewport[0] * acc_total[0],
+            origin_final[1] + viewport[1] * acc_total[1],
+        ]);
         let mut children = node.children.iter();
         let Some(&child) = children.next() else {
             return ContentOutcome {
@@ -2343,6 +2325,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 content: GuiEvaluatedContent::Container,
                 available: true,
                 content_extents: Some(ZERO_SIZE),
+                viewport: viewport_clip,
             };
         };
         if children.next().is_some() {
@@ -2351,21 +2334,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 detail: "extra-scroll-child",
             });
         }
-
-        // Viewport clip in final-logical coordinates, intersected with the
-        // incoming ancestor clip. A zero-area viewport suppresses content
-        // paint observably instead of drawing outside the panel.
-        let viewport_clip = normalize_clip([
-            origin_final[0],
-            origin_final[1],
-            origin_final[0] + viewport[0] * acc_total[0],
-            origin_final[1] + viewport[1] * acc_total[1],
-        ]);
-        let content_clip = match (clip, viewport_clip) {
-            (Some(outer), Some(inner)) => intersect_surface_clips(outer, inner),
-            (Some(outer), None) => Some(outer),
-            (None, inner) => inner,
-        };
 
         let content_size = self.visit(
             child,
@@ -2377,24 +2345,88 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             },
             origin_final,
             acc_total,
-            content_clip,
             depth + 1,
         );
 
-        // Content records were pushed with the viewport clip already, but
-        // the viewport record itself must carry the ancestor clip so an
-        // empty viewport does not hide the ancestor intersection. The
-        // viewport node record is inserted by the caller; fix up content
-        // records that predate the viewport clip computation instead: they
-        // already received `content_clip` above. Nothing further to do.
-        let _ = style;
         ContentOutcome {
             size: viewport,
             content: GuiEvaluatedContent::Container,
             available: self.child_available(child),
             content_extents: Some(content_size),
+            viewport: viewport_clip,
         }
     }
+
+    /// Apply deferred alignment and resolve clips in painter order.
+    ///
+    /// Records are in pre-order, so each record's parent is the nearest
+    /// preceding record one level shallower. A record moves by the sum of
+    /// its own and its ancestors' deferred translations. It inherits its
+    /// parent's clip for its children, narrowed by the parent's translated
+    /// ScrollView viewport, and the root inherits `root_clip`. An empty
+    /// intersection stays an explicit empty clip so the subtree suppresses
+    /// paint and hits instead of escaping its ancestors.
+    fn resolve_placement(&mut self, root_clip: Option<SurfaceClipRect>) {
+        // (depth, accumulated translation, clip inherited by children)
+        let mut ancestors: Vec<(u32, [f32; 2], Option<SurfaceClipRect>)> = Vec::new();
+        for (record, placement) in self.nodes.iter_mut().zip(&self.placements) {
+            while ancestors
+                .last()
+                .is_some_and(|(depth, _, _)| *depth >= record.depth)
+            {
+                ancestors.pop();
+            }
+            let (inherited, clip) = ancestors
+                .last()
+                .map_or(([0.0, 0.0], root_clip), |(_, shift, clip)| (*shift, *clip));
+            let shift = [
+                inherited[0] + placement.shift[0],
+                inherited[1] + placement.shift[1],
+            ];
+
+            record.rect[0] += shift[0];
+            record.rect[1] += shift[1];
+            record.content_origin[0] += shift[0];
+            record.content_origin[1] += shift[1];
+            record.clip = clip;
+            record.paint_suppressed = placement.placeholder
+                || clip.is_some_and(crate::systems::surface::surface_clip_is_empty);
+
+            let viewport = placement.viewport.map(|viewport| {
+                [
+                    viewport[0] + shift[0],
+                    viewport[1] + shift[1],
+                    viewport[2] + shift[0],
+                    viewport[3] + shift[1],
+                ]
+            });
+            let children_clip = match (clip, viewport) {
+                (Some(outer), Some(inner)) => Some(nested_clip(outer, inner)),
+                (outer, None) => outer,
+                (None, inner) => inner,
+            };
+            ancestors.push((record.depth, shift, children_clip));
+        }
+    }
+}
+
+/// One Row or Column child awaiting cross-axis alignment.
+struct FlexPlacement {
+    child: GuiNodeId,
+    index: Option<usize>,
+    cross: f32,
+}
+
+/// Intersect a nested viewport with its inherited clip. Unlike
+/// [`intersect_surface_clips`], a disjoint or empty result stays an explicit
+/// empty clip, so descendants remain suppressed rather than unclipped.
+fn nested_clip(outer: SurfaceClipRect, inner: SurfaceClipRect) -> SurfaceClipRect {
+    intersect_surface_clips(outer, inner).unwrap_or([
+        outer[0].max(inner[0]),
+        outer[1].max(inner[1]),
+        outer[0].max(inner[0]),
+        outer[1].max(inner[1]),
+    ])
 }
 
 /// Normalize possibly mirrored clip bounds into `[min_x, min_y, max_x,
@@ -2760,11 +2792,11 @@ fn evaluate_tree(
         units,
         diagnostics: Vec::new(),
         nodes: Vec::new(),
+        placements: Vec::new(),
         texts,
         remeasured: 0,
     };
 
-    let root_clip = Some([0.0, 0.0, logical[0], logical[1]]);
     if let Some(root_id) = request.root.nodes().root_node() {
         let margin = styled(request.root, root_id, units)
             .margin
@@ -2774,7 +2806,6 @@ fn evaluate_tree(
             Constraints::loose(logical[0], logical[1]),
             [margin[3], margin[0]],
             [1.0, 1.0],
-            root_clip,
             0,
         );
     } else if !request.root.nodes().is_empty() {
@@ -2785,6 +2816,8 @@ fn evaluate_tree(
                 detail: "missing-root-node",
             });
     }
+
+    evaluator.resolve_placement(Some([0.0, 0.0, logical[0], logical[1]]));
 
     (
         evaluator.nodes,

@@ -32,8 +32,6 @@ pub mod glyph_atlas;
 #[cfg(feature = "gui")]
 pub mod gui_batch;
 
-#[cfg(feature = "gui")]
-pub use device::SurfaceBoxShape;
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathDescriptor;
 #[cfg(feature = "surfaces")]

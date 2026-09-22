@@ -134,7 +134,7 @@ const reports = [];
       "Surface bridge dispatch differs from selected capability",
     );
     for (const name of [
-      "draw_surface_box",
+      "draw_gui_batch",
       "create_gui_batch",
       "create_glyph_batch",
       "create_glyph_atlas_page",

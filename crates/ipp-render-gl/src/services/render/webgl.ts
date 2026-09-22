@@ -34,6 +34,15 @@ type WebGlRenderProgram = {
   poseWeight?: WebGLUniformLocation | null;
 };
 
+/** Retained GUI or glyph vertices laid out by a Rust-owned attribute table. */
+type WebGlRetainedBatch = {
+  vao: WebGLVertexArrayObject;
+  vbo: WebGLBuffer;
+  stride: number;
+  count: number;
+  bytes: number;
+};
+
 type WebGlRenderMesh = {
   vao: WebGLVertexArrayObject;
   vertex: WebGLBuffer;
@@ -146,26 +155,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let surfaceInstanceBuffer: WebGLBuffer | null = null;
   let surfaceInstanceCapacity = 0;
   const guiBatches = IPP_GUI
-    ? new Map<
-        number,
-        {
-          vao: WebGLVertexArrayObject;
-          vbo: WebGLBuffer;
-          count: number;
-          bytes: number;
-        }
-      >()
+    ? new Map<number, WebGlRetainedBatch>()
     : undefined;
   const glyphBatches = IPP_GUI
-    ? new Map<
-        number,
-        {
-          vao: WebGLVertexArrayObject;
-          vbo: WebGLBuffer;
-          count: number;
-          bytes: number;
-        }
-      >()
+    ? new Map<number, WebGlRetainedBatch>()
     : undefined;
   const glyphAtlasPages = IPP_GUI
     ? new Map<
@@ -187,8 +180,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         viewport: Int32Array;
       }
     | undefined;
-  let surfaceBoxQuadVao: WebGLVertexArrayObject | null = null;
-  let surfaceBoxQuadVbo: WebGLBuffer | null = null;
   const shadows = IPP_SHADOWS
     ? new Map<
         number,
@@ -444,6 +435,96 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     return new Float32Array(buffer(pointer, count * 4, 4), pointer, count);
   }
 
+  function words(pointer: number, count: number): Uint32Array<ArrayBuffer> {
+    return new Uint32Array(buffer(pointer, count * 4, 4), pointer, count);
+  }
+
+  /**
+   * Upload retained vertices described by a Rust-owned `#[repr(C)]` layout table:
+   * stride, attribute count, then location, components and offset per attribute.
+   */
+  const createRetainedBatch = IPP_GUI
+    ? (
+        batches: Map<number, WebGlRetainedBatch>,
+        vertexPointer: number,
+        byteLength: number,
+        layoutPointer: number,
+        kind: string,
+      ): number => {
+        const header = words(layoutPointer, 2);
+        const stride = header[0]!;
+        const attributeCount = header[1]!;
+        const attributes = words(layoutPointer + 8, attributeCount * 3);
+        if (stride === 0 || stride % 4 !== 0 || byteLength % stride !== 0)
+          throw new Error(`${kind} batch length does not match its layout`);
+        const vertexData = floats(vertexPointer, byteLength / 4);
+        const vao = gl.createVertexArray();
+        const vbo = gl.createBuffer();
+        if (!vao || !vbo) {
+          if (vao) gl.deleteVertexArray(vao);
+          if (vbo) gl.deleteBuffer(vbo);
+          throw new Error(`${kind} batch allocation failed`);
+        }
+        bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+        for (let index = 0; index < attributeCount; index++) {
+          const location = attributes[index * 3]!;
+          gl.enableVertexAttribArray(location);
+          gl.vertexAttribPointer(
+            location,
+            attributes[index * 3 + 1]!,
+            gl.FLOAT,
+            false,
+            stride,
+            attributes[index * 3 + 2]!,
+          );
+        }
+        bindVertexArray(null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        try {
+          check();
+        } catch (error) {
+          gl.deleteVertexArray(vao);
+          gl.deleteBuffer(vbo);
+          throw error;
+        }
+        const handle = id();
+        batches.set(handle, {
+          vao,
+          vbo,
+          stride,
+          count: byteLength / stride,
+          bytes: byteLength,
+        });
+        return handle;
+      }
+    : undefined;
+
+  /** Replace a retained batch's complete store with vertices of its layout. */
+  const updateRetainedBatch = IPP_GUI
+    ? (
+        batch: WebGlRetainedBatch | undefined,
+        vertexPointer: number,
+        byteLength: number,
+        kind: string,
+      ): void => {
+        if (!batch) throw new Error(`Stale ${kind} batch handle`);
+        if (byteLength % batch.stride !== 0)
+          throw new Error(`${kind} batch length does not match its layout`);
+        const vertexData = floats(vertexPointer, byteLength / 4);
+        // Replace the complete store; GL preserves any previous storage needed
+        // by queued draws. The driver may still stall to allocate.
+        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        check();
+        batch.count = byteLength / batch.stride;
+        batch.bytes = byteLength;
+      }
+    : undefined;
+
   function wholeFloats(
     pointer: number,
     count: number,
@@ -576,8 +657,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       glyphBatches!.clear();
       glyphAtlasPages!.clear();
       glyphAtlasTarget = undefined;
-      surfaceBoxQuadVao = null;
-      surfaceBoxQuadVbo = null;
     }
 
     event.preventDefault();
@@ -607,8 +686,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       glyphBatches!.clear();
       glyphAtlasPages!.clear();
       glyphAtlasTarget = undefined;
-      surfaceBoxQuadVao = null;
-      surfaceBoxQuadVbo = null;
     }
     if (IPP_SHADOWS) {
       shadows!.clear();
@@ -1464,209 +1541,33 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
     ...(IPP_GUI
       ? {
-          draw_surface_box(
-            programHandle: number,
-            mvpPointer: number,
-            placementPointer: number,
-            clipPointer: number,
-            colorPointer: number,
-            borderPointer: number,
-            shapePointer: number,
+          create_gui_batch(
+            vertexPointer: number,
+            byteLength: number,
+            layoutPointer: number,
           ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              if (!program) throw new Error("Stale surface box handle");
-              if (blendMode !== 2) {
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.SRC_ALPHA,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                );
-                gl.depthMask(false);
-                blendMode = 2;
-              }
-              if (!surfaceBoxQuadVao || !surfaceBoxQuadVbo) {
-                surfaceBoxQuadVao = gl.createVertexArray();
-                surfaceBoxQuadVbo = gl.createBuffer();
-                if (!surfaceBoxQuadVao || !surfaceBoxQuadVbo)
-                  throw new Error("Surface box quad allocation failed");
-                bindVertexArray(surfaceBoxQuadVao);
-                gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBoxQuadVbo);
-                gl.enableVertexAttribArray(0);
-                gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 136, 0);
-                gl.enableVertexAttribArray(1);
-                gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 136, 8);
-                gl.enableVertexAttribArray(2);
-                gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 136, 24);
-                gl.enableVertexAttribArray(3);
-                gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 136, 40);
-                gl.enableVertexAttribArray(4);
-                gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 136, 56);
-                gl.enableVertexAttribArray(5);
-                gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 136, 72);
-                gl.enableVertexAttribArray(6);
-                gl.vertexAttribPointer(6, 4, gl.FLOAT, false, 136, 88);
-                gl.enableVertexAttribArray(7);
-                gl.vertexAttribPointer(7, 4, gl.FLOAT, false, 136, 104);
-                gl.enableVertexAttribArray(8);
-                gl.vertexAttribPointer(8, 4, gl.FLOAT, false, 136, 120);
-                bindVertexArray(null);
-                gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              }
-              const placement = floats(placementPointer >>> 0, 4);
-              const color = floats(colorPointer >>> 0, 4);
-              const border = floats(borderPointer >>> 0, 4);
-              const shape = floats(shapePointer >>> 0, 4);
-              const x0 =
-                Math.min(placement[0]!, placement[0]! + placement[2]!) - 0.002;
-              const y0 =
-                Math.min(placement[1]!, placement[1]! + placement[3]!) - 0.002;
-              const x1 =
-                Math.max(placement[0]!, placement[0]! + placement[2]!) + 0.002;
-              const y1 =
-                Math.max(placement[1]!, placement[1]! + placement[3]!) + 0.002;
-              const quadVertices = new Float32Array(204);
-              const corners = [
-                [x0, y0],
-                [x0, y1],
-                [x1, y1],
-                [x0, y0],
-                [x1, y1],
-                [x1, y0],
-              ];
-              for (let i = 0; i < 6; i++) {
-                const off = i * 34;
-                quadVertices[off] = corners[i]![0]!;
-                quadVertices[off + 1] = corners[i]![1]!;
-                quadVertices[off + 2] = placement[0]!;
-                quadVertices[off + 3] = placement[1]!;
-                quadVertices[off + 4] = placement[2]!;
-                quadVertices[off + 5] = placement[3]!;
-                quadVertices[off + 6] = shape[0]!;
-                quadVertices[off + 7] = shape[1]!;
-                quadVertices[off + 8] = shape[2]!;
-                quadVertices[off + 9] = shape[3]!;
-                quadVertices[off + 10] = color[0]!;
-                quadVertices[off + 11] = color[1]!;
-                quadVertices[off + 12] = color[2]!;
-                quadVertices[off + 13] = color[3]!;
-                quadVertices[off + 14] = color[0]!;
-                quadVertices[off + 15] = color[1]!;
-                quadVertices[off + 16] = color[2]!;
-                quadVertices[off + 17] = color[3]!;
-                quadVertices[off + 18] = border[0]!;
-                quadVertices[off + 19] = border[1]!;
-                quadVertices[off + 20] = border[2]!;
-                quadVertices[off + 21] = border[3]!;
-                // quadVertices[off + 22..off + 25] are gradient_coords (zeros)
-                // quadVertices[off + 26..off + 29] are material_params:
-                // fill_type = 0.0, glow_intensity = 0.0, glow_radius = 0.0, glow_falloff = 1.0
-                quadVertices[off + 29] = 1.0;
-                // quadVertices[off + 30..off + 33] are glow_color (zeros)
-              }
-              gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBoxQuadVbo);
-              gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.DYNAMIC_DRAW);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              gl.uniform4f(
-                parameterLocation(program, "u_viewport"),
-                gl.drawingBufferWidth,
-                gl.drawingBufferHeight,
-                0,
-                0,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              bindVertexArray(surfaceBoxQuadVao);
-              gl.drawArrays(gl.TRIANGLES, 0, 6);
-              bindVertexArray(null);
-              checkDraw();
-              return 1;
-            });
-          },
-          create_gui_batch(vertexPointer: number, vertexCount: number): number {
-            return status(() => {
-              const vao = gl.createVertexArray();
-              const vbo = gl.createBuffer();
-              if (!vao || !vbo) {
-                if (vao) gl.deleteVertexArray(vao);
-                if (vbo) gl.deleteBuffer(vbo);
-                throw new Error("GUI batch allocation failed");
-              }
-              const byteLength = (vertexCount >>> 0) * 136;
-              const vertexData = floats(
+            return status(() =>
+              createRetainedBatch!(
+                guiBatches!,
                 vertexPointer >>> 0,
-                (vertexCount >>> 0) * 34,
-              );
-              bindVertexArray(vao);
-              gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
-              gl.enableVertexAttribArray(0);
-              gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 136, 0);
-              gl.enableVertexAttribArray(1);
-              gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 136, 8);
-              gl.enableVertexAttribArray(2);
-              gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 136, 24);
-              gl.enableVertexAttribArray(3);
-              gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 136, 40);
-              gl.enableVertexAttribArray(4);
-              gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 136, 56);
-              gl.enableVertexAttribArray(5);
-              gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 136, 72);
-              gl.enableVertexAttribArray(6);
-              gl.vertexAttribPointer(6, 4, gl.FLOAT, false, 136, 88);
-              gl.enableVertexAttribArray(7);
-              gl.vertexAttribPointer(7, 4, gl.FLOAT, false, 136, 104);
-              gl.enableVertexAttribArray(8);
-              gl.vertexAttribPointer(8, 4, gl.FLOAT, false, 136, 120);
-              bindVertexArray(null);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-
-              try {
-                check();
-              } catch (error) {
-                gl.deleteVertexArray(vao);
-                gl.deleteBuffer(vbo);
-                throw error;
-              }
-              const handle = id();
-              guiBatches!.set(handle, {
-                vao,
-                vbo,
-                count: vertexCount >>> 0,
-                bytes: byteLength,
-              });
-              return handle;
-            });
+                byteLength >>> 0,
+                layoutPointer >>> 0,
+                "GUI",
+              ),
+            );
           },
           update_gui_batch(
             batchHandle: number,
             vertexPointer: number,
-            vertexCount: number,
+            byteLength: number,
           ): number {
             return status(() => {
-              const batch = guiBatches!.get(batchHandle >>> 0);
-              if (!batch) throw new Error("Stale GUI batch handle");
-              const byteLength = (vertexCount >>> 0) * 136;
-              const vertexData = floats(
+              updateRetainedBatch!(
+                guiBatches!.get(batchHandle >>> 0),
                 vertexPointer >>> 0,
-                (vertexCount >>> 0) * 34,
+                byteLength >>> 0,
+                "GUI",
               );
-              // Replace the complete store; GL preserves any previous storage
-              // needed by queued draws. The driver may still stall to allocate.
-              gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              check();
-              batch.count = vertexCount >>> 0;
-              batch.bytes = byteLength;
               return 1;
             });
           },
@@ -1724,69 +1625,31 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           },
           create_glyph_batch(
             vertexPointer: number,
-            vertexCount: number,
+            byteLength: number,
+            layoutPointer: number,
           ): number {
-            return status(() => {
-              const vao = gl.createVertexArray();
-              const vbo = gl.createBuffer();
-              if (!vao || !vbo) {
-                if (vao) gl.deleteVertexArray(vao);
-                if (vbo) gl.deleteBuffer(vbo);
-                throw new Error("Glyph batch allocation failed");
-              }
-              const byteLength = (vertexCount >>> 0) * 32;
-              const vertexData = floats(
+            return status(() =>
+              createRetainedBatch!(
+                glyphBatches!,
                 vertexPointer >>> 0,
-                (vertexCount >>> 0) * 8,
-              );
-              bindVertexArray(vao);
-              gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
-              gl.enableVertexAttribArray(0);
-              gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 32, 0);
-              gl.enableVertexAttribArray(1);
-              gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 8);
-              gl.enableVertexAttribArray(2);
-              gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 16);
-              bindVertexArray(null);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-
-              try {
-                check();
-              } catch (error) {
-                gl.deleteVertexArray(vao);
-                gl.deleteBuffer(vbo);
-                throw error;
-              }
-              const handle = id();
-              glyphBatches!.set(handle, {
-                vao,
-                vbo,
-                count: vertexCount >>> 0,
-                bytes: byteLength,
-              });
-              return handle;
-            });
+                byteLength >>> 0,
+                layoutPointer >>> 0,
+                "Glyph",
+              ),
+            );
           },
           update_glyph_batch(
             batchHandle: number,
             vertexPointer: number,
-            vertexCount: number,
+            byteLength: number,
           ): number {
             return status(() => {
-              const batch = glyphBatches!.get(batchHandle >>> 0);
-              if (!batch) throw new Error("Stale glyph batch handle");
-              const byteLength = (vertexCount >>> 0) * 32;
-              const vertexData = floats(
+              updateRetainedBatch!(
+                glyphBatches!.get(batchHandle >>> 0),
                 vertexPointer >>> 0,
-                (vertexCount >>> 0) * 8,
+                byteLength >>> 0,
+                "glyph",
               );
-              gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-              gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
-              gl.bindBuffer(gl.ARRAY_BUFFER, null);
-              check();
-              batch.count = vertexCount >>> 0;
-              batch.bytes = byteLength;
               return 1;
             });
           },
@@ -2635,8 +2498,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           }
           for (const page of glyphAtlasPages!.values())
             gl.deleteFramebuffer(page.framebuffer);
-          gl.deleteVertexArray(surfaceBoxQuadVao);
-          gl.deleteBuffer(surfaceBoxQuadVbo);
         }
         for (const texture of textures.values()) gl.deleteTexture(texture);
         if (IPP_SURFACES)
@@ -2659,8 +2520,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         glyphBatches!.clear();
         glyphAtlasPages!.clear();
         glyphAtlasTarget = undefined;
-        surfaceBoxQuadVao = null;
-        surfaceBoxQuadVbo = null;
       }
       meshes.clear();
       textures.clear();

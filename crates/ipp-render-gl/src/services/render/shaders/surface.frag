@@ -65,8 +65,7 @@ void curve_points(uint curve, vec2 sample_position, out vec4 p12, out vec2 p3, o
     p3 = absolute3.xy - sample_position;
 }
 
-void accumulate(vec2 sample_position, out float xcov, out float ycov, out float xwgt, out float ywgt) {
-    vec2 pixels_per_unit = 1.0 / max(fwidth(v_path_position), vec2(1.0 / 65536.0));
+void accumulate(vec2 sample_position, vec2 pixels_per_unit, out float xcov, out float ycov, out float xwgt, out float ywgt) {
     xcov = 0.0; ycov = 0.0; xwgt = 0.0; ywgt = 0.0;
     vec2 extent = max(v_bounds.zw - v_bounds.xy, vec2(1.0 / 65536.0));
     ivec2 band = clamp(ivec2((sample_position - v_bounds.xy) / extent * 16.0), ivec2(0), ivec2(15));
@@ -97,12 +96,15 @@ void accumulate(vec2 sample_position, out float xcov, out float ycov, out float 
 }
 
 void main() {
+    // Derivatives precede every discard: GLSL ES 3.00 leaves them undefined once a
+    // fragment of the quad has discarded.
+    vec2 pixels_per_unit = 1.0 / max(fwidth(v_path_position), vec2(1.0 / 65536.0));
     vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
     vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
     if (clip_coverage <= 0.0) discard;
     float xcov, ycov, xwgt, ywgt;
-    accumulate(v_path_position, xcov, ycov, xwgt, ywgt);
+    accumulate(v_path_position, pixels_per_unit, xcov, ycov, xwgt, ywgt);
     float coverage = max(abs(xcov * xwgt + ycov * ywgt) / max(xwgt + ywgt, 1.0 / 65536.0), min(abs(xcov), abs(ycov)));
     coverage = u_fill_rule == 0 ? clamp(coverage, 0.0, 1.0) : 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
     if (coverage <= 0.0) discard;

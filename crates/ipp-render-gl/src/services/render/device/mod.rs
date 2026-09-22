@@ -1,3 +1,5 @@
+#[cfg(feature = "gui")]
+mod retained_vertices;
 mod uniform_cache;
 
 use crate::RenderError;
@@ -65,29 +67,6 @@ pub(super) fn pack_surface_instances(
     }));
 }
 
-/// Parameterized box shape shared by the WebGL and GLES surface devices.
-///
-/// Corner radii and border width are explicit local Surface-metre dimensions
-/// applied after the common item scale. Devices clamp corners to the placed
-/// half size independently, preserving the authored elliptical corner instead
-/// of narrowing both axes to one scalar radius.
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SurfaceBoxShape {
-    /// Explicit local corner radii `[rx, ry]` in final Surface metres.
-    pub corner: [f32; 2],
-    /// Explicit local border width in final Surface metres; zero fills only.
-    pub border: f32,
-}
-
-#[cfg(feature = "gui")]
-impl SurfaceBoxShape {
-    /// Pack shape uniforms as `[corner_x, corner_y, border_width, reserved]`.
-    pub fn pack(&self) -> [f32; 4] {
-        [self.corner[0], self.corner[1], self.border, 0.0]
-    }
-}
-
 #[cfg(feature = "gui")]
 pub use super::glyph_atlas::GlyphVertex;
 #[cfg(feature = "gui")]
@@ -145,28 +124,6 @@ mod surface_instance_tests {
             [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.1, 0.2, 0.3, 0.4]
         );
         assert_eq!(packed[0][12..], [9.0, 10.0, 11.0, 0.0]);
-    }
-}
-
-#[cfg(all(test, feature = "gui"))]
-mod surface_box_tests {
-    use super::*;
-
-    #[test]
-    fn box_shape_packs_explicit_corner_and_border_dimensions() {
-        let shape = SurfaceBoxShape {
-            corner: [0.05, 0.1],
-            border: 0.02,
-        };
-        assert_eq!(shape.pack(), [0.05, 0.1, 0.02, 0.0]);
-        assert_eq!(
-            SurfaceBoxShape {
-                corner: [0.0, 0.0],
-                border: 0.0,
-            }
-            .pack(),
-            [0.0, 0.0, 0.0, 0.0]
-        );
     }
 }
 
@@ -392,29 +349,6 @@ pub trait RenderDevice: 'static {
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice(
             "surface bitmaps unavailable".into(),
-        ))
-    }
-
-    /// Draw one GUI-only parameterized fill/border box quad in painter order.
-    ///
-    /// `placement` carries position and scaled size, `clip` the intersected
-    /// Surface-metre rectangle, `color` the straight linear fill, `border`
-    /// the straight linear border color and `shape` the explicit corner and
-    /// border dimensions. Empty clips are suppressed by the caller.
-    #[cfg(feature = "gui")]
-    #[allow(clippy::too_many_arguments)]
-    fn draw_surface_box(
-        &mut self,
-        _program: &Self::Program,
-        _mvp: &[f32; 16],
-        _placement: &[f32; 4],
-        _clip: &[f32; 4],
-        _color: &[f32; 4],
-        _border: &[f32; 4],
-        _shape: SurfaceBoxShape,
-    ) -> Result<(), RenderError> {
-        Err(RenderError::RenderDevice(
-            "surface boxes unavailable".into(),
         ))
     }
 

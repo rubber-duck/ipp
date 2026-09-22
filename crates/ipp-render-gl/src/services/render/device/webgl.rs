@@ -1,4 +1,6 @@
 use super::RenderDevice;
+#[cfg(feature = "gui")]
+use super::retained_vertices::{GLYPH_VERTEX_LAYOUT, GUI_BOX_VERTEX_LAYOUT, RetainedVertexLayout};
 use crate::RenderError;
 
 #[link(wasm_import_module = "ipp_gl")]
@@ -190,21 +192,10 @@ unsafe extern "C" {
     ) -> u32;
 
     #[cfg(feature = "gui")]
-    fn draw_surface_box(
-        program: u32,
-        mvp: *const f32,
-        placement: *const f32,
-        clip: *const f32,
-        color: *const f32,
-        border: *const f32,
-        shape: *const f32,
-    ) -> u32;
+    fn create_gui_batch(vertex_ptr: *const f32, byte_length: u32, layout_ptr: *const u32) -> u32;
 
     #[cfg(feature = "gui")]
-    fn create_gui_batch(vertex_ptr: *const f32, vertex_count: u32) -> u32;
-
-    #[cfg(feature = "gui")]
-    fn update_gui_batch(batch_handle: u32, vertex_ptr: *const f32, vertex_count: u32) -> u32;
+    fn update_gui_batch(batch_handle: u32, vertex_ptr: *const f32, byte_length: u32) -> u32;
 
     #[cfg(feature = "gui")]
     fn delete_gui_batch(batch_handle: u32);
@@ -213,10 +204,10 @@ unsafe extern "C" {
     fn draw_gui_batch(program: u32, batch_handle: u32, mvp: *const f32, clip: *const f32) -> u32;
 
     #[cfg(feature = "gui")]
-    fn create_glyph_batch(vertex_ptr: *const f32, vertex_count: u32) -> u32;
+    fn create_glyph_batch(vertex_ptr: *const f32, byte_length: u32, layout_ptr: *const u32) -> u32;
 
     #[cfg(feature = "gui")]
-    fn update_glyph_batch(batch_handle: u32, vertex_ptr: *const f32, vertex_count: u32) -> u32;
+    fn update_glyph_batch(batch_handle: u32, vertex_ptr: *const f32, byte_length: u32) -> u32;
 
     #[cfg(feature = "gui")]
     fn delete_glyph_batch(batch_handle: u32);
@@ -326,6 +317,18 @@ impl WebGlRenderDevice {
 pub struct WebGlGlyphAtlasPage {
     target: u32,
     texture: u32,
+}
+
+/// Byte length of retained `vertices` and the address of their `'static` layout table.
+#[cfg(feature = "gui")]
+fn retained_upload<V, const N: usize>(
+    vertices: &[V],
+    layout: &'static RetainedVertexLayout<N>,
+) -> Result<(u32, *const u32), RenderError> {
+    debug_assert_eq!(std::mem::size_of::<V>(), layout.stride as usize);
+    let bytes = u32::try_from(std::mem::size_of_val(vertices))
+        .map_err(|_| RenderError::RenderDevice("retained batch exceeds bridge limits".into()))?;
+    Ok((bytes, std::ptr::from_ref(layout).cast()))
 }
 
 impl RenderDevice for WebGlRenderDevice {
@@ -610,44 +613,17 @@ impl RenderDevice for WebGlRenderDevice {
     }
 
     #[cfg(feature = "gui")]
-    fn draw_surface_box(
-        &mut self,
-        program: &Self::Program,
-        mvp: &[f32; 16],
-        placement: &[f32; 4],
-        clip: &[f32; 4],
-        color: &[f32; 4],
-        border: &[f32; 4],
-        shape: super::SurfaceBoxShape,
-    ) -> Result<(), RenderError> {
-        let shape = shape.pack();
-        // SAFETY: Handles are bridge-validated and fixed arrays are copied synchronously.
-        self.check(unsafe {
-            draw_surface_box(
-                program.id,
-                mvp.as_ptr(),
-                placement.as_ptr(),
-                clip.as_ptr(),
-                color.as_ptr(),
-                border.as_ptr(),
-                shape.as_ptr(),
-            )
-        })
-    }
-
-    #[cfg(feature = "gui")]
     fn create_gui_batch(
         &mut self,
         vertices: &[super::GuiBoxVertex],
     ) -> Result<Self::GuiBatch, RenderError> {
-        let count = u32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
-        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 136-byte
-        // `#[repr(C)]` vertices. The bridge bounds-checks and copies exactly
-        // `count * 136` bytes, the slice length, into GL before returning. It keeps
-        // no view of WASM memory and cannot reenter Rust, so the shared borrow is not
-        // aliased mutably or invalidated during the call.
-        let id = unsafe { create_gui_batch(vertices.as_ptr().cast(), count) };
+        let (bytes, layout) = retained_upload(vertices, &GUI_BOX_VERTEX_LAYOUT)?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of exactly `bytes` bytes of
+        // `#[repr(C)]` vertices, and `layout` points at a `'static` `#[repr(C)]` table of
+        // `u32` words describing them. The bridge bounds-checks both ranges and copies
+        // them into GL before returning. It keeps no view of WASM memory and cannot
+        // reenter Rust, so neither shared borrow is aliased mutably or invalidated.
+        let id = unsafe { create_gui_batch(vertices.as_ptr().cast(), bytes, layout) };
         if id == 0 {
             Err(self.error())
         } else {
@@ -661,13 +637,12 @@ impl RenderDevice for WebGlRenderDevice {
         batch: &mut Self::GuiBatch,
         vertices: &[super::GuiBoxVertex],
     ) -> Result<(), RenderError> {
-        let count = u32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
-        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 136-byte
+        let (bytes, _) = retained_upload(vertices, &GUI_BOX_VERTEX_LAYOUT)?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of exactly `bytes` bytes of
         // `#[repr(C)]` vertices. The bridge rejects stale batch handles, then
-        // bounds-checks and copies exactly `count * 136` bytes, the slice length,
-        // before returning. It keeps no view of WASM memory and cannot reenter Rust.
-        self.check(unsafe { update_gui_batch(*batch, vertices.as_ptr().cast(), count) })
+        // bounds-checks and copies that range before returning. It keeps no view of
+        // WASM memory and cannot reenter Rust.
+        self.check(unsafe { update_gui_batch(*batch, vertices.as_ptr().cast(), bytes) })
     }
 
     #[cfg(feature = "gui")]
@@ -696,14 +671,13 @@ impl RenderDevice for WebGlRenderDevice {
         &mut self,
         vertices: &[super::GlyphVertex],
     ) -> Result<Self::GlyphBatch, RenderError> {
-        let count = u32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
-        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 32-byte
-        // `#[repr(C)]` vertices. The bridge bounds-checks and copies exactly
-        // `count * 32` bytes, the slice length, into GL before returning. It keeps no
-        // view of WASM memory and cannot reenter Rust, so the shared borrow is not
-        // aliased mutably or invalidated during the call.
-        let id = unsafe { create_glyph_batch(vertices.as_ptr().cast(), count) };
+        let (bytes, layout) = retained_upload(vertices, &GLYPH_VERTEX_LAYOUT)?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of exactly `bytes` bytes of
+        // `#[repr(C)]` vertices, and `layout` points at a `'static` `#[repr(C)]` table of
+        // `u32` words describing them. The bridge bounds-checks both ranges and copies
+        // them into GL before returning. It keeps no view of WASM memory and cannot
+        // reenter Rust, so neither shared borrow is aliased mutably or invalidated.
+        let id = unsafe { create_glyph_batch(vertices.as_ptr().cast(), bytes, layout) };
         if id == 0 {
             Err(self.error())
         } else {
@@ -717,13 +691,12 @@ impl RenderDevice for WebGlRenderDevice {
         batch: &mut Self::GlyphBatch,
         vertices: &[super::GlyphVertex],
     ) -> Result<(), RenderError> {
-        let count = u32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
-        // SAFETY: `vertices` is a live, 4-byte-aligned slice of `count` 32-byte
+        let (bytes, _) = retained_upload(vertices, &GLYPH_VERTEX_LAYOUT)?;
+        // SAFETY: `vertices` is a live, 4-byte-aligned slice of exactly `bytes` bytes of
         // `#[repr(C)]` vertices. The bridge rejects stale batch handles, then
-        // bounds-checks and copies exactly `count * 32` bytes, the slice length,
-        // before returning. It keeps no view of WASM memory and cannot reenter Rust.
-        self.check(unsafe { update_glyph_batch(*batch, vertices.as_ptr().cast(), count) })
+        // bounds-checks and copies that range before returning. It keeps no view of
+        // WASM memory and cannot reenter Rust.
+        self.check(unsafe { update_glyph_batch(*batch, vertices.as_ptr().cast(), bytes) })
     }
 
     #[cfg(feature = "gui")]

@@ -134,6 +134,67 @@ class PlanningTests(unittest.TestCase):
             ):
                 plan("benchmark", backend, *flags)
 
+    def test_retained_gui_benchmark_rejects_stress_options(self):
+        for flags in (
+            ["--preset", "smoke"],
+            ["--group", "32"],
+            ["--instrumented"],
+            ["--allow-software"],
+            ["--scene-dir", "target/example"],
+            ["--geometry-index", "flat"],
+            ["--compare-culling"],
+            ["--reuse-import"],
+        ):
+            with (
+                self.subTest(flags=flags),
+                self.assertRaisesRegex(ValueError, "stress-scene options"),
+            ):
+                plan("benchmark", "browser", "--scene", "retained-gui", *flags)
+        selected = plan(
+            "benchmark",
+            "browser",
+            "--scene",
+            "retained-gui",
+            "--frames",
+            "5",
+            "--reuse-build",
+        )
+        self.assertEqual(
+            [task.id for task in selected.tasks], ["benchmark:retained-gui"]
+        )
+        self.assertEqual(selected.tasks[0].command[2], "5")
+        stress = plan("benchmark", "native", "--reuse-build")
+        config = json.loads(stress.tasks[-1].command[-1])
+        self.assertEqual((config["preset"], config["group"]), ("smoke", 64))
+
+    def test_ci_runs_retained_gui_as_its_own_bounded_cached_job(self):
+        # Job blocks at two-space indentation below `jobs:`; no YAML dependency.
+        jobs: dict[str, list[str]] = {}
+        current = None
+        lines = (ROOT / ".github/workflows/gallery-pages.yml").read_text()
+        for line in lines.split("jobs:\n", 1)[1].splitlines():
+            if line.startswith("  ") and not line.startswith("   "):
+                current = line.strip().removesuffix(":")
+                jobs[current] = []
+            elif current:
+                jobs[current].append(line.strip())
+        retained = jobs["retained-gui"]
+        self.assertTrue(any(line.startswith("timeout-minutes: ") for line in retained))
+        for step in (
+            "run: python tools/ipp.py doctor --for retained-gui",
+            "run: python tools/ipp.py test retained-gui",
+            "~/.cargo/registry/cache/",
+            "target/integration-artifacts/retained-gui/",
+            "if: always()",
+        ):
+            self.assertIn(step, retained)
+        self.assertTrue(
+            any(line.startswith("uses: actions/cache@") for line in retained)
+        )
+        # Deployment waits for the visible retained GUI job, not a hidden step.
+        self.assertIn("needs: [build, retained-gui]", jobs["deploy"])
+        self.assertFalse(any("retained-gui" in line for line in jobs["build"]))
+
     def test_every_suite_and_ci_selection_resolves(self):
         validate_catalog()
         tasks = catalog("/example/egl")
@@ -205,17 +266,65 @@ class PlanningTests(unittest.TestCase):
             "packages/ipp-client/src/render-worker.ts",
             "examples/surface-terminal/workload.ts",
             "tests/browser/environment.ts",
+            "tests/render/retained-gui-scenario.ts",
+            "tests/render/retained-gui-environment.ts",
+            "tests/render/surface-fixture.tsx",
+            "tests/performance/retained-gui.ts",
+            "tools/build_surface_assets.py",
+            "crates/ipp-wasm/src/services/render.rs",
+            "packages/ipp-client/tools/assemble.mjs",
+            "tools/build/verify-browser.mjs",
+            "packages/ipp-react/src/gui/theme.ts",
         ):
             with self.subTest(source=source):
                 ids, _ = affected([source], [])
                 self.assertTrue(set(suite_ids(["retained-gui"])).issubset(ids))
+
+    def test_gallery_gui_participant_changes_select_the_suite(self):
+        for source in (
+            "examples/world-gallery/worlds/gui/dashboard.tsx",
+            "packages/ipp-react/src/gui/theme.ts",
+            "packages/ipp-client/tools/assemble.mjs",
+            "tools/build/verify-browser.mjs",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(set(suite_ids(["gallery-gui"])).issubset(ids))
+
+    def test_wasm_services_select_the_browser_render_suites(self):
+        host, _ = affected(["crates/ipp-wasm/src/services/host.rs"], [])
+        self.assertTrue(set(suite_ids(["browser", "render"])).issubset(host))
+        self.assertFalse(set(suite_ids(["retained-gui"])).issubset(host))
+        render, _ = affected(["crates/ipp-wasm/src/services/render.rs"], [])
+        self.assertTrue(
+            set(suite_ids(["browser", "render", "retained-gui"])).issubset(render)
+        )
+
+    def test_owners_add_to_area_rules(self):
+        ids, _ = affected(["packages/ipp-client/src/render-worker.ts"], [])
+        self.assertTrue(
+            set(suite_ids(["client", "native", "browser", "retained-gui"])).issubset(
+                ids
+            )
+        )
+
+    def test_file_source_roots_match_one_path(self):
+        with self.assertRaisesRegex(ValueError, "--suite"):
+            affected(["tests/render/surface-fixture.tsx.orig"], [])
 
     def test_source_owner_requires_a_directory_boundary(self):
         with self.assertRaisesRegex(ValueError, "--suite"):
             affected(["integrations/blender-extra/adapter.ts"], [])
 
     def test_catalog_rejects_missing_or_escaping_source_roots(self):
-        for root in ("../outside/", "tests", "missing-directory/"):
+        for root in (
+            "../outside/",
+            "tests",
+            "missing-directory/",
+            "tests/render/missing-fixture.tsx",
+            "tools/ipp.py/",
+            "../tools/ipp.py",
+        ):
             with (
                 self.subTest(root=root),
                 patch.dict(SUITES["blender"], sourceRoots=[root]),

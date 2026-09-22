@@ -43,7 +43,7 @@ jobs:
           /snap/bin/blender --version | head -1 | grep '^Blender 5\.2\.'
       - name: Build and validate the static gallery
         # The build graph fetches pinned fonts and exports the packed Blender scenes.
-        run: python tools/ipp.py test gallery-site retained-gui
+        run: python tools/ipp.py test gallery-site
       - name: Upload the gallery site
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
@@ -56,11 +56,59 @@ jobs:
           path: |
             target/pipeline/runs/
             target/integration-artifacts/gallery-site/
+          if-no-files-found: warn
+
+  retained-gui:
+    name: Retained GUI browser suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+      - name: Restore Cargo dependencies and build outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/debug/
+            target/wasm32-unknown-unknown/
+          key: retained-gui-cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: retained-gui-cargo-${{ runner.os }}-
+      - name: Install build tools and Chromium
+        run: |
+          python tools/ipp.py setup rust
+          python tools/ipp.py setup node
+          python tools/ipp.py setup python
+          python tools/ipp.py setup browser --with-deps
+      - name: Require the browser and WebGL environment
+        # A missing browser or graphics environment fails here; it is never skipped.
+        run: python tools/ipp.py doctor --for retained-gui
+      - name: Compare analytic and retained GUI frames
+        run: python tools/ipp.py test retained-gui
+      - name: Preserve retained GUI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retained-gui-validation
+          path: |
+            target/pipeline/runs/
             target/integration-artifacts/retained-gui/
           if-no-files-found: warn
 
   deploy:
-    needs: build
+    # The published gallery renders through the retained GUI path; its browser
+    # evidence gates deployment as a separate, visible job.
+    needs: [build, retained-gui]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

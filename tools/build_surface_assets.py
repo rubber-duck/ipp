@@ -33,8 +33,31 @@ def main() -> None:
     )
     with TTFont(source_font) as font:
         cmap = font.getBestCmap()
-        ids = {char: font.getGlyphID(cmap[ord(char)]) for char in "AOg0"}
+        glyf = font["glyf"]
+
+        def outlined(code: int) -> bool:
+            return code in cmap and glyf[cmap[code]].numberOfContours != 0
+
+        # Every printable ASCII glyph with an outline, keyed by its character.
+        ids = {
+            chr(code): font.getGlyphID(cmap[code])
+            for code in range(0x21, 0x7F)
+            if outlined(code)
+        }
+        # Outlined glyphs outside ASCII that a terminal workload introduces as
+        # unseen text: Latin-1, box drawing and Font Awesome icon ranges.
+        unseen = [
+            font.getGlyphID(cmap[code])
+            for block in (
+                range(0xA1, 0x100),
+                range(0x2500, 0x25A0),
+                range(0xF000, 0xF2E1),
+            )
+            for code in block
+            if outlined(code)
+        ]
     (output / "glyphs.json").write_text(json.dumps(ids) + "\n")
+    (output / "unseen-glyphs.json").write_text(json.dumps(unseen) + "\n")
 
 
 if __name__ == "__main__":

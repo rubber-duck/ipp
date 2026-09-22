@@ -24,20 +24,40 @@ interface RenderHostExports {
   ipp_render_draw_calls(): number;
   ipp_render_triangles(): number;
   ipp_render_uploaded_bytes(): number;
-  ipp_render_gui_batches?(): number;
-  ipp_render_gui_rebuilds?(): number;
-  ipp_render_gui_allocations?(): number;
-  ipp_render_gui_resident_bytes?(): number;
-  ipp_render_glyph_misses?(): number;
-  ipp_render_glyph_populates?(): number;
-  ipp_render_glyph_population_failures?(): number;
-  ipp_render_glyph_page_retirements?(): number;
-  ipp_render_glyph_pages?(): number;
-  ipp_render_glyph_resident_bytes?(): number;
   ipp_render_failed_draw_calls(): number;
   ipp_render_invalid_camera(): number;
   ipp_render_unshadowed_lights(): number;
 }
+
+/** Retained GUI counters exported together by GUI-capable render builds. */
+const RETAINED_GUI_STATISTICS = {
+  guiBatches: "ipp_render_gui_batches",
+  guiRebuilds: "ipp_render_gui_rebuilds",
+  guiAllocations: "ipp_render_gui_allocations",
+  guiResidentBytes: "ipp_render_gui_resident_bytes",
+  glyphMisses: "ipp_render_glyph_misses",
+  glyphPopulates: "ipp_render_glyph_populates",
+  glyphPopulationFailures: "ipp_render_glyph_population_failures",
+  glyphPageRetirements: "ipp_render_glyph_page_retirements",
+  glyphPages: "ipp_render_glyph_pages",
+  glyphResidentBytes: "ipp_render_glyph_resident_bytes",
+} as const;
+
+type RetainedGuiStatistics = Record<
+  keyof typeof RETAINED_GUI_STATISTICS,
+  () => number
+>;
+
+/** Per-submission counters also accumulated across every rendered tick, so a
+ * capture observes work done by frames it did not capture. */
+const ACCUMULATED_GUI_STATISTICS = {
+  guiRebuilds: "totalGuiRebuilds",
+  guiAllocations: "totalGuiAllocations",
+  glyphMisses: "totalGlyphMisses",
+  glyphPopulates: "totalGlyphPopulates",
+  glyphPopulationFailures: "totalGlyphPopulationFailures",
+  glyphPageRetirements: "totalGlyphPageRetirements",
+} as const;
 
 interface CaptureRequest {
   id: number;
@@ -48,6 +68,9 @@ interface CaptureRequest {
 export class RenderWorkerService {
   readonly imports: WebAssembly.Imports;
   private runtime: RenderHostExports | undefined;
+  /** Absent for builds without GUI rendering: those counters are unavailable, not zero. */
+  private retainedStatistics: RetainedGuiStatistics | undefined;
+  private readonly retainedTotals: Record<string, number> = {};
   private session = 0n;
   private generation = 0;
   private totalUploadedBytes = 0;
@@ -118,6 +141,28 @@ export class RenderWorkerService {
           `WASM runtime is missing ${name}; select the render build`,
         );
     }
+    // A GUI render build exports every retained counter; a partial set is a
+    // build error rather than a report of zero work.
+    const statistics = Object.entries(RETAINED_GUI_STATISTICS);
+    const present = statistics.filter(
+      ([, name]) => typeof candidate[name] === "function",
+    );
+    if (present.length !== 0 && present.length !== statistics.length)
+      throw new Error(
+        `WASM runtime exports an incomplete retained GUI statistics set; missing ${statistics
+          .filter(([, name]) => typeof candidate[name] !== "function")
+          .map(([, name]) => name)
+          .join(", ")}`,
+      );
+    this.retainedStatistics =
+      present.length === 0
+        ? undefined
+        : (Object.fromEntries(
+            statistics.map(([key, name]) => [
+              key,
+              candidate[name] as () => number,
+            ]),
+          ) as RetainedGuiStatistics);
     this.runtime = exports as RenderHostExports;
     this.session = session;
     this.observedRenderTick = 0n;
@@ -206,6 +251,13 @@ export class RenderWorkerService {
     if (tick === 0n) return;
     if (tick !== this.observedRenderTick) {
       this.totalUploadedBytes += runtime.ipp_render_uploaded_bytes();
+      if (this.retainedStatistics)
+        for (const [key, total] of Object.entries(ACCUMULATED_GUI_STATISTICS))
+          this.retainedTotals[total] =
+            (this.retainedTotals[total] ?? 0) +
+            this.retainedStatistics[
+              key as keyof typeof ACCUMULATED_GUI_STATISTICS
+            ]();
       this.observedRenderTick = tick;
     }
     for (const [id, request] of this.captures) {
@@ -226,18 +278,23 @@ export class RenderWorkerService {
           uploadedBytes: runtime.ipp_render_uploaded_bytes(),
           totalUploadedBytes: this.totalUploadedBytes,
           failedDrawCalls: runtime.ipp_render_failed_draw_calls(),
-          guiBatches: runtime.ipp_render_gui_batches?.() ?? 0,
-          guiRebuilds: runtime.ipp_render_gui_rebuilds?.() ?? 0,
-          guiAllocations: runtime.ipp_render_gui_allocations?.() ?? 0,
-          guiResidentBytes: runtime.ipp_render_gui_resident_bytes?.() ?? 0,
-          glyphMisses: runtime.ipp_render_glyph_misses?.() ?? 0,
-          glyphPopulates: runtime.ipp_render_glyph_populates?.() ?? 0,
-          glyphPopulationFailures:
-            runtime.ipp_render_glyph_population_failures?.() ?? 0,
-          glyphPageRetirements:
-            runtime.ipp_render_glyph_page_retirements?.() ?? 0,
-          glyphPages: runtime.ipp_render_glyph_pages?.() ?? 0,
-          glyphResidentBytes: runtime.ipp_render_glyph_resident_bytes?.() ?? 0,
+          // Unavailable counters are omitted, never reported as zero work.
+          ...(this.retainedStatistics
+            ? {
+                ...Object.fromEntries(
+                  Object.entries(this.retainedStatistics).map(([key, read]) => [
+                    key,
+                    read(),
+                  ]),
+                ),
+                ...Object.fromEntries(
+                  Object.values(ACCUMULATED_GUI_STATISTICS).map((total) => [
+                    total,
+                    this.retainedTotals[total] ?? 0,
+                  ]),
+                ),
+              }
+            : {}),
           invalidCamera: runtime.ipp_render_invalid_camera() !== 0,
           unshadowedLights: runtime.ipp_render_unshadowed_lights(),
           ingress: { ...this.ingress },

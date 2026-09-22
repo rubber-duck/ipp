@@ -1,14 +1,31 @@
 # Retained Surface rendering measurements
 
-Run `python tools/ipp.py benchmark browser --scene retained-gui --frames 60`. This opt-in workload uses the same maintained scenario as `python tools/ipp.py test retained-gui`, with a longer streaming interval. It builds analytic Surface and GUI-enabled worker runtimes and drives both through generated clients, immutable font/drawing assets and actual WebGL. Results and completed-frame images go to `target/performance/retained-gui/`; `comparison.json` identifies each build and links its environment evidence.
+Run `python tools/ipp.py benchmark browser --scene retained-gui --frames 60`. For this scene `--frames` counts streaming screen updates; Blender stress options such as `--preset`, `--group` or `--instrumented` are rejected. The opt-in workload runs the same maintained scenario as `python tools/ipp.py test retained-gui` with a longer streaming interval. It builds analytic Surface and GUI-enabled worker runtimes and drives both through generated clients, immutable font/drawing assets and actual WebGL. Results and completed-frame images go to `target/performance/retained-gui/`.
 
-The fixture uses a 640 × 480 viewport at DPR 1 and 12 × 36 positioned glyphs. Its application generator accepts visible row/column counts, typing, cursor blink, scrolling and full replacement. Stable row identities bound a typing upload to one row. The scenario also changes panel placement, shares glyphs across three panels, changes geometry counts, restores the graphics context and removes all panels. The deterministic suite checks warm uploads and resident memory without timing gates.
+## Scenario
 
-Reports include actual backend identification, draw and triangle counts, upload bytes, GUI buffer residency and glyph atlas misses, populations, pages and bytes. Vertex layouts are defined by `GlyphVertex` in [the glyph atlas](../../crates/ipp-render-gl/src/services/render/glyph_atlas.rs) and `GuiBoxVertex` in [the retained batch implementation](../../crates/ipp-render-gl/src/services/render/gui_batch.rs). Timings measure the entire acknowledged application update through GPU readback and PNG writing. They include transport, scheduling and capture overhead and must not be reported as isolated rendering cost or FPS. Software GL is useful for correctness, not mobile performance prediction.
+The terminal fixture presents the application's printable ASCII glyph set as positioned rows. Its generator accepts visible row/column counts, typing, cursor blink, scrolling, full replacement and an `unseen` mode that slides a window through Latin-1, box-drawing and icon glyphs never shown before. The scenario:
+
+- counts cold misses and populations from counters accumulated over every rendered tick, then settles to a warm frame without uploads or rebuilds;
+- derives the glyph vertex size from a full-screen replacement and bounds typing to one row and cursor blink to one quad;
+- reuses local geometry for oblique and mirrored rear views of the same panel;
+- shares font coverage across three panels, restores the graphics context, retires geometry for smaller screens and releases everything when cleared;
+- grows the atlas past one page with unseen glyphs at a larger band, keeps it within the page budget while sliding through more glyphs than the budget retains, and proves eviction when the first window populates again;
+- renders a GUI panel mixing a gradient shape with glow, atlas glyphs and a curve drawing, captures its mirrored rear view, and compares sparse and filled controls under one camera, viewport and DPR.
+
+On this base the atlas retires pages without demand immediately, so the sliding windows evict through retirement; page-budget pressure appears only when a window's demand straddles full pages. The scenario marks where a configurable page budget or idle-retirement setting will force and assert pressure eviction.
+
+Analytic builds lack the retained counters and report them unavailable, never as zero. The GUI counter `guiResidentBytes` is the combined GPU storage of retained box and glyph batches; `glyphResidentBytes` counts atlas pages separately. Vertex layouts are defined by `GlyphVertex` in [the glyph atlas](../../crates/ipp-render-gl/src/services/render/glyph_atlas.rs) and `GuiBoxVertex` in [the retained batch implementation](../../crates/ipp-render-gl/src/services/render/gui_batch.rs).
+
+## Reports
+
+`comparison.json` identifies its run: source revision with a hash of uncommitted changes, machine and Node identity, the pipeline run directory when started through `tools/ipp.py`, the streaming count, DPR, viewports and workload dimensions. Each build entry names its evidence directory, browser version and backend strings. Every label both builds capture has `comparisons/<label>-expected.png` (analytic), `-actual.png` (retained) and `-diff.png`, with the changed-pixel fraction, text-mask agreement and coverage ratio checked against the tolerances recorded beside them. Each build's evidence directory also holds its per-label captures and `workload.json`.
+
+Timings measure the entire acknowledged application update through GPU readback. They include transport, scheduling and capture overhead and must not be reported as isolated rendering cost or FPS. Software GL proves correctness in its environment, not mobile performance.
 
 ## iPhone 14 Pro procedure
 
-Physical-device measurements are pending; no iPhone result is implied by the automated browser suite. Use the maintained gallery on the device to compare the Aurora, Ember and Neon materials. Controls use retained shapes and Nerd Font icons; the waveform, reference grid and pulse remain Surface curve drawings:
+Physical-device measurements are pending a device; no iPhone result is implied by the automated browser suite. Use the maintained gallery on the device to compare the Aurora, Ember and Neon materials. Controls use retained shapes and Nerd Font icons; the waveform, reference grid and pulse remain Surface curve drawings:
 
 1. Build the standalone gallery with `python tools/ipp.py build gallery-site`, then serve it with `python -m http.server 8000 --bind 0.0.0.0 --directory target/gallery-site`. On the same network, open `http://<development-machine-address>:8000/` in Safari and select the GUI world. Use a trusted HTTPS endpoint when exercising platform features that require a secure context. Stop the server with Ctrl-C after the run.
 2. Record the source revision and uncommitted diff identity, runtime build identity, iOS/Safari version, display orientation, viewport/DPR, presentation-quality settings used (including whether **Isolate GUI panel only** is active), power mode and thermal state. Keep these fixed between samples. Disable Low Power Mode and allow the device to cool between runs.

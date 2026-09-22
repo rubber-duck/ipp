@@ -109,6 +109,11 @@ pub(crate) enum FieldEncoding {
     Masked = 15,
 }
 
+/// Byte fields bounded only by the complete message budget, declared once from
+/// [`crate::MAX_MESSAGE_BYTES`] so manifests, encoders and generated codecs agree.
+pub(crate) const MESSAGE_BYTES: u32 = crate::MAX_MESSAGE_BYTES as u32;
+const _: () = assert!(crate::MAX_MESSAGE_BYTES == MESSAGE_BYTES as usize);
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WireField {
     pub(crate) name: &'static str,
@@ -199,29 +204,29 @@ layouts! {
     #[cfg(feature = "surfaces")]
     "response-surface" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response")];
     #[cfg(feature = "gui")]
-    "request-gui" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("batch_id", Option => "u64"), field!("edits", Bytes, 1048576)];
+    "request-gui" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("batch_id", Option => "u64"), field!("edits", Bytes, MESSAGE_BYTES)];
     #[cfg(feature = "gui")]
     "response-gui" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("applied", U32), field!("error", Option => "utf8-65536")];
     #[cfg(feature = "gui")]
     "request-gui-inspect" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("query", Bytes, 65536)];
     #[cfg(feature = "gui")]
-    "request-gui-input" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("input", Bytes, 1048576)];
+    "request-gui-input" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("input", Bytes, MESSAGE_BYTES)];
     #[cfg(feature = "gui")]
     "gui-input-routing" [Base] => [field!("tick", U64), field!("reason", U16), field!("blocker", Option => "u64")];
     #[cfg(feature = "gui")]
     "response-gui-input" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("routing", Named => "gui-input-routing")];
     #[cfg(feature = "gui")]
-    "response-gui-inspect" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("payload", Bytes, 1048576)];
+    "response-gui-inspect" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("payload", Bytes, MESSAGE_BYTES)];
     #[cfg(feature = "gui")]
-    "response-gui-observations" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("observations", Bytes, 1048576)];
+    "response-gui-observations" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("observations", Bytes, MESSAGE_BYTES)];
     #[cfg(feature = "gui")]
-    "response-gui-unhandled" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("unhandled", Bytes, 1048576)];
+    "response-gui-unhandled" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("unhandled", Bytes, MESSAGE_BYTES)];
     #[cfg(feature = "gui")]
     "request-gui-semantic-snapshot" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("query", Bytes, 65536)];
     #[cfg(feature = "gui")]
-    "request-gui-semantic-action" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("action", Bytes, 1048576)];
+    "request-gui-semantic-action" [Base] => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("action", Bytes, MESSAGE_BYTES)];
     #[cfg(feature = "gui")]
-    "response-gui-semantic-snapshot" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("snapshot", Bytes, 1048576)];
+    "response-gui-semantic-snapshot" [Base] => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response"), field!("snapshot", Bytes, MESSAGE_BYTES)];
     "host-request-list-worlds" [Base] => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("after", U64)];
     "host-request-create-world" [Base] => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("symbolic_id", Utf8, 65536), field!("hints", Named => "host-hints-patch"), field!("temporary", Bool)];
     "host-request-attach-world" [Base] => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("world", Union => "world-selector")];
@@ -525,7 +530,11 @@ layouts! {
     ];
     "snapshot-value-bytes" [Base] => [
         field!("tag", Variant => "snapshot-value"),
-        field!("value", Bytes, 1048576),
+        field!("value", Bytes, MESSAGE_BYTES),
+    ];
+    // An effective component repeats its base descriptor table by reference.
+    "snapshot-value-base-descriptors" [Base] => [
+        field!("tag", Variant => "snapshot-value"),
     ];
 
     "request-begin-batch" [Base] => [
@@ -981,6 +990,7 @@ tags! {
     SnapshotValue [Base] SNAPSHOT_VALUE_U64 = ipp_core::components::schema::FieldKind::U64 as u8 => "snapshot-value-u64";
     SnapshotValue [Base] SNAPSHOT_VALUE_STRING = ipp_core::components::schema::FieldKind::String as u8 => "snapshot-value-string";
     SnapshotValue [Base] SNAPSHOT_VALUE_BYTES = ipp_core::components::schema::FieldKind::Bytes as u8 => "snapshot-value-bytes";
+    SnapshotValue [Base] SNAPSHOT_VALUE_BASE_DESCRIPTORS = 12 => "snapshot-value-base-descriptors";
     SnapshotReference [Base] SNAPSHOT_REF_HANDLE = REF_HANDLE => "empty";
 
     Request [Animation] REQUEST_CONTROLLER_CREATE = 15 => "request-controller-create";

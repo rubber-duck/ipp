@@ -181,6 +181,42 @@ fn asset_formats_have_unique_nonzero_names_and_type_ids() {
 }
 
 #[test]
+fn message_budget_bounds_share_one_declaration() {
+    let limit = |layout: &str, field: &str| {
+        LAYOUTS
+            .iter()
+            .find(|candidate| candidate.name == layout)
+            .and_then(|layout| layout.fields.iter().find(|f| f.name == field))
+            .map(|field| field.limit as usize)
+    };
+
+    // Generated codecs read these exported declarations; encoders use the constant.
+    assert_eq!(
+        limit("snapshot-value-bytes", "value"),
+        Some(crate::MAX_MESSAGE_BYTES)
+    );
+    let convention = CONVENTIONS
+        .iter()
+        .find(|(name, _)| *name == "max-message-bytes")
+        .map(|(_, value)| value.parse::<usize>().unwrap());
+    assert_eq!(convention, Some(crate::MAX_MESSAGE_BYTES));
+
+    // No bounded byte or text field may exceed the complete message budget.
+    for layout in LAYOUTS {
+        for field in layout.fields {
+            if matches!(field.encoding, FieldEncoding::Bytes | FieldEncoding::Utf8) {
+                assert!(
+                    field.limit as usize <= crate::MAX_MESSAGE_BYTES,
+                    "{}.{} exceeds the message budget",
+                    layout.name,
+                    field.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn nested_field_order_and_encoding_change_contract_hash() {
     const FIRST: WireField = field!("first", U32);
     const SECOND: WireField = field!("second", Bytes, 32);

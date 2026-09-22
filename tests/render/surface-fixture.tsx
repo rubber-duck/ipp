@@ -6,6 +6,15 @@ import {
   type ReactWorldRoot,
 } from "@ipp/react";
 import {
+  Drawing,
+  GuiRoot,
+  Padding,
+  Row,
+  Stack,
+  Text,
+  type GuiControlTheme,
+} from "@ipp/react/gui";
+import {
   terminalWorkloadItems,
   type TerminalWorkload,
 } from "../../examples/surface-terminal/workload.js";
@@ -49,7 +58,9 @@ let terminal: bigint;
 let camera: bigint;
 let metrics: { units: number; ascender: number; line: number };
 let workloadGlyphs: number[];
+let unseenGlyphs: number[];
 const frames = new Map<string, FrameCapture>();
+const ORTHO_HEIGHT = 3;
 const references = new Map<string, HTMLCanvasElement>();
 const failures: unknown[] = [];
 
@@ -76,7 +87,7 @@ export async function initialize(config: {
   camera = await activateFixtureCamera(client);
   for (const [component, values] of [
     ["Transform", { x: 0, y: 0, z: 6, qx: 0, qy: 0, qz: 0, qw: 1 }],
-    ["Camera", { projection: 1, ortho_height: 3 }],
+    ["Camera", { projection: 1, ortho_height: ORTHO_HEIGHT }],
   ] as const) {
     successfulBatch(
       await client.batch(
@@ -117,6 +128,9 @@ export async function initialize(config: {
     await fetch("/target/surface-assets/glyphs.json")
   ).json();
   workloadGlyphs = Object.values(glyphs);
+  unseenGlyphs = await (
+    await fetch("/target/surface-assets/unseen-glyphs.json")
+  ).json();
   const lifecycle = await exerciseSurfaceLifecycle(client, assets, glyphs.A);
   successfulBatch(
     await client.batch([
@@ -147,13 +161,17 @@ export async function initialize(config: {
   };
 }
 
-export async function capture(label: string) {
-  const state = await client.inspect();
+/**
+ * Capture the frame presenting the latest inspected state, or with `next` the
+ * next completed frame, which observes work a following frame would finish.
+ */
+export async function capture(label: string, options: { next?: boolean } = {}) {
+  const tick = options.next ? undefined : (await client.inspect()).tick;
   if (failures.length)
     throw new Error(
       `Surface runtime failures: ${JSON.stringify(failures, (_, value) => (typeof value === "bigint" ? String(value) : value))}`,
     );
-  const frame = await client.presentation!.capture(state.tick);
+  const frame = await client.presentation!.capture(tick);
   frames.set(label, frame);
   const pixels = new Uint8Array(frame.pixels);
   let textPixels = 0;
@@ -177,6 +195,7 @@ export async function capture(label: string) {
   return {
     width: frame.width,
     height: frame.height,
+    devicePixelRatio: window.devicePixelRatio,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
     backend: frame.backend,
@@ -192,7 +211,7 @@ export async function capture(label: string) {
 
 /** The same application fixture runs against analytic and retained builds. */
 export async function workload(
-  config: Omit<TerminalWorkload, "glyphs"> & {
+  config: Omit<TerminalWorkload, "glyphs" | "unseenGlyphs"> & {
     panels?: number;
     angle?: number;
     width?: number;
@@ -216,6 +235,7 @@ export async function workload(
           items={terminalWorkloadItems(assets, {
             ...config,
             glyphs: workloadGlyphs,
+            unseenGlyphs,
           })}
         />
       </Entity>
@@ -223,8 +243,139 @@ export async function workload(
   );
 }
 
-export async function clearWorkload() {
+/** Sizes of the application's printable and unseen glyph sets. */
+export function glyphSets() {
+  return { printable: workloadGlyphs.length, unseen: unseenGlyphs.length };
+}
+
+export async function clearWorkload(viewport?: {
+  width: number;
+  height: number;
+}) {
+  if (viewport) client.presentation!.resize(viewport.width, viewport.height);
   await root.render(null);
+}
+
+type Color = readonly [number, number, number, number];
+const PANEL_COLOR: Color = [0.02, 0.03, 0.05, 1];
+/**
+ * A GUI panel on the same camera, viewport and DPR as the terminal workload.
+ * `mixed` combines a gradient shape with glow, atlas glyphs and a curve drawing;
+ * `filled` and `sparse` differ only in the shape's interior fill.
+ */
+export async function guiPanel(config: {
+  variant: "mixed" | "mixed-without-glow" | "filled" | "sparse" | "empty";
+  /** Shape size, border and corner radius in Surface metres. */
+  shape: {
+    width: number;
+    height: number;
+    borderWidth: number;
+    cornerRadius: number;
+  };
+  angle?: number;
+}) {
+  const [width, height] = [640, 480];
+  client.presentation!.resize(width, height);
+  const { variant, shape } = config;
+  const edge = {
+    cornerRadius: [shape.cornerRadius, shape.cornerRadius] as const,
+    borderWidth: shape.borderWidth,
+    borderColor: [1, 1, 1, 1] as Color,
+  };
+  const theme: GuiControlTheme = {
+    parts: {
+      background: {
+        base: variant.startsWith("mixed")
+          ? {
+              ...edge,
+              gradient: {
+                kind: "linear",
+                start: [0, 0],
+                end: [0, shape.height],
+                color0: [1, 0.08, 0.04, 1],
+                color1: [1, 0.8, 0.08, 1],
+              },
+              ...(variant === "mixed"
+                ? {
+                    glow: {
+                      color: [1, 0.35, 0.05, 1],
+                      intensity: 0.8,
+                      radius: 0.18,
+                      falloff: 2,
+                    },
+                  }
+                : {}),
+            }
+          : edge,
+      },
+    },
+  };
+  const fill: Color =
+    variant === "sparse" ? [0, 0, 0, 0] : [0.85, 0.25, 0.08, 1];
+  await root.render(
+    <Entity key="gui" id="retained-gui-panel">
+      <Transform bound={false} ry={config.angle ?? 0} />
+      <Surface bound={false} width={3.8} height={2.4} />
+      <GuiRoot>
+        <Stack width={3.8} height={2.4} backgroundColor={PANEL_COLOR}>
+          <Padding padding={[0.6, 0, 0, 0.3]}>
+            <Row>
+              {variant === "empty" ? (
+                <Stack width={shape.width} height={shape.height} />
+              ) : (
+                <Stack
+                  width={shape.width}
+                  height={shape.height}
+                  backgroundColor={fill}
+                  theme={theme}
+                />
+              )}
+              {variant.startsWith("mixed") ? (
+                <>
+                  {/* Scale the 32 x 24 unit icon to 0.8 x 0.6 metres. */}
+                  <Drawing
+                    asset={assets.icon}
+                    width={0.8}
+                    height={0.6}
+                    color={[1, 1, 1, 1]}
+                    margin={[0.3, 0, 0, 0.15]}
+                    theme={{
+                      parts: { icon: { base: { scale: [0.025, 0.025] } } },
+                    }}
+                  />
+                  <Text
+                    text="Gui"
+                    asset={assets.font}
+                    fontSize={0.36}
+                    color={[0.2, 1, 0.35, 1]}
+                    margin={[0.3, 0, 0, 0.15]}
+                  />
+                </>
+              ) : null}
+            </Row>
+          </Padding>
+        </Stack>
+      </GuiRoot>
+    </Entity>,
+  );
+  // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
+  return { pixelsPerMetre: height / ORTHO_HEIGHT };
+}
+
+/** Raw RGBA pixels of a completed capture, base64 encoded for Node-side comparison. */
+export async function capturePixels(label: string) {
+  const frame = frames.get(label)!;
+  const encoded = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(new Blob([frame.pixels]));
+  });
+  return {
+    width: frame.width,
+    height: frame.height,
+    pixels: encoded.slice(encoded.indexOf(",") + 1),
+  };
 }
 
 export async function referenceText(label: string) {

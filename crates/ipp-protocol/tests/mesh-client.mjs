@@ -441,7 +441,10 @@ test("resource event decoder validates event bounds, sessions and baseline resou
   assert.match(textures.source, /rgba8-srgb-linear-alpha/);
   assert.match(textures.source, /exact-payload/);
   assert.doesNotMatch(textures.source, /exact-rgba8|max-dimension=1024/);
-  assert.equal(textures.codec.MAX_MESSAGE_BYTES, 1_048_576);
+  assert.equal(
+    textures.codec.MAX_MESSAGE_BYTES,
+    Number(textures.codec.WIRE_CONVENTIONS["max-message-bytes"]),
+  );
 });
 
 test("resource events log failures once without polling and isolate optional listeners", async () => {

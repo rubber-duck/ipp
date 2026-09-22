@@ -445,6 +445,110 @@ export async function exerciseGuiLifecycle(
     await client.editGui({ action: "remove", handle: handle(id) });
   }
 
+  // Long named-part lanes make one panel's descriptor table exceed the former
+  // 64 KiB byte bound. Beyond the message budget, inspection fails explicitly
+  // without truncating state, and the same connection remains usable.
+  const denseRef = { kind: "alias", alias: 81 } as const;
+  const denseEntity = aliasId(
+    await client.batch([
+      createEntity(81, "gui-dense-panel"),
+      insertComponent(client, "Surface", denseRef, { width: 4, height: 3 }),
+      insertComponent(client, "GuiRoot", denseRef),
+    ]),
+    81,
+  );
+  await client.editGui({
+    action: "insert",
+    entity: denseEntity,
+    rootIncarnation: (await client.inspectGui({ entity: denseEntity }))
+      .rootIncarnation,
+    id: 1,
+    index: 0,
+    content: { kind: "container", containerKind: "column" },
+  });
+  const densePart = (index: number) =>
+    guiPartProperty(1, `dense_${index}_${"x".repeat(4000)}`, "color");
+  const setDenseLanes = async (from: number, to: number) => {
+    for (let start = from; start < to; start += 50)
+      successfulBatch(
+        await client.batch(
+          Array.from({ length: Math.min(50, to - start) }, (_, offset) => ({
+            kind: "setDynamicProperty" as const,
+            entity: { kind: "handle" as const, id: denseEntity },
+            component: client.components.GuiRoot!.id,
+            name: densePart(start + offset),
+            value: { kind: "vec4" as const, value: [0.1, 0.2, 0.3, 1] },
+          })),
+        ),
+      );
+  };
+  const denseLanes = async () => {
+    const snapshot = (await client.inspect()).entities.find(
+      (item) => item.id === denseEntity,
+    );
+    expect(snapshot, "Dense GUI entity disappeared");
+    return [snapshot.base, snapshot.effective].map((components) =>
+      Object.keys(
+        components.find(
+          (item) => item.component === client.components.GuiRoot!.id,
+        )?.properties ?? {},
+      ).filter((name) => name.includes("_part_dense_")),
+    );
+  };
+  await setDenseLanes(0, 20);
+  const encoder = new TextEncoder();
+  const [denseBase, denseEffective] = await denseLanes();
+  // UTF-8 property names alone bound the descriptor table from below.
+  const denseNameBytes = denseEffective!.reduce(
+    (total, name) => total + encoder.encode(name).length,
+    0,
+  );
+  expect(
+    denseNameBytes > 65536 &&
+      denseBase!.length === 20 &&
+      denseEffective!.length === 20 &&
+      denseEffective!.includes(densePart(19)),
+    `Dense inspection decoded ${denseBase!.length}/${denseEffective!.length} lanes and ${denseNameBytes} name bytes`,
+  );
+  await setDenseLanes(20, 300);
+  let oversized: unknown;
+  try {
+    await client.inspect();
+  } catch (error) {
+    oversized = error;
+  }
+  expect(
+    oversized instanceof Error &&
+      /Inspection record cannot be encoded/.test(oversized.message),
+    `An oversized inspection record was not rejected explicitly: ${String(oversized)}`,
+  );
+  // The same connection serves targeted reads and edits; state was not truncated.
+  expect(
+    (await client.inspectGui({ entity: denseEntity })).nodes.length === 1,
+    "Oversized inspection changed the GUI tree",
+  );
+  for (let start = 20; start < 300; start += 50)
+    successfulBatch(
+      await client.batch(
+        Array.from({ length: Math.min(50, 300 - start) }, (_, offset) => ({
+          kind: "removeDynamicProperty" as const,
+          entity: { kind: "handle" as const, id: denseEntity },
+          component: client.components.GuiRoot!.id,
+          name: densePart(start + offset),
+        })),
+      ),
+    );
+  const [restoredBase] = await denseLanes();
+  expect(
+    restoredBase!.length === 20 && restoredBase!.includes(densePart(19)),
+    "Inspection after the oversized record lost or truncated named lanes",
+  );
+  successfulBatch(
+    await client.batch([
+      { kind: "delete", entity: { kind: "handle", id: denseEntity } },
+    ]),
+  );
+
   await client.editGui({
     action: "move",
     handle: handle(3),
@@ -747,5 +851,6 @@ export async function exerciseGuiLifecycle(
     restoredIncarnation: String(after.rootIncarnation),
     nodes: ids(after),
     densePropertyCount,
+    denseNameBytes,
   };
 }

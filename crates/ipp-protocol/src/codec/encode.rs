@@ -1,4 +1,5 @@
 use super::*;
+use ipp_core::components::dynamic_properties::DYNAMIC_METADATA;
 
 impl Writer {
     pub(crate) fn raw(&mut self, v: &[u8]) -> Result<(), ProtocolError> {
@@ -199,14 +200,37 @@ impl Writer {
         Ok(())
     }
 
-    pub(super) fn component(&mut self, component: &ComponentValue) -> Result<(), ProtocolError> {
+    /// Encode one inspected component and return its named-property descriptor table.
+    ///
+    /// An effective component whose table equals its base counterpart's refers to that
+    /// table instead of repeating it, halving the budget a dense GUI panel consumes.
+    pub(super) fn component(
+        &mut self,
+        component: &ComponentValue,
+        base_descriptors: Option<&[u8]>,
+    ) -> Result<Option<Vec<u8>>, ProtocolError> {
         self.u16(component.type_id())?;
         let fields = component.fields();
         self.count(fields.len(), 65_536)?;
+        let mut descriptors = None;
         for (offset, value) in fields {
-            self.resolved_field(offset, value)?;
+            match value {
+                ResolvedValue::Bytes(table) if offset == DYNAMIC_METADATA => {
+                    self.u32(offset)?;
+                    if base_descriptors == Some(table.as_slice()) {
+                        self.u8(SNAPSHOT_VALUE_BASE_DESCRIPTORS)?;
+                    } else {
+                        // The same bytes encoding as any inspected byte field.
+                        self.u8(SNAPSHOT_VALUE_BYTES)?;
+                        self.count(table.len(), MAX_MESSAGE_BYTES)?;
+                        self.raw(&table)?;
+                    }
+                    descriptors = Some(table);
+                }
+                value => self.resolved_field(offset, value)?,
+            }
         }
-        Ok(())
+        Ok(descriptors)
     }
 
     pub(super) fn render_state_patch(
@@ -619,11 +643,20 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
             for entity in entities {
                 w.u64(entity.id.to_bits())?;
                 w.metadata(&entity.metadata)?;
-                for components in [&entity.base, &entity.effective] {
-                    w.count(components.len(), 256)?;
-                    for component in components {
-                        w.component(component)?;
+                let mut base_descriptors = Vec::new();
+                w.count(entity.base.len(), 256)?;
+                for component in &entity.base {
+                    if let Some(table) = w.component(component, None)? {
+                        base_descriptors.push((component.type_id(), table));
                     }
+                }
+                w.count(entity.effective.len(), 256)?;
+                for component in &entity.effective {
+                    let base = base_descriptors
+                        .iter()
+                        .find(|(id, _)| *id == component.type_id())
+                        .map(|(_, table)| table.as_slice());
+                    w.component(component, base)?;
                 }
             }
             {

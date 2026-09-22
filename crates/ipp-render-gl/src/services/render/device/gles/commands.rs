@@ -178,20 +178,6 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     #[cfg(feature = "gui")]
-    fn draw_surface_box(
-        &mut self,
-        program: &Self::Program,
-        mvp: &[f32; 16],
-        placement: &[f32; 4],
-        clip: &[f32; 4],
-        color: &[f32; 4],
-        border: &[f32; 4],
-        shape: super::SurfaceBoxShape,
-    ) -> Result<(), RenderError> {
-        self.draw_surface_box(program, mvp, placement, clip, color, border, shape)
-    }
-
-    #[cfg(feature = "gui")]
     fn create_gui_batch(
         &mut self,
         vertices: &[super::GuiBoxVertex],

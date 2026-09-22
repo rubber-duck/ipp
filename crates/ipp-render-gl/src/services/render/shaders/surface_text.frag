@@ -11,15 +11,15 @@ in vec4 v_color;
 out vec4 o_color;
 
 void main() {
+    // Sampling and derivatives precede the discard: GLSL ES 3.00 leaves implicit and
+    // explicit derivatives undefined once a fragment of the quad has discarded.
     vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
+    vec4 tex = texture(u_atlas, v_uv);
     vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
-    if (clip_coverage <= 0.0) discard;
-
-    vec4 tex = texture(u_atlas, v_uv);
     float coverage = max(tex.a, tex.r);
-    if (coverage <= 0.0) discard;
-
     float alpha = v_color.a * coverage * clip_coverage;
+    if (alpha <= 0.0) discard;
+
     o_color = vec4(v_color.rgb, alpha);
 }

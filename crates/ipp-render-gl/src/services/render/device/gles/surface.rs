@@ -1,4 +1,8 @@
 #[cfg(feature = "gui")]
+use super::super::retained_vertices::{
+    GLYPH_VERTEX_LAYOUT, GUI_BOX_VERTEX_LAYOUT, RetainedVertexLayout,
+};
+#[cfg(feature = "gui")]
 use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
 use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
 use crate::RenderError;
@@ -13,6 +17,31 @@ impl GlesRenderDevice {
             // SAFETY: The program is live and GL borrows this static name only for the call.
             unsafe { (self.gl.uniform_location)(program.id, name.as_ptr()) }
         })
+    }
+
+    /// Enable and point every attribute of `layout` at the bound array buffer.
+    ///
+    /// # Safety
+    ///
+    /// The device context is current with the destination vertex array and its array
+    /// buffer bound, so each offset addresses that buffer rather than client memory.
+    #[cfg(feature = "gui")]
+    unsafe fn point_retained_attributes<const N: usize>(&self, layout: &RetainedVertexLayout<N>) {
+        for attribute in &layout.attributes {
+            // SAFETY: The caller binds the destination vertex array and buffer in the
+            // current context; GL copies these scalar arguments during the call.
+            unsafe {
+                (self.gl.enable_attrib)(attribute.location);
+                (self.gl.attrib_pointer)(
+                    attribute.location,
+                    attribute.components as i32,
+                    FLOAT,
+                    0,
+                    layout.stride as i32,
+                    ptr::without_provenance(attribute.offset as usize),
+                );
+            }
+        }
     }
 
     pub(super) fn create_surface_path(
@@ -306,103 +335,6 @@ impl GlesRenderDevice {
     }
 
     #[cfg(feature = "gui")]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn draw_surface_box(
-        &mut self,
-        program: &GlesRenderProgram,
-        mvp: &[f32; 16],
-        placement: &[f32; 4],
-        clip: &[f32; 4],
-        color: &[f32; 4],
-        border: &[f32; 4],
-        shape: super::SurfaceBoxShape,
-    ) -> Result<(), RenderError> {
-        self.submission.invalidate();
-        self.alpha_blend(true)?;
-        if self.surface_box_quad_vao == 0 {
-            // SAFETY: GL writes exclusive handles for the current context.
-            unsafe {
-                (self.gl.gen_vertex_arrays)(1, &mut self.surface_box_quad_vao);
-                (self.gl.gen_buffers)(1, &mut self.surface_box_quad_vbo);
-            }
-            if self.surface_box_quad_vao == 0 || self.surface_box_quad_vbo == 0 {
-                return Err(RenderError::RenderDevice(
-                    "surface box allocation failed".into(),
-                ));
-            }
-            self.bind_vertex_array(self.surface_box_quad_vao);
-            // SAFETY: Configure vertex attributes on the dedicated box quad VAO.
-            unsafe {
-                (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
-                (self.gl.enable_attrib)(0);
-                (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 136, ptr::null());
-                (self.gl.enable_attrib)(1);
-                (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 136, 8 as *const _);
-                (self.gl.enable_attrib)(2);
-                (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 136, 24 as *const _);
-                (self.gl.enable_attrib)(3);
-                (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 136, 40 as *const _);
-                (self.gl.enable_attrib)(4);
-                (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 136, 56 as *const _);
-                (self.gl.enable_attrib)(5);
-                (self.gl.attrib_pointer)(5, 4, FLOAT, 0, 136, 72 as *const _);
-                (self.gl.enable_attrib)(6);
-                (self.gl.attrib_pointer)(6, 4, FLOAT, 0, 136, 88 as *const _);
-                (self.gl.enable_attrib)(7);
-                (self.gl.attrib_pointer)(7, 4, FLOAT, 0, 136, 104 as *const _);
-                (self.gl.enable_attrib)(8);
-                (self.gl.attrib_pointer)(8, 4, FLOAT, 0, 136, 120 as *const _);
-                self.bind_vertex_array(0);
-                (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
-            }
-        }
-        let style = ipp_core::systems::surface::SurfacePrimitiveStyle {
-            identity: ipp_core::systems::surface::SurfacePrimitiveIdentity::Authored(
-                ipp_core::systems::surface::SurfaceItemId(0),
-            ),
-            position: [placement[0], placement[1]],
-            scale: [1.0, 1.0],
-            color: *color,
-            opacity: 1.0,
-            clip: None,
-        };
-        let fill = ipp_core::systems::surface::GuiShapeFill::Solid(*color);
-        let vertices = crate::services::render::gui_batch::generate_box_vertices(
-            &style,
-            &[placement[2], placement[3]],
-            &shape.corner,
-            shape.border,
-            border,
-            &fill,
-            None,
-        );
-        let bytes = std::mem::size_of_val(vertices.as_slice());
-        let clip_location = self.surface_location(program, c"u_clip");
-        let viewport_location = self.surface_location(program, c"u_viewport");
-        // SAFETY: Upload complete vertices to the dedicated box quad VBO and draw.
-        unsafe {
-            (self.gl.bind_buffer)(ARRAY_BUFFER, self.surface_box_quad_vbo);
-            (self.gl.buffer_data)(
-                ARRAY_BUFFER,
-                bytes as isize,
-                vertices.as_ptr().cast(),
-                DYNAMIC_DRAW,
-            );
-            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
-
-            (self.gl.use_program)(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
-            let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
-            (self.gl.uniform_vec4)(viewport_location, 1, viewport.as_ptr());
-            self.bind_vertex_array(self.surface_box_quad_vao);
-            (self.gl.draw_arrays)(TRIANGLES, 0, vertices.len() as i32);
-            self.bind_vertex_array(0);
-        }
-        self.check_draw()
-    }
-
-    #[cfg(feature = "gui")]
     pub(super) fn create_gui_batch(
         &mut self,
         vertices: &[crate::services::render::gui_batch::GuiBoxVertex],
@@ -413,7 +345,9 @@ impl GlesRenderDevice {
         let bytes = std::mem::size_of_val(vertices);
         let mut vao = 0;
         let mut vbo = 0;
-        // SAFETY: GL allocates exclusive handles for the current context.
+        // SAFETY: GL allocates exclusive handles for the current context. BufferData
+        // copies the live `vertices` slice synchronously, and the attribute offsets
+        // index that newly bound buffer rather than client memory.
         unsafe {
             (self.gl.gen_vertex_arrays)(1, &mut vao);
             (self.gl.gen_buffers)(1, &mut vbo);
@@ -436,24 +370,7 @@ impl GlesRenderDevice {
                 vertices.as_ptr().cast(),
                 DYNAMIC_DRAW,
             );
-            (self.gl.enable_attrib)(0);
-            (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 136, ptr::null());
-            (self.gl.enable_attrib)(1);
-            (self.gl.attrib_pointer)(1, 4, FLOAT, 0, 136, 8 as *const _);
-            (self.gl.enable_attrib)(2);
-            (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 136, 24 as *const _);
-            (self.gl.enable_attrib)(3);
-            (self.gl.attrib_pointer)(3, 4, FLOAT, 0, 136, 40 as *const _);
-            (self.gl.enable_attrib)(4);
-            (self.gl.attrib_pointer)(4, 4, FLOAT, 0, 136, 56 as *const _);
-            (self.gl.enable_attrib)(5);
-            (self.gl.attrib_pointer)(5, 4, FLOAT, 0, 136, 72 as *const _);
-            (self.gl.enable_attrib)(6);
-            (self.gl.attrib_pointer)(6, 4, FLOAT, 0, 136, 88 as *const _);
-            (self.gl.enable_attrib)(7);
-            (self.gl.attrib_pointer)(7, 4, FLOAT, 0, 136, 104 as *const _);
-            (self.gl.enable_attrib)(8);
-            (self.gl.attrib_pointer)(8, 4, FLOAT, 0, 136, 120 as *const _);
+            self.point_retained_attributes(&GUI_BOX_VERTEX_LAYOUT);
             self.bind_vertex_array(0);
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
@@ -601,7 +518,9 @@ impl GlesRenderDevice {
         let mut vao = 0;
         let mut vbo = 0;
 
-        // SAFETY: GL allocates exclusive handles for the current context.
+        // SAFETY: GL allocates exclusive handles for the current context. BufferData
+        // copies the live `vertices` slice synchronously, and the attribute offsets
+        // index that newly bound buffer rather than client memory.
         unsafe {
             (self.gl.gen_vertex_arrays)(1, &mut vao);
             (self.gl.gen_buffers)(1, &mut vbo);
@@ -624,12 +543,7 @@ impl GlesRenderDevice {
                 vertices.as_ptr().cast(),
                 DYNAMIC_DRAW,
             );
-            (self.gl.enable_attrib)(0);
-            (self.gl.attrib_pointer)(0, 2, FLOAT, 0, 32, ptr::null());
-            (self.gl.enable_attrib)(1);
-            (self.gl.attrib_pointer)(1, 2, FLOAT, 0, 32, 8 as *const _);
-            (self.gl.enable_attrib)(2);
-            (self.gl.attrib_pointer)(2, 4, FLOAT, 0, 32, 16 as *const _);
+            self.point_retained_attributes(&GLYPH_VERTEX_LAYOUT);
             self.bind_vertex_array(0);
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }

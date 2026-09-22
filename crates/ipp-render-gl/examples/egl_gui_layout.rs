@@ -570,6 +570,150 @@ fn main() -> Result<()> {
     )?;
     std::fs::write(evidence.join("gui-layout-reordered.rgba"), &reordered)?;
 
+    // Perspective retained paint: turning the panel 30 degrees under a 60 degree
+    // perspective camera draws the same retained batches at independently projected
+    // positions. Restoring the view reproduces the front frame exactly.
+    let turn = 30.0_f32.to_radians();
+    let set_view = |host: &mut ipp_core::HostRuntime, perspective: bool| -> Result<()> {
+        use ipp_core::{FieldValue, FieldWrite};
+        use std::mem::offset_of;
+
+        let (half_sin, half_cos) = if perspective {
+            (turn * 0.5).sin_cos()
+        } else {
+            (0.0, 1.0)
+        };
+        let field = |entity, component, offset: usize, value| Command::SetField {
+            entity: EntityRef::Handle(entity),
+            component,
+            field: FieldWrite {
+                offset: offset as u32,
+                value,
+            },
+        };
+        let mut world_context = host.world_mut(world).unwrap();
+        world_context.enqueue(Batch {
+            id: world_context.tick() + 1,
+            operations: vec![
+                field(
+                    camera,
+                    ComponentValue::CAMERA,
+                    offset_of!(Camera, projection),
+                    FieldValue::U32(u32::from(!perspective)),
+                ),
+                field(
+                    camera,
+                    ComponentValue::CAMERA,
+                    offset_of!(Camera, fov_y),
+                    FieldValue::F32(60.0_f32.to_radians()),
+                ),
+                field(
+                    panel,
+                    ComponentValue::TRANSFORM,
+                    offset_of!(Transform, qy),
+                    FieldValue::F32(half_sin),
+                ),
+                field(
+                    panel,
+                    ComponentValue::TRANSFORM,
+                    offset_of!(Transform, qw),
+                    FieldValue::F32(half_cos),
+                ),
+            ],
+        })?;
+        let report = world_context.step(0.0)?;
+        report.outcomes[0]
+            .result
+            .as_ref()
+            .map_err(|error| format!("view change failed: {error:?}"))?;
+        Ok(())
+    };
+
+    // Content (x, y) lies at local (x - 2, 1 - y) on the panel, turned about +Y and
+    // viewed from z = 5 with the default near and far planes.
+    let project = |[x, y]: [f32; 2]| -> [f32; 2] {
+        let (sin, cos) = turn.sin_cos();
+        let local = [x - 2.0, 1.0 - y];
+        let eye = [local[0] * cos, local[1], -local[0] * sin - 5.0];
+        let focal = 1.0 / 30.0_f32.to_radians().tan();
+        let aspect = smoke::world::WIDTH as f32 / smoke::world::HEIGHT as f32;
+        let ndc = [focal / aspect * eye[0] / -eye[2], focal * eye[1] / -eye[2]];
+        [
+            (ndc[0] + 1.0) * 0.5 * smoke::world::WIDTH as f32,
+            (1.0 - ndc[1]) * 0.5 * smoke::world::HEIGHT as f32,
+        ]
+    };
+    let front = |[x, y]: [f32; 2]| [80.0 * x, 40.0 + 80.0 * y];
+
+    // Label pixels inside the projected bounds of the text's content rectangle, and
+    // that rectangle's projected area.
+    let label_box = [[2.8, 1.2], [3.25, 1.2], [3.25, 1.65], [2.8, 1.65]];
+    let label_region = |frame: &[u8], map: &dyn Fn([f32; 2]) -> [f32; 2]| {
+        let corners = label_box.map(map);
+        let (xs, ys) = (corners.map(|[x, _]| x), corners.map(|[_, y]| y));
+        let [left, right] = [
+            xs.iter().copied().fold(f32::MAX, f32::min),
+            xs.iter().copied().fold(f32::MIN, f32::max),
+        ];
+        let [top, bottom] = [
+            ys.iter().copied().fold(f32::MAX, f32::min),
+            ys.iter().copied().fold(f32::MIN, f32::max),
+        ];
+        let pixels = (top as u32..=bottom as u32)
+            .flat_map(|y| (left as u32..=right as u32).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let [red, green, blue, _] = pixel(frame, x, y);
+                red > 200 && green > 150 && blue < 140
+            })
+            .count() as f32;
+        let area = (0..4)
+            .map(|index| {
+                let [a, b] = [corners[index], corners[(index + 1) % 4]];
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum::<f32>()
+            .abs()
+            * 0.5;
+        (pixels, area)
+    };
+    let (front_label, front_area) = label_region(&reordered, &front);
+
+    set_view(&mut host, true)?;
+    let perspective_stats = render(&mut renderer, &mut host, world)?;
+    let perspective = context.capture()?;
+    std::fs::write(evidence.join("gui-layout-perspective.rgba"), &perspective)?;
+    assert_eq!(perspective_stats.gui_batches, reordered_stats.gui_batches);
+    assert!(perspective_stats.glyph_pages > 0);
+    for (point, expected, label) in [
+        ([0.75, 0.75], [255, 0, 0, 255], "perspective red sibling"),
+        (
+            [3.6, 0.25],
+            [255, 0, 255, 255],
+            "perspective scroll content",
+        ),
+        ([1.9, 1.6], BACKGROUND, "perspective transparent stack"),
+    ] {
+        let [x, y] = project(point);
+        check(&perspective, x as u32, y as u32, expected, label)?;
+    }
+
+    // Thin strokes lose some thresholded pixels at the smaller projected size, so
+    // the label keeps at least half of its front pixel density.
+    let (perspective_label, perspective_area) = label_region(&perspective, &project);
+    let minimum_label = 0.5 * front_label * perspective_area / front_area;
+    if front_label < 20.0 || perspective_label < minimum_label {
+        return Err(format!(
+            "perspective label kept {perspective_label} of {front_label} front pixels"
+        )
+        .into());
+    }
+
+    set_view(&mut host, false)?;
+    render(&mut renderer, &mut host, world)?;
+    if context.capture()? != reordered {
+        return Err("restoring the front view changed its completed GUI frame".into());
+    }
+
     let show_rear = |host: &mut ipp_core::HostRuntime| -> Result<()> {
         let mut world_context = host.world_mut(world).unwrap();
         world_context.enqueue(Batch {
@@ -655,11 +799,12 @@ fn main() -> Result<()> {
     std::fs::write(
         evidence.join("gui-layout-production.txt"),
         format!(
-            "empty_draw_calls={}\nclipped_draw_calls={}\nlayered_draw_calls={}\nreordered_draw_calls={}\nrear_draw_calls={}\nrear_mirror_mismatches={}\nrecovered_draw_calls={}\ndrawing_key={}:{}\nfont={}\nbitmap={}\n",
+            "empty_draw_calls={}\nclipped_draw_calls={}\nlayered_draw_calls={}\nreordered_draw_calls={}\nperspective_draw_calls={}\nperspective_label_pixels={perspective_label}/{front_label}\nrear_draw_calls={}\nrear_mirror_mismatches={}\nrecovered_draw_calls={}\ndrawing_key={}:{}\nfont={}\nbitmap={}\n",
             empty_stats.draw_calls,
             clipped_stats.draw_calls,
             layered_stats.draw_calls,
             reordered_stats.draw_calls,
+            perspective_stats.draw_calls,
             rear_stats.draw_calls,
             mirror_mismatches,
             recovered_stats.draw_calls,

@@ -49,6 +49,12 @@ pub struct GuiBoxVertex {
 // GLES attribute strides and the WebGL bridge read exactly this many bytes per vertex.
 const _: () = assert!(std::mem::size_of::<GuiBoxVertex>() == 136);
 
+/// Exterior margin in Surface metres that generated box geometry adds beyond paint.
+///
+/// `surface_box.vert` declares the same value and extends exterior vertices only by
+/// the part of its projected antialias footprint this margin does not already cover.
+pub const GUI_BOX_ANTIALIAS_PAD: f32 = 0.002;
+
 /// Surface participation in one completed frame, deciding which retained work is stale.
 ///
 /// Destroyed Surfaces release everything. A submitted Surface drew every primitive it
@@ -510,11 +516,7 @@ pub fn generate_box_vertices(
 
     let material_params = [fill_type, glow_intensity, glow_radius, glow_falloff];
 
-    let pad = if glow_radius > 0.0 {
-        glow_radius + 0.002
-    } else {
-        0.002
-    };
+    let pad = glow_radius.max(0.0) + GUI_BOX_ANTIALIAS_PAD;
 
     let x0 = pos[0].min(pos[0] + placed_size[0]) - pad;
     let y0 = pos[1].min(pos[1] + placed_size[1]) - pad;

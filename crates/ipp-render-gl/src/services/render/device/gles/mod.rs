@@ -8,8 +8,6 @@ pub use super::GlyphVertex;
 #[cfg(feature = "gui")]
 pub use super::GuiBoxVertex;
 use super::RenderDevice;
-#[cfg(feature = "gui")]
-use super::SurfaceBoxShape;
 #[cfg(feature = "surfaces")]
 use super::{SurfacePathDescriptor, SurfacePathInstance};
 use crate::RenderError;
@@ -63,10 +61,6 @@ pub struct GlesRenderDevice {
     exhaustive_draw_checks: bool,
     #[cfg(feature = "surfaces")]
     surface_quad_vao: u32,
-    #[cfg(feature = "gui")]
-    surface_box_quad_vao: u32,
-    #[cfg(feature = "gui")]
-    surface_box_quad_vbo: u32,
     #[cfg(feature = "surfaces")]
     surface_instance_buffer: u32,
     #[cfg(feature = "surfaces")]

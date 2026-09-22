@@ -44,39 +44,43 @@ float sd_round_box(vec2 offset, vec2 half_size, vec2 radius) {
     return sd_ellipse(corner_point, radius);
 }
 
-void main() {
-    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
-    vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
-    float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
-    if (clip_coverage <= 0.0) discard;
+// Linear-light gradient between straight RGBA stops, interpolated premultiplied so
+// a transparent stop contributes no colour fringe, then returned straight again.
+vec4 gradient_color(float t) {
+    vec4 start = vec4(v_color0.rgb * v_color0.a, v_color0.a);
+    vec4 end = vec4(v_color1.rgb * v_color1.a, v_color1.a);
+    vec4 color = mix(start, end, t);
+    return color.a > 0.0 ? vec4(color.rgb / color.a, color.a) : vec4(0.0);
+}
 
+void main() {
+    // Every screen-space derivative is taken first, in uniform control flow: GLSL ES
+    // 3.00 leaves derivatives undefined once a fragment of the quad has discarded.
+    // A zero border evaluates the inner contour as the outer one.
     vec2 half_size = abs(v_placement.zw) * 0.5;
     vec2 center = v_placement.xy + v_placement.zw * 0.5;
     // Clamp each explicit radius to the corresponding placed half size.
     vec2 corner = min(max(v_shape.xy, vec2(0.0)), half_size);
     vec2 offset = v_surface_position - center;
+    float border_width = max(v_shape.z, 0.0);
     float outer = sd_round_box(offset, half_size, corner);
-    // The distance spans one pixel across this footprint. A two-footprint
+    float inner = sd_round_box(
+        offset,
+        max(half_size - border_width, vec2(0.0)),
+        max(corner - border_width, vec2(0.0))
+    );
+    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
+    // Each distance spans one pixel across its footprint. A two-footprint
     // smoothstep blurs subpixel rails and borders into the surrounding halo.
     float edge = max(length(vec2(dFdx(outer), dFdy(outer))), 1.0 / 65536.0);
+    float inner_edge = max(length(vec2(dFdx(inner), dFdy(inner))), 1.0 / 65536.0);
 
-    // Shape interior coverage [0.0, 1.0]
+    vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
+    float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
+
+    // Shape interior coverage [0.0, 1.0]; the fill ends at the inner border contour.
     float shape_cov = clamp(0.5 - outer / edge, 0.0, 1.0);
-
-    // Outer glow evaluation
-    float glow_alpha = 0.0;
-    vec3 glow_rgb = v_glow_color.rgb;
-    float glow_radius = v_material_params.z;
-    float glow_intensity = v_material_params.y;
-    if (glow_radius > 0.0 && glow_intensity > 0.0) {
-        float dist_outside = max(outer, 0.0);
-        if (dist_outside < glow_radius) {
-            float norm = clamp(1.0 - dist_outside / glow_radius, 0.0, 1.0);
-            float factor = (abs(v_material_params.w - 1.0) < 1e-5) ? norm : pow(norm, v_material_params.w);
-            // An outer halo must not fill a transparent shape or focus ring.
-            glow_alpha = clamp(v_glow_color.a * glow_intensity * factor, 0.0, 1.0) * (1.0 - shape_cov);
-        }
-    }
+    float fill_cov = min(shape_cov, clamp(0.5 - inner / inner_edge, 0.0, 1.0));
 
     // Fill color evaluation (solid, linear gradient, or radial gradient)
     vec4 fill_color = v_color0;
@@ -87,44 +91,45 @@ void main() {
         vec2 dir = p1 - p0;
         float len_sq = dot(dir, dir);
         float t = (len_sq > 1e-12) ? clamp(dot(local_pos - p0, dir) / len_sq, 0.0, 1.0) : 0.0;
-        fill_color = mix(v_color0, v_color1, t);
+        fill_color = gradient_color(t);
     } else if (v_material_params.x >= 1.5) {
         vec2 center_pt = v_gradient_coords.xy;
         float radius = v_gradient_coords.z;
         float dist = length(local_pos - center_pt);
         float t = (radius > 1e-6) ? clamp(dist / radius, 0.0, 1.0) : 0.0;
-        fill_color = mix(v_color0, v_color1, t);
+        fill_color = gradient_color(t);
     }
 
-    // Border evaluation
-    float fill_cov = shape_cov;
-    if (v_shape.z > 0.0) {
-        vec2 inner_half = max(half_size - v_shape.z, vec2(0.0));
-        vec2 inner_corner = max(corner - v_shape.z, vec2(0.0));
-        float inner = sd_round_box(offset, inner_half, inner_corner);
-        float inner_edge = max(length(vec2(dFdx(inner), dFdy(inner))), 1.0 / 65536.0);
-        fill_cov = min(shape_cov, clamp(0.5 - inner / inner_edge, 0.0, 1.0));
-    }
-
-    // Composite straight fill and border colors
     // Coverage of the ring is the difference of its two contours. Multiplying
     // two antialias ramps loses contrast when a border is narrower than a pixel.
     float fill_a = fill_color.a * fill_cov;
     float border_a = v_border_color.a * (shape_cov - fill_cov);
-    float shape_base_alpha = fill_a + border_a;
+    float shape_alpha = fill_a + border_a;
     vec3 shape_rgb = vec3(0.0);
-    if (shape_base_alpha > 1e-5) {
-        shape_rgb = (fill_color.rgb * fill_a + v_border_color.rgb * border_a) / shape_base_alpha;
+    if (shape_alpha > 1e-5) {
+        shape_rgb = (fill_color.rgb * fill_a + v_border_color.rgb * border_a) / shape_alpha;
     }
-    float shape_alpha = shape_base_alpha;
 
-    // Composite shape and outer glow in straight linear RGBA
-    float combined_alpha = shape_alpha + glow_alpha * (1.0 - shape_alpha);
-    if (combined_alpha <= 0.0) discard;
+    // The outer glow occupies only the pixel area outside the shape contour, so its
+    // single attenuation is that uncovered fraction. The halo never fills a
+    // transparent shape or focus ring.
+    float glow_alpha = 0.0;
+    float glow_radius = v_material_params.z;
+    float glow_intensity = v_material_params.y;
+    if (glow_radius > 0.0 && glow_intensity > 0.0) {
+        float dist_outside = max(outer, 0.0);
+        if (dist_outside < glow_radius) {
+            float norm = clamp(1.0 - dist_outside / glow_radius, 0.0, 1.0);
+            float factor = (abs(v_material_params.w - 1.0) < 1e-5) ? norm : pow(norm, v_material_params.w);
+            glow_alpha = clamp(v_glow_color.a * glow_intensity * factor, 0.0, 1.0) * (1.0 - shape_cov);
+        }
+    }
 
-    vec3 out_rgb = (shape_rgb * shape_alpha + glow_rgb * glow_alpha * (1.0 - shape_alpha)) / combined_alpha;
+    // Shape and glow cover disjoint parts of the pixel: composite straight linear RGBA.
+    float combined_alpha = shape_alpha + glow_alpha;
     float out_alpha = combined_alpha * clip_coverage;
     if (out_alpha <= 0.0) discard;
 
+    vec3 out_rgb = (shape_rgb * shape_alpha + v_glow_color.rgb * glow_alpha) / combined_alpha;
     o_color = vec4(out_rgb, out_alpha);
 }

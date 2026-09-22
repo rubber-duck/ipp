@@ -2,14 +2,21 @@
 //!
 //! Device-level counterpart to the raw Surface scenes in `egl_surfaces`: nested
 //! clip intersections, scrolled curves/text-proxies/bitmaps, parameterized
-//! rounded boxes with explicit per-axis corner/border dimensions, empty-clip
-//! suppression, painter-order overlap, a tilted view and device replacement.
-//! All fixtures are synthetic and local; assertions compare completed-frame
-//! pixels against values derived independently from the scene layout below.
+//! rounded boxes drawn as one-box retained batches with explicit per-axis
+//! corner/border dimensions, empty-clip suppression, painter-order overlap, box
+//! coverage ramps at close range and clip edges, premultiplied gradients, glow
+//! falloff, tilted, grazing and perspective views and device replacement. All
+//! fixtures are synthetic and local; assertions compare completed-frame pixels
+//! against values derived independently from the scene layout and projection below.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod smoke;
+
+#[cfg(target_os = "linux")]
+use ipp_core::systems::surface::{
+    GuiShapeFill, GuiShapeGlow, SurfaceItemId, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
+};
 
 /// Surface content space: 4 x 3 metres at 80 pixels per metre on 320 x 240.
 /// Content (x, y) in top-left/Y-down metres lands on pixel (80x, 80y).
@@ -21,74 +28,289 @@ const MVP: [f32; 16] = [
     0.5, 0.0, 0.0, 0.0, 0.0, -0.6666667, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0,
 ];
 
-/// The filled/rounded/bordered reference frame, shared by the initial capture
+/// Close range: content (x, y) lands on pixel (2000x, 2000y), so the projected
+/// antialias footprint is narrower than the generated geometry margin.
+#[cfg(target_os = "linux")]
+const CLOSE_MVP: [f32; 16] = [
+    12.5,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -16.666_666,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    -1.0,
+    1.0,
+    0.0,
+    1.0,
+];
+
+/// Paints every rasterized fragment opaque magenta, exposing the production box
+/// vertex shader's padded geometry independently of coverage.
+#[cfg(target_os = "linux")]
+const FOOTPRINT_FRAGMENT: &str = "#version 300 es
+precision highp float;
+out vec4 o_color;
+void main() {
+    o_color = vec4(1.0, 0.0, 1.0, 1.0);
+}
+";
+
+/// One authored box: placement in Surface metres, straight linear colours and
+/// explicit corner and border dimensions.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct ProbeBox {
+    placement: [f32; 4],
+    fill: [f32; 4],
+    border_color: [f32; 4],
+    corner: [f32; 2],
+    border: f32,
+}
+
+#[cfg(target_os = "linux")]
+impl ProbeBox {
+    /// Production retained-batch vertices for this box with any fill and glow.
+    fn vertices_with(
+        &self,
+        fill: GuiShapeFill,
+        glow: Option<&GuiShapeGlow>,
+    ) -> Vec<ipp_render_gl::GuiBoxVertex> {
+        let style = SurfacePrimitiveStyle {
+            identity: SurfacePrimitiveIdentity::Authored(SurfaceItemId(0)),
+            position: [self.placement[0], self.placement[1]],
+            scale: [1.0, 1.0],
+            color: [1.0; 4],
+            opacity: 1.0,
+            clip: None,
+        };
+        ipp_render_gl::gui_batch::generate_box_vertices(
+            &style,
+            &[self.placement[2], self.placement[3]],
+            &self.corner,
+            self.border,
+            &self.border_color,
+            &fill,
+            glow,
+        )
+    }
+
+    fn vertices(&self) -> Vec<ipp_render_gl::GuiBoxVertex> {
+        self.vertices_with(GuiShapeFill::Solid(self.fill), None)
+    }
+}
+
+/// Draw `vertices` as one retained batch: allocate, draw once and release.
+#[cfg(target_os = "linux")]
+fn draw_batch<D: ipp_render_gl::RenderDevice>(
+    device: &mut D,
+    program: &D::Program,
+    vertices: &[ipp_render_gl::GuiBoxVertex],
+    mvp: &[f32; 16],
+    clip: &[f32; 4],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let batch = device.create_gui_batch(vertices)?;
+    let drawn = device.draw_gui_batch(program, &batch, mvp, clip);
+    device.delete_gui_batch(batch);
+    Ok(drawn?)
+}
+
+/// The filled/rounded/bordered reference boxes, shared by the initial capture
 /// and the device-replacement recovery check.
+#[cfg(target_os = "linux")]
+const REFERENCE_BOXES: [ProbeBox; 4] = [
+    ProbeBox {
+        placement: [0.5, 0.5, 1.0, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    },
+    ProbeBox {
+        placement: [2.0, 0.5, 1.0, 1.0],
+        fill: [0.0, 1.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.35, 0.12],
+        border: 0.0,
+    },
+    ProbeBox {
+        placement: [0.5, 1.75, 1.0, 0.75],
+        fill: [0.0, 0.0, 1.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.1, 0.1],
+        border: 0.05,
+    },
+    ProbeBox {
+        placement: [2.0, 1.75, 1.0, 0.75],
+        fill: [1.0, 1.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.0, 0.2],
+        border: 0.0,
+    },
+];
+
 #[cfg(target_os = "linux")]
 fn draw_boxes<D: ipp_render_gl::RenderDevice>(
     device: &mut D,
     box_program: &D::Program,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use ipp_render_gl::SurfaceBoxShape;
-
     device.begin_frame(
         smoke::world::WIDTH,
         smoke::world::HEIGHT,
         &[0.0, 0.0, 0.0, 1.0],
     )?;
-    device.draw_surface_box(
-        box_program,
-        &MVP,
-        &[0.5, 0.5, 1.0, 1.0],
-        &ROOT,
-        &[1.0, 0.0, 0.0, 1.0],
-        &[1.0, 1.0, 1.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.0, 0.0],
-            border: 0.0,
-        },
-    )?;
-    device.draw_surface_box(
-        box_program,
-        &MVP,
-        &[2.0, 0.5, 1.0, 1.0],
-        &ROOT,
-        &[0.0, 1.0, 0.0, 1.0],
-        &[1.0, 1.0, 1.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.35, 0.12],
-            border: 0.0,
-        },
-    )?;
-    device.draw_surface_box(
-        box_program,
-        &MVP,
-        &[0.5, 1.75, 1.0, 0.75],
-        &ROOT,
-        &[0.0, 0.0, 1.0, 1.0],
-        &[1.0, 1.0, 1.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.1, 0.1],
-            border: 0.05,
-        },
-    )?;
-    device.draw_surface_box(
-        box_program,
-        &MVP,
-        &[2.0, 1.75, 1.0, 0.75],
-        &ROOT,
-        &[1.0, 1.0, 0.0, 1.0],
-        &[1.0, 1.0, 1.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.0, 0.2],
-            border: 0.0,
-        },
-    )?;
+    for probe in REFERENCE_BOXES {
+        draw_batch(device, box_program, &probe.vertices(), &MVP, &ROOT)?;
+    }
     Ok(())
+}
+
+/// Display encoding applied once by the present pass, as 8-bit sRGB.
+#[cfg(target_os = "linux")]
+fn srgb(linear: f32) -> u8 {
+    let linear = linear.clamp(0.0, 1.0);
+    let encoded = if linear <= 0.003_130_8 {
+        12.92 * linear
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round() as u8
+}
+
+/// Coverage of a pixel whose centre lies `distance` pixels outside a straight
+/// contour (negative inside): a one-pixel linear ramp centred on the contour.
+#[cfg(target_os = "linux")]
+fn ramp(distance: f32) -> f32 {
+    (0.5 - distance).clamp(0.0, 1.0)
+}
+
+/// Column-major Surface-to-clip transforms and an independent projection oracle.
+#[cfg(target_os = "linux")]
+mod view {
+    use super::smoke::world::{HEIGHT, WIDTH};
+
+    /// Perspective camera at the origin looking down -Z, 60 degrees vertically.
+    pub fn perspective() -> [f32; 16] {
+        let (near, far) = (0.1_f32, 100.0_f32);
+        let focal = 1.0 / 30.0_f32.to_radians().tan();
+        let aspect = WIDTH as f32 / HEIGHT as f32;
+        [
+            focal / aspect,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            focal,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            (far + near) / (near - far),
+            -1.0,
+            0.0,
+            0.0,
+            2.0 * far * near / (near - far),
+            0.0,
+        ]
+    }
+
+    pub fn multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+        std::array::from_fn(|index| {
+            let (column, row) = (index / 4, index % 4);
+            (0..4).map(|k| a[k * 4 + row] * b[column * 4 + k]).sum()
+        })
+    }
+
+    pub fn rotation_x(angle: f32) -> [f32; 16] {
+        let (sin, cos) = angle.sin_cos();
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0, cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    pub fn rotation_y(angle: f32) -> [f32; 16] {
+        let (sin, cos) = angle.sin_cos();
+        [
+            cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    pub fn translation(x: f32, y: f32, z: f32) -> [f32; 16] {
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, x, y, z, 1.0,
+        ]
+    }
+
+    /// Place 4 x 3 metre Surface content (top-left origin, +Y down) on its centred
+    /// local plane, orient it and view it through the perspective camera.
+    pub fn surface(orientation: &[f32; 16], distance: f32) -> [f32; 16] {
+        let content = [
+            1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -2.0, 1.5, 0.0, 1.0,
+        ];
+        let model = multiply(
+            &translation(0.0, 0.0, -distance),
+            &multiply(orientation, &content),
+        );
+        multiply(&perspective(), &model)
+    }
+
+    /// Top-left pixel position and clip w of Surface content `point`.
+    pub fn project(mvp: &[f32; 16], point: [f32; 2]) -> ([f32; 2], f32) {
+        let clip: [f32; 4] = std::array::from_fn(|row| {
+            mvp[row] * point[0] + mvp[4 + row] * point[1] + mvp[12 + row]
+        });
+        let w = clip[3];
+        (
+            [
+                (clip[0] / w + 1.0) * 0.5 * WIDTH as f32,
+                (1.0 - clip[1] / w) * 0.5 * HEIGHT as f32,
+            ],
+            w,
+        )
+    }
+
+    /// Projected corners of a `[x, y, width, height]` content rectangle, in order.
+    pub fn corners(mvp: &[f32; 16], rectangle: [f32; 4]) -> [[f32; 2]; 4] {
+        let [x, y, width, height] = rectangle;
+        [
+            [x, y],
+            [x + width, y],
+            [x + width, y + height],
+            [x, y + height],
+        ]
+        .map(|point| project(mvp, point).0)
+    }
+
+    /// `[min_x, max_x, min_y, max_y]` of projected points.
+    pub fn bounds(points: &[[f32; 2]]) -> [f32; 4] {
+        points.iter().fold(
+            [f32::MAX, f32::MIN, f32::MAX, f32::MIN],
+            |[min_x, max_x, min_y, max_y], [x, y]| {
+                [min_x.min(*x), max_x.max(*x), min_y.min(*y), max_y.max(*y)]
+            },
+        )
+    }
+
+    /// Shoelace area of a projected polygon in square pixels.
+    pub fn area(points: &[[f32; 2]]) -> f32 {
+        let twice: f32 = (0..points.len())
+            .map(|index| {
+                let [a, b] = [points[index], points[(index + 1) % points.len()]];
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum();
+        twice.abs() * 0.5
+    }
 }
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use ipp_render_gl::{RenderDevice, SurfaceBoxShape, SurfacePathDescriptor};
+    use ipp_render_gl::{RenderDevice, SurfacePathDescriptor};
     use std::path::PathBuf;
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -319,17 +541,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0, 0.0, 0.0, 1.0],
         0,
     )?;
-    device.draw_surface_box(
+    let suppressed_box = ProbeBox {
+        placement: [0.5, 0.5, 1.0, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.1, 0.1],
+        border: 0.02,
+    };
+    draw_batch(
+        &mut device,
         &box_program,
+        &suppressed_box.vertices(),
         &MVP,
-        &[0.5, 0.5, 1.0, 1.0],
         &empty,
-        &[1.0, 0.0, 0.0, 1.0],
-        &[1.0, 1.0, 1.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.1, 0.1],
-            border: 0.02,
-        },
     )?;
     let suppressed = capture(&mut device, "clip-empty")?;
     if suppressed
@@ -394,17 +618,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Resizing keeps explicit corners and borders: corner blocks match exactly.
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     for placement in [[0.25, 0.25, 1.0, 1.0], [2.0, 0.25, 1.5, 2.0]] {
-        device.draw_surface_box(
+        let resized_box = ProbeBox {
+            placement,
+            fill: [1.0, 0.0, 0.0, 1.0],
+            border_color: [1.0; 4],
+            corner: [0.15, 0.15],
+            border: 0.03,
+        };
+        draw_batch(
+            &mut device,
             &box_program,
+            &resized_box.vertices(),
             &MVP,
-            &placement,
             &ROOT,
-            &[1.0, 0.0, 0.0, 1.0],
-            &[1.0, 1.0, 1.0, 1.0],
-            SurfaceBoxShape {
-                corner: [0.15, 0.15],
-                border: 0.03,
-            },
         )?;
     }
     let resized = capture(&mut device, "boxes-resized")?;
@@ -423,41 +649,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Painter order: later boxes win the overlap in draw order. Each box keeps
     // its placement, color and shape; only the draw sequence reverses.
-    let red: ([f32; 4], [f32; 4], SurfaceBoxShape) = (
-        [1.0, 1.0, 1.5, 1.0],
-        [1.0, 0.0, 0.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.0, 0.0],
-            border: 0.0,
-        },
-    );
-    let green: ([f32; 4], [f32; 4], SurfaceBoxShape) = (
-        [1.75, 1.25, 1.5, 1.0],
-        [0.0, 1.0, 0.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.2, 0.2],
-            border: 0.0,
-        },
-    );
-    let paint = |device: &mut ipp_render_gl::GlesRenderDevice,
-                 order: &[&([f32; 4], [f32; 4], SurfaceBoxShape)]| {
+    let red = ProbeBox {
+        placement: [1.0, 1.0, 1.5, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [0.0, 0.0, 0.0, 1.0],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    let green = ProbeBox {
+        placement: [1.75, 1.25, 1.5, 1.0],
+        fill: [0.0, 1.0, 0.0, 1.0],
+        corner: [0.2, 0.2],
+        ..red
+    };
+    let paint = |device: &mut ipp_render_gl::GlesRenderDevice, order: [ProbeBox; 2]| {
         device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
         for entry in order {
-            device.draw_surface_box(
-                &box_program,
-                &MVP,
-                &entry.0,
-                &ROOT,
-                &entry.1,
-                &[0.0, 0.0, 0.0, 1.0],
-                entry.2,
-            )?;
+            draw_batch(device, &box_program, &entry.vertices(), &MVP, &ROOT)?;
         }
         Ok::<_, Box<dyn std::error::Error>>(())
     };
-    paint(&mut device, &[&red, &green])?;
+    paint(&mut device, [red, green])?;
     let green_over = capture(&mut device, "boxes-green-over-red")?;
-    paint(&mut device, &[&green, &red])?;
+    paint(&mut device, [green, red])?;
     let red_over = capture(&mut device, "boxes-red-over-green")?;
     check(
         &green_over,
@@ -497,18 +711,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         MVP[14],
         MVP[15],
     ];
+    let tilted_box = ProbeBox {
+        placement: [1.0, 0.75, 2.0, 1.5],
+        fill: [0.0, 1.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.2, 0.2],
+        border: 0.0,
+    };
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_surface_box(
+    draw_batch(
+        &mut device,
         &box_program,
+        &tilted_box.vertices(),
         &tilted,
-        &[1.0, 0.75, 2.0, 1.5],
         &ROOT,
-        &[0.0, 1.0, 0.0, 1.0],
-        &[1.0, 1.0, 1.0, 1.0],
-        SurfaceBoxShape {
-            corner: [0.2, 0.2],
-            border: 0.0,
-        },
     )?;
     let tilted_frame = capture(&mut device, "boxes-tilted")?;
     let green_count = tilted_frame
@@ -791,7 +1007,294 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     check(&sharp, 80, 27, BLACK, 0, "halo has bounded extent")?;
     device.delete_gui_batch(sharp_batch);
-    device.delete_program(box_program);
+
+    // Close range: the projected footprint (0.75 mm) is narrower than the generated
+    // 2 mm margin. A hollow border drawn as sparse strips still antialiases its inner
+    // contour with the same one-pixel ramp as its outer contour, here at 40.25 and
+    // 48.25 pixels on both axes.
+    let hollow = ProbeBox {
+        placement: [0.020_125, 0.020_125, 0.12, 0.08],
+        fill: [0.0; 4],
+        border_color: [1.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.004,
+    };
+    let hollow_vertices = hollow.vertices();
+    assert_eq!(
+        hollow_vertices.len(),
+        24,
+        "hollow border must use sparse strips"
+    );
+
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &hollow_vertices,
+        &CLOSE_MVP,
+        &ROOT,
+    )?;
+    let close = capture(&mut device, "boxes-close-range-border")?;
+
+    let mut close_profile = Vec::new();
+    for offset in 38..51_u32 {
+        let centre = offset as f32 + 0.5;
+        let shape = ramp(40.25 - centre);
+        let level = srgb(shape - shape.min(ramp(48.25 - centre)));
+        let expected = [level, level, level, 255];
+        check(
+            &close,
+            offset,
+            120,
+            expected,
+            6,
+            "close-range left border ramp",
+        )?;
+        check(
+            &close,
+            160,
+            offset,
+            expected,
+            6,
+            "close-range top border ramp",
+        )?;
+        close_profile.push(pixel(&close, offset, 120)[0]);
+    }
+    check(
+        &close,
+        160,
+        120,
+        BLACK,
+        0,
+        "close-range hollow centre stays clear",
+    )?;
+
+    // Clip edges antialias over one pixel in Surface coordinates: the left clip edge
+    // passes through the centre of column 120 and the right one lies a quarter pixel
+    // beyond the centre of column 199.
+    let clipped_box = ProbeBox {
+        placement: [1.0, 1.0, 2.0, 1.0],
+        fill: [1.0; 4],
+        border_color: [1.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &clipped_box.vertices(),
+        &MVP,
+        &[120.5 / 80.0, 0.0, 200.25 / 80.0, 3.0],
+    )?;
+    let clip_edge = capture(&mut device, "boxes-clip-edge")?;
+
+    for (column, coverage) in [
+        (119, 0.0),
+        (120, 0.5),
+        (121, 1.0),
+        (199, 1.0),
+        (200, 0.25),
+        (201, 0.0),
+    ] {
+        let level = srgb(coverage);
+        check(
+            &clip_edge,
+            column,
+            120,
+            [level, level, level, 255],
+            6,
+            "clip edge ramp",
+        )?;
+    }
+
+    // Gradient stops with different alpha interpolate premultiplied: fading opaque red
+    // into fully transparent blue leaves no blue fringe over the black background.
+    let gradient_box = ProbeBox {
+        placement: [0.5, 0.5, 2.0, 1.0],
+        fill: [0.0; 4],
+        border_color: [0.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    let fading = GuiShapeFill::LinearGradient {
+        start: [0.0, 0.0],
+        end: [2.0, 0.0],
+        start_color: [1.0, 0.0, 0.0, 1.0],
+        end_color: [0.0, 0.0, 1.0, 0.0],
+    };
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &gradient_box.vertices_with(fading, None),
+        &MVP,
+        &ROOT,
+    )?;
+    let gradient = capture(&mut device, "boxes-gradient-alpha")?;
+
+    for column in (44..196).step_by(8) {
+        let t = ((column as f32 + 0.5) / 80.0 - 0.5) / 2.0;
+        check(
+            &gradient,
+            column,
+            80,
+            [srgb(1.0 - t), 0, 0, 255],
+            6,
+            "premultiplied gradient without fringe",
+        )?;
+    }
+
+    // Glow covers only the pixel area outside the shape and is attenuated once. The
+    // opaque red box's right contour passes through the centre of column 160, so that
+    // pixel is half fill and half full-strength glow; beyond it glow alpha follows the
+    // authored quadratic falloff over its 0.25 m (20 pixel) radius.
+    let glowing = ProbeBox {
+        placement: [1.0, 1.0, 160.5 / 80.0 - 1.0, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [0.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    let falloff_glow = GuiShapeGlow {
+        color: [0.0, 1.0, 0.0, 1.0],
+        intensity: 1.0,
+        radius: 0.25,
+        falloff: 2.0,
+    };
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &glowing.vertices_with(GuiShapeFill::Solid(glowing.fill), Some(&falloff_glow)),
+        &MVP,
+        &ROOT,
+    )?;
+    let glow_frame = capture(&mut device, "boxes-glow-falloff")?;
+
+    check(
+        &glow_frame,
+        159,
+        120,
+        [255, 0, 0, 255],
+        6,
+        "glowing fill interior",
+    )?;
+    let half = srgb(0.5);
+    check(
+        &glow_frame,
+        160,
+        120,
+        [half, half, 0, 255],
+        6,
+        "contour pixel splits fill and glow",
+    )?;
+    for distance in 1..=22_u32 {
+        let norm = (1.0 - distance as f32 / 20.0).max(0.0);
+        check(
+            &glow_frame,
+            160 + distance,
+            120,
+            [0, srgb(norm * norm), 0, 255],
+            6,
+            "single-attenuation glow falloff",
+        )?;
+    }
+
+    // Grazing views: nearly edge-on, the padded geometry of filled and sparse boxes
+    // stays within a few pixels of the box silhouette instead of stretching toward
+    // the camera, and the visible sliver keeps continuous coverage.
+    let footprint_program = device.create_program(
+        include_str!("../src/services/render/shaders/surface_box.vert"),
+        FOOTPRINT_FRAGMENT,
+    )?;
+    let grazing_fill = ProbeBox {
+        placement: [0.5, 0.5, 3.0, 2.0],
+        fill: [1.0; 4],
+        border_color: [1.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    let grazing_ring = ProbeBox {
+        fill: [0.0; 4],
+        border: 0.1,
+        ..grazing_fill
+    };
+    assert_eq!(grazing_ring.vertices().len(), 24);
+
+    let mut grazing_report = Vec::new();
+    for degrees in [88.0_f32, 89.5, 89.9] {
+        let mvp = view::surface(&view::rotation_y(degrees.to_radians()), 4.0);
+        let silhouette = view::corners(&mvp, grazing_fill.placement);
+        let [min_x, max_x, min_y, max_y] = view::bounds(&silhouette);
+        for (label, probe) in [("fill", grazing_fill), ("ring", grazing_ring)] {
+            device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+            draw_batch(
+                &mut device,
+                &footprint_program,
+                &probe.vertices(),
+                &mvp,
+                &ROOT,
+            )?;
+            let footprint = capture(&mut device, &format!("boxes-grazing-{label}-{degrees}"))?;
+
+            let mut rasterized = 0;
+            let mut beyond = 0.0_f32;
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    if pixel(&footprint, x, y) == [255, 0, 255, 255] {
+                        let [centre_x, centre_y] = [x as f32 + 0.5, y as f32 + 0.5];
+                        rasterized += 1;
+                        beyond = beyond
+                            .max(min_x - centre_x)
+                            .max(centre_x - max_x)
+                            .max(min_y - centre_y)
+                            .max(centre_y - max_y);
+                    }
+                }
+            }
+            if beyond > 12.0 {
+                return Err(format!(
+                    "grazing {label} geometry at {degrees} degrees reaches {beyond:.1} px beyond its silhouette"
+                )
+                .into());
+            }
+            grazing_report.push(format!(
+                "{label}@{degrees}: rasterized={rasterized} beyond={beyond:.1} silhouette_area={:.1}",
+                view::area(&silhouette)
+            ));
+        }
+    }
+    device.delete_program(footprint_program);
+
+    let sliver_mvp = view::surface(&view::rotation_y(89.5_f32.to_radians()), 4.0);
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    draw_batch(
+        &mut device,
+        &box_program,
+        &grazing_fill.vertices(),
+        &sliver_mvp,
+        &ROOT,
+    )?;
+    let sliver = capture(&mut device, "boxes-grazing-sliver")?;
+
+    let silhouette = view::corners(&sliver_mvp, grazing_fill.placement);
+    let [min_x, max_x, _, _] = view::bounds(&silhouette);
+
+    // Corners run near-top, far-top, far-bottom, near-bottom: rows between the far
+    // edge's ends cross both projected edges of the nearly edge-on box.
+    let rows = silhouette[1][1].ceil() as u32 + 2..silhouette[2][1].floor() as u32 - 2;
+    let columns = min_x.floor() as u32 - 2..=max_x.ceil() as u32 + 2;
+    for row in rows {
+        let brightest = columns
+            .clone()
+            .map(|column| pixel(&sliver, column, row)[0])
+            .max()
+            .unwrap_or(0);
+        if brightest < 128 {
+            return Err(format!("grazing sliver has a coverage gap in row {row}").into());
+        }
+    }
 
     let path_program = device.create_program(
         include_str!("../src/services/render/shaders/surface.vert"),
@@ -932,16 +1435,158 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "retained glyph batch updated yellow tint",
     )?;
 
+    // Perspective retained batches: an oblique Surface whose clip w varies across it
+    // draws a filled rounded box, a sparse hollow border and an atlas glyph quad.
+    let oblique = view::surface(
+        &view::multiply(&view::rotation_y(0.6), &view::rotation_x(-0.35)),
+        4.5,
+    );
+    let depths = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]].map(|corner| {
+        let (_, w) = view::project(&oblique, corner);
+        w
+    });
+    let [nearest, farthest] = depths.iter().fold([f32::MAX, f32::MIN], |[low, high], w| {
+        [low.min(*w), high.max(*w)]
+    });
+    if farthest - nearest < 1.0 {
+        return Err(format!("perspective Surface must vary clip w: {depths:?}").into());
+    }
+
+    let filled = ProbeBox {
+        placement: [0.4, 0.4, 1.4, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.15, 0.15],
+        border: 0.0,
+    };
+    let outline = ProbeBox {
+        placement: [2.2, 0.4, 1.4, 1.0],
+        fill: [0.0; 4],
+        border_color: [0.0, 1.0, 0.0, 1.0],
+        corner: [0.0, 0.0],
+        border: 0.12,
+    };
+    let outline_vertices = outline.vertices();
+    assert_eq!(outline_vertices.len(), 24);
+    let perspective_boxes =
+        device.create_gui_batch(&[filled.vertices(), outline_vertices].concat())?;
+
+    let glyph_rectangle = [0.6, 1.8, 1.0, 0.8];
+    let [left, top, right, bottom] = [
+        glyph_rectangle[0],
+        glyph_rectangle[1],
+        glyph_rectangle[0] + glyph_rectangle[2],
+        glyph_rectangle[1] + glyph_rectangle[3],
+    ];
+    let glyph_corner = |position: [f32; 2], uv: [f32; 2]| ipp_render_gl::GlyphVertex {
+        position,
+        uv,
+        color: cyan,
+    };
+    let [glyph_tl, glyph_bl, glyph_br, glyph_tr] = [
+        glyph_corner([left, top], [u0, v0]),
+        glyph_corner([left, bottom], [u0, v1]),
+        glyph_corner([right, bottom], [u1, v1]),
+        glyph_corner([right, top], [u1, v0]),
+    ];
+    let perspective_glyphs =
+        device.create_glyph_batch(&[glyph_tl, glyph_bl, glyph_br, glyph_tl, glyph_br, glyph_tr])?;
+
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    device.draw_gui_batch(&box_program, &perspective_boxes, &oblique, &ROOT)?;
+    device.draw_glyph_batch(
+        &text_program,
+        &perspective_glyphs,
+        &atlas_tex,
+        &oblique,
+        &ROOT,
+    )?;
+    let perspective = capture(&mut device, "retained-perspective")?;
+
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    for (point, expected, label) in [
+        ([1.1, 0.9], red, "perspective filled box centre"),
+        (
+            [0.6, 0.6],
+            red,
+            "perspective filled box near its rounded corner",
+        ),
+        (
+            [2.9, 0.9],
+            BLACK,
+            "perspective hollow border centre stays clear",
+        ),
+        ([2.9, 0.46], green, "perspective top border band"),
+        ([2.26, 0.9], green, "perspective left border band"),
+        ([3.54, 0.9], green, "perspective right border band"),
+        (
+            [1.1, 2.2],
+            [0, 255, 255, 255],
+            "perspective glyph quad centre",
+        ),
+        ([2.0, 2.2], BLACK, "perspective gap between primitives"),
+    ] {
+        let ([x, y], _) = view::project(&oblique, point);
+        check(&perspective, x as u32, y as u32, expected, 12, label)?;
+    }
+
+    // Region areas follow the independently projected shapes: the rounded corners
+    // remove (4 - pi) r^2 of the filled box, and the ring is the difference of its
+    // outer and inner rectangles.
+    let count = |matches: fn([u8; 4]) -> bool| {
+        (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+            .filter(|&(x, y)| matches(pixel(&perspective, x, y)))
+            .count() as f32
+    };
+    let filled_area = view::area(&view::corners(&oblique, filled.placement))
+        * (1.0 - (4.0 - std::f32::consts::PI) * 0.15 * 0.15 / (1.4 * 1.0));
+    let ring_area = view::area(&view::corners(&oblique, outline.placement))
+        - view::area(&view::corners(&oblique, [2.32, 0.52, 1.16, 0.76]));
+    let glyph_area = view::area(&view::corners(&oblique, glyph_rectangle));
+    let perspective_regions = [
+        (
+            "filled",
+            count(|pixel| pixel[0] > 128 && pixel[1] < 64 && pixel[2] < 64),
+            filled_area,
+            0.1,
+        ),
+        (
+            "ring",
+            count(|pixel| pixel[1] > 128 && pixel[0] < 64 && pixel[2] < 64),
+            ring_area,
+            0.2,
+        ),
+        (
+            "glyph",
+            count(|pixel| pixel[1] > 128 && pixel[2] > 128 && pixel[0] < 64),
+            glyph_area,
+            0.1,
+        ),
+    ];
+    for (label, counted, expected, tolerance) in perspective_regions {
+        if (counted - expected).abs() > tolerance * expected {
+            return Err(format!(
+                "perspective {label} region covers {counted} px, expected {expected:.0}"
+            )
+            .into());
+        }
+    }
+    device.delete_gui_batch(perspective_boxes);
+    device.delete_glyph_batch(perspective_glyphs);
+
     device.delete_glyph_batch(glyph_batch);
     device.delete_glyph_atlas_page(page);
     device.delete_program(text_program);
     device.delete_surface_path(square);
     device.delete_program(path_program);
+    device.delete_program(box_program);
 
     std::fs::write(
         evidence.join("gui-clips.txt"),
         format!(
-            "nested=[{:?} {:?} {:?}]\ntext=[{:?} {:?}]\nbitmap=[{:?} {:?}]\ntilted_green={green_count}\n{}\n",
+            "nested=[{:?} {:?} {:?}]\ntext=[{:?} {:?}]\nbitmap=[{:?} {:?}]\ntilted_green={green_count}\nclose_border_profile={close_profile:?}\ngrazing=[{}]\nperspective_w=[{nearest:.3} {farthest:.3}]\nperspective_regions=[{}]\n{}\n",
             pixel(&nested, 120, 120),
             pixel(&nested, 60, 60),
             pixel(&nested, 240, 40),
@@ -949,10 +1594,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             pixel(&text_after, 80, 92),
             pixel(&bitmap_before, 120, 120),
             pixel(&bitmap_after, 120, 120),
+            grazing_report.join("; "),
+            perspective_regions
+                .map(|(label, counted, expected, _)| format!("{label}={counted}/{expected:.0}"))
+                .join(" "),
             context.info().unwrap_or_else(|_| "no device info".into()),
         ),
     )?;
-    println!("PASS: nested clips, scrolled primitives, boxes, order, tilt and recovery");
+    println!(
+        "PASS: nested clips, scrolled primitives, boxes, order, coverage ramps, glow, grazing and perspective views, and recovery"
+    );
     Ok(())
 }
 

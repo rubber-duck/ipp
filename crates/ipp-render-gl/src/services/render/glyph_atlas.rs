@@ -12,6 +12,10 @@
 //! page remains. Retained batches check the pages they sample, so retiring one page
 //! rebuilds only the runs that reference it. A glyph whose population fails backs off
 //! before retrying; its text keeps the analytic path meanwhile.
+//!
+//! Context loss releases page textures and retained batches but keeps the atlas layout,
+//! demand and run bands. Recovery repopulates demanded entries into their original
+//! slots, so recovered text samples the same coverage as before the loss.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -213,9 +217,11 @@ pub struct GlyphAtlasEntry {
     pub font_bounds: [f32; 4],
 }
 
-/// One allocated atlas page texture, its shelf-packing state and demand accounting.
+/// One atlas page: its texture, shelf-packing state and demand accounting.
 struct AtlasPage<D: RenderDevice> {
-    handle: D::GlyphAtlasPage,
+    /// Context-owned texture and framebuffer; `None` after context loss until an
+    /// entry on the page is repopulated.
+    handle: Option<D::GlyphAtlasPage>,
     current_x: u32,
     current_y: u32,
     row_height: u32,
@@ -230,7 +236,7 @@ struct AtlasPage<D: RenderDevice> {
 impl<D: RenderDevice> AtlasPage<D> {
     fn new(handle: D::GlyphAtlasPage, tick: u64) -> Self {
         Self {
-            handle,
+            handle: Some(handle),
             current_x: 0,
             current_y: 0,
             row_height: 0,
@@ -268,13 +274,21 @@ impl<D: RenderDevice> AtlasPage<D> {
     }
 }
 
+/// One allocated atlas slot.
+struct AtlasSlot {
+    entry: GlyphAtlasEntry,
+    /// Whether the page texture holds this entry's coverage. Context loss keeps the
+    /// slot and clears this until recovery repopulates it.
+    populated: bool,
+}
+
 /// Renderer-owned shared glyph coverage atlas.
 pub struct GlyphAtlas<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     limits: GlyphAtlasLimits,
     pages: BTreeMap<usize, AtlasPage<D>>,
     next_page: usize,
-    entries: BTreeMap<GlyphKey, GlyphAtlasEntry>,
+    entries: BTreeMap<GlyphKey, AtlasSlot>,
     /// Text runs demanding each entry, across every World.
     demand: BTreeMap<GlyphKey, u32>,
     demand_tick: u64,
@@ -311,16 +325,35 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         };
     }
 
-    /// Release all atlas pages, entries and demand, as after context loss.
+    /// Release all atlas pages, entries and demand.
     pub fn clear(&mut self) {
         let mut device = self.device.borrow_mut();
         for (_, page) in std::mem::take(&mut self.pages) {
-            device.delete_glyph_atlas_page(page.handle);
+            if let Some(handle) = page.handle {
+                device.delete_glyph_atlas_page(handle);
+            }
         }
         self.entries.clear();
         self.demand.clear();
         self.population_backoff.clear();
         self.needs_reclaim = false;
+        self.residency_generation = self.residency_generation.wrapping_add(1);
+    }
+
+    /// Release page textures before the graphics context goes away.
+    ///
+    /// Slots, demand and back-off survive, so recovery repopulates each demanded entry
+    /// into its original slot. Until then no entry is resident.
+    pub fn release_context(&mut self) {
+        let mut device = self.device.borrow_mut();
+        for page in self.pages.values_mut() {
+            if let Some(handle) = page.handle.take() {
+                device.delete_glyph_atlas_page(handle);
+            }
+        }
+        for slot in self.entries.values_mut() {
+            slot.populated = false;
+        }
         self.residency_generation = self.residency_generation.wrapping_add(1);
     }
 
@@ -333,8 +366,8 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                 continue;
             }
 
-            if let Some(entry) = self.entries.get(key)
-                && let Some(page) = self.pages.get_mut(&entry.page_index)
+            if let Some(slot) = self.entries.get(key)
+                && let Some(page) = self.pages.get_mut(&slot.entry.page_index)
             {
                 page.demanded += 1;
             }
@@ -354,8 +387,8 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
             self.demand.remove(key);
             self.population_backoff.remove(key);
-            if let Some(entry) = self.entries.get(key)
-                && let Some(page) = self.pages.get_mut(&entry.page_index)
+            if let Some(slot) = self.entries.get(key)
+                && let Some(page) = self.pages.get_mut(&slot.entry.page_index)
             {
                 page.demanded -= 1;
                 if page.demanded == 0 {
@@ -404,8 +437,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         }
 
         // Back-off matters only while a glyph stays demanded and unpopulated.
-        self.population_backoff
-            .retain(|key, _| self.demand.contains_key(key) && !self.entries.contains_key(key));
+        self.population_backoff.retain(|key, _| {
+            self.demand.contains_key(key)
+                && !self.entries.get(key).is_some_and(|slot| slot.populated)
+        });
     }
 
     /// Release every page once no World demands any glyph.
@@ -443,22 +478,25 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             return;
         };
 
-        self.entries.retain(|_, entry| entry.page_index != id);
+        self.entries.retain(|_, slot| slot.entry.page_index != id);
         self.residency_generation = self.residency_generation.wrapping_add(1);
         self.retired_pages += 1;
-        self.device
-            .borrow_mut()
-            .delete_glyph_atlas_page(page.handle);
+        if let Some(handle) = page.handle {
+            self.device.borrow_mut().delete_glyph_atlas_page(handle);
+        }
     }
 
-    /// Number of resident atlas pages.
+    /// Number of atlas pages holding a resident texture.
     pub fn page_count(&self) -> u32 {
-        self.pages.len() as u32
+        self.pages
+            .values()
+            .filter(|page| page.handle.is_some())
+            .count() as u32
     }
 
     /// Total resident bytes occupied by atlas page textures (RGBA8).
     pub fn resident_bytes(&self) -> usize {
-        self.pages.len() * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * 4)
+        self.page_count() as usize * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * 4)
     }
 
     /// Pages retired since the last call, by idle expiry, pressure or lost demand.
@@ -472,14 +510,19 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         self.residency_generation
     }
 
-    /// Look up a cached glyph entry.
+    /// Look up a resident glyph entry.
     pub fn get(&self, key: &GlyphKey) -> Option<&GlyphAtlasEntry> {
-        self.entries.get(key)
+        self.entries
+            .get(key)
+            .filter(|slot| slot.populated)
+            .map(|slot| &slot.entry)
     }
 
-    /// Whether a page is still resident.
+    /// Whether a page still holds its texture.
     pub fn has_page(&self, page_index: usize) -> bool {
-        self.pages.contains_key(&page_index)
+        self.pages
+            .get(&page_index)
+            .is_some_and(|page| page.handle.is_some())
     }
 
     /// Discard an entry whose coverage was never written and delay its next population.
@@ -497,11 +540,11 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
     /// Discard an entry whose coverage was never written, without delaying a retry.
     pub fn discard_population(&mut self, key: GlyphKey) {
-        let Some(entry) = self.entries.remove(&key) else {
+        let Some(slot) = self.entries.remove(&key) else {
             return;
         };
 
-        if let Some(page) = self.pages.get_mut(&entry.page_index) {
+        if let Some(page) = self.pages.get_mut(&slot.entry.page_index) {
             page.entries -= 1;
             if self.demand.contains_key(&key) {
                 page.demanded -= 1;
@@ -521,8 +564,8 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
     /// Borrow the underlying color texture of an atlas page for sampling.
     pub fn page_texture(&self, page_index: usize) -> Option<&D::Texture> {
-        let page = self.pages.get(&page_index)?;
-        Some(D::glyph_atlas_texture(&page.handle))
+        let handle = self.pages.get(&page_index)?.handle.as_ref()?;
+        Some(D::glyph_atlas_texture(handle))
     }
 
     /// Allocate slot coordinates and UV mapping for a new glyph entry.
@@ -530,7 +573,8 @@ impl<D: RenderDevice> GlyphAtlas<D> {
     /// The slot is allocated with a 1-pixel border on each side to prevent bilinear
     /// sampling bleed. When no page has room and the page budget is exhausted, the
     /// longest idle page retires; with no idle page the allocation fails and the next
-    /// publication reclaims the most stale page.
+    /// publication reclaims the most stale page. An entry kept through context loss
+    /// returns its original slot, recreating its page texture when needed.
     pub fn allocate_slot(
         &mut self,
         key: GlyphKey,
@@ -543,10 +587,18 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                 "glyph exceeds atlas page size".into(),
             ));
         }
-        if let Some(entry) = self.entries.get(&key) {
+        if let Some(slot) = self.entries.get(&key) {
+            let entry = slot.entry;
+            if !slot.populated {
+                self.restore_page_texture(entry.page_index)?;
+            }
+            if let Some(slot) = self.entries.get_mut(&key) {
+                slot.populated = true;
+            }
+
             let x = (entry.uv[0] * ATLAS_PAGE_SIZE as f32).round() as u32;
             let y = ((1.0 - entry.uv[1]) * ATLAS_PAGE_SIZE as f32).round() as u32;
-            return Ok(([x, y], entry.page_index, *entry));
+            return Ok(([x, y], entry.page_index, entry));
         }
         let slot_w = px_width + 2;
         let slot_h = px_height + 2;
@@ -556,7 +608,11 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             .iter_mut()
             .find_map(|(&index, page)| Some((index, page.allocate(slot_w, slot_h)?)));
         let (page_index, [slot_x, slot_y]) = match existing {
-            Some(slot) => slot,
+            Some((index, slot)) => {
+                // A page kept through context loss regains its texture on first use.
+                self.restore_page_texture(index)?;
+                (index, slot)
+            }
             None => {
                 if self.pages.len() >= self.limits.max_pages {
                     let Some(idle) = self.idle_page() else {
@@ -609,13 +665,34 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                 page.demanded += 1;
             }
         }
-        self.entries.insert(key, entry);
+        self.entries.insert(
+            key,
+            AtlasSlot {
+                entry,
+                populated: true,
+            },
+        );
         Ok(([content_x, content_y], page_index, entry))
+    }
+
+    /// Recreate a page texture released by context loss.
+    fn restore_page_texture(&mut self, page_index: usize) -> Result<(), RenderError> {
+        let Some(page) = self.pages.get_mut(&page_index) else {
+            return Err(RenderError::RenderDevice("glyph atlas page missing".into()));
+        };
+        if page.handle.is_none() {
+            page.handle = Some(
+                self.device
+                    .borrow_mut()
+                    .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?,
+            );
+        }
+        Ok(())
     }
 
     /// Access the raw page handle for drawing.
     pub fn page_handle(&self, page_index: usize) -> Option<&D::GlyphAtlasPage> {
-        self.pages.get(&page_index).map(|p| &p.handle)
+        self.pages.get(&page_index)?.handle.as_ref()
     }
 }
 
@@ -797,6 +874,25 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                     device.delete_glyph_batch(batch.gpu);
                 }
             }
+        }
+    }
+
+    /// Release retained batches before the graphics context goes away.
+    ///
+    /// Bands and published demand survive, so recovered runs keep their presentation
+    /// quality and rebuild from entries repopulated into their original slots.
+    pub fn release_context(&mut self) {
+        let mut device = self.device.borrow_mut();
+        for run in self
+            .surfaces
+            .values_mut()
+            .flat_map(|surface| surface.runs.values_mut())
+        {
+            for batch in run.batches.drain(..) {
+                device.delete_glyph_batch(batch.gpu);
+            }
+            run.built_hash = None;
+            run.resident = None;
         }
     }
 

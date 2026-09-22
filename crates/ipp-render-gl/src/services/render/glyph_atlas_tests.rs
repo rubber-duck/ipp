@@ -1120,6 +1120,47 @@ fn failed_population_backs_off_without_invalidating_retained_runs() {
 }
 
 #[test]
+fn context_loss_keeps_slots_and_bands_for_identical_recovered_coverage() {
+    let (device, mut atlas, mut world) = setup();
+    let [earlier, text] = [style(1), style(2)];
+    let [glyphs_earlier, glyphs_text] = [glyphs(&[9]), glyphs(&[1])];
+    let earlier_run = text_run(1, &earlier, &glyphs_earlier);
+    let run = text_run(1, &text, &glyphs_text);
+
+    // History: an entry that later loses demand occupies the first slot, and camera
+    // motion keeps band 24 through hysteresis where a fresh run would select band 32.
+    world.publish(&mut atlas, &[(earlier_run, 26.0)], &[]);
+    world.populate(&mut atlas, 20);
+    world.publish(&mut atlas, &[(run, 26.0)], &[]);
+    world.populate(&mut atlas, 20);
+    world.publish(&mut atlas, &[(run, 28.5)], &[]);
+    assert!(world.draw(&atlas, &run).0);
+    let before = *atlas.get(&key(1, 24)).unwrap();
+    let deleted_batches = device.borrow().deleted_batches.len();
+
+    world.cache.release_context();
+    atlas.release_context();
+    assert_eq!(atlas.page_count(), 0);
+    assert!(atlas.get(&key(1, 24)).is_none());
+    assert_eq!(device.borrow().deleted_pages.len(), 1);
+    assert_eq!(device.borrow().deleted_batches.len(), deleted_batches + 1);
+
+    // Recovery repopulates the demanded entry into its original slot at the same band.
+    world.publish(&mut atlas, &[(run, 28.5)], &[]);
+    assert_eq!(world.work.misses, 1);
+    assert_eq!(world.populate(&mut atlas, 20), 1);
+    assert_eq!(*atlas.get(&key(1, 24)).unwrap(), before);
+    assert!(
+        atlas.get(&key(9, 24)).is_none(),
+        "entries without demand stay empty"
+    );
+    assert_eq!(device.borrow().created_pages.len(), 2);
+    let (drawn, recovered) = world.draw(&atlas, &run);
+    assert!(drawn);
+    assert_eq!(recovered.gui_rebuilds, 1);
+}
+
+#[test]
 fn projected_glyph_quality_accounts_for_perspective_and_rotation() {
     use super::projected_glyph_height;
     let mut m = [0.0; 16];

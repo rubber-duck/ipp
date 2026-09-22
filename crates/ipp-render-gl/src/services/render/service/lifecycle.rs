@@ -189,10 +189,15 @@ impl<D: RenderDevice> RenderService<D> {
         if let Some(program) = self.surface_text_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
+        // Glyph atlas layout, demand and run bands survive, so recovered text
+        // repopulates its original slots.
         #[cfg(feature = "gui")]
-        self.glyph_atlas.clear();
-        #[cfg(feature = "gui")]
-        self.glyph_batch_cache.clear();
+        {
+            for cache in self.glyph_batch_cache.values_mut() {
+                cache.release_context();
+            }
+            self.glyph_atlas.release_context();
+        }
         #[cfg(feature = "particles")]
         {
             self.particle_quad = None;

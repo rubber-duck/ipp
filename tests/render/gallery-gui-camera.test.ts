@@ -327,7 +327,8 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           uploaded: Number(frame.backend.totalUploadedBytes),
         };
       };
-      // The idle demo still uploads its animated waveform every frame.
+      // Retained analytic text leaves the idle demo only small per-frame
+      // uploads from its other animated content; measure them as the baseline.
       const idleStart = await renderTotals("sustained-slider-idle-start");
       let idleEnd = idleStart;
       while (idleEnd.tick - idleStart.tick < 20)
@@ -386,7 +387,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       // animated values before admitting it. Neither may repaint or
       // re-upload panels the drag did not touch: per frame, rebuilds stay
       // within the slider's own background, fill and focus-ring boxes, and
-      // uploads beyond the idle waveform come only from rebuilt boxes.
+      // uploads beyond the idle baseline come only from rebuilt boxes.
       // Measured on SwiftShader (ipp-9nx.61.20): 1.6-1.8 rebuilds per drag
       // frame at about 800 bytes each, unchanged by the ingress restore.
       const sliderBoxes = 3;

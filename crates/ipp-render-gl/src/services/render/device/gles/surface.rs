@@ -731,9 +731,12 @@ impl GlesRenderDevice {
         let mut texture = 0;
         let mut framebuffer = 0;
 
+        let previous = self.current_target();
+
         // SAFETY: Context owns new texture and framebuffer handles. Texture is initialized
         // to single-channel R8 coverage with linear filtering and edge clamping, and
-        // cleared to zero coverage.
+        // cleared to zero coverage. The previous draw/read framebuffers and viewport are
+        // tracked state, rebound unchanged before returning.
         let complete = unsafe {
             (self.gl.gen_textures)(1, &mut texture);
             (self.gl.gen_framebuffers)(1, &mut framebuffer);
@@ -753,23 +756,22 @@ impl GlesRenderDevice {
                 0x1401, // UNSIGNED_BYTE
                 ptr::null(),
             );
-            let mut draw = 0;
-            let mut read = 0;
-            let mut vp = [0i32; 4];
-            (self.gl.get_integer)(0x8CA6, &mut draw);
-            (self.gl.get_integer)(0x8CAA, &mut read);
-            (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
-            (self.gl.bind_framebuffer)(0x8D40, framebuffer);
-            (self.gl.framebuffer_texture)(0x8D40, 0x8CE0, 0x0DE1, texture, 0);
-            let complete = (self.gl.check_framebuffer)(0x8D40) == 0x8CD5;
-            (self.gl.viewport)(0, 0, width as i32, height as i32);
-            (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
-            (self.gl.clear)(0x00004000); // COLOR_BUFFER_BIT
-            (self.gl.bind_framebuffer)(0x8CA9, draw as u32);
-            (self.gl.bind_framebuffer)(0x8CA8, read as u32);
-            (self.gl.viewport)(vp[0], vp[1], vp[2], vp[3]);
             (self.gl.bind_texture)(0x0DE1, 0);
-            complete && texture != 0 && framebuffer != 0
+
+            // A failed allocation must not bind and clear the borrowed host target.
+            let complete = texture != 0 && framebuffer != 0 && {
+                self.bind_framebuffers(framebuffer, framebuffer);
+                (self.gl.framebuffer_texture)(0x8D40, 0x8CE0, 0x0DE1, texture, 0);
+                (self.gl.check_framebuffer)(0x8D40) == 0x8CD5
+            };
+            if complete {
+                self.set_viewport([0, 0, width as i32, height as i32]);
+                (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
+                (self.gl.clear)(0x00004000); // COLOR_BUFFER_BIT
+            }
+            self.bind_framebuffers(previous.draw, previous.read);
+            self.set_viewport(previous.viewport);
+            complete
         };
 
         let checked = self.check();

@@ -2236,14 +2236,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 gl.TEXTURE_WRAP_T,
                 gl.CLAMP_TO_EDGE,
               );
-              const prevDraw = gl.getParameter(
-                gl.DRAW_FRAMEBUFFER_BINDING,
-              ) as WebGLFramebuffer | null;
-              const prevRead = gl.getParameter(
-                gl.READ_FRAMEBUFFER_BINDING,
-              ) as WebGLFramebuffer | null;
-              const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
-              gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+              const previous = currentTarget();
+              bindFramebuffers(framebuffer, framebuffer);
               gl.framebufferTexture2D(
                 gl.FRAMEBUFFER,
                 gl.COLOR_ATTACHMENT0,
@@ -2254,17 +2248,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               const complete =
                 gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
                 gl.FRAMEBUFFER_COMPLETE;
-              gl.viewport(0, 0, width, height);
+              setViewport([0, 0, width, height]);
               gl.clearColor(0, 0, 0, 0);
               gl.clear(gl.COLOR_BUFFER_BIT);
-              gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevDraw);
-              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevRead);
-              gl.viewport(
-                prevViewport[0]!,
-                prevViewport[1]!,
-                prevViewport[2]!,
-                prevViewport[3]!,
-              );
+              bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+              setViewport(previous.viewport);
               try {
                 if (!complete)
                   throw new Error("Glyph atlas framebuffer incomplete");

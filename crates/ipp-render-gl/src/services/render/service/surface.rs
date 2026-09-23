@@ -4,45 +4,56 @@ use super::super::assets::GlTextureData;
 use super::{RenderError, RenderService, RenderStats};
 use crate::RenderDevice;
 use ipp_core::WorldContext;
-use ipp_core::systems::camera;
 
 impl<D: RenderDevice> RenderService<D> {
+    /// Draw a Surface's primitives with `mvp`: the scene projection times the
+    /// Surface model in the main pass, or a content-space projection into its
+    /// cache image during a repaint.
     pub(super) fn draw_surface(
         &mut self,
         world: &WorldContext<'_>,
         item: &ipp_core::SurfaceRenderItem,
-        view_projection: [f32; 16],
+        mvp: [f32; 16],
         stats: &mut RenderStats,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
-        if self.surface_program.is_none() {
-            self.surface_program = Some(self.device.borrow_mut().create_program(
-                include_str!("../shaders/surface.vert"),
-                include_str!("../shaders/surface.frag"),
-            )?);
-        }
+        self.prepare_surface_program()?;
         let started = { self.device.borrow_mut().set_surface_double_sided(true) };
         if let Err(error) = started {
             let _ = self.device.borrow_mut().set_surface_double_sided(false);
             return Err(error);
         }
-        let result = self.draw_surface_primitives(world, item, view_projection, stats, instances);
+        let result = self.draw_surface_primitives(world, item, &mvp, stats, instances);
         // Surface draw errors must not leak double-sided state into later mesh
         // submissions. Preserve the draw error when restoring state also fails.
         let restored = self.device.borrow_mut().set_surface_double_sided(false);
         result.and(restored)
     }
 
-    fn draw_surface_primitives(
+    /// Create the shared Surface path program on first use.
+    pub(super) fn prepare_surface_program(&mut self) -> Result<(), RenderError> {
+        if self.surface_program.is_none() {
+            self.surface_program = Some(self.device.borrow_mut().create_program(
+                include_str!("../shaders/surface.vert"),
+                include_str!("../shaders/surface.frag"),
+            )?);
+        }
+
+        Ok(())
+    }
+
+    /// Submit a Surface's primitives in painter order with a caller-selected
+    /// projection. Antialiasing and glyph coverage size from the device's
+    /// current Surface viewport: the host target in the main pass, the image
+    /// during a cache repaint.
+    pub(super) fn draw_surface_primitives(
         &mut self,
         world: &WorldContext<'_>,
         item: &ipp_core::SurfaceRenderItem,
-        view_projection: [f32; 16],
+        mvp: &[f32; 16],
         stats: &mut RenderStats,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
-        let mvp = camera::multiply(view_projection, item.model);
-
         #[cfg(feature = "gui")]
         let mut current_box_batch: Option<(
             ipp_core::systems::surface::SurfaceClipRect,
@@ -90,7 +101,7 @@ impl<D: RenderDevice> RenderService<D> {
                             batch_clip,
                             batch_class,
                             &mut pending_boxes,
-                            &mvp,
+                            mvp,
                             stats,
                         )?;
                         current_box_batch = Some((clip, part_class));
@@ -113,7 +124,7 @@ impl<D: RenderDevice> RenderService<D> {
                     batch_clip,
                     batch_class,
                     &mut pending_boxes,
-                    &mvp,
+                    mvp,
                     stats,
                 )?;
             }
@@ -150,7 +161,7 @@ impl<D: RenderDevice> RenderService<D> {
                             units_per_em: data.font.units_per_em(),
                             glyphs,
                         };
-                        if self.draw_glyphs_via_atlas(world.id(), &run, &mvp, stats)? {
+                        if self.draw_glyphs_via_atlas(world.id(), &run, mvp, stats)? {
                             continue;
                         }
                     }
@@ -204,7 +215,7 @@ impl<D: RenderDevice> RenderService<D> {
                             self.surface_instance_program.as_ref().unwrap(),
                             path,
                             instances,
-                            &mvp,
+                            mvp,
                             &clip,
                             0,
                         )?;
@@ -272,7 +283,7 @@ impl<D: RenderDevice> RenderService<D> {
                             .unwrap_or_else(|| data.drawing.bounds());
                         let program = self.surface_program.as_ref().unwrap();
                         self.device.borrow_mut().draw_surface_path(
-                            program, path, &bounds, range, &mvp, &placement, &clip, &color,
+                            program, path, &bounds, range, mvp, &placement, &clip, &color,
                             fill_rule,
                         )?;
                         stats.draw_calls += 1;
@@ -316,7 +327,7 @@ impl<D: RenderDevice> RenderService<D> {
                     ];
                     self.device
                         .borrow_mut()
-                        .draw_surface_bitmap(program, texture, &mvp, &placement, &clip, &color)?;
+                        .draw_surface_bitmap(program, texture, mvp, &placement, &clip, &color)?;
                     stats.draw_calls += 1;
                     stats.triangles += 2;
                 }
@@ -344,7 +355,7 @@ impl<D: RenderDevice> RenderService<D> {
                 batch_clip,
                 batch_class,
                 &mut pending_boxes,
-                &mvp,
+                mvp,
                 stats,
             )?;
         }
@@ -352,10 +363,14 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(())
     }
 
-    /// Publish this World's glyph demand before drawing, using the frame's culling decisions.
+    /// Publish this World's glyph demand before drawing, using the frame's culling
+    /// and Surface cache decisions.
     ///
-    /// Visible runs update their bands and demand and queue missing entries; culled
-    /// Surfaces keep theirs. Unchanged runs only hash their inputs.
+    /// Runs drawn this frame update their bands and demand and queue missing entries;
+    /// a repainted cache image selects bands from its own projection and size, so
+    /// camera movement within one cache resolution never changes glyph quality.
+    /// Culled Surfaces and reused images keep theirs. Unchanged runs only hash their
+    /// inputs.
     #[cfg(feature = "gui")]
     pub(super) fn prepare_glyph_demand(
         &mut self,
@@ -378,13 +393,23 @@ impl<D: RenderDevice> RenderService<D> {
         cache.begin_publication();
 
         for item in items {
-            // Culled Surfaces keep their retained runs, so they keep their entries too.
-            if !world.geometry_visible(item.entity, &frustum) {
-                cache.keep_surface(item.entity);
-                continue;
-            }
+            // Culled Surfaces and reused images keep their retained runs, so they
+            // keep their entries too.
+            let (mvp, viewport) = match super::surface_cache::surface_raster(
+                &self.surface_cache,
+                world,
+                item,
+                view_projection,
+                viewport,
+                &frustum,
+            ) {
+                super::surface_cache::SurfaceRaster::Skip => {
+                    cache.keep_surface(item.entity);
+                    continue;
+                }
+                super::surface_cache::SurfaceRaster::Draw(mvp, viewport) => (mvp, viewport),
+            };
 
-            let mvp = camera::multiply(view_projection, item.model);
             for primitive in &item.primitives {
                 let ipp_core::SurfaceRenderPrimitive::Glyphs {
                     style,

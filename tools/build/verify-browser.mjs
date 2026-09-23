@@ -17,7 +17,7 @@ const root = resolve(import.meta.dirname, "../..");
  * final runtime imports the cache bridge and embeds surface_cache.frag. Set
  * when the ipp-s1ge.2.3 service cache is integrated.
  */
-const SURFACE_CACHE_LINKED = false;
+const SURFACE_CACHE_LINKED = true;
 /** WebGL bridge imports of whole-Surface cache targets. */
 const SURFACE_CACHE_BRIDGE_IMPORTS = [
   "surface_cache_limit",

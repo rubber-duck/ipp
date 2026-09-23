@@ -14,10 +14,11 @@ test("opted-in Surfaces reuse bounded cache images and fall back to current dire
       if (!report.bridge) throw new Error("The bridge probe did not report");
     });
     await context.test(`${build}: cached presentation lifecycle`, (subtest) => {
-      // Visible, never passing: RenderService has not cached any Surface yet.
+      // Visible, never passing: no opted-in Surface reported a cache record,
+      // because core does not yet prepare the SurfaceCache policy (ipp-s1ge.1).
       if (report.status === "inactive")
         subtest.skip(
-          "RenderService presents opted-in Surfaces directly (ipp-s1ge.2.3 not integrated)",
+          "PENDING ipp-s1ge.1: opted-in Surfaces report no cache records until core prepares the SurfaceCache policy",
         );
     });
   }

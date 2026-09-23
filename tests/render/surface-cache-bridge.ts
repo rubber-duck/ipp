@@ -256,16 +256,21 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
     const lost = ok("create_surface_cache_target", 32, 16);
     ok("begin_surface_cache_target", lost);
     device.loseContext();
-    for (let attempt = 0; attempt < 120 && live() !== 0; attempt++)
+    for (let attempt = 0; attempt < 120 && !device.isContextLost(); attempt++)
       await frames(1);
-    if (!device.isContextLost() || live() !== 0)
-      throw new Error(`Context loss left ${live()} cache targets`);
+    if (!device.isContextLost()) throw new Error("Context was not lost");
+    // Restoration is valid only after the loss event has been dispatched.
+    await frames(2);
+    // info() requires a live context; the lost bridge refuses cache work.
     report.whileLost = {
       limit: call("surface_cache_limit"),
       create: call("create_surface_cache_target", 16, 16),
     };
-    if (call("surface_cache_limit") !== 0)
-      throw new Error("A lost context reported cache support");
+    if (
+      call("surface_cache_limit") !== 0 ||
+      call("create_surface_cache_target", 16, 16) !== 0
+    )
+      throw new Error("A lost context accepted cache work");
     device.restoreContext();
     for (let attempt = 0; attempt < 120 && device.isContextLost(); attempt++)
       await frames(1);

@@ -116,12 +116,21 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     assert.ok(Array.isArray(frame.backend.surfaceCaches), label);
     return frame;
   };
+  /**
+   * Capture until two consecutive completed frames are identical. Direct raw
+   * Surfaces upload path instances every frame, so uploads cannot mark this.
+   */
   const settle = async (label: string) => {
+    let previous = await capture(`${label}-0`);
     for (let attempt = 1; attempt <= 120; attempt++) {
-      const frame = await capture(label, attempt > 1);
-      if (frame.backend.uploadedBytes === 0) return frame;
+      const frame = await capture(`${label}-${attempt % 2}`, true);
+      if (await call<boolean>("equal", [`${label}-0`, `${label}-1`]))
+        return frame;
+      previous = frame;
     }
-    throw new Error(`${label}: presentation did not settle`);
+    throw new Error(
+      `${label}: presentation did not settle: ${JSON.stringify(previous.backend.uploadedBytes)}`,
+    );
   };
   const compare = (expected: string, actual: string): FrameDifference =>
     compareFrames(
@@ -172,8 +181,9 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     if (label !== "near") identical("direct-near", `direct-${label}`);
   }
 
-  // Opt in while near. Until RenderService caches (ipp-s1ge.2.3) opted-in
-  // Surfaces report no records; the caller reports that as a visible skip.
+  // Opt in while near. Until core prepares the SurfaceCache policy
+  // (ipp-s1ge.1) opted-in Surfaces report no records; the caller reports that
+  // as a visible pending skip.
   await call("cameraDistance", [DISTANCE.near]);
   const terminal = await call<string>("setSurfaceCache", [
     "surface-terminal",

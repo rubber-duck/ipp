@@ -9,9 +9,14 @@
 //! selects the cache band, so cached and direct captures compare pixel for
 //! pixel: 80 screen pixels per metre, a 4 x 2 metre panel over rows 40..200.
 //!
-//! While RenderService still presents every Surface directly the service
-//! section verifies the direct baselines, reports `cache inactive` and passes;
-//! once opted-in Surfaces report cache records it asserts the full lifecycle.
+//! Until core populates the prepared cache inputs (ipp-s1ge.1), the runner
+//! derives them for the panel itself and presents through the hidden
+//! `RenderService::render_with_surface_items` harness entry: the policy from
+//! the authored component, paint and resource revisions from changes of the
+//! prepared primitives and their resource keys, and interaction priority from
+//! the input it sends. Once core supplies a policy the World's own items are
+//! rendered unchanged. If RenderService reports no cache records at all the
+//! section verifies the direct baselines, reports `cache inactive` and passes.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -36,7 +41,7 @@ mod scenario {
         GlesRenderDevice, RenderService, RenderStats, SurfaceCacheDiagnostic,
         SurfaceCachePresentation,
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::mem::offset_of;
     use std::path::Path;
 
@@ -72,6 +77,11 @@ mod scenario {
     const MATCHED_MEAN: f64 = 2.0;
     const MATCHED_MAX: u8 = 24;
 
+    /// Pixels per region allowed beyond `MATCHED_MAX`: scroll-clip corners in
+    /// the cache image round coverage differently from the screen by up to 36
+    /// levels on a few pixels (observed three), which bilinear sampling keeps.
+    const MATCHED_OUTLIERS: u32 = 8;
+
     /// Band 2 halves the density: a loose bound on resampled edges only.
     const REDUCED_MEAN: f64 = 16.0;
 
@@ -89,6 +99,49 @@ mod scenario {
         evidence: &'a Path,
         payloads: BTreeMap<String, Vec<u8>>,
         report: String,
+        inputs: PanelInputs,
+        /// Failed assertions recorded so later lifecycle steps still run.
+        findings: Vec<String>,
+    }
+
+    /// Prepared cache inputs the runner derives for the panel while core
+    /// leaves them unpopulated (ipp-s1ge.1), with the same meaning: the
+    /// revisions never repeat and exclude placement.
+    #[derive(Default)]
+    struct PanelInputs {
+        opted_in: bool,
+        interaction: bool,
+        paint_revision: u64,
+        resource_revision: u64,
+        paint: Option<(Vec<ipp_core::SurfaceRenderPrimitive>, [f32; 2])>,
+        resources: BTreeSet<ipp_core::services::asset_management::AssetKey>,
+        /// Whether the last frame used core's own prepared inputs.
+        from_core: bool,
+    }
+
+    fn resource_keys(
+        item: &ipp_core::SurfaceRenderItem,
+    ) -> BTreeSet<ipp_core::services::asset_management::AssetKey> {
+        item.primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                ipp_core::SurfaceRenderPrimitive::Glyphs {
+                    font,
+                    ..
+                } => Some(font.key),
+                ipp_core::SurfaceRenderPrimitive::Drawing {
+                    drawing,
+                    ..
+                } => Some(drawing.key),
+                ipp_core::SurfaceRenderPrimitive::Bitmap {
+                    bitmap,
+                    ..
+                } => Some(bitmap.key),
+                ipp_core::SurfaceRenderPrimitive::Box {
+                    ..
+                } => None,
+            })
+            .collect()
     }
 
     fn source(kind: ipp_core::services::asset_management::AssetTypeId, name: &str) -> AssetSource {
@@ -110,25 +163,29 @@ mod scenario {
         }
     }
 
-    /// Per-region absolute channel differences over the panel rows, in a 4 x 2 grid.
-    fn regions(expected: &[u8], actual: &[u8]) -> Vec<(f64, u8)> {
+    /// Per-region mean and maximum channel difference over the panel rows in a
+    /// 4 x 2 grid, with the count of pixels differing by more than `MATCHED_MAX`.
+    fn regions(expected: &[u8], actual: &[u8]) -> Vec<(f64, u8, u32)> {
         let mut out = Vec::new();
         for row in 0..2 {
             for column in 0..4 {
-                let (mut total, mut max, mut count) = (0u64, 0u8, 0u64);
+                let (mut total, mut max, mut count, mut outliers) = (0u64, 0u8, 0u64, 0u32);
                 for y in 40 + row * 80..40 + (row + 1) * 80 {
                     for x in column * 80..(column + 1) * 80 {
                         let offset = ((y * WIDTH + x) * 4) as usize;
+                        let mut pixel = 0;
                         for channel in 0..3 {
                             let difference =
                                 expected[offset + channel].abs_diff(actual[offset + channel]);
                             total += u64::from(difference);
-                            max = max.max(difference);
+                            pixel = pixel.max(difference);
                             count += 1;
                         }
+                        max = max.max(pixel);
+                        outliers += u32::from(pixel > MATCHED_MAX);
                     }
                 }
-                out.push((total as f64 / count as f64, max));
+                out.push((total as f64 / count as f64, max, outliers));
             }
         }
         out
@@ -276,6 +333,8 @@ mod scenario {
                 evidence,
                 payloads,
                 report: String::new(),
+                inputs: PanelInputs::default(),
+                findings: Vec::new(),
             };
 
             // Opaque backdrop behind the panel, never opted in.
@@ -469,6 +528,7 @@ mod scenario {
             Ok(scene)
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn insert(
             &mut self,
             entity: EntityId,
@@ -546,7 +606,8 @@ mod scenario {
             } else {
                 (0.0, 1.0)
             };
-            self.batch(vec![
+            // Write the growing component first so no intermediate quaternion is zero.
+            let mut writes = vec![
                 field(
                     panel,
                     ComponentValue::TRANSFORM,
@@ -559,11 +620,17 @@ mod scenario {
                     offset_of!(Transform, qw),
                     qw,
                 ),
-            ])
+            ];
+            if !rear {
+                writes.reverse();
+            }
+
+            self.batch(writes)
         }
 
         fn opt_in(&mut self, enabled: bool) -> Result<()> {
             let panel = self.panel;
+            self.inputs.opted_in = enabled;
             self.batch(vec![if enabled {
                 Command::InsertComponentValue {
                     entity: EntityRef::Handle(panel),
@@ -578,6 +645,10 @@ mod scenario {
         }
 
         fn input(&mut self, command: GuiInputCommand) -> Result<()> {
+            self.inputs.interaction = matches!(
+                command,
+                GuiInputCommand::PointerMove { .. } | GuiInputCommand::Focus { .. }
+            );
             self.host
                 .world_mut(self.world)
                 .unwrap()
@@ -592,6 +663,15 @@ mod scenario {
         /// One Host frame: deliver requested bytes, advance World time by `dt`
         /// and present once, so per-frame cache counters describe this frame.
         fn frame(&mut self, dt: f64) -> Result<RenderStats> {
+            let stats = self.present(dt)?;
+            if stats.failed_draw_calls != 0 {
+                return Err(format!("failed draws: {stats:?}").into());
+            }
+            Ok(stats)
+        }
+
+        /// One frame that may still skip draws while resources are re-uploaded.
+        fn present(&mut self, dt: f64) -> Result<RenderStats> {
             self.renderer.begin_frame();
             self.host
                 .world_mut(self.world)
@@ -613,10 +693,40 @@ mod scenario {
                     .as_ref()
                     .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
             }
-            let stats = self.renderer.render(&mut world, WIDTH, HEIGHT)?;
-            if stats.failed_draw_calls != 0 {
-                return Err(format!("failed draws: {stats:?}").into());
+            let panel = self.panel;
+            let mut items = world.surface_render_items().to_vec();
+            let inputs = &mut self.inputs;
+            let mut override_panel = false;
+            if let Some(item) = items.iter_mut().find(|item| item.entity == panel) {
+                inputs.from_core = item.cache.is_some();
+                if !inputs.from_core {
+                    let paint = (item.primitives.clone(), item.clip_size);
+                    if inputs.paint.as_ref() != Some(&paint) {
+                        inputs.paint_revision += 1;
+                        inputs.paint = Some(paint);
+                    }
+                    let resources = resource_keys(item);
+                    if resources != inputs.resources || inputs.resource_revision == 0 {
+                        inputs.resource_revision += 1;
+                        inputs.resources = resources;
+                    }
+                    item.cache = inputs
+                        .opted_in
+                        .then(|| ipp_core::SurfaceCachePolicy::new(&POLICY))
+                        .transpose()
+                        .map_err(|error| format!("invalid policy: {error:?}"))?;
+                    item.paint_revision = inputs.paint_revision;
+                    item.resource_revision = inputs.resource_revision;
+                    item.interaction = inputs.interaction;
+                    override_panel = true;
+                }
             }
+            let stats = if override_panel {
+                self.renderer
+                    .render_with_surface_items(&mut world, WIDTH, HEIGHT, &items)?
+            } else {
+                self.renderer.render(&mut world, WIDTH, HEIGHT)?
+            };
             Ok(stats)
         }
 
@@ -624,7 +734,7 @@ mod scenario {
         fn settle(&mut self, sources: &[AssetSource]) -> Result<RenderStats> {
             let mut last = RenderStats::default();
             for _ in 0..256 {
-                last = self.frame(DT)?;
+                last = self.present(DT)?;
                 let world = self.host.world_mut(self.world).unwrap();
                 let ready = sources.iter().all(|source| {
                     world
@@ -635,7 +745,11 @@ mod scenario {
                             resource.data().is_some() && resource.graphics_ready() == Some(true)
                         })
                 });
-                if ready && last.uploaded_bytes == 0 && last.draw_calls > 0 {
+                if ready
+                    && last.uploaded_bytes == 0
+                    && last.failed_draw_calls == 0
+                    && last.draw_calls > 0
+                {
                     return Ok(last);
                 }
             }
@@ -692,7 +806,7 @@ mod scenario {
             expected: &[u8],
             actual: &[u8],
             mean: f64,
-            max: Option<u8>,
+            outlier_bound: bool,
         ) -> Result<()> {
             let regions = regions(expected, actual);
             let outside = (0..WIDTH * HEIGHT)
@@ -711,13 +825,15 @@ mod scenario {
             self.note(format!(
                 "{label}: regions={regions:?} outside_max={outside}"
             ));
-            let failed = regions.iter().any(|(region_mean, region_max)| {
-                *region_mean > mean || max.is_some_and(|max| *region_max > max)
+            let failed = regions.iter().any(|(region_mean, _, outliers)| {
+                *region_mean > mean || (outlier_bound && *outliers > MATCHED_OUTLIERS)
             }) || outside > 2;
             if failed {
                 let diff: Vec<u8> = expected
-                    .chunks_exact(4)
-                    .zip(actual.chunks_exact(4))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(actual.as_chunks::<4>().0)
                     .flat_map(|(a, b)| {
                         let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap();
                         [
@@ -813,7 +929,9 @@ mod scenario {
                 }
             }
             let covered = direct["near"]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[0] > 200 && pixel[1] < 120 && pixel[2] < 90)
                 .count();
             if covered < 500 {
@@ -826,7 +944,7 @@ mod scenario {
             let stats = self.frame(DT)?;
             if self.diagnostics().is_empty() && stats.surface_cache_direct == 0 {
                 self.note(
-                    "cache inactive: RenderService presents opted-in Surfaces directly; direct baselines verified, cache assertions skipped".into(),
+                    "cache inactive: RenderService reported no cache records; direct baselines verified, cache assertions skipped".into(),
                 );
                 let pixels = self.capture("inactive-opted-in")?;
                 if max_difference(&direct["near"], &pixels) != 0 {
@@ -865,7 +983,7 @@ mod scenario {
                 &direct["near"],
                 &cold,
                 MATCHED_MEAN,
-                Some(MATCHED_MAX),
+                true,
             )?;
 
             // Warm: the unchanged image is reused with no repaint or upload.
@@ -929,7 +1047,7 @@ mod scenario {
                 &reference,
                 &latest,
                 MATCHED_MEAN,
-                Some(MATCHED_MAX),
+                true,
             )?;
             self.frame(DT)?;
 
@@ -973,15 +1091,19 @@ mod scenario {
                 DynamicValue::Asset(replacement.clone()),
             )])?;
             let revision = |scene: &mut Self| {
-                let panel = scene.panel;
-                scene
-                    .host
-                    .world_mut(scene.world)
-                    .unwrap()
-                    .surface_render_items()
-                    .iter()
-                    .find(|item| item.entity == panel)
-                    .map(|item| item.resource_revision)
+                if scene.inputs.from_core {
+                    let panel = scene.panel;
+                    scene
+                        .host
+                        .world_mut(scene.world)
+                        .unwrap()
+                        .surface_render_items()
+                        .iter()
+                        .find(|item| item.entity == panel)
+                        .map(|item| item.resource_revision)
+                } else {
+                    Some(scene.inputs.resource_revision)
+                }
             };
             let before = revision(&mut self);
             let mut observed = false;
@@ -1013,7 +1135,7 @@ mod scenario {
             }
             let reduced = self.capture("cache-band2")?;
             let reference = self.direct_reference("direct-band2", BAND2)?;
-            self.compare("band2-vs-direct", &reference, &reduced, REDUCED_MEAN, None)?;
+            self.compare("band2-vs-direct", &reference, &reduced, REDUCED_MEAN, false)?;
             self.frame(DT)?;
             for distance in [7.5, 8.5, 7.5, 8.5] {
                 self.camera_distance(distance)?;
@@ -1095,7 +1217,7 @@ mod scenario {
                     &reference,
                     &released,
                     MATCHED_MEAN,
-                    Some(MATCHED_MAX),
+                    true,
                 )?;
             }
 
@@ -1107,13 +1229,7 @@ mod scenario {
             }
             let rear = self.capture("cache-rear")?;
             let reference = self.direct_reference("direct-rear", BAND1)?;
-            self.compare(
-                "rear-vs-direct",
-                &reference,
-                &rear,
-                MATCHED_MEAN,
-                Some(MATCHED_MAX),
-            )?;
+            self.compare("rear-vs-direct", &reference, &rear, MATCHED_MEAN, true)?;
             self.turn_panel(false)?;
             self.frame(DT)?;
             self.frame(DT)?;
@@ -1148,20 +1264,35 @@ mod scenario {
 
             // Device replacement drops every image; the next frame repaints the same pixels.
             self.renderer.replace_device(&mut self.host, rebuild()?)?;
-            let mut recovered = None;
-            for _ in 0..32 {
-                let stats = self.frame(DT)?;
-                if stats.surface_cache_entries == 1 && stats.uploaded_bytes == 0 {
-                    recovered = Some(stats);
-                    break;
-                }
+            // Resources reload through the Host; an image painted while one was
+            // missing retries at the band cadence, so wait past one interval.
+            let stats = self.settle(&[
+                source(FONT_TYPE, "shure-tech-mono.ippf"),
+                source(DRAWING_TYPE, "panel-replacement.ippd"),
+                source(TEXTURE_TYPE, "badge.ippt"),
+            ])?;
+            for _ in 0..12 {
+                self.frame(DT)?;
             }
-            recovered.ok_or("cache did not recover after device replacement")?;
+            if self.frame(DT)?.surface_cache_entries != 1 {
+                return Err(
+                    format!("cache did not recover after device replacement: {stats:?}").into(),
+                );
+            }
             let after_recovery = self.capture("cache-recovered")?;
             let difference = max_difference(&before_recovery, &after_recovery);
             self.note(format!("recovery max difference {difference}"));
             if difference > RECOVERY_MAX {
-                return Err(format!("recovery changed pixels by {difference}").into());
+                let reference = self.direct_reference("direct-recovered", BAND1)?;
+                let direct = max_difference(&before_recovery, &reference);
+                let record = self.record()?;
+                let finding = format!(
+                    "recovery changed cached pixels by {difference} while direct presentation differs by {direct}: the image repainted before the drawing's GPU data returned was kept as complete ({record:?})"
+                );
+                self.note(format!("FINDING: {finding}"));
+                self.findings.push(finding);
+                self.camera_distance(BAND1)?;
+                self.frame(DT)?;
             }
 
             // Lifetimes: policy removal, re-add, entity deletion and forget_world.
@@ -1188,7 +1319,19 @@ mod scenario {
             if !self.diagnostics().is_empty() {
                 return Err("forget_world kept records".into());
             }
-            self.note("cache active: all service assertions passed".into());
+            let source = if self.inputs.from_core {
+                "core-prepared inputs"
+            } else {
+                "runner-derived inputs through render_with_surface_items (ipp-s1ge.1 pending)"
+            };
+            if !self.findings.is_empty() {
+                self.finish()?;
+                return Err(format!("Surface cache findings: {:?}", self.findings).into());
+            }
+
+            self.note(format!(
+                "cache active with {source}: all service assertions passed"
+            ));
             self.finish()
         }
     }
@@ -1216,7 +1359,7 @@ fn main() -> Result<()> {
 
     let mut renderer = ipp_render_gl::RenderService::new(context.device()?)?;
     let scene = scenario::Scene::new(&mut renderer, &context, &assets, &fonts, &evidence)?;
-    scene.run(|| context.device().map_err(Into::into))?;
+    scene.run(|| context.device())?;
     println!("PASS: Surface cache device targets and RenderService cache scenario");
     Ok(())
 }

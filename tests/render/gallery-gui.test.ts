@@ -496,8 +496,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
           `outside rounded panel corners must reveal the unchanged scene: ${JSON.stringify({ painted, backdrop })}`,
         );
       };
-      // Region evidence stays in its own file: capture metadata can exhaust
-      // the bounded event log before these later observations.
+      // Region measurements and their expected values collect in one review
+      // file beside waveform-evidence.json.
       const regionEvidence: Record<string, unknown> = {};
       const recordRegions = async (name: string, value: unknown) => {
         regionEvidence[name] = value;

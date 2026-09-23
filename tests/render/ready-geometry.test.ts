@@ -49,10 +49,12 @@ for (const mode of ["development", "production"] as const) {
           scenario.execute(label, {}, () => pending);
         const sample = async (label: string) => {
           const frame = await call<ReplacementSample>("sample");
-          await scenario.evidence.record(label, frame);
+          // The PNG is an artifact; the bounded event log keeps the rest.
+          const { dataUrl, ...observation } = frame;
+          await scenario.evidence.record(label, observation);
           await writeDataUrl(
             join(scenario.evidence.directory, `${label}.png`),
-            frame.dataUrl,
+            dataUrl,
           );
           assert.equal(
             frame.frame.drawCalls,

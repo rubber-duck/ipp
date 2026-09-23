@@ -35,6 +35,9 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
       const module = `${env.urls.origin}/dist/tests/render/custom-materials-fixture.js`;
       const call = <T>(name: string, args: readonly unknown[] = []) =>
         env.execute(name, args, () => invoke<T>(env.page, module, name, args));
+      // PNG data URLs are artifacts; recording them would exhaust events.jsonl.
+      const artifact = <T>(name: string, args: readonly unknown[]) =>
+        invoke<T>(env.page, module, name, args);
       const captured = new Set<string>();
       const capture = async (name: string, draws = 2) => {
         const value = await call<Awaited<ReturnType<typeof Fixture.capture>>>(
@@ -53,10 +56,9 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
       };
       let sampleIndex = 0;
       const rgb = async (actual: number[], expected: number[]) => {
-        const evidence = await call<ReturnType<typeof Fixture.sampleEvidence>>(
-          "sampleEvidence",
-          [actual, expected],
-        );
+        const evidence = await artifact<
+          ReturnType<typeof Fixture.sampleEvidence>
+        >("sampleEvidence", [actual, expected]);
         for (const [kind, url] of Object.entries(evidence))
           await writeDataUrl(
             resolve(
@@ -74,11 +76,11 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
       const sameFrame = async (actual: string, expected: string) => {
         await writeDataUrl(
           resolve(env.evidence.directory, `${actual}-expected.png`),
-          await call<string>("captureDataUrl", [expected]),
+          await artifact<string>("captureDataUrl", [expected]),
         );
         await writeDataUrl(
           resolve(env.evidence.directory, `${actual}-difference.png`),
-          await call<string>("differenceDataUrl", [actual, expected]),
+          await artifact<string>("differenceDataUrl", [actual, expected]),
         );
         assert.equal(
           (

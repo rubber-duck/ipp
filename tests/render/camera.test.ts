@@ -152,7 +152,13 @@ export function createWebGlDevice(canvas) {
         const compare = async (first: string, second: string) => {
           await writeDataUrl(
             join(environment.evidence.directory, `${first}-${second}-diff.png`),
-            await call<string>("differenceDataUrl", [first, second]),
+            // Artifact data stays out of the recorded operation log.
+            await invoke<string>(
+              environment.page,
+              module,
+              "differenceDataUrl",
+              [first, second],
+            ),
           );
           return call<ImageDifference>("difference", [first, second]);
         };

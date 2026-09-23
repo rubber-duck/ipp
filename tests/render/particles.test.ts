@@ -33,6 +33,9 @@ test("particles batch thousands of sprites, preserve state through recovery and 
       const module = `${env.urls.origin}/dist/tests/render/particles-fixture.js`;
       const call = <T>(name: string, args: readonly unknown[] = []) =>
         env.execute(name, args, () => invoke<T>(env.page, module, name, args));
+      // PNG data URLs are artifacts; recording them would exhaust events.jsonl.
+      const dataUrl = (label: string) =>
+        invoke<string>(env.page, module, "captureDataUrl", [label]);
       const capture = async (name: string) => {
         const result = await call<{
           green: number;
@@ -42,7 +45,7 @@ test("particles batch thousands of sprites, preserve state through recovery and 
         }>("capture", [name]);
         await writeDataUrl(
           resolve(env.evidence.directory, `${name}.png`),
-          await call<string>("captureDataUrl", [name]),
+          await dataUrl(name),
         );
         return result;
       };
@@ -92,7 +95,7 @@ test("particles batch thousands of sprites, preserve state through recovery and 
         const alpha = await call<{ center: number[] }>("transparency");
         await writeDataUrl(
           resolve(env.evidence.directory, "alpha-order.png"),
-          await call<string>("captureDataUrl", ["alpha-order"]),
+          await dataUrl("alpha-order"),
         );
         assert.ok(
           [188, 4, 137].every((v, i) => Math.abs(v - alpha.center[i]!) <= 3),

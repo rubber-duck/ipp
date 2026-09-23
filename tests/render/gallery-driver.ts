@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Inspection, EntitySnapshot } from "@ipp/client";
 import type { BrowserEnvironmentContext } from "../browser/environment.js";
-import { invoke, writeDataUrl } from "./evidence.js";
+import { bigintJson, invoke, writeDataUrl } from "./evidence.js";
 import {
   startGalleryServer,
   type GalleryServerOptions,
@@ -178,12 +179,21 @@ export async function openGallery(
       label,
       waitForResources,
     );
-    const { dataUrl, ...metadata } = frame;
-    await writeDataUrl(
-      join(scenario.evidence.directory, `${label}.png`),
-      dataUrl,
-    );
-    await scenario.evidence.record(label, metadata);
+    // Pixels and the complete World inspection are artifacts; the bounded
+    // event log keeps only the frame and image summary so later records fit.
+    const { dataUrl, inspection: _inspection, ...observation } = frame;
+    const { dataUrl: _dataUrl, ...metadata } = frame;
+    await Promise.all([
+      writeDataUrl(join(scenario.evidence.directory, `${label}.png`), dataUrl),
+      writeFile(
+        join(scenario.evidence.directory, `${label}.json`),
+        `${JSON.stringify(metadata, bigintJson, 2)}\n`,
+      ),
+    ]);
+    await scenario.evidence.record(label, {
+      ...observation,
+      artifacts: [`${label}.png`, `${label}.json`],
+    });
     assert.deepEqual(errors, []);
     return frame;
   };

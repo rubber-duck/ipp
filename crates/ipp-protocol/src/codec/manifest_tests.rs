@@ -1192,7 +1192,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
 
     #[cfg(feature = "gui")]
     {
-        let mut edit = vec![3];
+        let mut edit = vec![4];
         edit.extend(1u32.to_le_bytes());
         edit.push(4);
         edit.extend(7u64.to_le_bytes());

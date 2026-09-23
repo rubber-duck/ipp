@@ -34,7 +34,7 @@ type Color = readonly [number, number, number, number];
  * inside the track at either end. Alignment slides it between the end
  * cells, and each palette's skin motion clip samples both ends at `time` so
  * the knob glides through the skin transition. The times are exact in the
- * runtime's f32 time lane, so the last one never passes the clip end. */
+ * runtime's f32 time property, so the last one never passes the clip end. */
 export const SWITCH_KNOB = {
   scale: 1.5,
   radius: 0.18,
@@ -157,7 +157,10 @@ function shapeControlTheme(
     scene.skin !== "neon"
       ? {}
       : { glow: pulse ? { ...halo, intensity: 0.45, radius: 0.12 } : halo };
+  // Named themes switch skins in place: the root theme rows change and the
+  // controls referencing them are not rewritten.
   return {
+    name: pulse ? "dashboard-pulse" : "dashboard-controls",
     font: scene.font,
     parts: {
       background: {
@@ -179,7 +182,7 @@ function shapeControlTheme(
           gradient: fill,
         },
         // A solid dim fill without glow, matching the skin motion's
-        // disabled sample so the transition settles on the lane values.
+        // disabled sample so the transition settles on its values.
         disabled: {
           ...state(palette.disabled, 0.3),
           opacity: 0.45,
@@ -526,7 +529,7 @@ function Scan({
           },
         },
         icon: {
-          // Base lanes are the animated knob's resting values; each variant
+          // Base values are the animated knob's resting values; each variant
           // selects its end and clip sample.
           base: {
             color: switchKnobColor(palette, false),

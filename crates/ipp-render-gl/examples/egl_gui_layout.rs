@@ -189,6 +189,7 @@ fn main() -> Result<()> {
     use ipp_core::services::asset_management::{
         AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
     };
+    use ipp_core::systems::gui::{GuiPartPatch, GuiPartProperty};
     use ipp_core::{
         Batch, Command, ComponentValue, EntityRef, GuiCommand, GuiContainerKind, GuiNodeData,
         GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiRoot, Surface, TEXTURE_TYPE,
@@ -484,32 +485,38 @@ fn main() -> Result<()> {
     )?;
     step(&mut host, world)?;
 
-    let named_properties = [
+    // Per-node part overrides: they take precedence over any theme for every
+    // state and variant.
+    let overrides = [
         (
-            GuiRoot::part_property_name(GuiNodeId(8), "label", "color").unwrap(),
+            8,
+            ipp_core::systems::surface::GuiPrimitivePart::Label,
+            GuiPartProperty::Color,
             ipp_core::DynamicValue::Vec4([1.0, 0.75, 0.1, 1.0]),
         ),
         (
-            GuiRoot::part_property_name(GuiNodeId(7), "icon", "asset").unwrap(),
+            7,
+            ipp_core::systems::surface::GuiPrimitivePart::Icon,
+            GuiPartProperty::Asset,
             ipp_core::DynamicValue::Asset(drawing.clone()),
         ),
         (
-            GuiRoot::part_property_name(GuiNodeId(9), "icon", "color").unwrap(),
+            9,
+            ipp_core::systems::surface::GuiPrimitivePart::Icon,
+            GuiPartProperty::Color,
             ipp_core::DynamicValue::Vec4([0.75, 1.0, 0.75, 1.0]),
         ),
     ];
-    host.world_mut(world).unwrap().enqueue(Batch {
-        id: 2,
-        operations: named_properties
-            .into_iter()
-            .map(|(name, value)| Command::SetDynamicProperty {
-                entity: EntityRef::Handle(panel),
-                component: ComponentValue::GUI_ROOT,
-                name,
-                value,
-            })
-            .collect(),
-    })?;
+    for (node, part, property, value) in overrides {
+        host.world_mut(world).unwrap().enqueue_gui_command(
+            SESSION,
+            ipp_core::GuiCommand::UpdatePart {
+                handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(node)),
+                part,
+                patch: GuiPartPatch::default().set(property, value),
+            },
+        )?;
+    }
     step(&mut host, world)?;
 
     let sources = [font.clone(), drawing.clone(), bitmap.clone()];

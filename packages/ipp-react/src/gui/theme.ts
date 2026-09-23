@@ -1,14 +1,15 @@
 /** Runtime-authored GUI themes.
  *
- * React only declares named-part lanes on GuiRoot. Core chooses interaction
- * state and checked/focus variants, and rendering consumes the resolved lanes.
+ * React compiles each distinct theme once per root into GuiRoot theme part
+ * rows and points nodes at it; core chooses interaction state and
+ * checked/focus variants, and rendering consumes the resolved properties.
  * No browser/TypeScript interaction resolver exists here.
  */
 import {
-  guiPartProperty,
-  type DynamicValue,
+  guiPartIndex,
   type GuiAssetSource,
-  type GuiPartProperty,
+  type GuiPartId,
+  type GuiPartValues,
 } from "@ipp/client";
 
 export const GUI_THEME_PARTS = [
@@ -24,8 +25,8 @@ export type GuiThemeState = "idle" | "hovered" | "pressed" | "disabled";
 export type GuiThemeVariant = "checked" | "unchecked";
 
 /** Two-stop linear or radial gradient in local shape space. Stops are
- * static material lanes: transitions animate the lane colour, not the
- * stops, and a missing stop takes the lane colour of the resolved state. */
+ * static material properties: transitions animate the part colour, not the
+ * stops, and a missing stop takes the colour of the resolved state. */
 export interface GuiThemeGradient {
   readonly kind: "linear" | "radial";
   readonly start?: readonly [number, number] | undefined;
@@ -35,8 +36,8 @@ export interface GuiThemeGradient {
   readonly color1?: readonly [number, number, number, number] | undefined;
 }
 
-/** Localized glow around the outer shape boundary. Glow lanes inherit from
- * less specific lanes independently of the fill; a state removes an
+/** Localized glow around the outer shape boundary. Glow properties inherit
+ * from less specific parts independently of the fill; a state removes an
  * inherited glow with `intensity: 0`. */
 export interface GuiThemeGlow {
   readonly color?: readonly [number, number, number, number] | undefined;
@@ -45,12 +46,12 @@ export interface GuiThemeGlow {
   readonly falloff?: number | undefined;
 }
 
-/** One authored runtime part. Checked/unchecked lanes are written for every
+/** One authored runtime part. Checked/unchecked styles are written for every
  * interaction state so core can apply its normal candidate precedence. */
-export interface GuiThemeLaneStyle {
+export interface GuiThemePartStyle {
   /** Linear RGBA. Without a gradient, the part paints this colour as a
-   * solid fill. When the part declares a gradient in another lane, a
-   * state or variant lane that sets `color` without its own `gradient`
+   * solid fill. When the part declares a gradient in another style, a
+   * state or variant style that sets `color` without its own `gradient`
    * selects a solid fill instead of inheriting that gradient. */
   readonly color?: readonly [number, number, number, number] | undefined;
   readonly opacity?: number | undefined;
@@ -77,7 +78,7 @@ export interface GuiThemeLaneStyle {
  * The clip holds color, opacity and scale tracks from `track`, sampled at
  * `time` for this state. When the part's base declares `alignX`, an
  * `align_x` track follows at `track + 3` so the indicator glides between
- * positions. Sampled values must equal the state's resolved lanes. */
+ * positions. Sampled values must equal the state's resolved properties. */
 export interface GuiThemeTransition {
   readonly motion: GuiAssetSource;
   readonly duration: number;
@@ -87,17 +88,22 @@ export interface GuiThemeTransition {
 }
 
 export interface GuiThemedPart {
-  readonly base?: GuiThemeLaneStyle | undefined;
-  readonly idle?: GuiThemeLaneStyle | undefined;
-  readonly hovered?: GuiThemeLaneStyle | undefined;
-  readonly pressed?: GuiThemeLaneStyle | undefined;
-  readonly disabled?: GuiThemeLaneStyle | undefined;
-  readonly checked?: GuiThemeLaneStyle | undefined;
-  readonly unchecked?: GuiThemeLaneStyle | undefined;
+  readonly base?: GuiThemePartStyle | undefined;
+  readonly idle?: GuiThemePartStyle | undefined;
+  readonly hovered?: GuiThemePartStyle | undefined;
+  readonly pressed?: GuiThemePartStyle | undefined;
+  readonly disabled?: GuiThemePartStyle | undefined;
+  readonly checked?: GuiThemePartStyle | undefined;
+  readonly unchecked?: GuiThemePartStyle | undefined;
 }
 
-/** App-authored lanes for the runtime's stable primitive parts. */
+/** App-authored appearance for the runtime's stable primitive parts. */
 export interface GuiControlTheme {
+  /** Stable identity of this theme within a root. Controls whose themes
+   * share a name share one runtime theme, and changing a named theme's
+   * content updates it in place without touching the nodes that reference
+   * it. Unnamed themes are identified by their content. */
+  readonly name?: string | undefined;
   /** Font measured by layout before label glyphs are painted. An explicit
    * node style asset overrides this theme default. */
   readonly font?: GuiAssetSource | undefined;
@@ -137,8 +143,8 @@ function validateAsset(value: GuiAssetSource, what: string): void {
     throw new Error(`GUI theme ${what} must be a valid asset source`);
 }
 
-export function validateThemeLaneStyle(
-  style: GuiThemeLaneStyle,
+export function validateThemePartStyle(
+  style: GuiThemePartStyle,
   what: string,
 ): void {
   if (typeof style !== "object" || style === null)
@@ -159,7 +165,7 @@ export function validateThemeLaneStyle(
         "transition",
       ].includes(key)
     )
-      throw new Error(`GUI theme ${what} has unknown lane "${key}"`);
+      throw new Error(`GUI theme ${what} has unknown property "${key}"`);
   if (
     style.color !== undefined &&
     (!Array.isArray(style.color) ||
@@ -383,12 +389,17 @@ export function validateGuiTheme(theme: GuiControlTheme): void {
   if (typeof theme.parts !== "object" || theme.parts === null)
     throw new Error("GUI theme parts must be an object");
   for (const key of Object.keys(theme))
-    if (key !== "font" && key !== "parts")
+    if (key !== "name" && key !== "font" && key !== "parts")
       throw new Error(`GUI theme has unknown key "${key}"`);
+  if (
+    theme.name !== undefined &&
+    (typeof theme.name !== "string" || theme.name.length === 0)
+  )
+    throw new Error("GUI theme name must be a nonempty string");
   if (theme.font !== undefined) validateAsset(theme.font, "font");
   for (const [name, part] of Object.entries(theme.parts)) {
     if (!partKeys.has(name))
-      throw new Error(`GUI theme part "${name}" is not a runtime named part`);
+      throw new Error(`GUI theme part "${name}" is not a runtime base part`);
     if (part === undefined) continue;
     if (typeof part !== "object" || part === null)
       throw new Error(`GUI theme part "${name}" must be an object`);
@@ -396,10 +407,10 @@ export function validateGuiTheme(theme: GuiControlTheme): void {
       if (!themedPartKeys.has(key))
         throw new Error(`GUI theme part "${name}" has unknown key "${key}"`);
     for (const key of ["base", ...states, ...variants] as const) {
-      const lanes = part[key];
-      if (lanes === undefined) continue;
-      validateThemeLaneStyle(lanes, `${name}.${key}`);
-      if (name === "label" && lanes.asset !== undefined)
+      const style = part[key];
+      if (style === undefined) continue;
+      validateThemePartStyle(style, `${name}.${key}`);
+      if (name === "label" && style.asset !== undefined)
         throw new Error(
           "GUI theme label.asset is unsupported; use theme.font so layout measures the selected font",
         );
@@ -408,7 +419,7 @@ export function validateGuiTheme(theme: GuiControlTheme): void {
       part.base,
       ...states.map((state) => part[state]),
       ...variants.map((variant) => part[variant]),
-    ].some((lanes) => lanes?.transition !== undefined);
+    ].some((style) => style?.transition !== undefined);
     if (
       animated &&
       (part.base?.color === undefined ||
@@ -416,107 +427,76 @@ export function validateGuiTheme(theme: GuiControlTheme): void {
         part.base.scale === undefined)
     )
       throw new Error(
-        `GUI theme animated part "${name}" requires base color, opacity, and scale lanes`,
+        `GUI theme animated part "${name}" requires base color, opacity, and scale`,
       );
   }
 }
 
-function dynamicLanes(
-  result: Record<string, DynamicValue>,
-  node: number,
-  part: string,
-  lanes: GuiThemeLaneStyle,
+/** Theme part row values for one authored part style. */
+function partValues(
+  style: GuiThemePartStyle,
   solidOverGradient: boolean,
-): void {
-  const set = (lane: GuiPartProperty, value: DynamicValue): void => {
-    result[guiPartProperty(node, part, lane)] = value;
-  };
-  if (lanes.color !== undefined)
-    set("color", { kind: "vec4", value: [...lanes.color] });
-  if (lanes.opacity !== undefined)
-    set("opacity", { kind: "f32", value: lanes.opacity });
-  if (lanes.scale !== undefined)
-    set("scale", { kind: "vec2", value: [...lanes.scale] });
-  if (lanes.alignX !== undefined)
-    set("align_x", { kind: "f32", value: lanes.alignX });
-  if (lanes.asset !== undefined)
-    set("asset", { kind: "asset", value: { ...lanes.asset } });
-  if (lanes.cornerRadius !== undefined)
-    set("corner_radius", { kind: "vec2", value: [...lanes.cornerRadius] });
-  if (lanes.borderWidth !== undefined)
-    set("border_width", { kind: "f32", value: lanes.borderWidth });
-  if (lanes.borderColor !== undefined)
-    set("border_color", { kind: "vec4", value: [...lanes.borderColor] });
-  if (lanes.gradient !== undefined) {
-    set("fill_mode", {
-      kind: "f32",
-      value: lanes.gradient.kind === "radial" ? 2 : 1,
-    });
-    if (lanes.gradient.start !== undefined)
-      set("gradient_start", { kind: "vec2", value: [...lanes.gradient.start] });
-    if (lanes.gradient.end !== undefined)
-      set("gradient_end", { kind: "vec2", value: [...lanes.gradient.end] });
-    if (lanes.gradient.radius !== undefined)
-      set("gradient_radius", { kind: "f32", value: lanes.gradient.radius });
-    if (lanes.gradient.color0 !== undefined)
-      set("gradient_color0", {
-        kind: "vec4",
-        value: [...lanes.gradient.color0],
-      });
-    if (lanes.gradient.color1 !== undefined)
-      set("gradient_color1", {
-        kind: "vec4",
-        value: [...lanes.gradient.color1],
-      });
-  } else if (solidOverGradient && lanes.color !== undefined) {
-    // Core resolves the fill mode like any other lane; an explicit solid
+): GuiPartValues {
+  const values: {
+    -readonly [K in keyof GuiPartValues]: GuiPartValues[K];
+  } = {};
+  if (style.color !== undefined) values.color = [...style.color];
+  if (style.opacity !== undefined) values.opacity = style.opacity;
+  if (style.scale !== undefined) values.scale = [...style.scale];
+  if (style.alignX !== undefined) values.alignX = style.alignX;
+  if (style.asset !== undefined) values.asset = { ...style.asset };
+  if (style.cornerRadius !== undefined)
+    values.cornerRadius = [...style.cornerRadius];
+  if (style.borderWidth !== undefined) values.borderWidth = style.borderWidth;
+  if (style.borderColor !== undefined)
+    values.borderColor = [...style.borderColor];
+  if (style.gradient !== undefined) {
+    values.fillMode = style.gradient.kind === "radial" ? 2 : 1;
+    if (style.gradient.start !== undefined)
+      values.gradientStart = [...style.gradient.start];
+    if (style.gradient.end !== undefined)
+      values.gradientEnd = [...style.gradient.end];
+    if (style.gradient.radius !== undefined)
+      values.gradientRadius = style.gradient.radius;
+    if (style.gradient.color0 !== undefined)
+      values.gradientColor0 = [...style.gradient.color0];
+    if (style.gradient.color1 !== undefined)
+      values.gradientColor1 = [...style.gradient.color1];
+  } else if (solidOverGradient && style.color !== undefined) {
+    // Core resolves the fill mode like any other property; an explicit solid
     // mode keeps this colour from hiding under a less specific gradient.
-    set("fill_mode", { kind: "f32", value: 0 });
+    values.fillMode = 0;
   }
-  if (lanes.glow !== undefined) {
-    if (lanes.glow.color !== undefined)
-      set("glow_color", { kind: "vec4", value: [...lanes.glow.color] });
-    if (lanes.glow.intensity !== undefined)
-      set("glow_intensity", { kind: "f32", value: lanes.glow.intensity });
-    if (lanes.glow.radius !== undefined)
-      set("glow_radius", { kind: "f32", value: lanes.glow.radius });
-    if (lanes.glow.falloff !== undefined)
-      set("glow_falloff", { kind: "f32", value: lanes.glow.falloff });
+  if (style.glow !== undefined) {
+    if (style.glow.color !== undefined)
+      values.glowColor = [...style.glow.color];
+    if (style.glow.intensity !== undefined)
+      values.glowIntensity = style.glow.intensity;
+    if (style.glow.radius !== undefined) values.glowRadius = style.glow.radius;
+    if (style.glow.falloff !== undefined)
+      values.glowFalloff = style.glow.falloff;
   }
-  const transition = lanes.transition;
+  const transition = style.transition;
   if (transition !== undefined) {
-    const prefix = `node_${node}_part_${part}`;
-    result[`${prefix}_motion`] = {
-      kind: "asset",
-      value: { ...transition.motion },
-    };
-    result[`${prefix}_duration`] = {
-      kind: "f32",
-      value: transition.duration,
-    };
-    result[`${prefix}_easing`] = {
-      kind: "f32",
-      value: transition.easing === "smoothstep" ? 1 : 0,
-    };
-    result[`${prefix}_track`] = {
-      kind: "f32",
-      value: transition.track ?? 0,
-    };
-    result[`${prefix}_time`] = {
-      kind: "f32",
-      value: transition.time ?? 0,
-    };
+    values.motion = { ...transition.motion };
+    values.duration = transition.duration;
+    values.easing = transition.easing === "smoothstep" ? 1 : 0;
+    values.track = transition.track ?? 0;
+    values.time = transition.time ?? 0;
   }
+  return values;
 }
 
-/** Compile one theme to the ordinary GuiRoot named-property namespace. */
-export function guiThemeProperties(
-  node: number,
-  theme: GuiControlTheme | undefined,
-): Readonly<Record<string, DynamicValue>> {
-  if (theme === undefined) return {};
+/** Compile one theme to GuiRoot theme part rows keyed by part index
+ * (see `guiPartIndex`). Variant styles apply under every state. */
+export function compileGuiTheme(
+  theme: GuiControlTheme,
+): ReadonlyMap<number, GuiPartValues> {
   validateGuiTheme(theme);
-  const result: Record<string, DynamicValue> = {};
+  const rows = new Map<number, GuiPartValues>();
+  const add = (id: GuiPartId, values: GuiPartValues): void => {
+    if (Object.keys(values).length > 0) rows.set(guiPartIndex(id), values);
+  };
   for (const partName of GUI_THEME_PARTS) {
     const part = theme.parts[partName];
     if (part === undefined) continue;
@@ -524,34 +504,37 @@ export function guiThemeProperties(
       part.base,
       ...states.map((state) => part[state]),
       ...variants.map((variant) => part[variant]),
-    ].some((lanes) => lanes?.gradient !== undefined);
+    ].some((style) => style?.gradient !== undefined);
     if (part.base !== undefined)
-      dynamicLanes(result, node, partName, part.base, false);
+      add({ part: partName }, partValues(part.base, false));
     for (const state of states) {
-      const lanes = part[state];
-      if (lanes !== undefined)
-        dynamicLanes(result, node, `${partName}_${state}`, lanes, hasGradient);
+      const style = part[state];
+      if (style !== undefined)
+        add({ part: partName, state }, partValues(style, hasGradient));
     }
     for (const variant of variants) {
-      const lanes = part[variant];
-      if (lanes === undefined) continue;
+      const style = part[variant];
+      if (style === undefined) continue;
       for (const state of states)
-        dynamicLanes(
-          result,
-          node,
-          `${partName}_${state}_${variant}`,
-          lanes,
-          hasGradient,
-        );
+        add({ part: partName, state, variant }, partValues(style, hasGradient));
     }
   }
-  return result;
+  return rows;
+}
+
+/** Root-local identity of a theme: its name, or else its compiled content. */
+export function guiThemeKey(
+  theme: GuiControlTheme,
+  rows: ReadonlyMap<number, GuiPartValues> = compileGuiTheme(theme),
+): string {
+  if (theme.name !== undefined) return `name:${theme.name}`;
+  return `content:${JSON.stringify([...rows].sort(([a], [b]) => a - b))}`;
 }
 
 /** Apply the theme's measured font default without overriding an explicit
- * node asset (including an explicit null clear). Named paint parts remain
- * ordinary theme properties: core materializes control geometry from them,
- * so React never duplicates background colors into node style. */
+ * node asset (including an explicit null clear). Paint parts stay in the
+ * root theme: core materializes control geometry from them, so React never
+ * duplicates background colors into node style. */
 export function guiStyleWithTheme<T extends { asset?: GuiAssetSource | null }>(
   style: T,
   theme: GuiControlTheme | undefined,
@@ -560,7 +543,7 @@ export function guiStyleWithTheme<T extends { asset?: GuiAssetSource | null }>(
   return { ...style, asset: { ...theme.font } };
 }
 
-/** Generic defaults authored through the same runtime part namespace. */
+/** Generic defaults compiled like any other theme. */
 export const defaultGuiTheme: GuiControlTheme = {
   parts: {
     background: {

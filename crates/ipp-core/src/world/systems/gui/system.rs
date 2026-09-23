@@ -1,9 +1,9 @@
 use super::system_state::GuiSystemState;
-use super::tree::GuiRoot;
 use super::tree::node_rows::{GuiNodeDataProperty, GuiNodeDataRow, GuiNodeStyleProperty};
 use super::tree::nodes::{
     GuiControlValue, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
 };
+use super::tree::{GuiPartId, GuiPartPatch, GuiPartRow, GuiRoot, GuiThemePartRow};
 use crate::systems::state_overlay::{StateOverlaySystem, StateOverlaySystemState};
 use crate::systems::surface::Surface;
 use crate::systems::{
@@ -66,6 +66,40 @@ pub enum GuiCommand {
         /// New control value to commit.
         value: GuiControlValue,
     },
+    /// Create or patch one part of a root theme. The first part of a new
+    /// handle defines the theme; referencing nodes re-resolve without edits.
+    UpdateTheme {
+        /// Entity owning the GuiRoot.
+        entity: EntityId,
+        /// Expected root component incarnation.
+        root_incarnation: u64,
+        /// Client-chosen theme handle.
+        theme: u32,
+        /// Part identity within the theme.
+        part: GuiPartId,
+        /// Appearance and motion changes.
+        patch: GuiPartPatch,
+    },
+    /// Remove every part of a root theme. Referencing nodes keep the handle
+    /// and resolve without a theme until it is defined again.
+    RemoveTheme {
+        /// Entity owning the GuiRoot.
+        entity: EntityId,
+        /// Expected root component incarnation.
+        root_incarnation: u64,
+        /// Theme handle to remove.
+        theme: u32,
+    },
+    /// Patch one node's appearance overrides for one base part; they take
+    /// precedence over its theme for every state and variant.
+    UpdatePart {
+        /// Fenced node handle.
+        handle: GuiNodeHandle,
+        /// Base part.
+        part: crate::systems::surface::GuiPrimitivePart,
+        /// Appearance changes; motion is theme-only.
+        patch: GuiPartPatch,
+    },
 }
 
 impl GuiCommand {
@@ -73,6 +107,14 @@ impl GuiCommand {
     pub fn entity(&self) -> EntityId {
         match self {
             Self::InsertNode {
+                entity,
+                ..
+            }
+            | Self::UpdateTheme {
+                entity,
+                ..
+            }
+            | Self::RemoveTheme {
                 entity,
                 ..
             } => *entity,
@@ -89,6 +131,10 @@ impl GuiCommand {
                 ..
             }
             | Self::SetControlValue {
+                handle,
+                ..
+            }
+            | Self::UpdatePart {
                 handle,
                 ..
             } => handle.entity,
@@ -219,12 +265,6 @@ impl System for GuiSystem {
         let raw_items =
             |entity| surface_content_live(staged, components, overlay_state, entity, &empty);
         match context.command {
-            Command::SetDynamicProperty {
-                component: Value::GUI_ROOT,
-                name,
-                value,
-                ..
-            } => super::tree::component::validate_property_value(name, value),
             Command::InsertComponentValue {
                 entity,
                 value,
@@ -275,9 +315,9 @@ impl System for GuiSystem {
                 let entity = staged.resolve(*entity, context.aliases)?;
                 if *component == Value::GUI_ROOT
                     && let FieldValue::Dynamic(value) = &field.value
-                    && GuiRoot::node_property(field.offset).is_some()
+                    && GuiRoot::row_property(field.offset).is_some()
                 {
-                    GuiRoot::validate_node_property(field.offset, value)?;
+                    GuiRoot::validate_row_value(field.offset, value)?;
                 }
                 let conflict = match *component {
                     Value::GUI_ROOT => {
@@ -517,12 +557,13 @@ pub(in crate::world::systems::gui) fn producer_root<'a>(
 
 /// Ordinary authored writes that apply one GuiCommand to the producer root.
 ///
-/// A command edits the tree and committed values plus the lanes of at most
-/// one node, or removes the lanes of a removed subtree. The edit runs on an
-/// [`GuiRoot::edit_scope`] copy holding only those lanes, so validation and
+/// A node command edits the tree and committed values plus the rows of at
+/// most one node, or removes the rows of a removed subtree. The edit runs on
+/// an [`GuiRoot::edit_scope`] copy holding only those rows, so validation and
 /// the diff against the producer cover the edited node rather than every
-/// property; untouched lanes were validated when they were written. The
-/// writes equal a diff of complete roots, in the same order.
+/// property; untouched rows were validated when they were written. The writes
+/// equal a diff of complete roots, in the same order. Theme and part commands
+/// write their rows directly.
 pub(super) fn edit_commands(
     entity: EntityId,
     root: &GuiRoot,
@@ -530,6 +571,18 @@ pub(super) fn edit_commands(
     session: u64,
     command: &GuiCommand,
 ) -> Result<Vec<Command>, ErrorReason> {
+    if let Some(writes) = skin_writes(root, root_incarnation, session, command)? {
+        let target = crate::EntityRef::Handle(entity);
+        return Ok(writes
+            .into_iter()
+            .map(|field| Command::SetField {
+                entity: target,
+                component: crate::ComponentValue::GUI_ROOT,
+                field,
+            })
+            .collect());
+    }
+
     match command {
         GuiCommand::InsertNode {
             root_incarnation: expected,
@@ -538,6 +591,15 @@ pub(super) fn edit_commands(
         GuiCommand::InsertNode {
             ..
         } => {}
+        GuiCommand::UpdateTheme {
+            ..
+        }
+        | GuiCommand::RemoveTheme {
+            ..
+        }
+        | GuiCommand::UpdatePart {
+            ..
+        } => unreachable!("skin commands return their writes above"),
         GuiCommand::UpdateNode {
             handle,
             ..
@@ -611,10 +673,67 @@ pub(super) fn edit_commands(
             expected_revision,
             value,
         } => next.set_control_value(handle.node_id, *expected_revision, value)?,
+        GuiCommand::UpdateTheme {
+            ..
+        }
+        | GuiCommand::RemoveTheme {
+            ..
+        }
+        | GuiCommand::UpdatePart {
+            ..
+        } => unreachable!("skin commands return their writes above"),
     }
 
     next.validate_tree()?;
     Ok(scoped_authored_diff(entity, root, &next, &touched))
+}
+
+/// Field writes of a theme or part command, or None for node commands. An
+/// existing row changes property by property; creating or removing rows
+/// replaces the whole table, whose write re-derives the live channels of
+/// referencing nodes inside the root.
+fn skin_writes(
+    root: &GuiRoot,
+    root_incarnation: u64,
+    session: u64,
+    command: &GuiCommand,
+) -> Result<Option<Vec<FieldWrite>>, ErrorReason> {
+    let fenced = |expected: u64| {
+        if expected == root_incarnation {
+            Ok(())
+        } else {
+            Err(ErrorReason::InvalidValue)
+        }
+    };
+    Ok(Some(match command {
+        GuiCommand::UpdateTheme {
+            root_incarnation: expected,
+            theme,
+            part,
+            patch,
+            ..
+        } => {
+            fenced(*expected)?;
+            root.theme_part_writes(*theme, *part, patch)?
+        }
+        GuiCommand::RemoveTheme {
+            root_incarnation: expected,
+            theme,
+            ..
+        } => {
+            fenced(*expected)?;
+            vec![root.theme_removal_write(*theme)?]
+        }
+        GuiCommand::UpdatePart {
+            handle,
+            part,
+            patch,
+        } => {
+            validate_handle(root, root_incarnation, session, handle)?;
+            root.part_override_writes(handle.node_id, *part, patch)?
+        }
+        _ => return Ok(None),
+    }))
 }
 
 /// Validate a GuiRoot assembled from `InsertComponent` fields as a whole.
@@ -715,9 +834,10 @@ fn withdrawal_conflicts(
     })
 }
 
-/// Overlays may override GUI style and `image_size` properties, but never
-/// supply a GUI tree or whole row table, override committed control values or
-/// the slider range, create a GuiRoot, or add raw items to a GUI-owned Surface.
+/// Overlays may override GUI style, `image_size`, theme part and part row
+/// properties, but never supply a GUI tree or whole row table, override
+/// committed control values, the slider range, theme references or row keys,
+/// create a GuiRoot, or add raw items to a GUI-owned Surface.
 ///
 /// Root ownership is producer-side: reconcilers create the GuiRoot component
 /// through `InsertComponent`/`InsertComponentValue`, drive its node tree only
@@ -783,7 +903,7 @@ pub(super) fn commit_control_value(
 /// Control commits change only command-owned fields (the tree and the
 /// committed `node_data` values), which overlays never carry. The
 /// effective-minus-producer delta observed before the commit, per real field,
-/// named part lane and row property, is therefore exactly the still-active
+/// extension value and row property, is therefore exactly the still-active
 /// layer contribution; command-owned fields are never carried, so a commit can
 /// never clobber its own value.
 pub(super) fn resolve_control_effective(
@@ -806,7 +926,7 @@ pub(super) fn resolve_control_effective(
         }
         let produced = previous_producer.field(offset).ok();
         if produced.as_ref() != Some(&value) {
-            // Mirror layer resolution: a dynamic lane whose descriptor the
+            // Mirror layer resolution: an extension value whose descriptor the
             // new producer no longer carries has no contribution to re-apply.
             if crate::components::dynamic_properties::is_dynamic_field(offset)
                 && next_producer
@@ -896,6 +1016,53 @@ fn row_winners(
             }
         }
     }
+    skin_row_winners(
+        producer.theme_parts(),
+        effective.theme_parts(),
+        next.theme_parts(),
+        GuiThemePartRow::THEME,
+        |slot, index| {
+            super::tree::GuiPartProperty::from_index(index)
+                .and_then(|property| GuiRoot::theme_part_offset(slot, property))
+        },
+        winners,
+    );
+    skin_row_winners(
+        producer.part_state(),
+        effective.part_state(),
+        next.part_state(),
+        GuiPartRow::NODE,
+        GuiRoot::part_row_offset,
+        winners,
+    );
+}
+
+/// Non-key properties of skin rows whose effective value differs from the
+/// producer's, for rows the new producer still holds. Keys lead no layout
+/// and follow every other property, so `keys` is the first key index.
+fn skin_row_winners<R: crate::components::rows::SchemaRow>(
+    producer: &crate::components::rows::Rows<R>,
+    effective: &crate::components::rows::Rows<R>,
+    next: &crate::components::rows::Rows<R>,
+    keys: u32,
+    offset: impl Fn(u32, u32) -> Option<u32>,
+    winners: &mut Vec<(u32, crate::components::schema::FieldValue)>,
+) {
+    use crate::components::schema::FieldValue as Value;
+
+    for (slot, row) in effective.iter() {
+        let (Some(produced), true) = (producer.get(slot), next.is_live(slot)) else {
+            continue;
+        };
+        for index in 0..keys {
+            let current = row.property(index).ok().flatten();
+            if current != produced.property(index).ok().flatten()
+                && let Some(offset) = offset(slot, index)
+            {
+                winners.push((offset, current.map_or(Value::Unset, Value::Dynamic)));
+            }
+        }
+    }
 }
 
 fn validate_handle(
@@ -913,14 +1080,14 @@ fn validate_handle(
         .ok_or(ErrorReason::InvalidValue)
 }
 
-/// Writes turning `previous` into `next` for the tree and the rows and part
-/// lanes of the touched nodes, which are the only ones `next` holds. The tree
-/// comes first: writing it inserts default rows for new nodes, conforms data
-/// rows to their kinds and removes the rows of removed nodes. Row properties
-/// follow in node order, each written against the row the tree write leaves:
-/// style in layout order, data in an order that keeps the slider range valid
-/// after every write. Part lanes are visited in name order, removals and
-/// changes before additions. Every write leaves a valid root.
+/// Writes turning `previous` into `next` for the tree and the node rows of
+/// the touched nodes, which are the only ones `next` holds. The tree comes
+/// first: writing it inserts default rows for new nodes, conforms data rows to
+/// their kinds and removes the node and part rows of removed nodes. Row
+/// properties follow in node order, each written against the row the tree
+/// write leaves: style in layout order, data in an order that keeps the
+/// slider range valid after every write. A written theme reference
+/// re-derives the node's live channels. Every write leaves a valid root.
 fn scoped_authored_diff(
     entity: EntityId,
     previous: &GuiRoot,
@@ -929,7 +1096,6 @@ fn scoped_authored_diff(
 ) -> Vec<Command> {
     use crate::components::rows::SchemaRow;
     use crate::components::schema::SchemaField;
-    use std::collections::BTreeMap;
 
     let target = crate::EntityRef::Handle(entity);
     let set_field = |offset: u32, value: Option<crate::DynamicValue>| Command::SetField {
@@ -983,51 +1149,7 @@ fn scoped_authored_diff(
         }
     }
 
-    let prefixes: Vec<String> = touched
-        .iter()
-        .map(|&id| super::tree::component::node_property_prefix(id))
-        .collect();
-    let lanes = |root: &'_ GuiRoot| -> Vec<(String, crate::DynamicPropertyDescriptor)> {
-        prefixes
-            .iter()
-            .flat_map(|prefix| root.node_properties(prefix))
-            .map(|(name, descriptor)| (name.to_owned(), descriptor))
-            .collect()
-    };
-    let before: BTreeMap<_, _> = lanes(previous).into_iter().collect();
-    let after: BTreeMap<_, _> = lanes(next).into_iter().collect();
-
-    for (name, descriptor) in &before {
-        match after.get(name) {
-            None => commands.push(Command::RemoveDynamicProperty {
-                entity: target,
-                component: crate::ComponentValue::GUI_ROOT,
-                name: name.clone(),
-            }),
-            Some(&current)
-                if next.properties.get_descriptor(current)
-                    != previous.properties.get_descriptor(*descriptor) =>
-            {
-                commands.push(set_property(entity, next, name));
-            }
-            Some(_) => {}
-        }
-    }
-    for name in after.keys() {
-        if !before.contains_key(name) {
-            commands.push(set_property(entity, next, name));
-        }
-    }
     commands
-}
-
-fn set_property(entity: EntityId, root: &GuiRoot, name: &str) -> Command {
-    Command::SetDynamicProperty {
-        entity: crate::EntityRef::Handle(entity),
-        component: crate::ComponentValue::GUI_ROOT,
-        name: name.into(),
-        value: root.properties.get(name).expect("described property"),
-    }
 }
 
 impl crate::WorldContext<'_> {

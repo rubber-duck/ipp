@@ -5,40 +5,16 @@ use super::node_rows::{
     validate_node_style_property,
 };
 use super::nodes::{GuiControlValue, GuiNodeData, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes};
+use super::part_rows::{
+    GUI_BASE_PARTS, GuiPartId, GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty,
+    GuiThemePartRow, base_part_index, validate_part_property, validate_part_row_property,
+};
 use crate::components::rows::{RowAddress, Rows, SchemaRow, row_address, row_region_relative};
 use crate::components::schema::ComponentLifecycle;
-use crate::{DynamicProperties, DynamicValue, ErrorReason};
+use crate::systems::surface::GuiPrimitivePart;
+use crate::{DynamicProperties, DynamicValue, ErrorReason, FieldValue, FieldWrite};
 use ipp_schema_derive::SchemaComponent;
-
-use crate::DynamicPropertyKind as Kind;
-
-/// Named skin-part lanes and their exact storage types.
-/// Ordered by descending suffix length so longer composite suffixes match first.
-pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 23] = [
-    ("gradient_color0", Kind::Vec4),
-    ("gradient_color1", Kind::Vec4),
-    ("gradient_radius", Kind::F32),
-    ("glow_intensity", Kind::F32),
-    ("gradient_start", Kind::Vec2),
-    ("corner_radius", Kind::Vec2),
-    ("gradient_end", Kind::Vec2),
-    ("border_color", Kind::Vec4),
-    ("border_width", Kind::F32),
-    ("glow_falloff", Kind::F32),
-    ("glow_radius", Kind::F32),
-    ("glow_color", Kind::Vec4),
-    ("fill_mode", Kind::F32),
-    ("duration", Kind::F32),
-    ("opacity", Kind::F32),
-    ("align_x", Kind::F32),
-    ("easing", Kind::F32),
-    ("motion", Kind::Asset),
-    ("color", Kind::Vec4),
-    ("scale", Kind::Vec2),
-    ("asset", Kind::Asset),
-    ("track", Kind::F32),
-    ("time", Kind::F32),
-];
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Root GUI component owning the content of its entity's Surface.
 ///
@@ -50,6 +26,13 @@ pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 23] = [
 /// node lives. The committed checkbox and slider values and the slider range
 /// are `node_data` properties that only GuiCommand changes; style properties
 /// and `image_size` are ordinary numeric properties.
+///
+/// Skins are root-owned themes in `theme_parts`, referenced by each node's
+/// `theme` style property, and per-node `part_state` rows holding appearance
+/// overrides and the live channels skin transitions animate. The root keeps a
+/// node's channels present exactly while its theme declares motion for the
+/// part, so writing a theme reference, a theme's motion or either table
+/// re-derives them. Theme updates never rewrite referencing nodes.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiRoot {
@@ -58,13 +41,57 @@ pub struct GuiRoot {
     /// Node style rows at slot = node id; rows field 0.
     #[schema(rows)]
     node_style: Rows<GuiNodeStyleRow>,
-    /// Scalar kind-specific node data at slot = node id; rows field 1.
+    /// Scalar kind-specific node data at slot = node id; rows field 1. Boxed,
+    /// like both skin tables, to keep the root and so every `Command` small.
     #[schema(rows)]
-    node_data: Rows<GuiNodeDataRow>,
-    /// Named skin-part properties. Boxed: the set is rarely large and keeps
-    /// the root, and so every `Command`, within its size budget.
+    node_data: Box<Rows<GuiNodeDataRow>>,
+    /// Theme part rows at slot = theme slot * [`GuiPartId::COUNT`] + part;
+    /// rows field 2.
+    #[schema(rows)]
+    theme_parts: Box<Rows<GuiThemePartRow>>,
+    /// Per-node part rows keyed by their `node` and `part` properties at
+    /// monotonically allocated slots; rows field 3.
+    #[schema(rows)]
+    part_state: Box<Rows<GuiPartRow>>,
+    /// Application extension values; the runtime writes no GUI names here.
+    /// Boxed: the set is rarely large and keeps the root, and so every
+    /// `Command`, within its size budget.
     #[schema(ignore)]
     pub properties: Box<DynamicProperties>,
+    /// Theme and part row lookup, rebuilt whenever either table is replaced.
+    #[schema(ignore)]
+    skin_index: Box<GuiSkinIndex>,
+}
+
+/// Lookup from theme handles and (node, base part) keys to row slots,
+/// derived from the tables' key properties.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct GuiSkinIndex {
+    /// Theme handle to theme slot.
+    themes: BTreeMap<u32, u32>,
+    /// (node, base part index) to `part_state` slot.
+    parts: BTreeMap<(u32, u32), u32>,
+}
+
+/// A GuiRoot row property addressed by a field offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GuiRootRowProperty {
+    /// A `node_style` or `node_data` property of one node.
+    Node(GuiNodePropertyRef),
+    /// A `theme_parts` property; None is the `theme` key.
+    Theme {
+        /// Row slot.
+        slot: u32,
+        /// Part property, or None for the key.
+        property: Option<GuiPartProperty>,
+    },
+    /// A `part_state` property.
+    Part {
+        /// Row slot.
+        slot: u32,
+        /// Override, channel or key.
+        property: GuiPartRowProperty,
+    },
 }
 
 impl GuiRoot {
@@ -73,6 +100,12 @@ impl GuiRoot {
 
     /// Rows field index of `node_data`; its region starts at `0x2000_0000`.
     pub const NODE_DATA_FIELD: usize = 1;
+
+    /// Rows field index of `theme_parts`; its region starts at `0x3000_0000`.
+    pub const THEME_PARTS_FIELD: usize = 2;
+
+    /// Rows field index of `part_state`; its region starts at `0x4000_0000`.
+    pub const PART_STATE_FIELD: usize = 3;
 
     /// Field offset of one node style property, or None for a node id the
     /// region cannot address.
@@ -84,6 +117,27 @@ impl GuiRoot {
     /// region cannot address.
     pub const fn node_data_offset(node: GuiNodeId, property: GuiNodeDataProperty) -> Option<u32> {
         Rows::<GuiNodeDataRow>::offset(Self::NODE_DATA_FIELD, node.0, property.index())
+    }
+
+    /// Row slot of one part of a theme slot.
+    pub const fn theme_part_slot(theme_slot: u32, part: GuiPartId) -> Option<u32> {
+        let Some(index) = part.index() else {
+            return None;
+        };
+        let Some(base) = theme_slot.checked_mul(GuiPartId::COUNT) else {
+            return None;
+        };
+        base.checked_add(index)
+    }
+
+    /// Field offset of one property of a theme part row slot.
+    pub const fn theme_part_offset(slot: u32, property: GuiPartProperty) -> Option<u32> {
+        Rows::<GuiThemePartRow>::offset(Self::THEME_PARTS_FIELD, slot, property.index())
+    }
+
+    /// Field offset of one property index of a `part_state` row slot.
+    pub const fn part_row_offset(slot: u32, property: u32) -> Option<u32> {
+        Rows::<GuiPartRow>::offset(Self::PART_STATE_FIELD, slot, property)
     }
 
     /// Node and row property addressed by a field offset; None outside the
@@ -128,13 +182,64 @@ impl GuiRoot {
         })
     }
 
+    /// Row property of any GuiRoot table addressed by a field offset.
+    pub const fn row_property(offset: u32) -> Option<GuiRootRowProperty> {
+        if let Some(reference) = Self::node_property(offset) {
+            return Some(GuiRootRowProperty::Node(reference));
+        }
+        if let Some(relative) = row_region_relative(offset, Self::THEME_PARTS_FIELD) {
+            let Some(RowAddress {
+                slot,
+                property,
+            }) = row_address(relative, GuiThemePartRow::THEME + 1)
+            else {
+                return None;
+            };
+            return Some(GuiRootRowProperty::Theme {
+                slot,
+                property: GuiPartProperty::from_index(property),
+            });
+        }
+        if let Some(relative) = row_region_relative(offset, Self::PART_STATE_FIELD) {
+            let Some(RowAddress {
+                slot,
+                property,
+            }) = row_address(relative, GuiPartRowProperty::COUNT)
+            else {
+                return None;
+            };
+            let Some(property) = GuiPartRowProperty::from_index(property) else {
+                return None;
+            };
+            return Some(GuiRootRowProperty::Part {
+                slot,
+                property,
+            });
+        }
+        None
+    }
+
     /// Whether numeric animation and overlays may target an offset: numeric
-    /// style properties and `image_size`. False for `enabled`, `asset`, the
-    /// command-owned control values and slider range, and any other offset.
+    /// node style properties, `image_size`, numeric theme part properties and
+    /// numeric part overrides and channels. False for `enabled`, `asset`,
+    /// `theme`, the command-owned control values, slider range and row keys,
+    /// asset references and any other offset.
     pub const fn numeric_animatable(offset: u32) -> bool {
-        match Self::node_property(offset) {
-            Some(reference) => reference.property.numeric_animatable(),
-            None => false,
+        match Self::row_property(offset) {
+            Some(GuiRootRowProperty::Node(reference)) => reference.property.numeric_animatable(),
+            Some(GuiRootRowProperty::Theme {
+                property: Some(property),
+                ..
+            }) => property.numeric_animatable(),
+            Some(GuiRootRowProperty::Part {
+                property,
+                ..
+            }) => property.numeric_animatable(),
+            Some(GuiRootRowProperty::Theme {
+                property: None,
+                ..
+            })
+            | None => false,
         }
     }
 
@@ -151,6 +256,34 @@ impl GuiRoot {
         }
     }
 
+    /// Accept a value for any non-key row property at `offset`: exact type,
+    /// finite and the property's own range.
+    pub fn validate_row_value(offset: u32, value: &DynamicValue) -> Result<(), ErrorReason> {
+        match Self::row_property(offset).ok_or(ErrorReason::InvalidField)? {
+            GuiRootRowProperty::Node(_) => Self::validate_node_property(offset, value),
+            GuiRootRowProperty::Theme {
+                property: Some(property),
+                ..
+            } => validate_part_property(property, value),
+            GuiRootRowProperty::Part {
+                property: GuiPartRowProperty::Override(property),
+                ..
+            } => validate_part_property(property, value),
+            GuiRootRowProperty::Part {
+                property: GuiPartRowProperty::Channel(channel),
+                ..
+            } => validate_part_property(channel.property(), value),
+            GuiRootRowProperty::Theme {
+                property: None,
+                ..
+            }
+            | GuiRootRowProperty::Part {
+                property: GuiPartRowProperty::Key,
+                ..
+            } => Err(ErrorReason::InvalidField),
+        }
+    }
+
     /// Node style rows keyed by node id.
     pub fn node_style(&self) -> &Rows<GuiNodeStyleRow> {
         &self.node_style
@@ -160,6 +293,51 @@ impl GuiRoot {
     /// and slider values.
     pub fn node_data(&self) -> &Rows<GuiNodeDataRow> {
         &self.node_data
+    }
+
+    /// Theme part rows keyed by theme slot and part.
+    pub fn theme_parts(&self) -> &Rows<GuiThemePartRow> {
+        &self.theme_parts
+    }
+
+    /// Per-node part rows.
+    pub fn part_state(&self) -> &Rows<GuiPartRow> {
+        &self.part_state
+    }
+
+    /// Slot of a live theme, the base of its part rows.
+    pub fn theme_slot(&self, theme: u32) -> Option<u32> {
+        self.skin_index.themes.get(&theme).copied()
+    }
+
+    /// Live theme handles in ascending order.
+    pub fn themes(&self) -> impl Iterator<Item = u32> + '_ {
+        self.skin_index.themes.keys().copied()
+    }
+
+    /// One part row of a theme slot.
+    pub fn theme_row(&self, theme_slot: u32, part: GuiPartId) -> Option<&GuiThemePartRow> {
+        self.theme_parts
+            .get(Self::theme_part_slot(theme_slot, part)?)
+    }
+
+    /// Theme slot a live node references, or None without a live theme.
+    pub fn node_theme_slot(&self, node: GuiNodeId) -> Option<u32> {
+        self.theme_slot(self.node_style.get(node.0)?.theme?)
+    }
+
+    /// Slot and row of one node's base part.
+    pub fn part_row(&self, node: GuiNodeId, part: GuiPrimitivePart) -> Option<(u32, &GuiPartRow)> {
+        let slot = *self
+            .skin_index
+            .parts
+            .get(&(node.0, base_part_index(part)))?;
+        Some((slot, self.part_state.get(slot)?))
+    }
+
+    /// First theme slot no theme has used in this incarnation.
+    fn next_theme_slot(&self) -> u32 {
+        self.theme_parts.next_slot().div_ceil(GuiPartId::COUNT)
     }
 
     pub(in crate::world::systems::gui) const fn nodes_field() -> u32 {
@@ -176,19 +354,44 @@ impl GuiRoot {
         std::mem::offset_of!(Self, node_data) as u32
     }
 
+    /// Real offset of the whole `theme_parts` table.
+    pub(in crate::world::systems::gui) const fn theme_parts_field() -> u32 {
+        std::mem::offset_of!(Self, theme_parts) as u32
+    }
+
+    /// Real offset of the whole `part_state` table.
+    pub(in crate::world::systems::gui) const fn part_state_field() -> u32 {
+        std::mem::offset_of!(Self, part_state) as u32
+    }
+
     /// Whether only GUI commands may write `offset` on a live root: the tree,
-    /// both whole tables, committed control values and the slider range.
+    /// every whole table, committed control values, the slider range, node
+    /// theme references and row keys.
     pub fn command_owned_field(offset: u32) -> bool {
         offset == Self::nodes_field()
             || offset == Self::node_style_field()
             || offset == Self::node_data_field()
-            || matches!(
-                Self::node_property(offset),
-                Some(GuiNodePropertyRef {
+            || offset == Self::theme_parts_field()
+            || offset == Self::part_state_field()
+            || match Self::row_property(offset) {
+                Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
                     property: GuiNodeRowProperty::Data(property),
                     ..
-                }) if property.command_owned()
-            )
+                })) => property.command_owned(),
+                Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
+                    property: GuiNodeRowProperty::Style(property),
+                    ..
+                })) => property == GuiNodeStyleProperty::Theme,
+                Some(GuiRootRowProperty::Theme {
+                    property,
+                    ..
+                }) => property.is_none(),
+                Some(GuiRootRowProperty::Part {
+                    property,
+                    ..
+                }) => matches!(property, GuiPartRowProperty::Key),
+                None => false,
+            }
     }
 
     /// Read-only access to root-local nodes.
@@ -281,28 +484,17 @@ impl GuiRoot {
         )
     }
 
-    /// Every named-part lane of one node in name order, as the part-and-lane
-    /// remainder after `node_<id>_part_` and its prepared descriptor.
-    pub(crate) fn part_lanes<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> impl Iterator<Item = (&'a str, crate::DynamicPropertyDescriptor)> + 'a {
-        self.properties.with_prefix(prefix)
-    }
-
     /// Copy of this root for editing at most one node: the complete tree and
-    /// control records with only `node`'s rows and part properties.
-    /// Validating and diffing the copy covers exactly what one command can
-    /// change.
+    /// control records with only `node`'s style and data rows. Validating
+    /// and diffing the copy covers exactly what one node command can change;
+    /// part rows follow from the written tree and theme reference.
     pub(in crate::world::systems::gui) fn edit_scope(
         &self,
         node: Option<GuiNodeId>,
     ) -> Result<Self, ErrorReason> {
         let mut scope = Self {
             nodes: self.nodes.clone(),
-            node_style: Rows::new(),
-            node_data: Rows::new(),
-            properties: Box::default(),
+            ..Self::default()
         };
         if let Some(id) = node {
             if let Some(row) = self.node_style.get(id.0) {
@@ -317,29 +509,13 @@ impl GuiRoot {
                     .insert(id.0, row.clone())
                     .map_err(field_error)?;
             }
-            let prefix = node_property_prefix(id);
-            for (name, descriptor) in self.properties.named_with_prefix(&prefix) {
-                let value = self
-                    .properties
-                    .get_descriptor(descriptor)
-                    .ok_or(ErrorReason::InvalidField)?;
-                scope.properties.set(name, value).map_err(field_error)?;
-            }
         }
         Ok(scope)
     }
 
-    /// Full names and descriptors of every part property owned by `node`, in
-    /// name order.
-    pub(in crate::world::systems::gui) fn node_properties<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> impl Iterator<Item = (&'a str, crate::DynamicPropertyDescriptor)> + 'a {
-        self.properties.named_with_prefix(prefix)
-    }
-
-    /// Insert one node with its complete style and kind-specific data.
-    /// Control nodes start at revision 1 with the authored value committed.
+    /// Insert one node with its complete style and kind-specific data, and
+    /// the live channels its theme reference needs. Control nodes start at
+    /// revision 1 with the authored value committed.
     /// Identities at or past [`MAX_GUI_NODE_ID`](super::nodes::MAX_GUI_NODE_ID)
     /// fail with `Capacity`; a new root incarnation starts identities anew.
     pub(in crate::world::systems::gui) fn insert_node(
@@ -362,7 +538,9 @@ impl GuiRoot {
             .map_err(field_error)?;
         self.nodes.controls.insert_initial(id, &data);
         self.node_style.insert(id.0, style).map_err(field_error)?;
-        self.node_data.insert(id.0, values).map_err(field_error)
+        self.node_data.insert(id.0, values).map_err(field_error)?;
+        self.sync_node_channels(id.0);
+        Ok(())
     }
 
     /// Apply a node patch. Style members replace row properties; a data or
@@ -421,11 +599,15 @@ impl GuiRoot {
             .get_mut(id.0)
             .ok_or(ErrorReason::InvalidValue)?;
         row.apply(patch);
-        row.validate()
+        row.validate()?;
+        if patch.theme.is_some() {
+            self.sync_node_channels(id.0);
+        }
+        Ok(())
     }
 
-    /// Remove a node and its subtree with their rows, control records and
-    /// part properties, returning the removed identities.
+    /// Remove a node and its subtree with their node and part rows and
+    /// control records, returning the removed identities.
     pub(in crate::world::systems::gui) fn remove_node(
         &mut self,
         id: GuiNodeId,
@@ -435,8 +617,8 @@ impl GuiRoot {
             self.nodes.controls.remove(id);
             self.node_style.remove(id.0);
             self.node_data.remove(id.0);
-            self.remove_part_properties(id);
         }
+        self.prune_part_rows();
         Ok(removed)
     }
 
@@ -482,21 +664,6 @@ impl GuiRoot {
         Ok(())
     }
 
-    /// Remove every part property owned by a removed node.
-    fn remove_part_properties(&mut self, id: GuiNodeId) {
-        let prefix = node_property_prefix(id);
-        let owned: Vec<String> = self
-            .properties
-            .descriptors()
-            .range(prefix.clone()..)
-            .take_while(|(name, _)| name.starts_with(&prefix))
-            .map(|(name, _)| name.clone())
-            .collect();
-        for name in owned {
-            self.properties.remove(&name);
-        }
-    }
-
     /// Give every node its rows, drop the rows of nodes no longer in the tree
     /// and conform each data row to its node's kind, after the tree field was
     /// replaced. New rows start from the default style; data rows keep their
@@ -504,39 +671,361 @@ impl GuiRoot {
     /// used ones and drop the rest, so every tree write leaves a valid root
     /// that the row writes following it complete. A slot that died earlier in
     /// this incarnation stays without a row, which readers treat as defaults.
+    /// Part rows of removed nodes go with them.
     fn sync_rows(&mut self) {
         let mut live: Vec<u32> = self.nodes.as_slice().iter().map(|node| node.id.0).collect();
         live.sort_unstable();
         sync_table(&mut self.node_style, &live);
-        sync_table(&mut self.node_data, &live);
+        sync_table(&mut *self.node_data, &live);
         for node in self.nodes.as_slice() {
             if let Some(row) = self.node_data.get_mut(node.id.0) {
                 row.conform(&node.data);
             }
         }
+        self.prune_part_rows();
     }
 
-    /// Produce a validated named-property address for a named skin part lane.
-    pub fn part_property_name(id: GuiNodeId, part: &str, suffix: &str) -> Option<String> {
-        if valid_part_name(part) && lane_kind(&GUI_PART_PROPERTIES, suffix).is_some() {
-            Some(format!("node_{}_part_{}_{}", id.0, part, suffix))
-        } else {
-            None
+    /// Writes applying one theme part patch. An existing row changes property
+    /// by property; a new part, or the first part of a new theme at the next
+    /// unused theme slot, replaces the whole table.
+    pub(in crate::world::systems::gui) fn theme_part_writes(
+        &self,
+        theme: u32,
+        part: GuiPartId,
+        patch: &GuiPartPatch,
+    ) -> Result<Vec<FieldWrite>, ErrorReason> {
+        patch.validate()?;
+        let theme_slot = self
+            .theme_slot(theme)
+            .unwrap_or_else(|| self.next_theme_slot());
+        let slot = Self::theme_part_slot(theme_slot, part).ok_or(ErrorReason::InvalidValue)?;
+        if let Some(row) = self.theme_parts.get(slot) {
+            return Ok(patch
+                .changes
+                .iter()
+                .filter(|(property, value)| {
+                    row.property(property.index()).ok().flatten() != **value
+                })
+                .filter_map(|(property, value)| {
+                    Some(FieldWrite {
+                        offset: Self::theme_part_offset(slot, *property)?,
+                        value: value.clone().map_or(FieldValue::Unset, FieldValue::Dynamic),
+                    })
+                })
+                .collect());
+        }
+
+        if slot >= Rows::<GuiThemePartRow>::MAX_SLOTS {
+            return Err(ErrorReason::Capacity);
+        }
+        let mut row = GuiThemePartRow::for_theme(theme);
+        patch.apply(&mut row).map_err(field_error)?;
+        let mut table = Rows::clone(&self.theme_parts);
+        table.insert(slot, row).map_err(field_error)?;
+        Ok(vec![FieldWrite {
+            offset: Self::theme_parts_field(),
+            value: FieldValue::Rows(table.encode()),
+        }])
+    }
+
+    /// Write removing every part row of one live theme. Referencing nodes
+    /// keep the handle and resolve without a theme until it is defined again.
+    pub(in crate::world::systems::gui) fn theme_removal_write(
+        &self,
+        theme: u32,
+    ) -> Result<FieldWrite, ErrorReason> {
+        let theme_slot = self.theme_slot(theme).ok_or(ErrorReason::InvalidValue)?;
+        let mut table = Rows::clone(&self.theme_parts);
+        let owned: Vec<u32> = table
+            .iter()
+            .map(|(slot, _)| slot)
+            .filter(|slot| slot / GuiPartId::COUNT == theme_slot)
+            .collect();
+        for slot in owned {
+            table.remove(slot);
+        }
+        Ok(FieldWrite {
+            offset: Self::theme_parts_field(),
+            value: FieldValue::Rows(table.encode()),
+        })
+    }
+
+    /// Writes applying one node's part overrides. Motion is theme-only. An
+    /// existing row changes property by property, or is dropped with the whole
+    /// table once it holds neither overrides nor channels; a first override
+    /// pushes a new row.
+    pub(in crate::world::systems::gui) fn part_override_writes(
+        &self,
+        node: GuiNodeId,
+        part: GuiPrimitivePart,
+        patch: &GuiPartPatch,
+    ) -> Result<Vec<FieldWrite>, ErrorReason> {
+        patch.validate()?;
+        if patch.changes.keys().any(|property| !property.appearance()) {
+            return Err(ErrorReason::InvalidField);
+        }
+        self.nodes.node(node).ok_or(ErrorReason::InvalidValue)?;
+
+        let table_write = |table: Rows<GuiPartRow>| FieldWrite {
+            offset: Self::part_state_field(),
+            value: FieldValue::Rows(table.encode()),
+        };
+        if let Some((slot, row)) = self.part_row(node, part) {
+            let mut next = row.clone();
+            patch.apply(&mut next).map_err(field_error)?;
+            if !next.has_overrides() && !next.has_channels() {
+                let mut table = Rows::clone(&self.part_state);
+                table.remove(slot);
+                return Ok(vec![table_write(table)]);
+            }
+            return Ok(patch
+                .changes
+                .iter()
+                .filter(|(property, value)| {
+                    row.property(property.index()).ok().flatten() != **value
+                })
+                .filter_map(|(property, value)| {
+                    Some(FieldWrite {
+                        offset: Self::part_row_offset(slot, property.index())?,
+                        value: value.clone().map_or(FieldValue::Unset, FieldValue::Dynamic),
+                    })
+                })
+                .collect());
+        }
+
+        let mut row = GuiPartRow::keyed(node.0, part);
+        patch.apply(&mut row).map_err(field_error)?;
+        if !row.has_overrides() {
+            return Ok(Vec::new());
+        }
+        let mut table = Rows::clone(&self.part_state);
+        table.push(row).map_err(|_| ErrorReason::Capacity)?;
+        Ok(vec![table_write(table)])
+    }
+
+    /// Base parts the theme at `theme_slot` declares motion for, as a bit
+    /// mask by base part index.
+    fn animated_parts(&self, theme_slot: u32) -> u8 {
+        let mut mask = 0;
+        for index in 0..GuiPartId::COUNT {
+            if let Some(id) = GuiPartId::from_index(index)
+                && self
+                    .theme_row(theme_slot, id)
+                    .is_some_and(|row| row.motion.is_some())
+            {
+                mask |= 1 << base_part_index(id.part);
+            }
+        }
+        mask
+    }
+
+    /// Make one node's live channels present exactly for the base parts in
+    /// `animated` of the theme at `theme_slot`, pushing a row where one is
+    /// needed and dropping rows left with neither overrides nor channels.
+    /// Opened channels start from the part's base appearance.
+    fn sync_part_channels(&mut self, node: u32, theme_slot: Option<u32>, animated: u8) {
+        for part in GUI_BASE_PARTS {
+            let key = (node, base_part_index(part));
+            let needed = animated & (1 << key.1) != 0;
+            let base = theme_slot
+                .filter(|_| needed)
+                .and_then(|slot| self.theme_row(slot, GuiPartId::base(part)))
+                .cloned();
+            match self.skin_index.parts.get(&key).copied() {
+                Some(slot) => {
+                    let Some(row) = self.part_state.get_mut(slot) else {
+                        continue;
+                    };
+                    if needed {
+                        row.open_channels(base.as_ref());
+                    } else {
+                        row.close_channels();
+                        if !row.has_overrides() {
+                            self.part_state.remove(slot);
+                            self.skin_index.parts.remove(&key);
+                        }
+                    }
+                }
+                None if needed => {
+                    let mut row = GuiPartRow::keyed(node, part);
+                    row.open_channels(base.as_ref());
+                    // An exhausted region leaves the part without channels,
+                    // so its transitions paint destinations directly.
+                    if let Ok(slot) = self.part_state.push(row) {
+                        self.skin_index.parts.insert(key, slot);
+                    }
+                }
+                None => {}
+            }
         }
     }
 
-    /// Whether a canonical named property belongs to a node removed from this root.
-    pub(in crate::world) fn is_removed_node_property(&self, name: &str) -> bool {
-        property_lane(name).is_some_and(|(id, _, _)| self.nodes.node(id).is_none())
+    /// Re-derive the channels of one live node from its theme reference.
+    fn sync_node_channels(&mut self, node: u32) {
+        let theme_slot = self.node_theme_slot(GuiNodeId(node));
+        let animated = theme_slot.map_or(0, |slot| self.animated_parts(slot));
+        self.sync_part_channels(node, theme_slot, animated);
     }
 
-    /// Every named property is a GUI part lane with its declared type and range.
-    pub(in crate::world::systems::gui) fn validate_properties(&self) -> Result<(), ErrorReason> {
-        for name in self.properties.descriptors().keys() {
-            let value = self.properties.get(name).ok_or(ErrorReason::InvalidField)?;
-            validate_property_value(name, &value)?;
+    /// Re-derive the channels of every node referencing `theme`.
+    fn sync_theme_channels(&mut self, theme: u32) {
+        let theme_slot = self.theme_slot(theme);
+        let animated = theme_slot.map_or(0, |slot| self.animated_parts(slot));
+        let nodes: Vec<u32> = self
+            .node_style
+            .iter()
+            .filter(|(_, row)| row.theme == Some(theme))
+            .map(|(slot, _)| slot)
+            .collect();
+        for node in nodes {
+            self.sync_part_channels(node, theme_slot, animated);
+        }
+    }
+
+    /// Re-derive the channels of every node after a table was replaced.
+    fn sync_all_channels(&mut self) {
+        let mut masks = BTreeMap::new();
+        let mut nodes: BTreeSet<u32> = self.skin_index.parts.keys().map(|key| key.0).collect();
+        for (slot, row) in self.node_style.iter() {
+            if row.theme.is_some() {
+                nodes.insert(slot);
+            }
+        }
+        for node in nodes {
+            if self.nodes.node(GuiNodeId(node)).is_none() {
+                continue;
+            }
+            let theme_slot = self.node_theme_slot(GuiNodeId(node));
+            let animated = match theme_slot {
+                Some(slot) => *masks
+                    .entry(slot)
+                    .or_insert_with(|| self.animated_parts(slot)),
+                None => 0,
+            };
+            self.sync_part_channels(node, theme_slot, animated);
+        }
+    }
+
+    /// Theme handle to theme slot, from the `theme` keys of a table.
+    fn theme_index(table: &Rows<GuiThemePartRow>) -> BTreeMap<u32, u32> {
+        table
+            .iter()
+            .map(|(slot, row)| (row.theme, slot / GuiPartId::COUNT))
+            .collect()
+    }
+
+    /// (node, base part) to slot, from the `node` and `part` keys of a table.
+    fn part_index(table: &Rows<GuiPartRow>) -> BTreeMap<(u32, u32), u32> {
+        table
+            .iter()
+            .map(|(slot, row)| ((row.node, row.part), slot))
+            .collect()
+    }
+
+    /// Rebuild the theme index after the table was replaced.
+    fn rebuild_theme_index(&mut self) {
+        self.skin_index.themes = Self::theme_index(&self.theme_parts);
+    }
+
+    /// Rebuild the part index after the table was replaced.
+    fn rebuild_part_index(&mut self) {
+        self.skin_index.parts = Self::part_index(&self.part_state);
+    }
+
+    /// Drop the part rows of nodes no longer in the tree.
+    fn prune_part_rows(&mut self) {
+        let stale: Vec<((u32, u32), u32)> = self
+            .skin_index
+            .parts
+            .iter()
+            .filter(|((node, _), _)| self.nodes.node(GuiNodeId(*node)).is_none())
+            .map(|(key, slot)| (*key, *slot))
+            .collect();
+        for (key, slot) in stale {
+            self.part_state.remove(slot);
+            self.skin_index.parts.remove(&key);
+        }
+    }
+
+    /// Every theme slot holds rows of one theme and every theme one slot.
+    fn validate_theme_rows(&self) -> Result<(), ErrorReason> {
+        let mut slots: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut themes: BTreeSet<u32> = BTreeSet::new();
+        for (slot, row) in self.theme_parts.iter() {
+            row.validate()?;
+            match slots.get(&(slot / GuiPartId::COUNT)) {
+                Some(theme) if *theme != row.theme => return Err(ErrorReason::InvalidField),
+                Some(_) => {}
+                None => {
+                    if !themes.insert(row.theme) {
+                        return Err(ErrorReason::InvalidField);
+                    }
+                    slots.insert(slot / GuiPartId::COUNT, row.theme);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Every part row is valid, belongs to a live node and has a unique key.
+    fn validate_part_rows(&self) -> Result<(), ErrorReason> {
+        let mut keys = BTreeSet::new();
+        for (_, row) in self.part_state.iter() {
+            row.validate()?;
+            if self.nodes.node(GuiNodeId(row.node)).is_none() || !keys.insert((row.node, row.part))
+            {
+                return Err(ErrorReason::InvalidField);
+            }
+        }
+        Ok(())
+    }
+
+    /// The lookup index matches the tables' keys. Registry writes rebuild it;
+    /// a value assembled around them is rejected rather than misresolved.
+    fn validate_skin_index(&self) -> Result<(), ErrorReason> {
+        if Self::theme_index(&self.theme_parts) == self.skin_index.themes
+            && Self::part_index(&self.part_state) == self.skin_index.parts
+        {
+            Ok(())
+        } else {
+            Err(ErrorReason::InvalidField)
+        }
+    }
+
+    /// Check one written theme or part row property against its range.
+    fn validate_skin_property(&self, reference: GuiRootRowProperty) -> Result<(), ErrorReason> {
+        match reference {
+            GuiRootRowProperty::Theme {
+                slot,
+                property: Some(property),
+            } => match self
+                .theme_parts
+                .property(slot, property.index())
+                .map_err(|_| ErrorReason::InvalidField)?
+            {
+                Some(value) => validate_part_property(property, &value),
+                None => Ok(()),
+            },
+            GuiRootRowProperty::Part {
+                slot,
+                property,
+            } => {
+                let index = property.index().ok_or(ErrorReason::InvalidField)?;
+                match self
+                    .part_state
+                    .property(slot, index)
+                    .map_err(|_| ErrorReason::InvalidField)?
+                {
+                    Some(value) => validate_part_row_property(index, &value),
+                    None => Ok(()),
+                }
+            }
+            GuiRootRowProperty::Theme {
+                property: None,
+                ..
+            }
+            | GuiRootRowProperty::Node(_) => Err(ErrorReason::InvalidField),
+        }
     }
 
     /// Validate the node tree and control records, which are all a control
@@ -624,17 +1113,14 @@ impl ComponentLifecycle for GuiRoot {
         &[crate::ComponentValue::SURFACE]
     }
 
-    // Track B (ipp-63be.3): animation, numeric animation and evaluated writes
-    // address node properties by row offset. Named part properties stay dynamic
-    // until they move to rows.
+    // Animation, numeric animation and evaluated writes address every GUI
+    // property by row offset; extension values are not animatable.
     fn animatable_field(offset: u32) -> bool {
         crate::components::rows::row_region(offset).is_none() || Self::numeric_animatable(offset)
     }
 
     fn supports_numeric_property(offset: u32) -> bool {
         Self::numeric_animatable(offset)
-            || (crate::components::dynamic_properties::is_dynamic_field(offset)
-                && offset != crate::components::dynamic_properties::DYNAMIC_METADATA)
     }
 
     fn validate_numeric_properties(
@@ -649,30 +1135,12 @@ impl ComponentLifecycle for GuiRoot {
             let FieldValue::Dynamic(value) = field else {
                 return Err(ErrorReason::InvalidField);
             };
-            if Self::node_property(*offset).is_some() {
-                if !Self::numeric_animatable(*offset)
-                    || !matches!(self.field(*offset), Ok(FieldValue::Dynamic(_)))
-                {
-                    return Err(ErrorReason::InvalidField);
-                }
-                Self::validate_node_property(*offset, value)?;
-                continue;
-            }
-            if value.kind() == crate::DynamicPropertyKind::Asset
-                || self
-                    .properties
-                    .get_key(*offset)
-                    .is_none_or(|old| old.kind() != value.kind())
+            if !Self::numeric_animatable(*offset)
+                || !matches!(self.field(*offset), Ok(FieldValue::Dynamic(_)))
             {
                 return Err(ErrorReason::InvalidField);
             }
-            let name = self
-                .properties
-                .descriptors()
-                .iter()
-                .find_map(|(name, descriptor)| (descriptor.key == *offset).then_some(name.as_str()))
-                .ok_or(ErrorReason::InvalidField)?;
-            validate_property_value(name, value)?;
+            Self::validate_row_value(*offset, value)?;
         }
         Ok(())
     }
@@ -692,38 +1160,63 @@ impl ComponentLifecycle for GuiRoot {
     fn validate(&self) -> Result<(), ErrorReason> {
         self.nodes.validate().map_err(field_error)?;
         self.validate_rows()?;
-        self.validate_properties()
+        self.validate_theme_rows()?;
+        self.validate_part_rows()?;
+        self.validate_skin_index()
     }
 
     /// Each write is checked where it lands: a row property against its range
-    /// and node, a named part lane against its declaration. The tree and both
-    /// whole tables are structurally validated by their decoders; only GUI
-    /// commands write them on a live root, and new incarnations are validated
-    /// completely before admission.
+    /// and node. Whole theme and part tables are checked for consistent keys;
+    /// the tree and node tables are structurally validated by their decoders.
+    /// Only GUI commands write tables on a live root, and new incarnations are
+    /// validated completely before admission. Extension values carry no GUI
+    /// rules.
     fn validate_field(&self, offset: u32) -> Result<(), ErrorReason> {
-        if offset == crate::components::dynamic_properties::DYNAMIC_METADATA {
-            return self.validate_properties();
+        if offset == Self::theme_parts_field() {
+            return self.validate_theme_rows();
         }
-        if crate::components::dynamic_properties::is_dynamic_field(offset) {
-            let (name, _) = self
-                .properties
-                .descriptors()
-                .iter()
-                .find(|(_, descriptor)| descriptor.key == offset)
-                .ok_or(ErrorReason::InvalidField)?;
-            let value = self.properties.get(name).ok_or(ErrorReason::InvalidField)?;
-            return validate_property_value(name, &value);
+        if offset == Self::part_state_field() {
+            return self.validate_part_rows();
         }
-        if let Some(reference) = Self::node_property(offset) {
-            return self.validate_row_property(reference);
+        match Self::row_property(offset) {
+            Some(GuiRootRowProperty::Node(reference)) => self.validate_row_property(reference),
+            Some(reference) => self.validate_skin_property(reference),
+            None => Ok(()),
         }
-        Ok(())
     }
 
-    /// Rows follow the tree: replacing it inserts and removes node rows.
+    /// Rows follow the tree and skins follow theme references: replacing the
+    /// tree inserts and removes node rows, and writing a theme reference, a
+    /// theme's motion or either skin table re-derives live channels.
     fn after_field_write(&mut self, offset: u32) {
         if offset == Self::nodes_field() {
             self.sync_rows();
+            return;
+        }
+        if offset == Self::theme_parts_field() {
+            self.rebuild_theme_index();
+            self.sync_all_channels();
+            return;
+        }
+        if offset == Self::part_state_field() {
+            self.rebuild_part_index();
+            self.sync_all_channels();
+            return;
+        }
+        match Self::row_property(offset) {
+            Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
+                node,
+                property: GuiNodeRowProperty::Style(GuiNodeStyleProperty::Theme),
+            })) => self.sync_node_channels(node.0),
+            Some(GuiRootRowProperty::Theme {
+                slot,
+                property: Some(GuiPartProperty::Motion),
+            }) => {
+                if let Some(theme) = self.theme_parts.get(slot).map(|row| row.theme) {
+                    self.sync_theme_channels(theme);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -735,111 +1228,11 @@ impl ComponentLifecycle for GuiRoot {
     ) {
         self.properties.resource_demand(demand);
         self.node_style.resource_demand(demand);
+        self.theme_parts.resource_demand(demand);
+        self.part_state.resource_demand(demand);
     }
-}
-
-/// Common prefix of every part lane owned by one node.
-pub(in crate::world::systems::gui) fn node_property_prefix(id: GuiNodeId) -> String {
-    format!("node_{}_", id.0)
-}
-
-/// Prefix of every lane owned by one named part of a node.
-pub(crate) fn part_property_prefix(id: GuiNodeId, part: &str) -> String {
-    format!("node_{}_part_{}_", id.0, part)
-}
-
-/// Prefix of every named-part lane owned by one node.
-pub(crate) fn node_parts_prefix(id: GuiNodeId) -> String {
-    format!("node_{}_part_", id.0)
 }
 
 fn field_error(_: crate::components::schema::FieldError) -> ErrorReason {
     ErrorReason::InvalidValue
-}
-
-/// Parse `node_<id>_part_<part>_<lane>` into its node, lane and type.
-fn property_lane(name: &str) -> Option<(GuiNodeId, &str, Kind)> {
-    let (id, lane) = name.strip_prefix("node_")?.split_once('_')?;
-    if id.starts_with('0') {
-        return None;
-    }
-    let id = GuiNodeId(id.parse().ok()?);
-    let part_and_suffix = lane.strip_prefix("part_")?;
-    for &(suffix, kind) in &GUI_PART_PROPERTIES {
-        if let Some(part) = part_and_suffix.strip_suffix(suffix)
-            && let Some(part) = part.strip_suffix('_')
-            && valid_part_name(part)
-        {
-            return Some((id, suffix, kind));
-        }
-    }
-    None
-}
-
-fn lane_kind(lanes: &[(&str, Kind)], suffix: &str) -> Option<Kind> {
-    lanes
-        .iter()
-        .find_map(|(lane, kind)| (*lane == suffix).then_some(*kind))
-}
-
-fn valid_part_name(part: &str) -> bool {
-    !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// Convert an authored F32 base track only when all three skin lanes fit.
-pub(in crate::world::systems::gui) fn skin_motion_base_track(value: f32) -> Option<u32> {
-    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
-        return None;
-    }
-    let base = u32::try_from(value as u64).ok()?;
-    base.checked_add(2)?;
-    Some(base)
-}
-
-/// Accept only GUI part-addressed names with their exact type and value range.
-pub(crate) fn validate_property_value(name: &str, value: &DynamicValue) -> Result<(), ErrorReason> {
-    let (_, lane, kind) = property_lane(name).ok_or(ErrorReason::InvalidField)?;
-    if value.kind() != kind {
-        return Err(ErrorReason::InvalidField);
-    }
-    value.validate().map_err(field_error)?;
-    let valid = match value {
-        DynamicValue::F32(value) => {
-            value.is_finite()
-                && match lane {
-                    "opacity" => (0.0..=1.0).contains(value),
-                    "font_size" => *value > 0.0,
-                    "duration" | "time" => *value >= 0.0,
-                    "easing" => matches!(*value, 0.0 | 1.0),
-                    "track" => skin_motion_base_track(*value).is_some(),
-                    "border_width" | "gradient_radius" | "glow_intensity" | "glow_radius"
-                    | "glow_falloff" => *value >= 0.0,
-                    "fill_mode" => matches!(*value, 0.0 | 1.0 | 2.0),
-                    _ => true,
-                }
-        }
-        DynamicValue::Vec2(value) => {
-            value.iter().all(|v| v.is_finite())
-                && match lane {
-                    "corner_radius" => value.iter().all(|v| *v >= 0.0),
-                    _ => true,
-                }
-        }
-        DynamicValue::Vec4(value) => {
-            value.iter().all(|value| value.is_finite())
-                && match lane {
-                    "color" | "border_color" | "gradient_color0" | "gradient_color1"
-                    | "glow_color" => value.iter().all(|value| (0.0..=1.0).contains(value)),
-                    _ => true,
-                }
-        }
-        DynamicValue::Bool(_) => true,
-        DynamicValue::Asset(_) => true,
-        _ => false,
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(ErrorReason::InvalidValue)
-    }
 }

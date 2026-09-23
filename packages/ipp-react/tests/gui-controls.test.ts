@@ -29,11 +29,27 @@ import {
 } from "../src/gui/controls.js";
 import {
   GUI_THEME_PARTS,
+  compileGuiTheme,
   defaultGuiTheme,
-  guiThemeProperties,
+  guiThemeKey,
   validateGuiTheme,
   type GuiControlTheme,
 } from "../src/gui/theme.js";
+import { guiPartFromIndex, type GuiPartValues } from "@ipp/client";
+
+/** Compiled theme rows keyed by part name: `background`,
+ * `background_pressed` or `background_idle_checked`. */
+function themeRows(theme: GuiControlTheme): Record<string, GuiPartValues> {
+  return Object.fromEntries(
+    [...compileGuiTheme(theme)].map(([index, values]) => {
+      const id = guiPartFromIndex(index);
+      return [
+        [id.part, id.state, id.variant].filter(Boolean).join("_"),
+        values,
+      ];
+    }),
+  );
+}
 import {
   actionsForControlKind,
   controlKindForData,
@@ -233,7 +249,7 @@ test("callbacks, refs and initial values resubmit nothing", () => {
   );
 });
 
-test("themes compile to runtime named parts without resolving interaction", () => {
+test("themes compile to root theme part rows without resolving interaction", () => {
   const theme: GuiControlTheme = {
     parts: {
       background: {
@@ -244,23 +260,11 @@ test("themes compile to runtime named parts without resolving interaction", () =
       focusRing: { base: { color: [1, 0, 0, 1] } },
     },
   };
-  const properties = guiThemeProperties(9, theme);
-  assert.deepEqual(properties.node_9_part_background_color, {
-    kind: "vec4",
-    value: [1, 1, 1, 1],
-  });
-  assert.deepEqual(properties.node_9_part_background_pressed_color, {
-    kind: "vec4",
-    value: [0, 0, 0, 1],
-  });
-  assert.deepEqual(properties.node_9_part_background_idle_checked_color, {
-    kind: "vec4",
-    value: [0, 1, 0, 1],
-  });
-  assert.deepEqual(properties.node_9_part_focusRing_color, {
-    kind: "vec4",
-    value: [1, 0, 0, 1],
-  });
+  const properties = themeRows(theme);
+  assert.deepEqual(properties["background"]?.color, [1, 1, 1, 1]);
+  assert.deepEqual(properties["background_pressed"]?.color, [0, 0, 0, 1]);
+  assert.deepEqual(properties["background_idle_checked"]?.color, [0, 1, 0, 1]);
+  assert.deepEqual(properties["focusRing"]?.color, [1, 0, 0, 1]);
   assert.deepEqual(GUI_THEME_PARTS, [
     "background",
     "fill",
@@ -270,11 +274,11 @@ test("themes compile to runtime named parts without resolving interaction", () =
   ]);
 });
 
-test("theme validation fails closed on names, keys and lanes", () => {
+test("theme validation fails closed on names, keys and properties", () => {
   validateGuiTheme(defaultGuiTheme);
   assert.throws(
     () => validateGuiTheme({ parts: { "bad-name": {} } } as never),
-    /not a runtime named part/,
+    /not a runtime base part/,
   );
   assert.throws(
     () =>
@@ -302,7 +306,7 @@ test("theme validation fails closed on names, keys and lanes", () => {
 });
 
 test("transition declarations author the rendering contract", () => {
-  const properties = guiThemeProperties(4, {
+  const properties = themeRows({
     parts: {
       background: {
         base: {
@@ -323,29 +327,18 @@ test("transition declarations author the rendering contract", () => {
       },
     },
   });
-  assert.deepEqual(properties.node_4_part_background_pressed_motion, {
-    kind: "asset",
-    value: { kind: 10, source: "asset://motion", variant: 2 },
+  assert.deepEqual(properties["background_pressed"]?.motion, {
+    kind: 10,
+    source: "asset://motion",
+    variant: 2,
   });
-  assert.deepEqual(properties.node_4_part_background_pressed_duration, {
-    kind: "f32",
-    value: 0.25,
-  });
-  assert.deepEqual(properties.node_4_part_background_pressed_easing, {
-    kind: "f32",
-    value: 1,
-  });
-  assert.deepEqual(properties.node_4_part_background_pressed_track, {
-    kind: "f32",
-    value: 3,
-  });
-  assert.deepEqual(properties.node_4_part_background_pressed_time, {
-    kind: "f32",
-    value: 0.5,
-  });
+  assert.deepEqual(properties["background_pressed"]?.duration, 0.25);
+  assert.deepEqual(properties["background_pressed"]?.easing, 1);
+  assert.deepEqual(properties["background_pressed"]?.track, 3);
+  assert.deepEqual(properties["background_pressed"]?.time, 0.5);
   assert.throws(
     () =>
-      guiThemeProperties(4, {
+      compileGuiTheme({
         parts: {
           background: {
             base: { color: [0, 0, 0, 1] },
@@ -358,7 +351,7 @@ test("transition declarations author the rendering contract", () => {
           },
         },
       }),
-    /requires base color, opacity, and scale lanes/,
+    /requires base color, opacity, and scale/,
   );
   const transition = (track: number): GuiControlTheme => ({
     parts: {
@@ -381,7 +374,7 @@ test("transition declarations author the rendering contract", () => {
   assert.throws(() => validateGuiTheme(transition(0xffff_fffe)), /u32::MAX-2/);
 });
 
-test("switch knob alignment authors an animated align_x lane", () => {
+test("switch knob alignment authors an animated align_x property", () => {
   const knob = (alignX: number, time: number) => ({
     alignX,
     transition: {
@@ -390,7 +383,7 @@ test("switch knob alignment authors an animated align_x lane", () => {
       time,
     },
   });
-  const properties = guiThemeProperties(3, {
+  const properties = themeRows({
     parts: {
       icon: {
         base: { color: [1, 1, 1, 1], opacity: 1, scale: [1, 1], alignX: -1 },
@@ -399,18 +392,9 @@ test("switch knob alignment authors an animated align_x lane", () => {
       },
     },
   });
-  assert.deepEqual(properties.node_3_part_icon_align_x, {
-    kind: "f32",
-    value: -1,
-  });
-  assert.deepEqual(properties.node_3_part_icon_pressed_checked_align_x, {
-    kind: "f32",
-    value: 1,
-  });
-  assert.deepEqual(properties.node_3_part_icon_idle_unchecked_align_x, {
-    kind: "f32",
-    value: -1,
-  });
+  assert.deepEqual(properties["icon"]?.alignX, -1);
+  assert.deepEqual(properties["icon_pressed_checked"]?.alignX, 1);
+  assert.deepEqual(properties["icon_idle_unchecked"]?.alignX, -1);
   assert.throws(
     () =>
       validateGuiTheme({
@@ -448,30 +432,21 @@ test("theme fonts enter measured node style and label assets reject", () => {
   );
 });
 
-test("theme-only control paint stays in named parts instead of node style", () => {
+test("theme-only control paint stays in theme rows instead of node style", () => {
   const button = describeButton({
     label: "Painted",
     theme: defaultGuiTheme,
   });
   assert.equal(button.style.backgroundColor, undefined);
-  const properties = guiThemeProperties(3, defaultGuiTheme);
-  assert.deepEqual(properties.node_3_part_background_color, {
-    kind: "vec4",
-    value: [0.16, 0.34, 0.72, 1],
-  });
-  assert.deepEqual(properties.node_3_part_icon_idle_checked_opacity, {
-    kind: "f32",
-    value: 1,
-  });
-  assert.deepEqual(properties.node_3_part_icon_idle_unchecked_opacity, {
-    kind: "f32",
-    value: 0,
-  });
+  const properties = themeRows(defaultGuiTheme);
+  assert.deepEqual(properties["background"]?.color, [0.16, 0.34, 0.72, 1]);
+  assert.deepEqual(properties["icon_idle_checked"]?.opacity, 1);
+  assert.deepEqual(properties["icon_idle_unchecked"]?.opacity, 0);
 });
 
-test("colour-only state lanes select a solid fill over an inherited gradient", () => {
+test("colour-only state styles select a solid fill over an inherited gradient", () => {
   const glow = { color: [0, 1, 1, 1] as const, intensity: 0.2, radius: 0.03 };
-  const properties = guiThemeProperties(5, {
+  const properties = themeRows({
     parts: {
       background: {
         base: {
@@ -491,41 +466,20 @@ test("colour-only state lanes select a solid fill over an inherited gradient", (
     },
   });
 
-  assert.deepEqual(properties.node_5_part_background_fill_mode, {
-    kind: "f32",
-    value: 1,
-  });
-  assert.deepEqual(properties.node_5_part_background_hovered_fill_mode, {
-    kind: "f32",
-    value: 2,
-  });
-  assert.deepEqual(properties.node_5_part_background_disabled_fill_mode, {
-    kind: "f32",
-    value: 0,
-  });
-  assert.deepEqual(
-    properties.node_5_part_background_hovered_checked_fill_mode,
-    {
-      kind: "f32",
-      value: 0,
-    },
-  );
-  // Lanes without a colour keep inheriting the fill; glow lanes inherit
+  assert.deepEqual(properties["background"]?.fillMode, 1);
+  assert.deepEqual(properties["background_hovered"]?.fillMode, 2);
+  assert.deepEqual(properties["background_disabled"]?.fillMode, 0);
+  assert.deepEqual(properties["background_hovered_checked"]?.fillMode, 0);
+  // Styles without a colour keep inheriting the fill; glow properties inherit
   // independently and are removed only by an explicit zero intensity.
-  assert.equal(properties.node_5_part_background_pressed_fill_mode, undefined);
-  assert.equal(
-    properties.node_5_part_background_disabled_glow_color,
-    undefined,
-  );
-  assert.deepEqual(properties.node_5_part_background_disabled_glow_intensity, {
-    kind: "f32",
-    value: 0,
-  });
+  assert.equal(properties["background_pressed"]?.fillMode, undefined);
+  assert.equal(properties["background_disabled"]?.glowColor, undefined);
+  assert.deepEqual(properties["background_disabled"]?.glowIntensity, 0);
   // Parts without any gradient need no explicit mode.
-  assert.equal(properties.node_5_part_icon_hovered_fill_mode, undefined);
+  assert.equal(properties["icon_hovered"]?.fillMode, undefined);
   assert.equal(
-    Object.keys(guiThemeProperties(3, defaultGuiTheme)).some((name) =>
-      name.endsWith("_fill_mode"),
+    Object.values(themeRows(defaultGuiTheme)).some(
+      (values) => values.fillMode !== undefined,
     ),
     false,
   );
@@ -557,7 +511,7 @@ test("node kinds map to control roles, names and actions", () => {
 });
 
 test("shape material declarations author the rendering contract and validate closed", () => {
-  const properties = guiThemeProperties(7, {
+  const properties = themeRows({
     parts: {
       background: {
         base: {
@@ -591,92 +545,47 @@ test("shape material declarations author the rendering contract and validate clo
     },
   });
 
-  assert.deepEqual(properties.node_7_part_background_corner_radius, {
-    kind: "vec2",
-    value: [0.05, 0.05],
-  });
-  assert.deepEqual(properties.node_7_part_background_border_width, {
-    kind: "f32",
-    value: 0.01,
-  });
-  assert.deepEqual(properties.node_7_part_background_border_color, {
-    kind: "vec4",
-    value: [0.2, 0.4, 0.8, 1],
-  });
-  assert.deepEqual(properties.node_7_part_background_fill_mode, {
-    kind: "f32",
-    value: 1,
-  });
-  assert.deepEqual(properties.node_7_part_background_gradient_start, {
-    kind: "vec2",
-    value: [0, 0],
-  });
-  assert.deepEqual(properties.node_7_part_background_gradient_end, {
-    kind: "vec2",
-    value: [1, 1],
-  });
-  assert.deepEqual(properties.node_7_part_background_gradient_color0, {
-    kind: "vec4",
-    value: [1, 0, 0, 1],
-  });
-  assert.deepEqual(properties.node_7_part_background_gradient_color1, {
-    kind: "vec4",
-    value: [0, 0, 1, 1],
-  });
-  assert.deepEqual(properties.node_7_part_background_glow_color, {
-    kind: "vec4",
-    value: [1, 0.5, 0, 0.8],
-  });
-  assert.deepEqual(properties.node_7_part_background_glow_intensity, {
-    kind: "f32",
-    value: 1.5,
-  });
-  assert.deepEqual(properties.node_7_part_background_glow_radius, {
-    kind: "f32",
-    value: 0.02,
-  });
-  assert.deepEqual(properties.node_7_part_background_glow_falloff, {
-    kind: "f32",
-    value: 2.0,
-  });
+  assert.deepEqual(properties["background"]?.cornerRadius, [0.05, 0.05]);
+  assert.deepEqual(properties["background"]?.borderWidth, 0.01);
+  assert.deepEqual(properties["background"]?.borderColor, [0.2, 0.4, 0.8, 1]);
+  assert.deepEqual(properties["background"]?.fillMode, 1);
+  assert.deepEqual(properties["background"]?.gradientStart, [0, 0]);
+  assert.deepEqual(properties["background"]?.gradientEnd, [1, 1]);
+  assert.deepEqual(properties["background"]?.gradientColor0, [1, 0, 0, 1]);
+  assert.deepEqual(properties["background"]?.gradientColor1, [0, 0, 1, 1]);
+  assert.deepEqual(properties["background"]?.glowColor, [1, 0.5, 0, 0.8]);
+  assert.deepEqual(properties["background"]?.glowIntensity, 1.5);
+  assert.deepEqual(properties["background"]?.glowRadius, 0.02);
+  assert.deepEqual(properties["background"]?.glowFalloff, 2.0);
 
-  assert.deepEqual(properties.node_7_part_background_hovered_fill_mode, {
-    kind: "f32",
-    value: 2,
-  });
-  assert.deepEqual(properties.node_7_part_background_hovered_gradient_start, {
-    kind: "vec2",
-    value: [0.5, 0.5],
-  });
-  assert.deepEqual(properties.node_7_part_background_hovered_gradient_radius, {
-    kind: "f32",
-    value: 0.75,
-  });
+  assert.deepEqual(properties["background_hovered"]?.fillMode, 2);
+  assert.deepEqual(properties["background_hovered"]?.gradientStart, [0.5, 0.5]);
+  assert.deepEqual(properties["background_hovered"]?.gradientRadius, 0.75);
 
   assert.throws(
     () =>
-      guiThemeProperties(7, {
+      compileGuiTheme({
         parts: { background: { base: { cornerRadius: [-1, 0] } } },
       }),
     /cornerRadius must be two non-negative finite numbers/,
   );
   assert.throws(
     () =>
-      guiThemeProperties(7, {
+      compileGuiTheme({
         parts: { background: { base: { borderWidth: -0.5 } } },
       }),
     /borderWidth must be a non-negative finite number/,
   );
   assert.throws(
     () =>
-      guiThemeProperties(7, {
+      compileGuiTheme({
         parts: { background: { base: { borderColor: [1, 1, 2, 1] } } },
       }),
     /borderColor must be four finite numbers in 0..1/,
   );
   assert.throws(
     () =>
-      guiThemeProperties(7, {
+      compileGuiTheme({
         parts: {
           background: { base: { gradient: { kind: "invalid" as never } } },
         },
@@ -685,7 +594,7 @@ test("shape material declarations author the rendering contract and validate clo
   );
   assert.throws(
     () =>
-      guiThemeProperties(7, {
+      compileGuiTheme({
         parts: {
           background: { base: { gradient: { kind: "radial", radius: -1 } } },
         },
@@ -694,9 +603,31 @@ test("shape material declarations author the rendering contract and validate clo
   );
   assert.throws(
     () =>
-      guiThemeProperties(7, {
+      compileGuiTheme({
         parts: { background: { base: { glow: { intensity: -1 } } } },
       }),
     /intensity must be a non-negative finite number/,
+  );
+});
+
+test("themes are identified once per root by name or content", () => {
+  const red: GuiControlTheme = {
+    parts: { background: { base: { color: [1, 0, 0, 1] } } },
+  };
+  const green: GuiControlTheme = {
+    parts: { background: { base: { color: [0, 1, 0, 1] } } },
+  };
+  // Equal content shares one runtime theme; different content does not.
+  assert.equal(guiThemeKey(red), guiThemeKey({ ...red }));
+  assert.notEqual(guiThemeKey(red), guiThemeKey(green));
+  // A name keeps identity across content edits, so the runtime theme updates
+  // in place.
+  assert.equal(
+    guiThemeKey({ name: "panel", ...red }),
+    guiThemeKey({ name: "panel", ...green }),
+  );
+  assert.throws(
+    () => validateGuiTheme({ name: "", parts: {} }),
+    /name must be a nonempty string/,
   );
 });

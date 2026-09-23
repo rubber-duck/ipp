@@ -23,6 +23,7 @@ import type {
   GuiNodeStyle,
   GuiNodeValues,
   GuiObservationTarget,
+  GuiPartPatch,
   GuiPointerButton,
   GuiSemanticActionKind,
   GuiSemanticActionRequest,
@@ -35,6 +36,7 @@ import type {
   GuiUnhandledObservation,
 } from "./gui-types.js";
 import type { RowPropertyDescriptor } from "./types.js";
+import { GUI_BASE_PARTS, guiPartIndex } from "./gui-types.js";
 export * from "./gui-types.js";
 
 function guiVector(
@@ -185,8 +187,10 @@ function readGuiControlValue(r: Reader): GuiControlValue {
   }
 }
 
-/** The `GuiRoot.node_style` and `GuiRoot.node_data` row layouts of this contract. */
-function guiRowLayout(field: "node_style" | "node_data"): RowsLayoutDescriptor {
+/** A GuiRoot row layout of this contract. */
+function guiRowLayout(
+  field: "node_style" | "node_data" | "theme_parts",
+): RowsLayoutDescriptor {
   return (
     components.GuiRoot.fields[field]?.rows ?? fail(`GuiRoot.${field} rows`)
   );
@@ -344,17 +348,20 @@ function readGuiRow(
 }
 
 /**
- * Write a style patch: a changed mask and a set mask over the style layout,
- * then the set values in layout order. `null` clears an optional property.
+ * Write a sparse patch: a changed mask and a set mask over `properties`, then
+ * the set values in their order. `null` clears an optional property.
  */
-function writeGuiNodePatchStyle(w: Writer, style: GuiNodePatchStyle): void {
-  const layout = guiRowLayout("node_style");
-  const record = style as Readonly<Record<string, unknown>>;
-  const known = new Set(layout.properties.map((p) => guiRowKey(p.name)));
+function writeGuiPatch(
+  w: Writer,
+  properties: readonly RowPropertyDescriptor[],
+  patch: object,
+): void {
+  const record = patch as Readonly<Record<string, unknown>>;
+  const known = new Set(properties.map((p) => guiRowKey(p.name)));
   for (const key of Object.keys(record))
     if (!known.has(key) && record[key] !== undefined)
       fail(`unknown GUI ${key}`);
-  const changes = layout.properties.map((property) => {
+  const changes = properties.map((property) => {
     const value = record[guiRowKey(property.name)];
     if (value === null && !property.optional)
       fail(`GUI ${guiRowKey(property.name)} cannot be cleared`);
@@ -368,11 +375,27 @@ function writeGuiNodePatchStyle(w: Writer, style: GuiNodePatchStyle): void {
     w,
     changes.map((value) => value !== undefined && value !== null),
   );
-  layout.properties.forEach((property, index) => {
+  properties.forEach((property, index) => {
     const value = changes[index];
     if (value !== undefined && value !== null)
       writeGuiRowValue(w, property, value);
   });
+}
+
+/** Write a style patch over the `node_style` layout. */
+function writeGuiNodePatchStyle(w: Writer, style: GuiNodePatchStyle): void {
+  writeGuiPatch(w, guiRowLayout("node_style").properties, style);
+}
+
+/**
+ * Write a part patch over the `theme_parts` part properties: every property
+ * before the trailing `theme` key.
+ */
+function writeGuiPartPatch(w: Writer, patch: GuiPartPatch): void {
+  const properties = guiRowLayout("theme_parts").properties;
+  const key = properties.findIndex(({ name }) => name === "theme");
+  if (key < 0) fail("GuiRoot.theme_parts theme key");
+  writeGuiPatch(w, properties.slice(0, key), patch);
 }
 
 /** Encode a complete GUI tree and its control records for a new GuiRoot incarnation. */
@@ -471,6 +494,9 @@ function encodeGuiEditBody(edit: GuiEdit): Uint8Array<ArrayBuffer> {
     move: 3,
     remove: 4,
     setControlValue: 5,
+    updateTheme: 6,
+    removeTheme: 7,
+    updatePart: 8,
   };
   if (!Object.hasOwn(actions, edit.action)) fail("GUI edit action");
   w.u8(actions[edit.action]);
@@ -534,6 +560,52 @@ function encodeGuiEditBody(edit: GuiEdit): Uint8Array<ArrayBuffer> {
       w.u32(edit.expectedRevision);
       writeGuiControlValue(w, edit.value);
       break;
+    case "updateTheme":
+      exactFields(edit, [
+        "action",
+        "entity",
+        "rootIncarnation",
+        "theme",
+        "part",
+        "patch",
+      ]);
+      if (edit.entity === 0n) fail("GUI edit entity");
+      if (edit.rootIncarnation < 0n) fail("GUI edit root incarnation");
+      if (
+        !Number.isInteger(edit.theme) ||
+        edit.theme < 0 ||
+        edit.theme > 0xffffffff
+      )
+        fail("GUI theme handle");
+      w.u64(edit.entity);
+      w.u64(edit.rootIncarnation);
+      w.u32(edit.theme);
+      w.u8(guiPartIndex(edit.part));
+      writeGuiPartPatch(w, edit.patch);
+      break;
+    case "removeTheme":
+      exactFields(edit, ["action", "entity", "rootIncarnation", "theme"]);
+      if (edit.entity === 0n) fail("GUI edit entity");
+      if (edit.rootIncarnation < 0n) fail("GUI edit root incarnation");
+      if (
+        !Number.isInteger(edit.theme) ||
+        edit.theme < 0 ||
+        edit.theme > 0xffffffff
+      )
+        fail("GUI theme handle");
+      w.u64(edit.entity);
+      w.u64(edit.rootIncarnation);
+      w.u32(edit.theme);
+      break;
+    case "updatePart": {
+      exactFields(edit, ["action", "handle", "part", "patch"]);
+      writeGuiNodeHandle(w, edit.handle);
+      const part = GUI_BASE_PARTS.indexOf(edit.part);
+      if (part < 0) fail("GUI base part");
+      w.u8(part);
+      writeGuiPartPatch(w, edit.patch);
+      break;
+    }
   }
   return w.finish();
 }
@@ -584,7 +656,7 @@ export function encodeGuiEdits(
 ): Uint8Array<ArrayBuffer> {
   const bodies = edits.map(encodeGuiEditBody);
   const w = new Writer(MAX_DIRECT_GUI_BATCH_BYTES);
-  w.u8(3);
+  w.u8(4);
   w.count(bodies.length, 0xffffffff);
   for (const body of bodies) w.raw(body);
   return w.finish();

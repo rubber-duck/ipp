@@ -5,7 +5,7 @@ import {
   Stack,
   Text,
   type GuiNodeProps,
-  type GuiThemeLaneStyle,
+  type GuiThemePartStyle,
 } from "@ipp/react/gui";
 import type { ClientAssetSource } from "@ipp/client";
 
@@ -34,7 +34,7 @@ export function Shape({
 }: GuiNodeProps & {
   x?: number;
   y?: number;
-  material?: GuiThemeLaneStyle;
+  material?: GuiThemePartStyle;
 }) {
   const { color = [0, 0, 0, 0], ...appearance } = material ?? {};
   // Plain strips need only a fill, without redundant named material properties.

@@ -4,13 +4,14 @@ use super::{ProtocolError, Reader, Writer};
 use crate::MAX_MESSAGE_BYTES;
 use ipp_core::components::rows::{SchemaRow, decode_row, decode_row_value, encode_row};
 use ipp_core::systems::gui::{
-    GuiBlockerHit, GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand, GuiInspectQuery,
-    GuiInspectResponse, GuiKey, GuiNodeData, GuiNodeDataRow, GuiNodeHandle, GuiNodeId,
-    GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiPointerButton,
+    GUI_BASE_PARTS, GuiBlockerHit, GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand,
+    GuiInspectQuery, GuiInspectResponse, GuiKey, GuiNodeData, GuiNodeDataRow, GuiNodeHandle,
+    GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiPartId,
+    GuiPartPatch, GuiPartProperty, GuiPointerButton,
 };
 
 /// GUI edit framing version; see the `gui-edit` wire convention.
-const GUI_EDIT_VERSION: u8 = 3;
+const GUI_EDIT_VERSION: u8 = 4;
 /// GUI inspection response framing version.
 const GUI_INSPECT_VERSION: u8 = 2;
 
@@ -25,10 +26,11 @@ impl Reader<'_> {
             return Err(ProtocolError::Malformed("GUI edit version"));
         }
         let count = r.u32()? as usize;
-        // A remove command is the smallest command body: one action byte and
-        // one 28-byte node handle. Derive the admission bound from the framed
-        // bytes so malformed counts cannot force disproportionate allocation.
-        const MIN_COMMAND_BYTES: usize = 29;
+        // A theme removal is the smallest command body: one action byte, the
+        // entity, the root incarnation and the theme handle. Derive the
+        // admission bound from the framed bytes so malformed counts cannot
+        // force disproportionate allocation.
+        const MIN_COMMAND_BYTES: usize = 21;
         if count == 0 || count > bytes.len().saturating_sub(r.at) / MIN_COMMAND_BYTES {
             return Err(ProtocolError::Malformed("GUI edit count"));
         }
@@ -108,6 +110,38 @@ impl Reader<'_> {
                     handle,
                     expected_revision,
                     value,
+                }
+            }
+            6 => {
+                let entity = ipp_core::EntityId::from_bits(r.u64()?);
+                let root_incarnation = r.u64()?;
+                let theme = r.u32()?;
+                let part = GuiPartId::from_index(u32::from(r.u8()?))
+                    .ok_or(ProtocolError::Malformed("GUI theme part"))?;
+                let patch = r.gui_part_patch()?;
+                GuiCommand::UpdateTheme {
+                    entity,
+                    root_incarnation,
+                    theme,
+                    part,
+                    patch,
+                }
+            }
+            7 => GuiCommand::RemoveTheme {
+                entity: ipp_core::EntityId::from_bits(r.u64()?),
+                root_incarnation: r.u64()?,
+                theme: r.u32()?,
+            },
+            8 => {
+                let handle = r.gui_node_handle()?;
+                let part = *GUI_BASE_PARTS
+                    .get(usize::from(r.u8()?))
+                    .ok_or(ProtocolError::Malformed("GUI base part"))?;
+                let patch = r.gui_part_patch()?;
+                GuiCommand::UpdatePart {
+                    handle,
+                    part,
+                    patch,
                 }
             }
             _ => return Err(ProtocolError::Malformed("GUI edit action")),
@@ -282,30 +316,50 @@ impl Reader<'_> {
             },
             ..GuiNodePatch::default()
         };
-        let layout = GuiNodeStyleRow::LAYOUT;
-        let changed = self.take(layout.mask_bytes())?.to_vec();
-        let set = self.take(layout.mask_bytes())?.to_vec();
-        let bit = |mask: &[u8], index: usize| mask[index / 8] & (1 << (index % 8)) != 0;
-        if let Some(last) = changed.last()
-            && layout.properties.len() % 8 != 0
-            && (last >> (layout.properties.len() % 8) != 0
-                || set[set.len() - 1] >> (layout.properties.len() % 8) != 0)
-        {
-            return Err(ProtocolError::Malformed("GUI patch mask"));
-        }
+        let masks = self.gui_patch_masks(GuiNodeStyleProperty::COUNT)?;
         for property in GuiNodeStyleProperty::ALL {
-            let index = property.index() as usize;
-            let change = match (bit(&changed, index), bit(&set, index)) {
-                (false, false) => continue,
-                (false, true) => return Err(ProtocolError::Malformed("GUI patch mask")),
-                (true, false) => Some(None),
-                (true, true) => Some(Some(self.gui_row_value(property.kind())?)),
+            let change = match masks.change(property.index())? {
+                None => continue,
+                Some(false) => Some(None),
+                Some(true) => Some(Some(self.gui_row_value(property.kind())?)),
             };
             patch
                 .set_style_change(property, change)
                 .map_err(|_| ProtocolError::Malformed("GUI patch value"))?;
         }
         Ok(patch)
+    }
+
+    /// Part patch body: a changed mask and a set mask over the part
+    /// properties of the theme part row layout, followed by the set values in
+    /// layout order; changed-but-unset clears a property.
+    fn gui_part_patch(&mut self) -> Result<GuiPartPatch, ProtocolError> {
+        let masks = self.gui_patch_masks(GuiPartProperty::COUNT)?;
+        let mut patch = GuiPartPatch::default();
+        for property in GuiPartProperty::ALL {
+            match masks.change(property.index())? {
+                None => {}
+                Some(false) => patch = patch.clear(property),
+                Some(true) => patch = patch.set(property, self.gui_row_value(property.kind())?),
+            }
+        }
+        Ok(patch)
+    }
+
+    /// Changed and set masks over the first `count` properties of a layout;
+    /// bits past `count` must be clear.
+    fn gui_patch_masks(&mut self, count: u32) -> Result<GuiPatchMasks, ProtocolError> {
+        let bytes = (count as usize).div_ceil(8);
+        let changed = self.take(bytes)?.to_vec();
+        let set = self.take(bytes)?.to_vec();
+        let extra = count as usize % 8;
+        if extra != 0 && (changed[bytes - 1] >> extra != 0 || set[bytes - 1] >> extra != 0) {
+            return Err(ProtocolError::Malformed("GUI patch mask"));
+        }
+        Ok(GuiPatchMasks {
+            changed,
+            set,
+        })
     }
 
     /// One row in the table's per-row encoding, validated by its layout.
@@ -394,6 +448,25 @@ impl Reader<'_> {
             },
             _ => return Err(ProtocolError::Malformed("GUI data tag")),
         })
+    }
+}
+
+/// Changed and set bit masks of one patch.
+struct GuiPatchMasks {
+    changed: Vec<u8>,
+    set: Vec<u8>,
+}
+
+impl GuiPatchMasks {
+    /// None when unchanged, Some(false) to clear and Some(true) to set; a set
+    /// bit without its changed bit is malformed.
+    fn change(&self, index: u32) -> Result<Option<bool>, ProtocolError> {
+        let bit = |mask: &[u8]| mask[index as usize / 8] & (1 << (index % 8)) != 0;
+        match (bit(&self.changed), bit(&self.set)) {
+            (false, false) => Ok(None),
+            (false, true) => Err(ProtocolError::Malformed("GUI patch mask")),
+            (true, set) => Ok(Some(set)),
+        }
     }
 }
 

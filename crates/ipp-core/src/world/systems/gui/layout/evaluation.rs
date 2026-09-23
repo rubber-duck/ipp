@@ -100,9 +100,10 @@
 //! renderer through the internal retained Surface preparation path, never
 //! through self-issued client commands.
 
-use super::super::tree::GuiNodeStyleRow;
+use super::super::tree::{GUI_BASE_PARTS, GuiNodeStyleRow, GuiPartId};
 use super::super::{GuiContainerKind, GuiNode, GuiNodeData, GuiNodeId, GuiNodeStyle, GuiRoot};
 use crate::EntityId;
+use crate::components::rows::SchemaRow;
 use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetKey, AssetSource};
 use crate::systems::surface::{
@@ -2637,6 +2638,7 @@ fn hash_node_paint(
     id: GuiNodeId,
     style: &GuiNodeStyleRow,
     resolver: &dyn GuiResourceResolver,
+    themes: &BTreeMap<u32, u64>,
 ) {
     for lane in style.color {
         hasher.f32(lane);
@@ -2645,7 +2647,7 @@ fn hash_node_paint(
     hasher.f32(style.opacity);
     hasher.u32(u32::from(style.enabled));
     hash_control_state(hasher, root, id);
-    hash_node_part_paint(hasher, root, id, resolver);
+    hash_node_part_paint(hasher, root, id, style, resolver, themes);
 }
 
 /// Hash non-geometric control values and revisions for retained state refresh.
@@ -2672,48 +2674,79 @@ fn hash_control_state(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) {
     }
 }
 
-/// Hash named skin-part lanes into the paint fingerprint.
+/// Hash one node's skin inputs into the paint fingerprint.
 ///
-/// Skins resolve at render preparation from live part properties and
-/// input cursors, outside retained layout evaluation. Without these
-/// lanes a reskin leaves every fingerprint still and needs an unrelated
-/// trigger to repaint. All part states hash together: any part edit
-/// invalidates paint while cursors select the visible state, so paint
-/// rebuilds without remeasuring text or reflowing layout. Each lane hashes
-/// its name, storage type and stored bytes, read through one ordered scan.
+/// Skins resolve at render preparation from theme and part rows and input
+/// cursors, outside retained layout evaluation. Without these inputs a reskin
+/// leaves every fingerprint still and needs an unrelated trigger to repaint.
+/// A node hashes its theme reference with the precomputed hash of that
+/// theme's rows, so editing a theme repaints exactly its referencing nodes,
+/// and its own part rows including live channels. All states hash together:
+/// any part edit invalidates paint while cursors select the visible state, so
+/// paint rebuilds without remeasuring text or reflowing layout.
 fn hash_node_part_paint(
     hasher: &mut Fingerprint,
     root: &GuiRoot,
     id: GuiNodeId,
+    style: &GuiNodeStyleRow,
     resolver: &dyn GuiResourceResolver,
+    themes: &BTreeMap<u32, u64>,
 ) {
-    let prefix = super::super::tree::component::node_parts_prefix(id);
-    for (lane, descriptor) in root.part_lanes(&prefix) {
-        hasher.string(lane);
-        hasher.u32(descriptor.kind as u32);
-        if descriptor.kind == crate::DynamicPropertyKind::Asset {
-            let source = root.properties.descriptor_asset(descriptor);
-            hash_asset(hasher, source);
-            match source.and_then(|source| resolver.resource_generation(source)) {
-                Some(generation) => {
-                    hasher.u32(1);
-                    hasher.u64(generation);
-                }
-                None => hasher.u32(0),
+    match style.theme {
+        Some(theme) => {
+            hasher.u32(1);
+            hasher.u32(theme);
+            match root.theme_slot(theme).and_then(|slot| themes.get(&slot)) {
+                Some(hash) => hasher.u64(*hash),
+                None => hasher.u32(u32::MAX),
             }
-            continue;
         }
-
-        let start = descriptor.offset as usize;
-        match root
-            .properties
-            .buffer()
-            .get(start..start + descriptor.kind.byte_len())
-        {
-            Some(bytes) => hasher.bytes(bytes),
-            None => hasher.u32(u32::MAX),
+        None => hasher.u32(0),
+    }
+    for part in GUI_BASE_PARTS {
+        match root.part_row(id, part) {
+            Some((_, row)) => {
+                hasher.u32(1);
+                hash_skin_row(hasher, row, resolver);
+            }
+            None => hasher.u32(0),
         }
     }
+}
+
+/// Hash every theme's rows once per fingerprint pass, keyed by theme slot.
+fn theme_hashes(root: &GuiRoot, resolver: &dyn GuiResourceResolver) -> BTreeMap<u32, u64> {
+    let mut hashes: BTreeMap<u32, Fingerprint> = BTreeMap::new();
+    for (slot, row) in root.theme_parts().iter() {
+        let hasher = hashes
+            .entry(slot / GuiPartId::COUNT)
+            .or_insert_with(Fingerprint::new);
+        hasher.u32(slot % GuiPartId::COUNT);
+        hash_skin_row(hasher, row, resolver);
+    }
+    hashes
+        .into_iter()
+        .map(|(slot, hasher)| (slot, hasher.finish()))
+        .collect()
+}
+
+/// Hash a skin row's encoded properties and the readiness generation of each
+/// asset it references.
+fn hash_skin_row<R: SchemaRow>(
+    hasher: &mut Fingerprint,
+    row: &R,
+    resolver: &dyn GuiResourceResolver,
+) {
+    let mut bytes = Vec::new();
+    crate::components::rows::encode_row(row, &mut bytes);
+    hasher.bytes(&bytes);
+    row.visit_assets(&mut |source| match resolver.resource_generation(source) {
+        Some(generation) => {
+            hasher.u32(1);
+            hasher.u64(generation);
+        }
+        None => hasher.u32(0),
+    });
 }
 
 #[cfg(test)]
@@ -2743,12 +2776,13 @@ fn fingerprints(
     let mut paint = Fingerprint::new();
     structure.u32(root.nodes().next_node_id());
     structure.u32(root.nodes().root_node().map(|id| id.0).unwrap_or(u32::MAX));
+    let themes = theme_hashes(root, resolver);
     for node in root.nodes().as_slice() {
         hash_node_structure(&mut structure, root, node);
         let style = root.style_row(node.id).unwrap_or(&DEFAULT_STYLE_ROW);
         hash_node_layout(&mut layout, style, resolver);
         hash_node_visual(&mut visual, style);
-        hash_node_paint(&mut paint, root, node.id, style, resolver);
+        hash_node_paint(&mut paint, root, node.id, style, resolver, &themes);
     }
     let structure = structure.finish();
     layout.u64(structure);

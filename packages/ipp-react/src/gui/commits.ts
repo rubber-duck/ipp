@@ -18,15 +18,17 @@
  * All transport happens here, in the commit phase. Description, validation
  * and diffing stay pure.
  */
-import type {
-  BatchOutcome,
-  Command,
-  DynamicValue,
-  GuiEdit,
-  GuiEditBatchOutcome,
-  GuiInspectedNode,
-  GuiInspectResponse,
-  GuiNodeHandle,
+import {
+  guiPartFromIndex,
+  type BatchOutcome,
+  type Command,
+  type GuiEdit,
+  type GuiEditBatchOutcome,
+  type GuiInspectedNode,
+  type GuiInspectResponse,
+  type GuiNodeHandle,
+  type GuiPartPatch,
+  type GuiPartValues,
 } from "@ipp/client";
 import type { ReactWorldClient } from "../contract.js";
 import type { GuiDeclarationStyle, GuiNodeRef } from "./components.js";
@@ -49,7 +51,7 @@ import {
 } from "./description.js";
 import { diffGuiTree, type GuiAcknowledgedNode } from "./diff.js";
 import { retainedNodeCallbacks } from "../tree.js";
-import { guiThemeProperties } from "./theme.js";
+import { compileGuiTheme, guiThemeKey, type GuiControlTheme } from "./theme.js";
 
 export interface GuiCommitOptions {
   checkSession(): void;
@@ -79,8 +81,13 @@ interface GuiRootState {
   /** True when this reconciler created the producer root and must remove it
    * on release. Adopted pre-existing producers are used but never removed. */
   producerOwned: boolean;
-  /** Acknowledged ordinary GuiRoot named-part properties. */
-  themeProperties: Map<string, DynamicValue>;
+  /** Acknowledged root themes by theme key, with their runtime handle and
+   * compiled part rows keyed by part index. */
+  themes: Map<string, GuiThemeState>;
+  /** Next unused theme handle; handles are never reused within a root. */
+  nextThemeId: number;
+  /** Acknowledged theme handle each node references. */
+  nodeThemes: Map<number, number>;
   /** Retained teardown progress. A successful node removal must not be
    * replayed merely because the later producer removal was rejected. */
   cleanup?:
@@ -89,6 +96,26 @@ interface GuiRootState {
         producerReleased: boolean;
       }
     | undefined;
+}
+
+interface GuiThemeState {
+  readonly id: number;
+  readonly rows: ReadonlyMap<number, GuiPartValues>;
+}
+
+/** Sparse change turning one compiled part row into another, or undefined
+ * when they are equal. */
+function partPatch(
+  previous: GuiPartValues | undefined,
+  next: GuiPartValues | undefined,
+): GuiPartPatch | undefined {
+  const before = (previous ?? {}) as Readonly<Record<string, unknown>>;
+  const after = (next ?? {}) as Readonly<Record<string, unknown>>;
+  const patch: Record<string, unknown> = {};
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)]))
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+      patch[key] = after[key] ?? null;
+  return Object.keys(patch).length === 0 ? undefined : (patch as GuiPartPatch);
 }
 
 function isRejected(error: unknown): boolean {
@@ -398,7 +425,9 @@ export class GuiCommits {
           nextId: 1,
           boundRefs: new Map(),
           producerOwned: true,
-          themeProperties: new Map(),
+          themes: new Map(),
+          nextThemeId: 1,
+          nodeThemes: new Map(),
         };
         this.stageCleanup(undefined, refused);
         await this.retryPendingCleanup();
@@ -435,7 +464,9 @@ export class GuiCommits {
       nextId: restored ?? 1,
       boundRefs: new Map(),
       producerOwned,
-      themeProperties: new Map(),
+      themes: new Map(),
+      nextThemeId: 1,
+      nodeThemes: new Map(),
     };
     this.states.set(identity, state);
     return state;
@@ -509,6 +540,14 @@ export class GuiCommits {
             action: "remove",
             handle: this.handleFor(state, root[1].nodeId),
           },
+          ...[...state.themes.values()].map(
+            (theme): GuiEdit => ({
+              action: "removeTheme",
+              entity: state.entity,
+              rootIncarnation: state.incarnation,
+              theme: theme.id,
+            }),
+          ),
         ]);
         if (!outcome.ok) {
           const inspection = await client
@@ -651,56 +690,119 @@ export class GuiCommits {
     return next;
   }
 
-  /** Author theme declarations through the ordinary GuiRoot dynamic-property
-   * path after structural acknowledgement. Core, not React, selects the
-   * active state/variant and owns transition playback. */
+  /** Flush themes once per root after structural acknowledgement: create
+   * or patch each distinct theme's part rows, point nodes at their theme and
+   * remove themes no node references. Core, not React, selects the active
+   * state/variant and owns transition playback. */
   private async flushTheme(
     root: GuiDescribedRoot,
     state: GuiRootState,
   ): Promise<void> {
-    const descriptor = this.client.components["GuiRoot"];
-    if (!descriptor)
-      throw new Error("GUI themes require the GuiRoot component descriptor");
-    const desired = new Map<string, DynamicValue>();
-    const liveNodeIds = new Set<number>();
+    const client = this.client;
+    if (!hasGui(client))
+      throw new Error("GUI declarations require a GUI-capable client");
+    const compiled = new Map<
+      GuiControlTheme,
+      { key: string; rows: ReadonlyMap<number, GuiPartValues> }
+    >();
+    const desired = new Map<string, ReadonlyMap<number, GuiPartValues>>();
+    const references = new Map<number, string | undefined>();
     for (const node of root.nodes) {
       const ack = state.acked.get(node.identity);
       if (!ack) continue;
-      liveNodeIds.add(ack.nodeId);
-      for (const [name, value] of Object.entries(
-        guiThemeProperties(ack.nodeId, node.theme),
-      ))
-        desired.set(name, value);
-    }
-    const belongsToLiveNode = (name: string): boolean => {
-      const match = /^node_([1-9][0-9]*)_part_/.exec(name);
-      return match !== null && liveNodeIds.has(Number(match[1]));
-    };
-    const previous = new Map(
-      [...state.themeProperties].filter(([name]) => belongsToLiveNode(name)),
-    );
-    const commands: Command[] = [];
-    for (const [name, value] of desired) {
-      if (JSON.stringify(previous.get(name)) === JSON.stringify(value))
+      if (node.theme === undefined) {
+        references.set(ack.nodeId, undefined);
         continue;
-      commands.push({
-        kind: "setDynamicProperty",
-        entity: { kind: "handle", id: state.entity },
-        component: descriptor.id,
-        name,
-        value,
+      }
+      let entry = compiled.get(node.theme);
+      if (!entry) {
+        const rows = compileGuiTheme(node.theme);
+        entry = { key: guiThemeKey(node.theme, rows), rows };
+        compiled.set(node.theme, entry);
+      }
+      const existing = desired.get(entry.key);
+      if (
+        existing !== undefined &&
+        existing !== entry.rows &&
+        JSON.stringify([...existing]) !== JSON.stringify([...entry.rows])
+      )
+        throw this.options.report(
+          new Error(`GUI themes named "${node.theme.name}" differ`),
+        );
+      desired.set(entry.key, entry.rows);
+      references.set(ack.nodeId, entry.key);
+    }
+
+    const edits: GuiEdit[] = [];
+    const effects: (() => void)[] = [];
+    const scope = { entity: state.entity, rootIncarnation: state.incarnation };
+    let nextThemeId = state.nextThemeId;
+    const ids = new Map<string, number>();
+    for (const [key, rows] of desired) {
+      const previous = state.themes.get(key);
+      const id = previous?.id ?? nextThemeId++;
+      ids.set(key, id);
+      const indices = new Set([
+        ...(previous?.rows.keys() ?? []),
+        ...rows.keys(),
+      ]);
+      let sent = previous !== undefined;
+      for (const index of [...indices].sort((a, b) => a - b)) {
+        const patch = partPatch(previous?.rows.get(index), rows.get(index));
+        if (patch === undefined) continue;
+        edits.push({
+          action: "updateTheme",
+          ...scope,
+          theme: id,
+          part: guiPartFromIndex(index),
+          patch,
+        });
+        effects.push(() => {});
+        sent = true;
+      }
+      if (!sent) {
+        // An empty theme still exists, so its removal stays well-defined.
+        edits.push({
+          action: "updateTheme",
+          ...scope,
+          theme: id,
+          part: { part: "background" },
+          patch: {},
+        });
+        effects.push(() => {});
+      }
+      effects[effects.length - 1] = () => {
+        state.themes.set(key, { id, rows });
+      };
+    }
+    for (const [nodeId, key] of references) {
+      const id = key === undefined ? undefined : ids.get(key);
+      if (state.nodeThemes.get(nodeId) === id) continue;
+      edits.push({
+        action: "update",
+        handle: this.handleFor(state, nodeId),
+        patch: { style: { theme: id ?? null } },
+      });
+      effects.push(() => {
+        if (id === undefined) state.nodeThemes.delete(nodeId);
+        else state.nodeThemes.set(nodeId, id);
       });
     }
-    for (const name of previous.keys())
-      if (!desired.has(name))
-        commands.push({
-          kind: "removeDynamicProperty",
-          entity: { kind: "handle", id: state.entity },
-          component: descriptor.id,
-          name,
-        });
-    if (commands.length > 0) await this.submitProducer(commands);
-    state.themeProperties = desired;
+    for (const [key, theme] of state.themes) {
+      if (desired.has(key)) continue;
+      edits.push({ action: "removeTheme", ...scope, theme: theme.id });
+      effects.push(() => {
+        state.themes.delete(key);
+      });
+    }
+    for (const nodeId of [...state.nodeThemes.keys()])
+      if (!references.has(nodeId)) state.nodeThemes.delete(nodeId);
+    if (edits.length === 0) return;
+
+    state.nextThemeId = nextThemeId;
+    const outcome = await client.editGuiBatch(edits);
+    for (const effect of effects.slice(0, outcome.applied)) effect();
+    this.requireBatchSuccess(outcome);
   }
 
   private withScope(state: GuiRootState, edit: GuiEdit): GuiEdit {
@@ -934,11 +1036,19 @@ export class GuiCommits {
       state.nextId = fresh.nextId;
       state.boundRefs = fresh.boundRefs;
       state.producerOwned = fresh.producerOwned;
+      state.themes = fresh.themes;
+      state.nextThemeId = fresh.nextThemeId;
+      state.nodeThemes = fresh.nodeThemes;
       this.states.set(root.identity, state);
       return;
     }
     const seen = new Map<number, GuiInspectedNode>();
     for (const node of inspection.nodes) seen.set(node.id, node);
+    state.nodeThemes = new Map(
+      inspection.nodes.flatMap((node) =>
+        node.style.theme === undefined ? [] : [[node.id, node.style.theme]],
+      ),
+    );
     const known = new Set(state.ids.values());
     for (const id of seen.keys()) {
       if (!known.has(id)) {

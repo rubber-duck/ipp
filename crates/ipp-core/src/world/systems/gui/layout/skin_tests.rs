@@ -4,12 +4,13 @@
 //! from the implementation output.
 
 use super::*;
-use crate::SurfaceRenderResource;
 use crate::services::asset_management::{AssetKey, AssetTypeId};
+use crate::systems::gui::test_support::{author_part, set_theme_part};
 use crate::systems::gui::{GuiNodeId, MAX_LAYOUT_DEPTH};
 use crate::systems::surface::{
     GuiPrimitiveId, GuiPrimitivePart, SurfaceGlyph, SurfacePrimitiveStyle, TextGlyph, TextLayout,
 };
+use crate::{DynamicValue, SurfaceRenderResource};
 use std::collections::BTreeMap;
 
 fn skin_target(entity: EntityId, node: u32) -> crate::systems::gui::GuiInputTarget {
@@ -129,49 +130,51 @@ fn test_view_with_incarnation(
 }
 
 fn set_part_color(root: &mut GuiRoot, node: u32, part: &str, color: [f32; 4]) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "color").unwrap();
-    root.properties
-        .set(&name, DynamicValue::Vec4(color))
-        .unwrap();
+    author_part(root, node, part, "color", DynamicValue::Vec4(color));
 }
 
 fn set_part_opacity(root: &mut GuiRoot, node: u32, part: &str, opacity: f32) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "opacity").unwrap();
-    root.properties
-        .set(&name, DynamicValue::F32(opacity))
-        .unwrap();
+    author_part(root, node, part, "opacity", DynamicValue::F32(opacity));
 }
 
 fn set_part_asset(root: &mut GuiRoot, node: u32, part: &str, uri: &str) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "asset").unwrap();
-    root.properties
-        .set(&name, DynamicValue::Asset(asset_source(uri)))
-        .unwrap();
+    author_part(
+        root,
+        node,
+        part,
+        "asset",
+        DynamicValue::Asset(asset_source(uri)),
+    );
 }
 
 fn set_typed_part_asset(root: &mut GuiRoot, node: u32, part: &str, kind: AssetTypeId, uri: &str) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "asset").unwrap();
-    root.properties
-        .set(
-            &name,
-            DynamicValue::Asset(AssetSource {
-                kind,
-                uri: uri.to_owned(),
-                variant: 0,
-            }),
-        )
-        .unwrap();
+    author_part(
+        root,
+        node,
+        part,
+        "asset",
+        DynamicValue::Asset(AssetSource {
+            kind,
+            uri: uri.to_owned(),
+            variant: 0,
+        }),
+    );
 }
 
-fn set_part_lane(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: DynamicValue) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, lane).unwrap();
-    root.properties.set(&name, value).unwrap();
+fn set_part_property(
+    root: &mut GuiRoot,
+    node: u32,
+    part: &str,
+    property: &str,
+    value: DynamicValue,
+) {
+    author_part(root, node, part, property, value);
 }
 
 #[test]
-fn motion_lanes_resolve_independently_through_the_state_chain() {
+fn motion_properties_resolve_independently_through_the_state_chain() {
     let mut root = GuiRoot::default();
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
@@ -182,17 +185,17 @@ fn motion_lanes_resolve_independently_through_the_state_chain() {
             variant: 0,
         }),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "duration",
         DynamicValue::F32(0.4),
     );
-    set_part_lane(&mut root, 1, "background", "easing", DynamicValue::F32(0.0));
-    set_part_lane(&mut root, 1, "background", "track", DynamicValue::F32(6.0));
-    set_part_lane(&mut root, 1, "background", "time", DynamicValue::F32(0.1));
-    set_part_lane(
+    set_part_property(&mut root, 1, "background", "easing", DynamicValue::F32(0.0));
+    set_part_property(&mut root, 1, "background", "track", DynamicValue::F32(6.0));
+    set_part_property(&mut root, 1, "background", "time", DynamicValue::F32(0.1));
+    set_part_property(
         &mut root,
         1,
         "background_hovered",
@@ -203,14 +206,14 @@ fn motion_lanes_resolve_independently_through_the_state_chain() {
             variant: 2,
         }),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background_hovered",
         "easing",
         DynamicValue::F32(1.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background_hovered",
@@ -221,7 +224,7 @@ fn motion_lanes_resolve_independently_through_the_state_chain() {
     let motion = resolve_state_part_motion(
         &root,
         GuiNodeId(1),
-        "background",
+        GuiPrimitivePart::Background,
         GuiSkinState::Hovered,
         GuiControlVariant::Plain,
     )
@@ -239,24 +242,20 @@ fn motion_track_range_rejects_rounded_overflow_at_validation_and_resolution() {
     const LARGEST_F32_BELOW_U32_LIMIT: f32 = 4_294_967_040.0;
     const ROUNDED_U32_LIMIT: f32 = 4_294_967_296.0;
 
-    let name = GuiRoot::part_property_name(GuiNodeId(1), "background", "track").unwrap();
+    let track = |value| {
+        crate::systems::gui::tree::part_rows::validate_part_property(
+            crate::systems::gui::GuiPartProperty::Track,
+            &DynamicValue::F32(value),
+        )
+    };
     assert_eq!(
-        crate::systems::gui::validate_gui_property_value(
-            &name,
-            &DynamicValue::F32(ROUNDED_U32_LIMIT),
-        ),
+        track(ROUNDED_U32_LIMIT),
         Err(crate::ErrorReason::InvalidValue)
     );
-    assert_eq!(
-        crate::systems::gui::validate_gui_property_value(
-            &name,
-            &DynamicValue::F32(LARGEST_F32_BELOW_U32_LIMIT),
-        ),
-        Ok(())
-    );
+    assert_eq!(track(LARGEST_F32_BELOW_U32_LIMIT), Ok(()));
 
     let mut root = GuiRoot::default();
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
@@ -267,27 +266,27 @@ fn motion_track_range_rejects_rounded_overflow_at_validation_and_resolution() {
             variant: 0,
         }),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "duration",
         DynamicValue::F32(0.4),
     );
-    set_part_lane(&mut root, 1, "background", "easing", DynamicValue::F32(0.0));
-    set_part_lane(
+    set_part_property(&mut root, 1, "background", "easing", DynamicValue::F32(0.0));
+    set_part_property(
         &mut root,
         1,
         "background",
         "track",
         DynamicValue::F32(LARGEST_F32_BELOW_U32_LIMIT),
     );
-    set_part_lane(&mut root, 1, "background", "time", DynamicValue::F32(0.1));
+    set_part_property(&mut root, 1, "background", "time", DynamicValue::F32(0.1));
 
     let motion = resolve_state_part_motion(
         &root,
         GuiNodeId(1),
-        "background",
+        GuiPrimitivePart::Background,
         GuiSkinState::Idle,
         GuiControlVariant::Plain,
     )
@@ -295,14 +294,14 @@ fn motion_track_range_rejects_rounded_overflow_at_validation_and_resolution() {
     assert_eq!(motion.base_track, 4_294_967_040);
     assert_eq!(motion.base_track.checked_add(2), Some(4_294_967_042));
 
-    root.properties
-        .set(&name, DynamicValue::F32(ROUNDED_U32_LIMIT))
-        .unwrap();
+    // Rows only hold validated values, so an out-of-range track never
+    // reaches resolution; clearing it leaves no motion.
+    set_theme_part(&mut root, 1, "background", "track", None);
     assert!(
         resolve_state_part_motion(
             &root,
             GuiNodeId(1),
-            "background",
+            GuiPrimitivePart::Background,
             GuiSkinState::Idle,
             GuiControlVariant::Plain,
         )
@@ -399,7 +398,8 @@ fn checkbox_variant_selects_qualified_part_first() {
         },
         ..evaluated_node(1, GuiEvaluatedContent::Container)
     };
-    let appearance = resolve_appearance(&root, &checked, &interaction, "background").unwrap();
+    let appearance =
+        resolve_appearance(&root, &checked, &interaction, GuiPrimitivePart::Background).unwrap();
     assert_eq!(appearance.variant, GuiControlVariant::Checked(true));
     assert_eq!(appearance.color, Some([0.9, 0.1, 0.1, 1.0]));
     let unchecked = GuiEvaluatedNode {
@@ -409,7 +409,13 @@ fn checkbox_variant_selects_qualified_part_first() {
         },
         ..evaluated_node(1, GuiEvaluatedContent::Container)
     };
-    let appearance = resolve_appearance(&root, &unchecked, &interaction, "background").unwrap();
+    let appearance = resolve_appearance(
+        &root,
+        &unchecked,
+        &interaction,
+        GuiPrimitivePart::Background,
+    )
+    .unwrap();
     assert_eq!(appearance.color, Some([0.1, 0.1, 0.1, 1.0]));
 }
 
@@ -460,33 +466,40 @@ fn slider_and_text_variants_follow_committed_payloads() {
 }
 
 #[test]
-fn part_identity_is_stable_and_independent_of_order() {
-    assert_eq!(
-        skin_part_key(GuiNodeId(3), "thumb"),
-        Some((GuiNodeId(3), "thumb".to_owned()))
-    );
-    assert!(skin_part_key(GuiNodeId(3), "").is_none());
-    assert!(skin_part_key(GuiNodeId(3), "has-dash").is_none());
-    assert!(is_valid_skin_part("focus_ring_2"));
-    assert!(!is_valid_skin_part(""));
-    // Reordered candidate vectors keep the same winning key.
-    let first = state_part_candidates(
-        "background",
+fn part_identity_is_enumerated_and_independent_of_order() {
+    let candidates: Vec<_> = crate::systems::gui::GuiPartId::candidates(
+        GuiPrimitivePart::Background,
         GuiSkinState::Pressed,
-        GuiControlVariant::Checked(true),
-    );
+        GuiControlVariant::Checked(true).part_variant(),
+    )
+    .collect();
     assert_eq!(
-        first,
+        candidates,
         vec![
-            "background_pressed_checked".to_owned(),
-            "background_pressed".to_owned(),
-            "background".to_owned(),
+            crate::systems::gui::test_support::part_id("background_pressed_checked"),
+            crate::systems::gui::test_support::part_id("background_pressed"),
+            crate::systems::gui::test_support::part_id("background"),
         ]
     );
-    // Part keys do not depend on node order in the view.
-    let a = skin_part_key(GuiNodeId(1), "background").unwrap();
-    let b = skin_part_key(GuiNodeId(2), "background").unwrap();
-    assert_ne!(a, b);
+    // Part identities do not depend on node order in the view: two nodes
+    // sharing a theme resolve the same part independently.
+    let mut root = GuiRoot::default();
+    set_part_color(&mut root, 1, "background", [0.5, 0.5, 0.5, 1.0]);
+    crate::systems::gui::test_support::ensure_themed_nodes(&mut root, 2);
+    crate::systems::gui::test_support::set_node_theme(&mut root, GuiNodeId(2), Some(1));
+    for node in [2, 1] {
+        assert_eq!(
+            resolve_state_part_style(
+                &root,
+                GuiNodeId(node),
+                GuiPrimitivePart::Background,
+                GuiSkinState::Idle,
+                GuiControlVariant::Plain,
+            )
+            .color,
+            Some([0.5, 0.5, 0.5, 1.0])
+        );
+    }
     let _ = MAX_LAYOUT_DEPTH;
 }
 
@@ -499,8 +512,13 @@ fn skins_never_mutate_behavior_or_layout() {
     let before_view = view.clone();
     let cursors = GuiSkinCursors::default();
     let resolver = MapResolver::empty();
-    let appearance =
-        resolve_appearance(&root, &node, &GuiInteractionState::idle(), "background").unwrap();
+    let appearance = resolve_appearance(
+        &root,
+        &node,
+        &GuiInteractionState::idle(),
+        GuiPrimitivePart::Background,
+    )
+    .unwrap();
     assert_eq!(appearance.state, GuiSkinState::Idle);
     let painted = skinned_primitives_for_view(&view, &root, &cursors, &resolver);
     let repainted = view.surface_primitives();
@@ -649,7 +667,7 @@ fn paint_keeps_order_identities_and_focus_border() {
         assert_eq!(before.style().clip, after.style().clip);
         assert_eq!(before.style().position, after.style().position);
     }
-    // Hovered node picks the qualified part lanes.
+    // Hovered node picks the qualified part properties.
     assert_eq!(skinned[0].style().color, [0.0, 1.0, 0.0, 1.0]);
     assert_eq!(skinned[0].style().opacity, 0.5);
     // Focused node keeps its independent background unchanged.
@@ -725,8 +743,8 @@ fn focus_ring_paints_without_a_background_primitive() {
     ));
 
     // An authored border colour strokes the ring in preference to the
-    // colour lane, and the ring interior stays transparent.
-    set_part_lane(
+    // colour, and the ring interior stays transparent.
+    set_part_property(
         &mut root,
         1,
         "focusRing",
@@ -1067,7 +1085,7 @@ fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_c
     set_part_color(&mut root, 1, "background", [0.1, 0.2, 0.7, 1.0]);
     set_part_color(&mut root, 1, "icon", [0.9, 0.8, 0.2, 1.0]);
 
-    // Without the lane the 2.5 indicator stays centred in the 10 x 5 rect.
+    // Without alignment the 2.5 indicator stays centred in the 10 x 5 rect.
     assert_eq!(
         indicator(&root, true, wide),
         ([3.75, 1.25], [1.0, 1.0], [2.5, 2.5])
@@ -1075,14 +1093,14 @@ fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_c
 
     // Centre x = h/2 + (t + 1)/2 * (w - h): 2.5 at -1, 5 at 0 and 7.5 at +1,
     // so each end keeps the indicator centred in a 5 x 5 end cell.
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon_idle_unchecked",
         "align_x",
         DynamicValue::F32(-1.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon_idle_checked",
@@ -1091,8 +1109,8 @@ fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_c
     );
     assert_eq!(indicator(&root, false, wide).0, [1.25, 1.25]);
     assert_eq!(indicator(&root, true, wide).0, [6.25, 1.25]);
-    set_part_lane(&mut root, 1, "icon", "align_x", DynamicValue::F32(0.0));
-    set_part_lane(
+    set_part_property(&mut root, 1, "icon", "align_x", DynamicValue::F32(0.0));
+    set_part_property(
         &mut root,
         1,
         "icon_idle_checked",
@@ -1102,14 +1120,14 @@ fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_c
     assert_eq!(indicator(&root, true, wide).0, [3.75, 1.25]);
 
     // Values beyond the ends clamp to them.
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon_idle_checked",
         "align_x",
         DynamicValue::F32(4.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon_idle_unchecked",
@@ -1120,7 +1138,7 @@ fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_c
     assert_eq!(indicator(&root, false, wide).0, [1.25, 1.25]);
 
     // Scale 0.8 paints a 2 x 2 knob about the same 7.5 x 2.5 centre.
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon",
@@ -1133,7 +1151,7 @@ fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_c
     assert!((position[0] - 6.5).abs() < 1.0e-6 && (position[1] - 1.5).abs() < 1.0e-6);
 
     // A control no wider than tall has no horizontal travel.
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon",
@@ -1548,7 +1566,7 @@ fn synthesized_drawing_fits_decoded_nonunit_nonzero_view_box_and_composes_scale(
         crate::services::asset_management::drawing::DRAWING_TYPE,
         "nonunit",
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "icon",
@@ -1818,84 +1836,84 @@ fn retained_skin_resource_is_fenced_by_root_incarnation_and_named_part() {
 #[test]
 fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
     let mut root = GuiRoot::default();
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "corner_radius",
         DynamicValue::Vec2([0.05, 0.08]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "border_width",
         DynamicValue::F32(0.01),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "border_color",
         DynamicValue::Vec4([0.2, 0.4, 0.8, 1.0]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "fill_mode",
         DynamicValue::F32(1.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "gradient_start",
         DynamicValue::Vec2([0.0, 0.0]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "gradient_end",
         DynamicValue::Vec2([1.0, 1.0]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "gradient_color0",
         DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "gradient_color1",
         DynamicValue::Vec4([0.0, 0.0, 1.0, 1.0]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "glow_color",
         DynamicValue::Vec4([1.0, 0.5, 0.0, 1.0]),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "glow_intensity",
         DynamicValue::F32(2.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
         "glow_radius",
         DynamicValue::F32(0.05),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background",
@@ -1908,7 +1926,7 @@ fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
         &root,
         &node,
         &GuiInteractionState::idle(),
-        GuiPrimitivePart::Background.as_str(),
+        GuiPrimitivePart::Background,
     )
     .unwrap();
 
@@ -2017,21 +2035,21 @@ fn background_box() -> SurfaceRenderPrimitive {
 }
 
 #[test]
-fn solid_state_replaces_inherited_gradient_while_glow_lanes_stay_independent() {
+fn solid_state_replaces_inherited_gradient_while_glow_properties_stay_independent() {
     let mut root = GuiRoot::default();
     set_part_color(&mut root, 1, "background", [0.1, 0.2, 0.3, 1.0]);
-    for (lane, value) in [
+    for (property, value) in [
         ("fill_mode", DynamicValue::F32(1.0)),
         ("gradient_color0", DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0])),
         ("gradient_color1", DynamicValue::Vec4([0.0, 0.0, 1.0, 1.0])),
         ("glow_intensity", DynamicValue::F32(0.5)),
         ("glow_radius", DynamicValue::F32(0.04)),
     ] {
-        set_part_lane(&mut root, 1, "background", lane, value);
+        set_part_property(&mut root, 1, "background", property, value);
     }
     set_part_color(&mut root, 1, "background_hovered", [0.0, 1.0, 0.0, 1.0]);
     set_part_color(&mut root, 1, "background_disabled", [0.4, 0.4, 0.4, 0.5]);
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background_disabled",
@@ -2039,14 +2057,14 @@ fn solid_state_replaces_inherited_gradient_while_glow_lanes_stay_independent() {
         DynamicValue::F32(0.0),
     );
     set_part_color(&mut root, 1, "background_pressed", [0.9, 0.8, 0.1, 1.0]);
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background_pressed",
         "fill_mode",
         DynamicValue::F32(0.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut root,
         1,
         "background_pressed",
@@ -2056,7 +2074,8 @@ fn solid_state_replaces_inherited_gradient_while_glow_lanes_stay_independent() {
 
     let node = evaluated_node(1, GuiEvaluatedContent::Container);
     let paint = |interaction: GuiInteractionState| {
-        let appearance = resolve_appearance(&root, &node, &interaction, "background").unwrap();
+        let appearance =
+            resolve_appearance(&root, &node, &interaction, GuiPrimitivePart::Background).unwrap();
         let SurfaceRenderPrimitive::Box {
             fill,
             glow,
@@ -2087,7 +2106,7 @@ fn solid_state_replaces_inherited_gradient_while_glow_lanes_stay_independent() {
     };
     assert_eq!(paint(hovered), (gradient, base_glow));
 
-    // Explicit solid mode paints the state colour; glow is a separate lane.
+    // Explicit solid mode paints the state colour; glow resolves separately.
     let disabled = GuiInteractionState {
         disabled: true,
         ..GuiInteractionState::idle()
@@ -2110,14 +2129,44 @@ fn solid_state_replaces_inherited_gradient_while_glow_lanes_stay_independent() {
 
 #[test]
 fn sampled_colour_reaches_solid_fill_and_focus_stroke_but_not_gradient_stops() {
+    use crate::systems::gui::GuiPartChannel;
+    use crate::systems::gui::test_support::set_part_channel;
+
     let mut authored = GuiRoot::default();
     set_part_color(&mut authored, 1, "background", [0.0, 1.0, 0.0, 1.0]);
     set_part_color(&mut authored, 1, "focusRing", [1.0, 1.0, 1.0, 1.0]);
+    // Motion opens the node's live channels for both parts.
+    for part in ["background", "focusRing"] {
+        set_part_property(
+            &mut authored,
+            1,
+            part,
+            "motion",
+            DynamicValue::Asset(AssetSource {
+                kind: crate::systems::animation::ANIMATION_TYPE,
+                uri: "fade.ippa".into(),
+                variant: 0,
+            }),
+        );
+    }
 
-    // AnimationSystem writes mid-transition samples into the effective base lanes.
+    // AnimationSystem writes mid-transition samples into the effective
+    // part-row channels.
     let mut effective = authored.clone();
-    set_part_color(&mut effective, 1, "background", [0.25, 0.5, 0.25, 1.0]);
-    set_part_color(&mut effective, 1, "focusRing", [0.5, 0.5, 0.5, 1.0]);
+    set_part_channel(
+        &mut effective,
+        1,
+        GuiPrimitivePart::Background,
+        GuiPartChannel::Color,
+        DynamicValue::Vec4([0.25, 0.5, 0.25, 1.0]),
+    );
+    set_part_channel(
+        &mut effective,
+        1,
+        GuiPrimitivePart::FocusRing,
+        GuiPartChannel::Color,
+        DynamicValue::Vec4([0.5, 0.5, 0.5, 1.0]),
+    );
 
     let node = evaluated_node(1, GuiEvaluatedContent::Container);
     let view = test_view(vec![node.clone()]);
@@ -2142,7 +2191,13 @@ fn sampled_colour_reaches_solid_fill_and_focus_stroke_but_not_gradient_stops() {
                 };
                 (
                     id,
-                    appearance_with_effective_numeric(desired, &effective, GuiNodeId(1), part),
+                    appearance_with_effective_numeric(
+                        desired,
+                        &effective,
+                        GuiNodeId(1),
+                        part,
+                        false,
+                    ),
                 )
             })
             .collect();
@@ -2180,16 +2235,16 @@ fn sampled_colour_reaches_solid_fill_and_focus_stroke_but_not_gradient_stops() {
     assert_eq!(*border_color, [0.5, 0.5, 0.5, 1.0]);
     assert_eq!(*fill, GuiShapeFill::Solid([0.0; 4]));
 
-    // Gradient stops are separate unanimated lanes: sampling the colour lane
-    // leaves an authored gradient unchanged.
-    set_part_lane(
+    // Gradient stops are separate unanimated properties: sampling the colour
+    // channel leaves an authored gradient unchanged.
+    set_part_property(
         &mut authored,
         1,
         "background",
         "fill_mode",
         DynamicValue::F32(1.0),
     );
-    set_part_lane(
+    set_part_property(
         &mut authored,
         1,
         "background",

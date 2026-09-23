@@ -74,14 +74,15 @@ export type {
 export {
   GUI_THEME_PARTS,
   defaultGuiTheme,
-  guiThemeProperties,
+  compileGuiTheme,
+  guiThemeKey,
   validateGuiTheme,
-  validateThemeLaneStyle,
+  validateThemePartStyle,
 } from "./gui/theme.js";
 export type {
   GuiControlTheme,
   GuiThemedPart,
-  GuiThemeLaneStyle,
+  GuiThemePartStyle,
   GuiThemePartName,
   GuiThemeState,
   GuiThemeTransition,

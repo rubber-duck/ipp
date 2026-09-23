@@ -170,6 +170,8 @@ pub struct GuiNodeStyle {
     /// Visual axis-aligned scale; moves paint and hit regions together
     /// without reflow. Layout rejects singular scales with a diagnostic.
     pub scale: [f32; 2],
+    /// Handle of the root theme skinning this node, if any.
+    pub theme: Option<u32>,
 }
 
 impl Default for GuiNodeStyle {
@@ -194,6 +196,7 @@ impl Default for GuiNodeStyle {
             asset: None,
             position: [0.0, 0.0],
             scale: [1.0, 1.0],
+            theme: None,
         }
     }
 }
@@ -247,6 +250,8 @@ pub struct GuiNodePatch {
     pub position: Option<[f32; 2]>,
     /// Replacement visual scale.
     pub scale: Option<[f32; 2]>,
+    /// Replacement theme reference.
+    pub theme: Option<Option<u32>>,
 }
 
 /// One authoritative node in the GUI tree.

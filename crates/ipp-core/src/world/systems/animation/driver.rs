@@ -178,12 +178,6 @@ pub(in crate::world) enum DynamicValueDestination {
         crate::world::component_binding::ComponentBinding<crate::components::Surface>,
         crate::components::dynamic_properties::DynamicPropertyDescriptor,
     ),
-    /// Named GUI part properties; node properties are rows.
-    #[cfg(feature = "gui")]
-    GuiRootPart(
-        crate::world::component_binding::ComponentBinding<crate::systems::gui::GuiRoot>,
-        crate::components::dynamic_properties::DynamicPropertyDescriptor,
-    ),
     Row(super::row_property_destination::RowPropertyDestination),
 }
 
@@ -238,17 +232,6 @@ impl DynamicValueDestination {
                         .descriptor(key)
                         .filter(numeric)?,
                 )),
-                #[cfg(feature = "gui")]
-                ComponentValue::GUI_ROOT => Some(Self::GuiRootPart(
-                    crate::world::component_binding::ComponentBinding::new(
-                        storage.gui_root_ptr(index)?,
-                    ),
-                    storage
-                        .gui_root(index)?
-                        .properties
-                        .descriptor(key)
-                        .filter(numeric)?,
-                )),
                 _ => None,
             }
         }
@@ -266,11 +249,6 @@ impl DynamicValueDestination {
                 .set_descriptor(descriptor, value),
             #[cfg(feature = "surfaces")]
             Self::Surface(binding, descriptor) => binding
-                .get_mut(storage)
-                .properties
-                .set_descriptor(descriptor, value),
-            #[cfg(feature = "gui")]
-            Self::GuiRootPart(binding, descriptor) => binding
                 .get_mut(storage)
                 .properties
                 .set_descriptor(descriptor, value),
@@ -524,15 +502,6 @@ fn validate_transition_value(
             {
                 crate::systems::surface::validate_animation_property(name, value)?;
             }
-            #[cfg(feature = "gui")]
-            if let AnimationTrackTarget::DynamicProperty {
-                component,
-                name,
-            } = &identity.property
-                && *component == ComponentValue::GUI_ROOT
-            {
-                crate::systems::gui::validate_gui_property_value(name, value)?;
-            }
             // Row targets are checked before any channel publishes, so a
             // rejected value leaves every transition output unchanged.
             #[cfg(feature = "gui")]
@@ -544,7 +513,7 @@ fn validate_transition_value(
                 if !crate::systems::gui::GuiRoot::numeric_animatable(*offset) {
                     return Err(ErrorReason::InvalidField);
                 }
-                crate::systems::gui::GuiRoot::validate_node_property(*offset, value)?;
+                crate::systems::gui::GuiRoot::validate_row_value(*offset, value)?;
             }
         }
         AnimationValue::Rotation(value) if value.iter().any(|value| !value.is_finite()) => {

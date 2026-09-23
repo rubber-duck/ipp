@@ -1,31 +1,36 @@
-//! GUI named-part resolution and retained Surface paint.
+//! GUI skin resolution and retained Surface paint.
 //!
 //! Skinning observes evaluated layout and input cursors without changing control
-//! behaviour, geometry, clipping, or painter order. Appearance and motion lanes
-//! resolve independently through the same variant/state/base candidate chain.
-//! AnimationSystem is the sole numeric sampler; this module resolves authored
-//! destinations and paints effective values only.
+//! behaviour, geometry, clipping, or painter order. Each part property resolves
+//! independently: a node's part-row override wins, then its theme's (part,
+//! state, variant), (part, state) and (part) rows in that order. Motion
+//! resolves through the same theme chain. AnimationSystem is the sole numeric
+//! sampler; this module resolves authored destinations and paints effective
+//! values only.
 //!
 //! Colour, opacity, scale and the checkbox indicator's `align_x` are the
-//! animated numeric lanes: a state's motion clip supplies color, opacity and
+//! animated properties: a state's motion clip supplies colour, opacity and
 //! scale tracks from its base track, plus an `align_x` track after them when
-//! the base part declares that lane, so a switch knob glides between its
-//! unchecked and checked positions. The remaining shape, gradient and glow
-//! lanes are static material values of the resolved state.
+//! the part's base resolves that property, so a switch knob glides between its
+//! unchecked and checked positions. Transitions write the node's part-row
+//! channels, which replace those destinations only while a transition owns
+//! them. The remaining shape, gradient and glow properties are static
+//! material values of the resolved state.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::EntityId;
 use crate::services::asset_management::AssetSource;
 use crate::systems::animation::AnimationTransitionEasing;
 use crate::systems::gui::{
     GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiInputFocus, GuiInputTarget,
-    GuiNodeId, GuiResourceResolver, GuiRoot, MAX_LAYOUT_DEPTH,
+    GuiNodeId, GuiPartId, GuiPartRow, GuiPartVariant, GuiResourceResolver, GuiRoot,
+    GuiThemePartRow, MAX_LAYOUT_DEPTH,
 };
 use crate::systems::surface::{
     GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfacePrimitiveIdentity,
     SurfacePrimitiveStyle, SurfaceRenderPrimitive, gui_logical_to_surface_content,
 };
-use crate::{DynamicValue, EntityId};
 
 /// Nodes per tree mirrored from the evaluator cap.
 pub const MAX_SKIN_NODES: usize = 65_536;
@@ -49,7 +54,7 @@ const CHECKBOX_INDICATOR_EDGE: f32 = 0.5;
 const CONTROL_ICON_EDGE: f32 = 0.55;
 
 /// Resolved interaction state with fixed precedence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GuiSkinState {
     /// The control cannot interact.
     Disabled,
@@ -72,16 +77,6 @@ impl GuiSkinState {
             Self::Hovered
         } else {
             Self::Idle
-        }
-    }
-
-    /// Stable state suffix used by named parts.
-    pub fn suffix(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Pressed => "pressed",
-            Self::Hovered => "hovered",
-            Self::Idle => "idle",
         }
     }
 }
@@ -158,11 +153,11 @@ pub enum GuiControlVariant {
 }
 
 impl GuiControlVariant {
-    /// Return the stable authoring suffix, when this variant has one.
-    pub fn suffix(self) -> Option<&'static str> {
+    /// Checked variant qualifying skin parts, when this variant has one.
+    pub fn part_variant(self) -> Option<GuiPartVariant> {
         match self {
-            Self::Checked(true) => Some("checked"),
-            Self::Checked(false) => Some("unchecked"),
+            Self::Checked(true) => Some(GuiPartVariant::Checked),
+            Self::Checked(false) => Some(GuiPartVariant::Unchecked),
             Self::Plain
             | Self::Slider01(_)
             | Self::Text {
@@ -223,37 +218,8 @@ pub fn variant_for_content(content: &GuiEvaluatedContent) -> GuiControlVariant {
     }
 }
 
-/// Return whether a named part is safe for dynamic-property lookup.
-pub fn is_valid_skin_part(part: &str) -> bool {
-    !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// Construct a validated node/part key.
-pub fn skin_part_key(node: GuiNodeId, part: &str) -> Option<(GuiNodeId, String)> {
-    is_valid_skin_part(part).then(|| (node, part.to_owned()))
-}
-
-/// Qualified part names in per-lane lookup order.
-pub fn state_part_candidates(
-    base: &str,
-    state: GuiSkinState,
-    variant: GuiControlVariant,
-) -> Vec<String> {
-    let mut names = Vec::with_capacity(3);
-    if let Some(suffix) = variant.suffix() {
-        names.push(format!("{base}_{}_{suffix}", state.suffix()));
-    }
-    names.push(format!("{base}_{}", state.suffix()));
-    names.push(base.to_owned());
-    names
-}
-
-/// Retained for source compatibility; focus-ring authoring uses `focusRing`.
-pub fn focus_part_name(base: &str) -> String {
-    format!("{base}_focus")
-}
-
-/// Resolved appearance lanes for one exact named part.
+/// Appearance properties resolved for one part; absent properties fall back
+/// to control defaults when painted.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GuiPartStyle {
     /// Optional linear RGBA override.
@@ -276,7 +242,7 @@ pub struct GuiPartStyle {
     pub border_color: Option<[f32; 4]>,
     /// Optional fill mode: 0.0 = solid, 1.0 = linear gradient, 2.0 = radial gradient.
     ///
-    /// Solid paints the colour lane. Like every lane, the mode resolves
+    /// Solid paints the colour. Like every property, the mode resolves
     /// independently through the candidate chain, so a state that paints its
     /// own colour over an inherited gradient declares mode 0 explicitly.
     pub fill_mode: Option<f32>,
@@ -300,162 +266,110 @@ pub struct GuiPartStyle {
     pub glow_falloff: Option<f32>,
 }
 
-impl GuiPartStyle {
-    /// Return whether no valid lane was authored.
-    pub fn is_empty(&self) -> bool {
-        self.color.is_none()
-            && self.opacity.is_none()
-            && self.scale.is_none()
-            && self.align_x.is_none()
-            && self.asset.is_none()
-            && self.corner_radius.is_none()
-            && self.border_width.is_none()
-            && self.border_color.is_none()
-            && self.fill_mode.is_none()
-            && self.gradient_start.is_none()
-            && self.gradient_end.is_none()
-            && self.gradient_color0.is_none()
-            && self.gradient_color1.is_none()
-            && self.gradient_radius.is_none()
-            && self.glow_color.is_none()
-            && self.glow_intensity.is_none()
-            && self.glow_radius.is_none()
-            && self.glow_falloff.is_none()
-    }
-}
-
-fn valid_color(value: [f32; 4]) -> bool {
-    value
-        .iter()
-        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-}
-
-fn valid_opacity(value: f32) -> bool {
-    value.is_finite() && (0.0..=1.0).contains(&value)
-}
-
-fn valid_scale(value: [f32; 2]) -> bool {
-    value.iter().all(|v| v.is_finite())
-}
-
-fn valid_non_negative_f32(value: f32) -> bool {
-    value.is_finite() && value >= 0.0
-}
-
-fn valid_non_negative_vec2(value: [f32; 2]) -> bool {
-    value.iter().all(|v| v.is_finite() && *v >= 0.0)
-}
-
-/// Read valid lanes for one exact named part.
-pub fn part_style(root: &GuiRoot, node: GuiNodeId, part: &str) -> GuiPartStyle {
-    let mut style = GuiPartStyle::default();
-    let Some(_) = skin_part_key(node, part) else {
-        return style;
+/// Appearance properties of a theme or part row, which share names.
+macro_rules! row_part_style {
+    ($row:expr) => {
+        GuiPartStyle {
+            color: $row.color,
+            opacity: $row.opacity,
+            scale: $row.scale,
+            align_x: $row.align_x,
+            asset: $row.asset.clone(),
+            corner_radius: $row.corner_radius,
+            border_width: $row.border_width,
+            border_color: $row.border_color,
+            fill_mode: $row.fill_mode,
+            gradient_start: $row.gradient_start,
+            gradient_end: $row.gradient_end,
+            gradient_color0: $row.gradient_color0,
+            gradient_color1: $row.gradient_color1,
+            gradient_radius: $row.gradient_radius,
+            glow_color: $row.glow_color,
+            glow_intensity: $row.glow_intensity,
+            glow_radius: $row.glow_radius,
+            glow_falloff: $row.glow_falloff,
+        }
     };
-
-    // One ordered scan of `node_<id>_part_<part>_*` reads the same names the
-    // per-lane lookups would; remainders that are not a lane (another part
-    // sharing this prefix) are ignored.
-    let prefix = super::super::tree::component::part_property_prefix(node, part);
-    for (lane, descriptor) in root.part_lanes(&prefix) {
-        if lane == "asset" {
-            style.asset = root.properties.descriptor_asset(descriptor).cloned();
-            continue;
-        }
-
-        let Some(value) = root.properties.get_descriptor(descriptor) else {
-            continue;
-        };
-        match (lane, value) {
-            ("color", DynamicValue::Vec4(color)) if valid_color(color) => {
-                style.color = Some(color);
-            }
-            ("opacity", DynamicValue::F32(opacity)) if valid_opacity(opacity) => {
-                style.opacity = Some(opacity);
-            }
-            ("scale", DynamicValue::Vec2(scale)) if valid_scale(scale) => {
-                style.scale = Some(scale);
-            }
-            ("align_x", DynamicValue::F32(align)) if align.is_finite() => {
-                style.align_x = Some(align);
-            }
-            ("corner_radius", DynamicValue::Vec2(cr)) if valid_non_negative_vec2(cr) => {
-                style.corner_radius = Some(cr);
-            }
-            ("border_width", DynamicValue::F32(bw)) if valid_non_negative_f32(bw) => {
-                style.border_width = Some(bw);
-            }
-            ("border_color", DynamicValue::Vec4(bc)) if valid_color(bc) => {
-                style.border_color = Some(bc);
-            }
-            ("fill_mode", DynamicValue::F32(fm)) if matches!(fm, 0.0 | 1.0 | 2.0) => {
-                style.fill_mode = Some(fm);
-            }
-            ("gradient_start", DynamicValue::Vec2(gs)) if valid_scale(gs) => {
-                style.gradient_start = Some(gs);
-            }
-            ("gradient_end", DynamicValue::Vec2(ge)) if valid_scale(ge) => {
-                style.gradient_end = Some(ge);
-            }
-            ("gradient_color0", DynamicValue::Vec4(c0)) if valid_color(c0) => {
-                style.gradient_color0 = Some(c0);
-            }
-            ("gradient_color1", DynamicValue::Vec4(c1)) if valid_color(c1) => {
-                style.gradient_color1 = Some(c1);
-            }
-            ("gradient_radius", DynamicValue::F32(gr)) if valid_non_negative_f32(gr) => {
-                style.gradient_radius = Some(gr);
-            }
-            ("glow_color", DynamicValue::Vec4(gc)) if valid_color(gc) => {
-                style.glow_color = Some(gc);
-            }
-            ("glow_intensity", DynamicValue::F32(gi)) if valid_non_negative_f32(gi) => {
-                style.glow_intensity = Some(gi);
-            }
-            ("glow_radius", DynamicValue::F32(gr)) if valid_non_negative_f32(gr) => {
-                style.glow_radius = Some(gr);
-            }
-            ("glow_falloff", DynamicValue::F32(gf)) if valid_non_negative_f32(gf) => {
-                style.glow_falloff = Some(gf);
-            }
-            _ => {}
-        }
-    }
-    style
 }
 
-/// Resolve appearance lanes independently through variant, state and base names.
+impl From<&GuiThemePartRow> for GuiPartStyle {
+    fn from(row: &GuiThemePartRow) -> Self {
+        row_part_style!(row)
+    }
+}
+
+impl GuiPartStyle {
+    /// Appearance overrides of a part row, without its live channels.
+    pub fn overrides(row: &GuiPartRow) -> Self {
+        row_part_style!(row)
+    }
+
+    /// Return whether no property is present.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Fill every absent property from a less specific source.
+    fn inherit(&mut self, next: &Self) {
+        fn or<T: Clone>(target: &mut Option<T>, next: &Option<T>) {
+            if target.is_none() {
+                target.clone_from(next);
+            }
+        }
+
+        or(&mut self.color, &next.color);
+        or(&mut self.opacity, &next.opacity);
+        or(&mut self.scale, &next.scale);
+        or(&mut self.align_x, &next.align_x);
+        or(&mut self.asset, &next.asset);
+        or(&mut self.corner_radius, &next.corner_radius);
+        or(&mut self.border_width, &next.border_width);
+        or(&mut self.border_color, &next.border_color);
+        or(&mut self.fill_mode, &next.fill_mode);
+        or(&mut self.gradient_start, &next.gradient_start);
+        or(&mut self.gradient_end, &next.gradient_end);
+        or(&mut self.gradient_color0, &next.gradient_color0);
+        or(&mut self.gradient_color1, &next.gradient_color1);
+        or(&mut self.gradient_radius, &next.gradient_radius);
+        or(&mut self.glow_color, &next.glow_color);
+        or(&mut self.glow_intensity, &next.glow_intensity);
+        or(&mut self.glow_radius, &next.glow_radius);
+        or(&mut self.glow_falloff, &next.glow_falloff);
+    }
+}
+
+/// Appearance of one exact part identity of a node's theme; empty without a
+/// live theme or row.
+pub fn theme_part_style(root: &GuiRoot, node: GuiNodeId, part: GuiPartId) -> GuiPartStyle {
+    root.node_theme_slot(node)
+        .and_then(|slot| root.theme_row(slot, part))
+        .map(GuiPartStyle::from)
+        .unwrap_or_default()
+}
+
+/// Appearance overrides one node declares for a base part.
+pub fn part_overrides(root: &GuiRoot, node: GuiNodeId, part: GuiPrimitivePart) -> GuiPartStyle {
+    root.part_row(node, part)
+        .map(|(_, row)| GuiPartStyle::overrides(row))
+        .unwrap_or_default()
+}
+
+/// Resolve every appearance property independently: the node's override,
+/// then its theme's (part, state, variant), (part, state) and (part) rows.
 pub fn resolve_state_part_style(
     root: &GuiRoot,
     node: GuiNodeId,
-    base: &str,
+    base: GuiPrimitivePart,
     state: GuiSkinState,
     variant: GuiControlVariant,
 ) -> GuiPartStyle {
-    let mut merged = GuiPartStyle::default();
-    if skin_part_key(node, base).is_none() {
-        return merged;
-    }
-    for candidate in state_part_candidates(base, state, variant) {
-        let next = part_style(root, node, &candidate);
-        merged.color = merged.color.or(next.color);
-        merged.opacity = merged.opacity.or(next.opacity);
-        merged.scale = merged.scale.or(next.scale);
-        merged.align_x = merged.align_x.or(next.align_x);
-        merged.asset = merged.asset.or(next.asset);
-        merged.corner_radius = merged.corner_radius.or(next.corner_radius);
-        merged.border_width = merged.border_width.or(next.border_width);
-        merged.border_color = merged.border_color.or(next.border_color);
-        merged.fill_mode = merged.fill_mode.or(next.fill_mode);
-        merged.gradient_start = merged.gradient_start.or(next.gradient_start);
-        merged.gradient_end = merged.gradient_end.or(next.gradient_end);
-        merged.gradient_color0 = merged.gradient_color0.or(next.gradient_color0);
-        merged.gradient_color1 = merged.gradient_color1.or(next.gradient_color1);
-        merged.gradient_radius = merged.gradient_radius.or(next.gradient_radius);
-        merged.glow_color = merged.glow_color.or(next.glow_color);
-        merged.glow_intensity = merged.glow_intensity.or(next.glow_intensity);
-        merged.glow_radius = merged.glow_radius.or(next.glow_radius);
-        merged.glow_falloff = merged.glow_falloff.or(next.glow_falloff);
+    let mut merged = part_overrides(root, node, base);
+    if let Some(theme) = root.node_theme_slot(node) {
+        for candidate in GuiPartId::candidates(base, state, variant.part_variant()) {
+            if let Some(row) = root.theme_row(theme, candidate) {
+                merged.inherit(&GuiPartStyle::from(row));
+            }
+        }
     }
     merged
 }
@@ -468,59 +382,46 @@ struct ControlVisualSources {
     plain_icon: bool,
 }
 
-/// Whether one canonical candidate can contribute a visual source for `base`,
-/// and whether it belongs to the plain (non-checked) lookup chain.
-fn visual_candidate(candidate: &str, base: &str) -> Option<bool> {
-    if candidate == base {
-        return Some(true);
-    }
-    let suffix = candidate.strip_prefix(base)?.strip_prefix('_')?;
-    let mut parts = suffix.split('_');
-    if !matches!(
-        parts.next(),
-        Some("disabled" | "pressed" | "hovered" | "idle")
-    ) {
-        return None;
-    }
-    match (parts.next(), parts.next()) {
-        (None, None) => Some(true),
-        (Some("checked" | "unchecked"), None) => Some(false),
-        _ => None,
-    }
-}
-
-/// Scan one node's canonical descriptors once for geometry-producing lanes.
-/// Opacity and scale alone never synthesize geometry.
+/// Find the geometry-producing properties (colour or asset) a node's theme
+/// and overrides declare for the synthesized parts. Opacity and scale alone
+/// never synthesize geometry. Icon sources from the base or a state without a
+/// variant, and every override, belong to the plain (non-checked) chain.
 fn control_visual_sources(root: &GuiRoot, node: GuiNodeId) -> ControlVisualSources {
-    let prefix = format!("node_{}_part_", node.0);
+    let theme = root.node_theme_slot(node);
     let mut sources = ControlVisualSources::default();
-    for (name, descriptor) in root
-        .properties
-        .descriptors()
-        .range(prefix.clone()..)
-        .take_while(|(name, _)| name.starts_with(&prefix))
-    {
-        if !matches!(
-            descriptor.kind,
-            crate::DynamicPropertyKind::Vec4 | crate::DynamicPropertyKind::Asset
-        ) {
-            continue;
+    for part in [
+        GuiPrimitivePart::Background,
+        GuiPrimitivePart::Fill,
+        GuiPrimitivePart::Icon,
+    ] {
+        let overridden = root
+            .part_row(node, part)
+            .is_some_and(|(_, row)| row.color.is_some() || row.asset.is_some());
+        let mut plain = overridden;
+        let mut any = overridden;
+        if let Some(theme) = theme {
+            let first =
+                super::super::tree::part_rows::base_part_index(part) * GuiPartId::QUALIFIERS;
+            for index in first..first + GuiPartId::QUALIFIERS {
+                let Some(id) = GuiPartId::from_index(index) else {
+                    continue;
+                };
+                if root
+                    .theme_row(theme, id)
+                    .is_some_and(|row| row.color.is_some() || row.asset.is_some())
+                {
+                    any = true;
+                    plain |= id.variant.is_none();
+                }
+            }
         }
-        let Some(candidate) = name.strip_prefix(&prefix).and_then(|name| {
-            name.strip_suffix("_color")
-                .or_else(|| name.strip_suffix("_asset"))
-        }) else {
-            continue;
-        };
-        if visual_candidate(candidate, GuiPrimitivePart::Background.as_str()).is_some() {
-            sources.background = true;
-        }
-        if visual_candidate(candidate, GuiPrimitivePart::Fill.as_str()).is_some() {
-            sources.fill = true;
-        }
-        if let Some(plain) = visual_candidate(candidate, GuiPrimitivePart::Icon.as_str()) {
-            sources.icon = true;
-            sources.plain_icon |= plain;
+        match part {
+            GuiPrimitivePart::Background => sources.background = any,
+            GuiPrimitivePart::Fill => sources.fill = any,
+            _ => {
+                sources.icon = any;
+                sources.plain_icon = plain;
+            }
         }
     }
     sources
@@ -535,13 +436,13 @@ pub struct GuiSkinnedAppearance {
     pub focused: bool,
     /// Resolved content variant.
     pub variant: GuiControlVariant,
-    /// Optional color lane.
+    /// Optional colour.
     pub color: Option<[f32; 4]>,
-    /// Optional opacity lane.
+    /// Optional opacity.
     pub opacity: Option<f32>,
-    /// Optional scale lane.
+    /// Optional scale.
     pub scale: Option<[f32; 2]>,
-    /// Optional horizontal alignment lane.
+    /// Optional horizontal alignment.
     pub align_x: Option<f32>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
@@ -554,9 +455,9 @@ pub struct GuiSkinnedAppearance {
     /// Optional linear or radial gradient fill.
     ///
     /// Solid fills are not duplicated here: a box without a gradient paints
-    /// the `color` lane, and a focus ring without a border colour strokes it.
+    /// the `color` property, and a focus ring without a border colour strokes it.
     /// Both therefore observe the colour AnimationSystem samples during a
-    /// transition. Gradient stops are separate, unanimated material lanes; a
+    /// transition. Gradient stops are separate, unanimated material properties; a
     /// missing stop takes the destination colour when the gradient resolves.
     pub fill: Option<GuiShapeFill>,
     /// Optional local glow.
@@ -568,21 +469,20 @@ pub fn resolve_appearance(
     root: &GuiRoot,
     node: &GuiEvaluatedNode,
     interaction: &GuiInteractionState,
-    base_part: &str,
+    base_part: GuiPrimitivePart,
 ) -> Option<GuiSkinnedAppearance> {
-    skin_part_key(node.node, base_part)?;
     let state = interaction.state();
     let variant = variant_for_content(&node.content);
-    let lanes = resolve_state_part_style(root, node.node, base_part, state, variant);
-    let fill = match lanes.fill_mode {
+    let resolved = resolve_state_part_style(root, node.node, base_part, state, variant);
+    let fill = match resolved.fill_mode {
         Some(1.0) => {
-            let start = lanes.gradient_start.unwrap_or([0.0, 0.0]);
-            let end = lanes.gradient_end.unwrap_or([1.0, 1.0]);
-            let start_color = lanes
+            let start = resolved.gradient_start.unwrap_or([0.0, 0.0]);
+            let end = resolved.gradient_end.unwrap_or([1.0, 1.0]);
+            let start_color = resolved
                 .gradient_color0
-                .or(lanes.color)
+                .or(resolved.color)
                 .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            let end_color = lanes.gradient_color1.unwrap_or(start_color);
+            let end_color = resolved.gradient_color1.unwrap_or(start_color);
             Some(GuiShapeFill::LinearGradient {
                 start,
                 end,
@@ -591,13 +491,13 @@ pub fn resolve_appearance(
             })
         }
         Some(2.0) => {
-            let center = lanes.gradient_start.unwrap_or([0.5, 0.5]);
-            let radius = lanes.gradient_radius.unwrap_or(0.5);
-            let start_color = lanes
+            let center = resolved.gradient_start.unwrap_or([0.5, 0.5]);
+            let radius = resolved.gradient_radius.unwrap_or(0.5);
+            let start_color = resolved
                 .gradient_color0
-                .or(lanes.color)
+                .or(resolved.color)
                 .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            let end_color = lanes.gradient_color1.unwrap_or(start_color);
+            let end_color = resolved.gradient_color1.unwrap_or(start_color);
             Some(GuiShapeFill::RadialGradient {
                 center,
                 radius,
@@ -605,18 +505,18 @@ pub fn resolve_appearance(
                 end_color,
             })
         }
-        // Solid mode paints the colour lane when the primitive is styled.
+        // Solid mode paints the colour when the primitive is styled.
         _ => None,
     };
 
-    let glow = if lanes.glow_intensity.is_some_and(|i| i > 0.0)
-        && lanes.glow_radius.is_some_and(|r| r > 0.0)
+    let glow = if resolved.glow_intensity.is_some_and(|i| i > 0.0)
+        && resolved.glow_radius.is_some_and(|r| r > 0.0)
     {
         Some(GuiShapeGlow {
-            color: lanes.glow_color.unwrap_or([1.0, 1.0, 1.0, 1.0]),
-            intensity: lanes.glow_intensity.unwrap_or(1.0),
-            radius: lanes.glow_radius.unwrap_or(0.0),
-            falloff: lanes.glow_falloff.unwrap_or(1.0),
+            color: resolved.glow_color.unwrap_or([1.0, 1.0, 1.0, 1.0]),
+            intensity: resolved.glow_intensity.unwrap_or(1.0),
+            radius: resolved.glow_radius.unwrap_or(0.0),
+            falloff: resolved.glow_falloff.unwrap_or(1.0),
         })
     } else {
         None
@@ -626,21 +526,21 @@ pub fn resolve_appearance(
         state,
         focused: interaction.focused,
         variant,
-        color: lanes.color,
-        opacity: lanes.opacity,
-        scale: lanes.scale,
-        align_x: lanes.align_x,
-        asset: lanes.asset,
-        corner_radius: lanes.corner_radius,
-        border_width: lanes.border_width,
-        border_color: lanes.border_color,
+        color: resolved.color,
+        opacity: resolved.opacity,
+        scale: resolved.scale,
+        align_x: resolved.align_x,
+        asset: resolved.asset,
+        corner_radius: resolved.corner_radius,
+        border_width: resolved.border_width,
+        border_color: resolved.border_color,
         fill,
         glow,
     })
 }
 
 /// Apply control-owned defaults after ordinary named-part resolution.
-/// Checkbox `icon` base lanes describe the checked indicator; unchecked stays
+/// Checkbox `icon` base properties describe the checked indicator; unchecked stays
 /// hidden unless its exact variant declares color, opacity, or an asset.
 /// This rule is shared by paint and AnimationSystem destination ownership.
 pub(crate) fn resolve_paint_appearance(
@@ -649,7 +549,7 @@ pub(crate) fn resolve_paint_appearance(
     interaction: &GuiInteractionState,
     part: GuiPrimitivePart,
 ) -> Option<GuiSkinnedAppearance> {
-    let mut appearance = resolve_appearance(root, node, interaction, part.as_str())?;
+    let mut appearance = resolve_appearance(root, node, interaction, part)?;
     if part != GuiPrimitivePart::Icon {
         return Some(appearance);
     }
@@ -659,8 +559,15 @@ pub(crate) fn resolve_paint_appearance(
             checked,
             ..
         } => {
-            let exact = format!("icon_{}_unchecked", interaction.state().suffix());
-            let unchecked = part_style(root, node.node, &exact);
+            let unchecked = theme_part_style(
+                root,
+                node.node,
+                GuiPartId::variant(
+                    GuiPrimitivePart::Icon,
+                    interaction.state(),
+                    GuiPartVariant::Unchecked,
+                ),
+            );
             let explicit_unchecked = unchecked.color.is_some()
                 || unchecked.opacity.is_some()
                 || unchecked.asset.is_some();
@@ -693,53 +600,52 @@ pub struct GuiPartMotion {
     pub base_track: u32,
     /// Whether the clip also animates `align_x` from `base_track + 3`.
     ///
-    /// Set when the base part declares `align_x`, so every state resolves an
-    /// alignment destination and the animated base lane exists.
+    /// Set when the part's base resolves `align_x`, so every state resolves
+    /// an alignment destination.
     pub animates_align: bool,
     /// Clip time that represents this state's authored destination.
     pub sample_time: f64,
+    /// `part_state` slot whose live channels the transition writes.
+    pub channels: u32,
 }
 
-/// Resolve every motion lane independently through the appearance candidate chain.
+/// Resolve every motion property independently through the node theme's
+/// candidate chain. None without motion or without the node's live channels.
 pub fn resolve_state_part_motion(
     root: &GuiRoot,
     node: GuiNodeId,
-    base: &str,
+    base: GuiPrimitivePart,
     state: GuiSkinState,
     variant: GuiControlVariant,
 ) -> Option<GuiPartMotion> {
-    let candidates = state_part_candidates(base, state, variant);
-    let asset_lane = |suffix: &str| {
-        candidates.iter().find_map(|candidate| {
-            let name = GuiRoot::part_property_name(node, candidate, suffix)?;
-            root.properties.asset(&name).cloned()
-        })
-    };
-    let f32_lane = |suffix: &str| {
-        candidates.iter().find_map(|candidate| {
-            let name = GuiRoot::part_property_name(node, candidate, suffix)?;
-            match root.properties.get(&name) {
-                Some(DynamicValue::F32(value)) => Some(value),
-                _ => None,
-            }
-        })
-    };
-    let source = asset_lane("motion")?;
+    let theme = root.node_theme_slot(node)?;
+    let (channels, _) = root
+        .part_row(node, base)
+        .filter(|(_, row)| row.has_channels())?;
+    let rows: Vec<&GuiThemePartRow> = GuiPartId::candidates(base, state, variant.part_variant())
+        .filter_map(|candidate| root.theme_row(theme, candidate))
+        .collect();
+    let property =
+        |read: fn(&GuiThemePartRow) -> Option<f32>| rows.iter().find_map(|row| read(row));
+    let source = rows.iter().find_map(|row| row.motion.clone())?;
     if source.kind != crate::systems::animation::ANIMATION_TYPE {
         return None;
     }
-    let duration = f32_lane("duration")?;
-    let easing = match f32_lane("easing")? {
+    let duration = property(|row| row.duration)?;
+    let easing = match property(|row| row.easing)? {
         0.0 => AnimationTransitionEasing::Linear,
         1.0 => AnimationTransitionEasing::Smoothstep,
         _ => return None,
     };
-    let track = super::super::tree::component::skin_motion_base_track(f32_lane("track")?)?;
-    let animates_align = part_style(root, node, base).align_x.is_some();
+    let track = super::super::tree::part_rows::skin_motion_base_track(property(|row| row.track)?)?;
+    let animates_align = part_overrides(root, node, base).align_x.is_some()
+        || theme_part_style(root, node, GuiPartId::base(base))
+            .align_x
+            .is_some();
     if animates_align {
         track.checked_add(3)?;
     }
-    let time = f32_lane("time")?;
+    let time = property(|row| row.time)?;
     if !duration.is_finite() || duration < 0.0 || !time.is_finite() || time < 0.0 {
         return None;
     }
@@ -750,28 +656,46 @@ pub fn resolve_state_part_motion(
         base_track: track,
         animates_align,
         sample_time: time as f64,
+        channels,
     })
 }
 
-/// Replace destination numeric lanes with effective animated base lanes.
+/// Whether a node's colour, opacity and scale channels for a part are
+/// present, so a transition can bind them.
+pub(crate) fn skin_channels_complete(
+    root: &GuiRoot,
+    node: GuiNodeId,
+    part: GuiPrimitivePart,
+) -> bool {
+    root.part_row(node, part).is_some_and(|(_, row)| {
+        row.live_color.is_some() && row.live_opacity.is_some() && row.live_scale.is_some()
+    })
+}
+
+/// Replace destination numeric properties with the live channels an owning
+/// transition samples; alignment only when its motion animates it.
 ///
-/// Solid fills and focus-ring strokes read the colour lane when applied, so
+/// Solid fills and focus-ring strokes read the colour when applied, so
 /// replacing `color` here is sufficient for them to paint the sampled value.
 pub(crate) fn appearance_with_effective_numeric(
     mut appearance: GuiSkinnedAppearance,
     effective_root: &GuiRoot,
     node: GuiNodeId,
     part: GuiPrimitivePart,
+    animates_align: bool,
 ) -> GuiSkinnedAppearance {
-    let sampled = part_style(effective_root, node, part.as_str());
-    appearance.color = sampled.color.or(appearance.color);
-    appearance.opacity = sampled.opacity.or(appearance.opacity);
-    appearance.scale = sampled.scale.or(appearance.scale);
-    appearance.align_x = sampled.align_x.or(appearance.align_x);
+    if let Some((_, row)) = effective_root.part_row(node, part) {
+        appearance.color = row.live_color.or(appearance.color);
+        appearance.opacity = row.live_opacity.or(appearance.opacity);
+        appearance.scale = row.live_scale.or(appearance.scale);
+        if animates_align {
+            appearance.align_x = row.live_align_x.or(appearance.align_x);
+        }
+    }
     appearance
 }
 
-/// Apply numeric skin lanes while preserving primitive identity and geometry.
+/// Apply numeric skin properties while preserving primitive identity and geometry.
 pub fn apply_appearance_to_primitive(
     primitive: &SurfaceRenderPrimitive,
     appearance: &GuiSkinnedAppearance,
@@ -810,7 +734,7 @@ pub fn apply_appearance_to_primitive(
         {
             *border_color = c;
         }
-        // A gradient replaces the fill; otherwise the colour lane is the
+        // A gradient replaces the fill; otherwise the colour is the
         // solid fill, including its sampled value mid-transition.
         if let Some(f) = appearance.fill.filter(|f| f.is_valid()) {
             *fill = f;
@@ -1219,7 +1143,7 @@ fn synthetic_control_part(
             let current = resolve_state_part_style(
                 root,
                 node.node,
-                GuiPrimitivePart::Icon.as_str(),
+                GuiPrimitivePart::Icon,
                 interaction.state(),
                 variant_for_content(&node.content),
             );
@@ -1301,7 +1225,7 @@ fn synthetic_control_part(
     let appearance = resolve_state_part_style(
         root,
         node.node,
-        part.as_str(),
+        part,
         interaction.state(),
         variant_for_content(&node.content),
     );
@@ -1419,8 +1343,8 @@ fn skin_primitive(
 /// indicator centre at `x + h/2 + (t + 1)/2 * (w - h)`: 0 keeps the centred
 /// square, while -1 and +1 centre it in the left- and right-most `h`-square
 /// cells, so a switch knob keeps the same inset from both track ends. A
-/// control no wider than tall ignores alignment. The scale lane then resizes
-/// the indicator about that centre. Neutral lanes leave geometry untouched.
+/// control no wider than tall ignores alignment. The scale then resizes
+/// the indicator about that centre. Neutral values leave geometry untouched.
 fn place_checkbox_indicator(
     mut primitive: SurfaceRenderPrimitive,
     rect: [f32; 4],
@@ -1489,14 +1413,9 @@ fn focus_ring_primitive(
         let max = gui_logical_to_surface_content([clip[2], clip[3]], units)?;
         Some([min[0], min[1], max[0], max[1]])
     });
-    let appearance = override_appearance.cloned().or_else(|| {
-        resolve_appearance(
-            root,
-            node,
-            interaction,
-            GuiPrimitivePart::FocusRing.as_str(),
-        )
-    })?;
+    let appearance = override_appearance
+        .cloned()
+        .or_else(|| resolve_appearance(root, node, interaction, GuiPrimitivePart::FocusRing))?;
     let color = appearance
         .border_color
         .or(appearance.color)

@@ -409,28 +409,6 @@ impl super::StateOverlayMutationAccess<'_> {
                 } else {
                     Vec::new()
                 };
-                #[cfg(feature = "gui")]
-                let removed_gui_properties = if owns_properties
-                    && declaration.component == crate::ComponentValue::GUI_ROOT
-                {
-                    let mut declared = value.clone();
-                    for field in &declaration.fields {
-                        if !crate::components::dynamic_properties::is_dynamic_field(field.offset) {
-                            registry::write(&mut declared, field)?;
-                        }
-                    }
-                    if let crate::ComponentValue::GuiRoot(gui_root) = &declared {
-                        clear
-                            .iter()
-                            .filter(|name| gui_root.is_removed_node_property(name))
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                };
                 let descriptors = value
                     .dynamic_properties_mut()
                     .ok_or(ErrorReason::InvalidField)?;
@@ -461,10 +439,6 @@ impl super::StateOverlayMutationAccess<'_> {
                     .collect();
                 #[cfg(feature = "surfaces")]
                 for name in &removed_surface_properties {
-                    descriptors.remove(name);
-                }
-                #[cfg(feature = "gui")]
-                for name in &removed_gui_properties {
                     descriptors.remove(name);
                 }
                 if owns_properties {

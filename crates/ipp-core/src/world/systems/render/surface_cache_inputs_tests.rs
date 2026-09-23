@@ -678,11 +678,15 @@ mod gui {
 
     const SESSION: u64 = 7;
 
+    /// Author one colour of theme 2, which the checkbox (node 2) references.
     fn skin_color(root: &mut GuiRoot, part: &str, color: [f32; 4]) {
-        let name = GuiRoot::part_property_name(GuiNodeId(2), part, "color").unwrap();
-        root.properties
-            .set(&name, DynamicValue::Vec4(color))
-            .unwrap();
+        crate::world::systems::gui::test_support::set_theme_part(
+            root,
+            2,
+            part,
+            "color",
+            Some(DynamicValue::Vec4(color)),
+        );
     }
 
     /// Checkbox (node 2) skin colours for idle, hovered and pressed paint.
@@ -768,7 +772,16 @@ mod gui {
                 GuiNodeData::Container(GuiContainerKind::Column).into(),
                 sized(10.0, 10.0),
             ),
-            node(2, Some(1), 0, checkbox_node(false), sized(2.0, 1.0)),
+            node(
+                2,
+                Some(1),
+                0,
+                checkbox_node(false),
+                GuiNodeStyle {
+                    theme: Some(2),
+                    ..sized(2.0, 1.0)
+                },
+            ),
             node(
                 3,
                 Some(1),
@@ -933,19 +946,22 @@ mod gui {
         update(&mut world, 0.0);
         advanced(&mut world, "layout");
 
-        // Theme: an authored skin value on the root.
+        // Theme: an authored value of the referenced theme's part row.
+        let theme_slot = world.gui_root(panel).unwrap().theme_slot(2).unwrap();
+        let part = crate::world::systems::gui::test_support::part_id("background_idle_unchecked");
         run(
             &mut world,
-            vec![Command::SetDynamicProperty {
+            vec![Command::SetField {
                 entity: EntityRef::Handle(panel),
                 component: ComponentValue::GUI_ROOT,
-                name: GuiRoot::part_property_name(
-                    GuiNodeId(2),
-                    "background_idle_unchecked",
-                    "color",
-                )
-                .unwrap(),
-                value: DynamicValue::Vec4([0.3, 0.3, 0.6, 1.0]),
+                field: FieldWrite {
+                    offset: GuiRoot::theme_part_offset(
+                        GuiRoot::theme_part_slot(theme_slot, part).unwrap(),
+                        crate::systems::gui::GuiPartProperty::Color,
+                    )
+                    .unwrap(),
+                    value: FieldValue::Dynamic(DynamicValue::Vec4([0.3, 0.3, 0.6, 1.0])),
+                },
             }],
         )
         .unwrap();

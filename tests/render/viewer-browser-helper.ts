@@ -6,14 +6,20 @@ import type {
   GuiSemanticNode,
   GuiSemanticRole,
   GuiSemanticTree,
-  GuiPartProperty,
+  DynamicValue,
+  GuiBasePart,
+  GuiPartState,
+  GuiPartVariant,
   GuiWorldClient,
   PickingWorldClient,
   StateOverlayRef,
   SurfaceWorldClient,
   SystemQuery,
 } from "@ipp/client";
-import { guiPartProperty } from "@ipp/client";
+import { GUI_BASE_PARTS, GUI_PART_QUALIFIERS, guiPartIndex } from "@ipp/client";
+
+/** Theme part rows per theme slot. */
+const GUI_PART_COUNT = GUI_BASE_PARTS.length * GUI_PART_QUALIFIERS;
 import type { IppCanvasHandle } from "@ipp/react/web";
 import {
   compareImages,
@@ -288,12 +294,17 @@ export async function galleryGuiPoint(
   return pointForNode(selectGuiNode(semantic, selector), fractionX, fractionY);
 }
 
-/** Read one evaluated named skin-part property for a semantic GUI node. */
+/**
+ * Read one GUI part value for a semantic node: `background` reads the node's
+ * live background channels, which skin transitions animate, and a qualified
+ * part such as `background_disabled` reads the authored row of the node's
+ * theme.
+ */
 export async function galleryGuiPartValue(
   entityId: bigint,
   nodeId: number,
   part: string,
-  property: GuiPartProperty,
+  property: "color" | "opacity" | "scale",
 ) {
   // Timed hover probes read one entity, without traversing unrelated resources
   // or decorative nodes after the input burst has already begun.
@@ -307,10 +318,45 @@ export async function galleryGuiPartValue(
     ({ component }) => component === client.components.GuiRoot!.id,
   );
   if (!root) throw new Error("Missing effective GUI demo GuiRoot");
-  const value = root.properties?.[guiPartProperty(nodeId, part, property)];
-  if (!value)
+  type Row = Readonly<Record<string, unknown>>;
+  const table = (field: string) =>
+    (root.fields[field] as { rows: ReadonlyMap<number, Row> } | undefined)
+      ?.rows ?? new Map<number, Row>();
+  let value: unknown;
+  if (part === "background") {
+    // Inspection keys rows by their layout property names.
+    const live = `live_${property}`;
+    const row = [...table("part_state").values()].find(
+      (candidate) => candidate.node === nodeId && candidate.part === 0,
+    );
+    value = row?.[live];
+  } else {
+    const [base, state, variant] = part.split("_") as [
+      GuiBasePart,
+      GuiPartState | undefined,
+      GuiPartVariant | undefined,
+    ];
+    const theme = table("node_style").get(nodeId)?.theme;
+    const rows = [...table("theme_parts")];
+    const first = rows.find(([, row]) => row.theme === theme)?.[0];
+    if (first !== undefined) {
+      const slot =
+        Math.floor(first / GUI_PART_COUNT) * GUI_PART_COUNT +
+        guiPartIndex({ part: base, state, variant });
+      value = table("theme_parts").get(slot)?.[property];
+    }
+  }
+  if (value === undefined)
     throw new Error(`Missing ${nodeId}:${part}:${property} GUI part value`);
-  return value;
+  return {
+    kind:
+      typeof value === "number"
+        ? "f32"
+        : (value as readonly number[]).length === 4
+          ? "vec4"
+          : "vec2",
+    value,
+  } as DynamicValue;
 }
 
 /** Project a semantic control rectangle into normalized completed-frame bounds. */

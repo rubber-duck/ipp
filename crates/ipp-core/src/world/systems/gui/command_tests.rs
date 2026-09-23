@@ -1,6 +1,7 @@
-//! GuiCommand writes derived from the edited node's rows and part lanes
-//! produce the same root as applying the edit to the complete root, over
-//! randomized edit sequences.
+//! GuiCommand writes derived from the edited node's rows produce the same
+//! root, part rows and live channels included, as applying the edit to the
+//! complete root, over randomized edit sequences with theme edits between
+//! them.
 
 use super::*;
 use crate::DynamicValue;
@@ -15,7 +16,7 @@ fn entity() -> EntityId {
 }
 
 /// The complete-root path: apply the edit to a full copy and validate the
-/// complete result, rows and part lanes included.
+/// complete result, node and part rows included.
 fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReason> {
     match command {
         GuiCommand::InsertNode {
@@ -40,6 +41,15 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
             handle,
             ..
         } => validate_handle(root, INCARNATION, SESSION, handle)?,
+        GuiCommand::UpdateTheme {
+            ..
+        }
+        | GuiCommand::RemoveTheme {
+            ..
+        }
+        | GuiCommand::UpdatePart {
+            ..
+        } => unreachable!("the random edits author themes directly"),
     }
 
     let mut next = root.clone();
@@ -91,6 +101,15 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
                 value,
             )?;
         }
+        GuiCommand::UpdateTheme {
+            ..
+        }
+        | GuiCommand::RemoveTheme {
+            ..
+        }
+        | GuiCommand::UpdatePart {
+            ..
+        } => unreachable!("the random edits author themes directly"),
     }
     next.validate_complete()?;
     Ok(next)
@@ -98,9 +117,8 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
 
 /// Apply ordinary authored writes to a root the way the World applies them:
 /// field writes through the registry (tree writes sync rows, row writes are
-/// validated where they land) and named part lanes directly. Every write
-/// must leave a complete valid root, as debug preparation checks after each
-/// operation.
+/// validated where they land). Every write must leave a complete valid root,
+/// as debug preparation checks after each operation.
 fn apply_writes(root: &GuiRoot, commands: &[Command]) -> Result<GuiRoot, ErrorReason> {
     let mut value = crate::ComponentValue::GuiRoot(root.clone());
     for command in commands {
@@ -109,26 +127,6 @@ fn apply_writes(root: &GuiRoot, commands: &[Command]) -> Result<GuiRoot, ErrorRe
                 field,
                 ..
             } => crate::components::registry::write(&mut value, field)?,
-            Command::SetDynamicProperty {
-                name,
-                value: property,
-                ..
-            } => {
-                value
-                    .dynamic_properties_mut()
-                    .expect("GUI roots carry part lanes")
-                    .set(name, property.clone())
-                    .map_err(|_| ErrorReason::InvalidValue)?;
-            }
-            Command::RemoveDynamicProperty {
-                name,
-                ..
-            } => {
-                value
-                    .dynamic_properties_mut()
-                    .expect("GUI roots carry part lanes")
-                    .remove(name);
-            }
             other => panic!("unexpected GUI write {other:?}"),
         }
         let crate::ComponentValue::GuiRoot(root) = &value else {
@@ -193,6 +191,7 @@ fn style(random: &mut Random) -> GuiNodeStyle {
         padding: random.chance(30).then_some([0.01; 4]),
         background_color: random.chance(50).then(|| [random.unit(), 0.2, 0.3, 1.0]),
         opacity: random.unit(),
+        theme: random.chance(50).then(|| 1 + random.below(3) as u32),
         ..Default::default()
     }
 }
@@ -219,6 +218,9 @@ fn patch(random: &mut Random) -> GuiNodePatch {
             .chance(30)
             .then(|| random.chance(70).then(|| [0.1, random.unit(), 0.1, 1.0])),
         opacity: random.chance(30).then(|| random.unit()),
+        theme: random
+            .chance(30)
+            .then(|| random.chance(80).then(|| 1 + random.below(3) as u32)),
         ..Default::default()
     }
 }
@@ -282,26 +284,37 @@ fn command(root: &GuiRoot, random: &mut Random) -> Option<GuiCommand> {
     })
 }
 
-/// Skin authoring writes part lanes directly, outside GuiCommand.
-fn author_part_lanes(root: &mut GuiRoot, random: &mut Random) {
-    let nodes = root.nodes().as_slice();
-    let Some(node) = nodes.get(random.below(nodes.len())).map(|node| node.id) else {
-        return;
-    };
-    for (part, lane, value) in [
-        (
-            "background",
+/// Theme edits run between node commands, so node commands meet themes that
+/// gain and lose motion; referencing nodes follow without being written.
+fn author_theme(root: &mut GuiRoot, random: &mut Random) {
+    use crate::systems::gui::test_support::set_theme_part;
+
+    let theme = 1 + random.below(3) as u32;
+    let part = [
+        "background",
+        "background_hovered",
+        "icon_pressed_checked",
+        "focusRing",
+    ][random.below(4)];
+    let (property, value) = match random.below(4) {
+        0 => (
             "color",
-            DynamicValue::Vec4([0.2, 0.3, 0.4, 1.0]),
+            Some(DynamicValue::Vec4([0.2, 0.3, random.unit(), 1.0])),
         ),
-        ("background_hovered", "opacity", DynamicValue::F32(0.5)),
-        ("focusRing", "border_width", DynamicValue::F32(0.01)),
-    ] {
-        if random.chance(60) {
-            let name = GuiRoot::part_property_name(node, part, lane).unwrap();
-            root.properties.set(&name, value).unwrap();
-        }
-    }
+        1 => ("opacity", Some(DynamicValue::F32(random.unit()))),
+        2 => (
+            "motion",
+            Some(DynamicValue::Asset(
+                crate::services::asset_management::AssetSource {
+                    kind: crate::systems::animation::ANIMATION_TYPE,
+                    uri: "fade.ippa".into(),
+                    variant: 0,
+                },
+            )),
+        ),
+        _ => ("motion", None),
+    };
+    set_theme_part(root, theme, part, property, value);
 }
 
 #[test]
@@ -314,7 +327,7 @@ fn scoped_command_writes_reach_the_complete_root_result() {
 
         for _ in 0..1_500 {
             if random.chance(8) {
-                author_part_lanes(&mut root, &mut random);
+                author_theme(&mut root, &mut random);
             }
             let Some(command) = command(&root, &mut random) else {
                 continue;

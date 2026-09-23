@@ -12,8 +12,9 @@ use ipp_core::systems::animation::*;
 use ipp_core::systems::gui::{
     GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand, GuiKey, GuiNodeData,
     GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty,
-    GuiRoot,
+    GuiPartId, GuiPartPatch, GuiPartProperty, GuiRoot, GuiSkinState,
 };
+use ipp_core::systems::surface::GuiPrimitivePart;
 use ipp_core::{
     Batch, Command, ComponentValue, DynamicValue, EntityId, EntityRef, ErrorReason, FieldValue,
     FieldWrite, HostRuntime, Surface, SurfaceCommand, SurfaceItemContent, SurfaceItemId,
@@ -908,31 +909,33 @@ fn style_is_stored_once_and_patches_preserve_omitted_values() {
         0.5
     );
 
-    // Named properties hold only skin parts; node style names are rejected.
+    // Named properties are application extension values: node style names
+    // are ordinary names that never reach the rows.
     for (name, value) in [
-        ("node_1_width", DynamicValue::F32(1.0)),
-        ("node_1_opacity", DynamicValue::F32(0.5)),
-        ("node_1_unknown", DynamicValue::F32(1.0)),
+        ("node_1_opacity", DynamicValue::F32(0.25)),
+        ("node_1_part_background_color", DynamicValue::F32(1.0)),
         ("unrelated", DynamicValue::F32(1.0)),
     ] {
-        assert!(
-            submit(
-                &mut world,
-                vec![Command::SetDynamicProperty {
-                    entity: EntityRef::Handle(entity),
-                    component: ComponentValue::GUI_ROOT,
-                    name: name.into(),
-                    value,
-                }],
-            )
-            .is_err(),
-            "{name}"
-        );
+        submit(
+            &mut world,
+            vec![Command::SetDynamicProperty {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::GUI_ROOT,
+                name: name.into(),
+                value,
+            }],
+        )
+        .unwrap();
     }
+    assert_eq!(
+        root(&world, entity).style(GuiNodeId(1)).unwrap().opacity,
+        0.5
+    );
+    assert_eq!(root(&world, entity).part_state().len(), 0);
 }
 
 #[test]
-fn removing_a_subtree_removes_node_and_part_properties() {
+fn removing_a_subtree_removes_node_and_part_rows() {
     let (mut host, world_id) = host_world();
     let mut world = host.world_mut(world_id).unwrap();
     let entity = create_root(&mut world, Surface::default());
@@ -960,17 +963,23 @@ fn removing_a_subtree_removes_node_and_part_properties() {
         Default::default(),
     )
     .unwrap();
-    let part = GuiRoot::part_property_name(GuiNodeId(2), "background", "color").unwrap();
-    submit(
+    edit(
         &mut world,
-        vec![Command::SetDynamicProperty {
-            entity: EntityRef::Handle(entity),
-            component: ComponentValue::GUI_ROOT,
-            name: part.clone(),
-            value: DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0]),
-        }],
+        GuiCommand::UpdatePart {
+            handle: button,
+            part: GuiPrimitivePart::Background,
+            patch: GuiPartPatch::default().set(
+                GuiPartProperty::Color,
+                DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0]),
+            ),
+        },
     )
     .unwrap();
+    assert!(
+        root(&world, entity)
+            .part_row(GuiNodeId(2), GuiPrimitivePart::Background)
+            .is_some()
+    );
 
     edit(
         &mut world,
@@ -981,14 +990,7 @@ fn removing_a_subtree_removes_node_and_part_properties() {
     .unwrap();
     let root = root(&world, entity);
     assert_eq!(root.node_count(), 1);
-    assert!(
-        root.properties
-            .descriptors()
-            .keys()
-            .all(|name| name.starts_with("node_1_")),
-        "{:?}",
-        root.properties.descriptors().keys().collect::<Vec<_>>()
-    );
+    assert!(root.part_state().is_empty());
     assert!(world.validate_gui_node_handle(&button, SESSION).is_err());
     // Identities are never reused after removal.
     assert!(insert(&mut world, entity, 2, Some(1), column(), Default::default()).is_err());
@@ -1461,36 +1463,46 @@ fn gui_properties_are_validated_on_field_and_overlay_writes() {
     );
     assert_eq!(opacity(&world), 0.75);
 
-    // Track declarations reject the rounded 2^32 F32 boundary and accept the
-    // greatest representable F32 whose complete three-lane range fits u32.
-    let track_name = GuiRoot::part_property_name(GuiNodeId(1), "background", "track").unwrap();
-    assert!(
-        submit(
-            &mut world,
-            vec![Command::SetDynamicProperty {
-                entity: EntityRef::Handle(entity),
-                component: ComponentValue::GUI_ROOT,
-                name: track_name.clone(),
-                value: DynamicValue::F32(4_294_967_296.0),
-            }],
-        )
-        .is_err()
-    );
-    assert!(root(&world, entity).properties.get(&track_name).is_none());
-    submit(
+    // Theme track properties reject the rounded 2^32 F32 boundary and accept
+    // the greatest representable F32 whose colour, opacity and scale tracks
+    // fit u32, by row offset like any row property.
+    let current = incarnation(&world, entity);
+    edit(
         &mut world,
-        vec![Command::SetDynamicProperty {
-            entity: EntityRef::Handle(entity),
-            component: ComponentValue::GUI_ROOT,
-            name: track_name.clone(),
-            value: DynamicValue::F32(4_294_967_040.0),
-        }],
+        GuiCommand::UpdateTheme {
+            entity,
+            root_incarnation: current,
+            theme: 3,
+            part: GuiPartId::base(GuiPrimitivePart::Background),
+            patch: GuiPartPatch::default(),
+        },
     )
     .unwrap();
-    assert_eq!(
-        root(&world, entity).properties.get(&track_name),
-        Some(DynamicValue::F32(4_294_967_040.0))
-    );
+    let theme_slot = root(&world, entity).theme_slot(3).unwrap();
+    let track_offset = GuiRoot::theme_part_offset(
+        GuiRoot::theme_part_slot(theme_slot, GuiPartId::base(GuiPrimitivePart::Background))
+            .unwrap(),
+        GuiPartProperty::Track,
+    )
+    .unwrap();
+    let track = |value: f32| Command::SetField {
+        entity: EntityRef::Handle(entity),
+        component: ComponentValue::GUI_ROOT,
+        field: FieldWrite {
+            offset: track_offset,
+            value: FieldValue::Dynamic(DynamicValue::F32(value)),
+        },
+    };
+    assert!(submit(&mut world, vec![track(4_294_967_296.0)]).is_err());
+    let theme_track = |world: &WorldContext<'_>| {
+        root(world, entity)
+            .theme_row(theme_slot, GuiPartId::base(GuiPrimitivePart::Background))
+            .unwrap()
+            .track
+    };
+    assert_eq!(theme_track(&world), None);
+    submit(&mut world, vec![track(4_294_967_040.0)]).unwrap();
+    assert_eq!(theme_track(&world), Some(4_294_967_040.0));
 
     // Overlay declarations and overlay updates follow the same property rules.
     assert!(
@@ -1522,4 +1534,154 @@ fn gui_properties_are_validated_on_field_and_overlay_writes() {
     assert_eq!(opacity(&world), 0.25);
     submit(&mut world, vec![release_owner(&valid)]).unwrap();
     assert_eq!(opacity(&world), 0.75);
+}
+
+/// Theme edits reach every node that references the theme without writing
+/// the nodes; overrides keep precedence and theme removal leaves the
+/// references resolving without a theme until it is defined again.
+#[test]
+fn theme_edits_re_resolve_referencing_nodes_without_node_writes() {
+    let (mut host, world_id) = host_world();
+    let mut world = host.world_mut(world_id).unwrap();
+    let entity = create_root(&mut world, Surface::default());
+    let themed = GuiNodeStyle {
+        theme: Some(4),
+        ..Default::default()
+    };
+    insert(&mut world, entity, 1, None, column(), Default::default()).unwrap();
+    insert(&mut world, entity, 2, Some(1), column(), themed.clone()).unwrap();
+    let overridden = insert(&mut world, entity, 3, Some(1), column(), themed).unwrap();
+    let update_theme = |world: &mut WorldContext<'_>, part, color| {
+        let root_incarnation = incarnation(world, entity);
+        edit(
+            world,
+            GuiCommand::UpdateTheme {
+                entity,
+                root_incarnation,
+                theme: 4,
+                part,
+                patch: GuiPartPatch::default()
+                    .set(GuiPartProperty::Color, DynamicValue::Vec4(color)),
+            },
+        )
+    };
+    let base = GuiPartId::base(GuiPrimitivePart::Background);
+    let hovered = GuiPartId::state(GuiPrimitivePart::Background, GuiSkinState::Hovered);
+    update_theme(&mut world, base, [0.1, 0.2, 0.3, 1.0]).unwrap();
+    update_theme(&mut world, hovered, [0.9, 0.8, 0.7, 1.0]).unwrap();
+    edit(
+        &mut world,
+        GuiCommand::UpdatePart {
+            handle: overridden,
+            part: GuiPrimitivePart::Background,
+            patch: GuiPartPatch::default().set(
+                GuiPartProperty::Color,
+                DynamicValue::Vec4([0.0, 1.0, 0.0, 1.0]),
+            ),
+        },
+    )
+    .unwrap();
+
+    let resolved = |world: &WorldContext<'_>, node: u32, state| {
+        ipp_core::systems::gui::resolve_state_part_style(
+            &root(world, entity),
+            GuiNodeId(node),
+            GuiPrimitivePart::Background,
+            state,
+            ipp_core::systems::gui::GuiControlVariant::Plain,
+        )
+        .color
+    };
+    assert_eq!(
+        resolved(&world, 2, GuiSkinState::Idle),
+        Some([0.1, 0.2, 0.3, 1.0])
+    );
+    assert_eq!(
+        resolved(&world, 2, GuiSkinState::Hovered),
+        Some([0.9, 0.8, 0.7, 1.0])
+    );
+    assert_eq!(
+        resolved(&world, 3, GuiSkinState::Hovered),
+        Some([0.0, 1.0, 0.0, 1.0])
+    );
+
+    // Editing the theme changes resolution without touching node rows.
+    let styles = |world: &WorldContext<'_>| {
+        [2, 3].map(|node| root(world, entity).style_row(GuiNodeId(node)).cloned())
+    };
+    let before = styles(&world);
+    update_theme(&mut world, base, [0.4, 0.4, 0.4, 1.0]).unwrap();
+    assert_eq!(styles(&world), before);
+    assert_eq!(
+        resolved(&world, 2, GuiSkinState::Idle),
+        Some([0.4, 0.4, 0.4, 1.0])
+    );
+    assert_eq!(
+        resolved(&world, 3, GuiSkinState::Idle),
+        Some([0.0, 1.0, 0.0, 1.0])
+    );
+
+    // Removing the theme leaves references resolving without it; defining it
+    // again at a fresh theme slot restores them.
+    let first_slot = root(&world, entity).theme_slot(4).unwrap();
+    let current = incarnation(&world, entity);
+    edit(
+        &mut world,
+        GuiCommand::RemoveTheme {
+            entity,
+            root_incarnation: current,
+            theme: 4,
+        },
+    )
+    .unwrap();
+    assert_eq!(resolved(&world, 2, GuiSkinState::Idle), None);
+    let current = incarnation(&world, entity);
+    assert!(
+        edit(
+            &mut world,
+            GuiCommand::RemoveTheme {
+                entity,
+                root_incarnation: current,
+                theme: 4,
+            },
+        )
+        .is_err()
+    );
+    update_theme(&mut world, base, [0.5, 0.5, 0.5, 1.0]).unwrap();
+    assert_ne!(root(&world, entity).theme_slot(4), Some(first_slot));
+    assert_eq!(
+        resolved(&world, 2, GuiSkinState::Idle),
+        Some([0.5, 0.5, 0.5, 1.0])
+    );
+    assert_eq!(styles(&world), before);
+
+    // Motion is theme-only, and theme handles and whole tables are
+    // command-owned on a live root.
+    assert!(
+        edit(
+            &mut world,
+            GuiCommand::UpdatePart {
+                handle: overridden,
+                part: GuiPrimitivePart::Background,
+                patch: GuiPartPatch::default()
+                    .set(GuiPartProperty::Duration, DynamicValue::F32(1.0)),
+            },
+        )
+        .is_err()
+    );
+    assert!(
+        submit(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::GUI_ROOT,
+                field: FieldWrite {
+                    offset: GuiRoot::node_style_offset(GuiNodeId(2), GuiNodeStyleProperty::Theme)
+                        .unwrap(),
+                    value: FieldValue::Dynamic(DynamicValue::U32(9)),
+                },
+            }],
+        )
+        .is_err()
+    );
 }

@@ -5,7 +5,6 @@ import type {
   GuiWorldClient,
   SurfaceWorldClient,
   WorldPersistenceHostClient,
-  guiPartProperty,
 } from "@ipp/client";
 import {
   aliasId,
@@ -21,7 +20,6 @@ export type GuiTestClient = GuiWorldClient &
 
 /** Property addressing exported by the generated contract under test. */
 export interface GuiContractNames {
-  guiPartProperty: typeof guiPartProperty;
   /** Generated GuiRoot row helpers: node style properties by offset. */
   GuiRoot: {
     node_styleOffset(slot: number, property: "opacity"): number;
@@ -78,7 +76,7 @@ async function guiStyleRows(
  */
 export async function exerciseGuiLifecycle(
   host: WorldPersistenceHostClient<GuiTestClient>,
-  { guiPartProperty, GuiRoot }: GuiContractNames,
+  { GuiRoot }: GuiContractNames,
 ) {
   const client = await host.createWorld({ symbolicId: "gui-lifecycle" });
   const batchRef = { kind: "alias", alias: 80 } as const;
@@ -419,7 +417,7 @@ export async function exerciseGuiLifecycle(
   expect(ids(pipelined) === "1,2,3", `Pipelined inspection ${ids(pipelined)}`);
 
   // A styled panel keeps every node's style in one row table: inspection
-  // decodes all rows through the generated client, not named lanes.
+  // decodes all rows through the generated client, not named properties.
   const denseStyle = {
     enabled: true,
     width: 1,
@@ -468,9 +466,10 @@ export async function exerciseGuiLifecycle(
     await client.editGui({ action: "remove", handle: handle(id) });
   }
 
-  // Long named-part lanes make one panel's descriptor table exceed the former
-  // 64 KiB byte bound. Beyond the message budget, inspection fails explicitly
-  // without truncating state, and the same connection remains usable.
+  // Long extension property names make one panel's descriptor table exceed
+  // the former 64 KiB byte bound. Beyond the message budget, inspection fails
+  // explicitly without truncating state, and the same connection remains
+  // usable.
   const denseRef = { kind: "alias", alias: 81 } as const;
   const denseEntity = aliasId(
     await client.batch([
@@ -489,9 +488,8 @@ export async function exerciseGuiLifecycle(
     index: 0,
     data: { kind: "container", containerKind: "column" },
   });
-  const densePart = (index: number) =>
-    guiPartProperty(1, `dense_${index}_${"x".repeat(4000)}`, "color");
-  const setDenseLanes = async (from: number, to: number) => {
+  const densePart = (index: number) => `dense_${index}_${"x".repeat(4000)}`;
+  const setDenseProperties = async (from: number, to: number) => {
     for (let start = from; start < to; start += 50)
       successfulBatch(
         await client.batch(
@@ -505,7 +503,7 @@ export async function exerciseGuiLifecycle(
         ),
       );
   };
-  const denseLanes = async () => {
+  const denseProperties = async () => {
     const snapshot = (await client.inspect()).entities.find(
       (item) => item.id === denseEntity,
     );
@@ -515,12 +513,12 @@ export async function exerciseGuiLifecycle(
         components.find(
           (item) => item.component === client.components.GuiRoot!.id,
         )?.properties ?? {},
-      ).filter((name) => name.includes("_part_dense_")),
+      ).filter((name) => name.startsWith("dense_")),
     );
   };
-  await setDenseLanes(0, 20);
+  await setDenseProperties(0, 20);
   const encoder = new TextEncoder();
-  const [denseBase, denseEffective] = await denseLanes();
+  const [denseBase, denseEffective] = await denseProperties();
   // UTF-8 property names alone bound the descriptor table from below.
   const denseNameBytes = denseEffective!.reduce(
     (total, name) => total + encoder.encode(name).length,
@@ -531,9 +529,9 @@ export async function exerciseGuiLifecycle(
       denseBase!.length === 20 &&
       denseEffective!.length === 20 &&
       denseEffective!.includes(densePart(19)),
-    `Dense inspection decoded ${denseBase!.length}/${denseEffective!.length} lanes and ${denseNameBytes} name bytes`,
+    `Dense inspection decoded ${denseBase!.length}/${denseEffective!.length} properties and ${denseNameBytes} name bytes`,
   );
-  await setDenseLanes(20, 300);
+  await setDenseProperties(20, 300);
   let oversized: unknown;
   try {
     await client.inspect();
@@ -561,10 +559,10 @@ export async function exerciseGuiLifecycle(
         })),
       ),
     );
-  const [restoredBase] = await denseLanes();
+  const [restoredBase] = await denseProperties();
   expect(
     restoredBase!.length === 20 && restoredBase!.includes(densePart(19)),
-    "Inspection after the oversized record lost or truncated named lanes",
+    "Inspection after the oversized record lost or truncated named properties",
   );
   successfulBatch(
     await client.batch([
@@ -643,7 +641,7 @@ export async function exerciseGuiLifecycle(
     value: { kind: "scalar", value: 0.75 },
   });
 
-  // A partial style patch preserves omitted lanes.
+  // A partial style patch preserves omitted properties.
   await client.editGui({
     action: "update",
     handle: handle(2),
@@ -655,7 +653,7 @@ export async function exerciseGuiLifecycle(
     checkbox.style.opacity === 0.5 &&
       Math.abs(checkbox.style.fontSize! - 0.2) < 1e-6 &&
       Math.abs(checkbox.style.color![1] - 0.4) < 1e-6,
-    `Style patch replaced omitted lanes: ${JSON.stringify(checkbox.style)}`,
+    `Style patch replaced omitted properties: ${JSON.stringify(checkbox.style)}`,
   );
 
   // Clearing the tree through a generic write or adding raw Surface items is rejected.
@@ -692,25 +690,30 @@ export async function exerciseGuiLifecycle(
     "Rejected writes changed the tree",
   );
 
-  // Named-part properties die with their node; stale handles cannot retarget.
-  const part = guiPartProperty(2, "background", "color");
-  successfulBatch(
-    await client.batch([
-      {
-        kind: "setDynamicProperty",
-        entity: { kind: "handle", id: entity },
-        component: client.components.GuiRoot!.id,
-        name: part,
-        value: { kind: "vec4", value: [1, 0, 0, 1] },
-      },
-    ]),
+  // Part rows die with their node; stale handles cannot retarget.
+  await client.editGui({
+    action: "updatePart",
+    handle: handle(2),
+    part: "background",
+    patch: { color: [1, 0, 0, 1] },
+  });
+  const partNodes = async () => {
+    const table = (await guiProperties(client, entity)).fields.part_state as
+      | { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
+      | undefined;
+    expect(table?.rows instanceof Map, "GuiRoot inspection omitted part_state");
+    return [...table.rows.values()].map((row) => row.node);
+  };
+  expect(
+    (await partNodes()).includes(2),
+    "A part override did not create the node's part row",
   );
   await client.editGui({ action: "remove", handle: handle(2) });
-  const properties = (await guiProperties(client, entity)).properties;
   const remaining = await guiStyleRows(client, entity);
+  const parts = await partNodes();
   expect(
-    !(part in properties) && !remaining.has(2),
-    `Removed node properties survived: ${Object.keys(properties).join()}`,
+    !parts.includes(2) && !remaining.has(2),
+    `Removed node rows survived: parts ${parts.join()}`,
   );
   await rejects(
     client.editGui({

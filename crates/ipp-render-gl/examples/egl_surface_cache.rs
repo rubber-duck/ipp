@@ -25,6 +25,8 @@ mod scenario {
     use ipp_core::services::asset_management::{
         AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
     };
+    use ipp_core::systems::gui::{GuiPartPatch, GuiPartProperty};
+    use ipp_core::systems::surface::GuiPrimitivePart;
     use ipp_core::{
         Batch, Command, ComponentValue, DynamicValue, EntityId, EntityRef, FieldValue, FieldWrite,
         GuiCommand, GuiContainerKind, GuiInputCommand, GuiNodeData, GuiNodeDataRow, GuiNodeHandle,
@@ -468,30 +470,29 @@ mod scenario {
                 )?;
                 *index += 1;
             }
-            let part = |suffix, value| {
+            use GuiPartProperty as P;
+            let background = [
+                (P::FillMode, DynamicValue::F32(1.0)),
+                (P::GradientStart, DynamicValue::Vec2([0.0, 0.0])),
+                (P::GradientEnd, DynamicValue::Vec2([0.0, 1.0])),
                 (
-                    GuiRoot::part_property_name(GuiNodeId(2), "background", suffix).unwrap(),
-                    value,
-                )
-            };
-            let lanes = [
-                part("fill_mode", DynamicValue::F32(1.0)),
-                part("gradient_start", DynamicValue::Vec2([0.0, 0.0])),
-                part("gradient_end", DynamicValue::Vec2([0.0, 1.0])),
-                part(
-                    "gradient_color0",
+                    P::GradientColor0,
                     DynamicValue::Vec4([1.0, 0.08, 0.04, 1.0]),
                 ),
-                part("gradient_color1", DynamicValue::Vec4([1.0, 0.8, 0.08, 1.0])),
-                part("corner_radius", DynamicValue::Vec2([0.12, 0.12])),
-                part("border_width", DynamicValue::F32(0.05)),
-                part("border_color", DynamicValue::Vec4([1.0, 1.0, 1.0, 1.0])),
-                part("glow_color", DynamicValue::Vec4([1.0, 0.35, 0.05, 1.0])),
-                part("glow_intensity", DynamicValue::F32(0.8)),
-                part("glow_radius", DynamicValue::F32(0.15)),
-                part("glow_falloff", DynamicValue::F32(2.0)),
-            ];
-            scene.dynamic(lanes.into_iter().collect())?;
+                (P::GradientColor1, DynamicValue::Vec4([1.0, 0.8, 0.08, 1.0])),
+                (P::CornerRadius, DynamicValue::Vec2([0.12, 0.12])),
+                (P::BorderWidth, DynamicValue::F32(0.05)),
+                (P::BorderColor, DynamicValue::Vec4([1.0, 1.0, 1.0, 1.0])),
+                (P::GlowColor, DynamicValue::Vec4([1.0, 0.35, 0.05, 1.0])),
+                (P::GlowIntensity, DynamicValue::F32(0.8)),
+                (P::GlowRadius, DynamicValue::F32(0.15)),
+                (P::GlowFalloff, DynamicValue::F32(2.0)),
+            ]
+            .into_iter()
+            .fold(GuiPartPatch::default(), |patch, (property, value)| {
+                patch.set(property, value)
+            });
+            scene.part(2, GuiPrimitivePart::Background, background)?;
             scene.settle(&[font, drawing, bitmap])?;
             Ok(scene)
         }
@@ -537,26 +538,30 @@ mod scenario {
             Ok(())
         }
 
-        fn dynamic(&mut self, lanes: Vec<(String, DynamicValue)>) -> Result<()> {
-            let panel = self.panel;
-            self.batch(
-                lanes
-                    .into_iter()
-                    .map(|(name, value)| Command::SetDynamicProperty {
-                        entity: EntityRef::Handle(panel),
-                        component: ComponentValue::GUI_ROOT,
-                        name,
-                        value,
-                    })
-                    .collect(),
-            )
+        /// Patch one node's part overrides, which take precedence over any
+        /// theme for every state and variant.
+        fn part(&mut self, node: u32, part: GuiPrimitivePart, patch: GuiPartPatch) -> Result<()> {
+            let handle = self.node(node);
+            self.host
+                .world_mut(self.world)
+                .unwrap()
+                .enqueue_gui_command(
+                    SESSION,
+                    GuiCommand::UpdatePart {
+                        handle,
+                        part,
+                        patch,
+                    },
+                )?;
+            Ok(())
         }
 
         fn text_color(&mut self, color: [f32; 4]) -> Result<()> {
-            self.dynamic(vec![(
-                GuiRoot::part_property_name(GuiNodeId(7), "label", "color").unwrap(),
-                DynamicValue::Vec4(color),
-            )])
+            self.part(
+                7,
+                GuiPrimitivePart::Label,
+                GuiPartPatch::default().set(GuiPartProperty::Color, DynamicValue::Vec4(color)),
+            )
         }
 
         fn camera_distance(&mut self, distance: f32) -> Result<()> {
@@ -1041,10 +1046,14 @@ mod scenario {
             // Resource replacement bypasses the cadence: the frame that sees the
             // new resource identity repaints or presents directly.
             let replacement = source(DRAWING_TYPE, "panel-replacement.ippd");
-            self.dynamic(vec![(
-                GuiRoot::part_property_name(GuiNodeId(8), "icon", "asset").unwrap(),
-                DynamicValue::Asset(replacement.clone()),
-            )])?;
+            self.part(
+                8,
+                GuiPrimitivePart::Icon,
+                GuiPartPatch::default().set(
+                    GuiPartProperty::Asset,
+                    DynamicValue::Asset(replacement.clone()),
+                ),
+            )?;
             let revision = |scene: &mut Self| scene.revisions().map(|(_, resource)| resource);
             let before = revision(&mut self);
             let mut observed = false;

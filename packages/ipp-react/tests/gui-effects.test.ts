@@ -738,6 +738,8 @@ class CommitsProducer {
       for (const gone of doomed) this.nodes.delete(gone);
       return;
     }
+    // Themes are root-owned; this fake keeps no skin state.
+    if (edit.action === "updateTheme" || edit.action === "removeTheme") return;
     const node = this.nodes.get(edit.handle.nodeId);
     if (!node) throw commitsRejected();
     if (edit.action === "update") {

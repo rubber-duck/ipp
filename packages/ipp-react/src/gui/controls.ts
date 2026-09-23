@@ -84,7 +84,8 @@ export interface GuiControlBaseProps extends GuiStyleProps {
   readonly nodeRef?: GuiNodeRef | null | undefined;
   readonly onAction?: GuiActionListener | undefined;
   readonly onActionCapture?: GuiActionListener | undefined;
-  /** Runtime named-part lanes; core chooses the active interaction state. */
+  /** Root theme this control references; core chooses the active
+   * interaction state. */
   readonly theme?: GuiControlTheme | undefined;
 }
 

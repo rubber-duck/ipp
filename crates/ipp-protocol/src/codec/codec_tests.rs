@@ -2060,7 +2060,7 @@ fn gui_edit_style_and_values_follow_the_row_layouts() {
         bytes
     };
     let batch = |command: Vec<u8>| {
-        let mut payload = vec![3];
+        let mut payload = vec![4];
         payload.extend_from_slice(&1u32.to_le_bytes());
         payload.extend_from_slice(&command);
         payload
@@ -2143,5 +2143,100 @@ fn gui_edit_style_and_values_follow_the_row_layouts() {
     // mask bits are malformed.
     assert!(decode(patch([0, 0x10, 0], [0, 0, 0], &[])).is_err());
     assert!(decode(patch([0, 0, 0], [1, 0, 0], &0u32.to_le_bytes())).is_err());
-    assert!(decode(patch([0, 0, 0x08], [0, 0, 0], &[])).is_err());
+    assert!(decode(patch([0, 0, 0x10], [0, 0, 0], &[])).is_err());
+    // Bit 19 is the theme reference; changed-but-unset clears it.
+    assert_eq!(
+        decode(patch([0, 0, 0x08], [0, 0, 0x08], &7u32.to_le_bytes())),
+        Ok(GuiCommand::UpdateNode {
+            handle: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(1)),
+            patch: GuiNodePatch {
+                theme: Some(Some(7)),
+                ..GuiNodePatch::default()
+            },
+        })
+    );
+
+    // Theme and part edits: part identities by dense index, then changed and
+    // set masks over the 23 part properties (three bytes each).
+    use ipp_core::systems::gui::{GuiPartId, GuiPartPatch, GuiPartProperty, GuiSkinState};
+    use ipp_core::systems::surface::GuiPrimitivePart;
+    let part_patch = |changed: [u8; 3], set: [u8; 3], values: &[u8]| {
+        let mut payload = changed.to_vec();
+        payload.extend_from_slice(&set);
+        payload.extend_from_slice(values);
+        payload
+    };
+    let mut theme = vec![6];
+    theme.extend_from_slice(&42u64.to_le_bytes());
+    theme.extend_from_slice(&3u64.to_le_bytes());
+    theme.extend_from_slice(&11u32.to_le_bytes());
+    // Background (0) hovered (state 1): qualifier 1 + 1 * 3 = 4.
+    theme.push(4);
+    // Bit 0 colour (set), bit 1 opacity (cleared).
+    let mut color = Vec::new();
+    for channel in [0.25f32, 0.5, 0.75, 1.0] {
+        color.extend_from_slice(&channel.to_le_bytes());
+    }
+    theme.extend(part_patch([0b11, 0, 0], [0b01, 0, 0], &color));
+    assert_eq!(
+        decode(theme),
+        Ok(GuiCommand::UpdateTheme {
+            entity: EntityId::from_bits(42),
+            root_incarnation: 3,
+            theme: 11,
+            part: GuiPartId::state(GuiPrimitivePart::Background, GuiSkinState::Hovered),
+            patch: GuiPartPatch::default()
+                .set(
+                    GuiPartProperty::Color,
+                    ipp_core::DynamicValue::Vec4([0.25, 0.5, 0.75, 1.0]),
+                )
+                .clear(GuiPartProperty::Opacity),
+        })
+    );
+    let mut part_index_out_of_range = vec![6];
+    part_index_out_of_range.extend_from_slice(&42u64.to_le_bytes());
+    part_index_out_of_range.extend_from_slice(&3u64.to_le_bytes());
+    part_index_out_of_range.extend_from_slice(&11u32.to_le_bytes());
+    part_index_out_of_range.push(65);
+    part_index_out_of_range.extend(part_patch([0; 3], [0; 3], &[]));
+    assert!(decode(part_index_out_of_range).is_err());
+
+    let mut remove = vec![7];
+    remove.extend_from_slice(&42u64.to_le_bytes());
+    remove.extend_from_slice(&3u64.to_le_bytes());
+    remove.extend_from_slice(&11u32.to_le_bytes());
+    assert_eq!(
+        decode(remove),
+        Ok(GuiCommand::RemoveTheme {
+            entity: EntityId::from_bits(42),
+            root_incarnation: 3,
+            theme: 11,
+        })
+    );
+
+    let part = |base: u8, changed: [u8; 3], set: [u8; 3], values: &[u8]| {
+        let mut payload = vec![8];
+        payload.extend_from_slice(&1u64.to_le_bytes());
+        payload.extend_from_slice(&42u64.to_le_bytes());
+        payload.extend_from_slice(&3u64.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.push(base);
+        payload.extend(part_patch(changed, set, values));
+        payload
+    };
+    // Icon (3), bit 6 border width set.
+    assert_eq!(
+        decode(part(3, [0x40, 0, 0], [0x40, 0, 0], &0.5f32.to_le_bytes())),
+        Ok(GuiCommand::UpdatePart {
+            handle: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(1)),
+            part: GuiPrimitivePart::Icon,
+            patch: GuiPartPatch::default().set(
+                GuiPartProperty::BorderWidth,
+                ipp_core::DynamicValue::F32(0.5)
+            ),
+        })
+    );
+    // Unknown base parts and mask bits past the 23 part properties are malformed.
+    assert!(decode(part(5, [0; 3], [0; 3], &[])).is_err());
+    assert!(decode(part(3, [0, 0, 0x80], [0, 0, 0], &[])).is_err());
 }

@@ -9,7 +9,7 @@ use crate::GuiNodePatch;
 use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetKey, AssetSource};
 use crate::systems::surface::SurfaceRenderResource;
-use crate::world::systems::gui::test_support::checkbox_node;
+use crate::world::systems::gui::test_support::{checkbox_node, set_node_theme, set_theme_part};
 use std::collections::BTreeSet;
 
 #[test]
@@ -116,24 +116,33 @@ fn skin_part_edits_advance_paint_without_reflow_or_remeasure() {
     );
     let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let mut root_tree = tree.build();
-    let part = GuiRoot::part_property_name(leaf, "background", "color").unwrap();
-    root_tree
-        .properties
-        .set(&part, DynamicValue::Vec4([0.0, 0.0, 1.0, 1.0]))
-        .unwrap();
+    let color = |value| Some(DynamicValue::Vec4(value));
+    set_theme_part(
+        &mut root_tree,
+        7,
+        "background",
+        "color",
+        color([0.0, 0.0, 1.0, 1.0]),
+    );
+    set_node_theme(&mut root_tree, leaf, Some(7));
 
     let mut cache = GuiLayoutCache::default();
     let first = cache
         .evaluate(entity(), &request(&root_tree, 1), &resolver)
         .clone();
 
-    // A reskin touches only named part lanes: paint revision advances
-    // with no reflow and no remeasure, so render preparation re-skins
-    // without any unrelated trigger.
-    root_tree
-        .properties
-        .set(&part, DynamicValue::Vec4([1.0, 0.0, 0.0, 1.0]))
-        .unwrap();
+    // A reskin touches only the referenced theme: paint revision advances
+    // with no reflow and no remeasure and no write to the node, so render
+    // preparation re-skins without any unrelated trigger.
+    let style = root_tree.style_row(leaf).cloned();
+    set_theme_part(
+        &mut root_tree,
+        7,
+        "background",
+        "color",
+        color([1.0, 0.0, 0.0, 1.0]),
+    );
+    assert_eq!(root_tree.style_row(leaf).cloned(), style);
 
     let second = cache
         .evaluate(entity(), &request(&root_tree, 2), &resolver)
@@ -142,6 +151,27 @@ fn skin_part_edits_advance_paint_without_reflow_or_remeasure() {
     assert_eq!(second.paint_revision, first.paint_revision + 1);
     assert_eq!(second.reflow_count, 1);
     assert_eq!(second.remeasure_count, 1);
+
+    // Editing a theme no node references leaves paint untouched.
+    set_theme_part(
+        &mut root_tree,
+        8,
+        "background",
+        "color",
+        color([0.0, 1.0, 0.0, 1.0]),
+    );
+    let third = cache
+        .evaluate(entity(), &request(&root_tree, 3), &resolver)
+        .clone();
+    assert_eq!(third.paint_revision, second.paint_revision);
+
+    // Switching the node to that theme repaints it.
+    set_node_theme(&mut root_tree, leaf, Some(8));
+    let fourth = cache
+        .evaluate(entity(), &request(&root_tree, 4), &resolver)
+        .clone();
+    assert_eq!(fourth.layout_revision, first.layout_revision);
+    assert_eq!(fourth.paint_revision, third.paint_revision + 1);
     let _ = root;
 }
 
@@ -157,22 +187,29 @@ fn material_part_edits_advance_paint_without_reflow_or_remeasure() {
     );
     let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let mut root_tree = tree.build();
-    let glow_intensity = GuiRoot::part_property_name(leaf, "background", "glow_intensity").unwrap();
-    root_tree
-        .properties
-        .set(&glow_intensity, DynamicValue::F32(1.0))
-        .unwrap();
+    set_theme_part(
+        &mut root_tree,
+        7,
+        "background",
+        "glow_intensity",
+        Some(DynamicValue::F32(1.0)),
+    );
+    set_node_theme(&mut root_tree, leaf, Some(7));
 
     let mut cache = GuiLayoutCache::default();
     let first = cache
         .evaluate(entity(), &request(&root_tree, 1), &resolver)
         .clone();
 
-    // Change material lane: glow_intensity advances paint revision without reflow.
-    root_tree
-        .properties
-        .set(&glow_intensity, DynamicValue::F32(2.5))
-        .unwrap();
+    // Change a material property: glow_intensity advances paint revision
+    // without reflow.
+    set_theme_part(
+        &mut root_tree,
+        7,
+        "background",
+        "glow_intensity",
+        Some(DynamicValue::F32(2.5)),
+    );
 
     let second = cache
         .evaluate(entity(), &request(&root_tree, 2), &resolver)
@@ -182,12 +219,14 @@ fn material_part_edits_advance_paint_without_reflow_or_remeasure() {
     assert_eq!(second.reflow_count, 1);
     assert_eq!(second.remeasure_count, 1);
 
-    // Change gradient color lane advances paint revision without reflow.
-    let grad_color = GuiRoot::part_property_name(leaf, "background", "gradient_color0").unwrap();
-    root_tree
-        .properties
-        .set(&grad_color, DynamicValue::Vec4([0.2, 0.4, 0.6, 1.0]))
-        .unwrap();
+    // Changing a gradient colour advances paint revision without reflow.
+    set_theme_part(
+        &mut root_tree,
+        7,
+        "background",
+        "gradient_color0",
+        Some(DynamicValue::Vec4([0.2, 0.4, 0.6, 1.0])),
+    );
 
     let third = cache
         .evaluate(entity(), &request(&root_tree, 3), &resolver)

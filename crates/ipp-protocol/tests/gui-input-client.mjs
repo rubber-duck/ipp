@@ -355,7 +355,7 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
       },
     ]),
     concatenate([
-      u8(3),
+      u8(4),
       u32(2),
       // Insert: identity, slider data, then the node_data row (value, min,
       // max, step) and the node_style row with its required defaults.
@@ -419,6 +419,89 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
         { action: "update", handle, patch: { style: { lanes: 1 } } },
       ]),
     /unknown GUI lanes/,
+  );
+});
+
+test("GUI theme and part edits encode part identities and part patches", () => {
+  const handle = { session: 7n, entity: 42n, rootIncarnation: 3n, nodeId: 1 };
+  assert.deepEqual(
+    codec.encodeGuiEdits([
+      {
+        action: "updateTheme",
+        entity: 42n,
+        rootIncarnation: 3n,
+        theme: 11,
+        part: { part: "background", state: "hovered" },
+        patch: { color: [0.25, 0.5, 0.75, 1], opacity: null },
+      },
+      { action: "removeTheme", entity: 42n, rootIncarnation: 3n, theme: 11 },
+      {
+        action: "updatePart",
+        handle,
+        part: "icon",
+        patch: { borderWidth: 0.5 },
+      },
+    ]),
+    concatenate([
+      u8(4),
+      u32(3),
+      // Theme: identity, background (0) hovered (1 + 1 * 3), then changed
+      // and set masks over the 23 part properties and the set values.
+      u8(6),
+      u64(42n),
+      u64(3n),
+      u32(11),
+      u8(4),
+      u8(0b0000_0011),
+      u8(0),
+      u8(0),
+      u8(0b0000_0001),
+      u8(0),
+      u8(0),
+      f32(0.25),
+      f32(0.5),
+      f32(0.75),
+      f32(1),
+      u8(7),
+      u64(42n),
+      u64(3n),
+      u32(11),
+      // Part: handle, icon (3), border width (bit 6).
+      u8(8),
+      u64(7n),
+      u64(42n),
+      u64(3n),
+      u32(1),
+      u8(3),
+      u8(0b0100_0000),
+      u8(0),
+      u8(0),
+      u8(0b0100_0000),
+      u8(0),
+      u8(0),
+      f32(0.5),
+    ]),
+  );
+  assert.throws(
+    () =>
+      codec.encodeGuiEdits([
+        {
+          action: "updateTheme",
+          entity: 42n,
+          rootIncarnation: 3n,
+          theme: 1,
+          part: { part: "icon", variant: "checked" },
+          patch: {},
+        },
+      ]),
+    /requires a state/,
+  );
+  assert.throws(
+    () =>
+      codec.encodeGuiEdits([
+        { action: "updatePart", handle, part: "icon", patch: { theme: 1 } },
+      ]),
+    /unknown GUI theme/,
   );
 });
 

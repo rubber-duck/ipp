@@ -107,6 +107,8 @@ export interface GuiNodeStyle {
   position?: readonly [number, number];
   /** Visual scale; moves paint and hit regions without reflow. */
   scale?: readonly [number, number];
+  /** Handle of the root theme skinning this node. */
+  theme?: number;
 }
 
 /** Sparse style change; `null` clears an optional property. */
@@ -130,7 +132,118 @@ export interface GuiNodePatchStyle {
   asset?: GuiAssetSource | null;
   position?: readonly [number, number];
   scale?: readonly [number, number];
+  theme?: number | null;
 }
+
+/** Stable primitive part a skin styles. */
+export type GuiBasePart =
+  | "background"
+  | "fill"
+  | "label"
+  | "icon"
+  | "focusRing";
+
+/** Interaction state qualifying a skin part. */
+export type GuiPartState = "idle" | "hovered" | "pressed" | "disabled";
+
+/** Checked variant qualifying a state-qualified skin part. */
+export type GuiPartVariant = "checked" | "unchecked";
+
+/**
+ * Enumerated skin part identity: a base part, optionally qualified by a
+ * state and, under a state, by a checked variant. The runtime resolves each
+ * property through (part, state, variant), (part, state) and (part).
+ */
+export interface GuiPartId {
+  readonly part: GuiBasePart;
+  readonly state?: GuiPartState | undefined;
+  readonly variant?: GuiPartVariant | undefined;
+}
+
+export const GUI_BASE_PARTS: readonly GuiBasePart[] = [
+  "background",
+  "fill",
+  "label",
+  "icon",
+  "focusRing",
+];
+
+const GUI_PART_STATES: readonly GuiPartState[] = [
+  "idle",
+  "hovered",
+  "pressed",
+  "disabled",
+];
+
+/** Qualifiers per base part: the base, four states, and four states with
+ * each of two variants. */
+export const GUI_PART_QUALIFIERS = 13;
+
+/** Dense wire index of one part identity, below 65. */
+export function guiPartIndex(id: GuiPartId): number {
+  const base = GUI_BASE_PARTS.indexOf(id.part);
+  if (base < 0) throw new RangeError(`Unknown GUI base part ${id.part}`);
+  if (id.state === undefined) {
+    if (id.variant !== undefined)
+      throw new RangeError("A GUI part variant requires a state");
+    return base * GUI_PART_QUALIFIERS;
+  }
+  const state = GUI_PART_STATES.indexOf(id.state);
+  if (state < 0) throw new RangeError(`Unknown GUI part state ${id.state}`);
+  const variant =
+    id.variant === undefined ? 0 : id.variant === "checked" ? 1 : 2;
+  return base * GUI_PART_QUALIFIERS + 1 + state * 3 + variant;
+}
+
+/** Part identity at a dense wire index. */
+export function guiPartFromIndex(index: number): GuiPartId {
+  const part = GUI_BASE_PARTS[Math.floor(index / GUI_PART_QUALIFIERS)];
+  if (!Number.isInteger(index) || index < 0 || part === undefined)
+    throw new RangeError("GUI part index out of range");
+  const qualifier = index % GUI_PART_QUALIFIERS;
+  if (qualifier === 0) return { part };
+  const state = GUI_PART_STATES[Math.floor((qualifier - 1) / 3)]!;
+  const variant = (qualifier - 1) % 3;
+  return variant === 0
+    ? { part, state }
+    : { part, state, variant: variant === 1 ? "checked" : "unchecked" };
+}
+
+/**
+ * Appearance and motion of one skin part, a `GuiRoot.theme_parts` row
+ * without its key. Keys are the contract's property names in camelCase.
+ * Per-node part overrides accept only the appearance properties.
+ */
+export interface GuiPartValues {
+  color?: readonly [number, number, number, number];
+  opacity?: number;
+  scale?: readonly [number, number];
+  alignX?: number;
+  asset?: GuiAssetSource;
+  cornerRadius?: readonly [number, number];
+  borderWidth?: number;
+  borderColor?: readonly [number, number, number, number];
+  fillMode?: number;
+  gradientStart?: readonly [number, number];
+  gradientEnd?: readonly [number, number];
+  gradientColor0?: readonly [number, number, number, number];
+  gradientColor1?: readonly [number, number, number, number];
+  gradientRadius?: number;
+  glowColor?: readonly [number, number, number, number];
+  glowIntensity?: number;
+  glowRadius?: number;
+  glowFalloff?: number;
+  motion?: GuiAssetSource;
+  duration?: number;
+  easing?: number;
+  track?: number;
+  time?: number;
+}
+
+/** Sparse part change; `null` clears a property. */
+export type GuiPartPatch = {
+  [K in keyof GuiPartValues]?: GuiPartValues[K] | null;
+};
 
 export interface GuiNode {
   id: GuiNodeId;
@@ -208,6 +321,30 @@ export type GuiEdit =
       handle: GuiNodeHandle;
       expectedRevision: number;
       value: GuiControlValue;
+    }
+  | {
+      /** Create or patch one part of a root theme; referencing nodes
+       * re-resolve without edits. */
+      action: "updateTheme";
+      entity: bigint;
+      rootIncarnation: bigint;
+      theme: number;
+      part: GuiPartId;
+      patch: GuiPartPatch;
+    }
+  | {
+      /** Remove a root theme; referencing nodes resolve without it. */
+      action: "removeTheme";
+      entity: bigint;
+      rootIncarnation: bigint;
+      theme: number;
+    }
+  | {
+      /** Patch one node's appearance overrides for a base part. */
+      action: "updatePart";
+      handle: GuiNodeHandle;
+      part: GuiBasePart;
+      patch: GuiPartPatch;
     };
 
 /** Ordered GUI edit acknowledgement. A failed operation may retain partial effects. */
@@ -469,8 +606,8 @@ export type GuiNodeDataProperty = keyof GuiNodeValues;
 
 function guiRowOffset(
   guiRoot: ComponentDescriptor,
-  field: "node_style" | "node_data",
-  node: GuiNodeId,
+  field: "node_style" | "node_data" | "theme_parts" | "part_state",
+  slot: number,
   property: string,
 ): number {
   const layout = guiRoot.fields[field]?.rows;
@@ -479,13 +616,18 @@ function guiRowOffset(
   const index = layout.properties.findIndex(({ name }) => name === snake);
   if (index < 0) throw new RangeError(`Unknown GuiRoot.${field} ${property}`);
   const count = layout.properties.length;
+  const nodeTable = field === "node_style" || field === "node_data";
   if (
-    !Number.isInteger(node) ||
-    node <= 0 ||
-    node >= Math.floor(0x10000000 / count)
+    !Number.isInteger(slot) ||
+    slot < (nodeTable ? 1 : 0) ||
+    slot >= Math.floor(0x10000000 / count)
   )
-    throw new RangeError("GUI node identity out of row range");
-  return layout.regionBase + node * count + index;
+    throw new RangeError(
+      nodeTable
+        ? "GUI node identity out of row range"
+        : "GUI row slot out of range",
+    );
+  return layout.regionBase + slot * count + index;
 }
 
 /**
@@ -514,42 +656,42 @@ export function guiNodeDataOffset(
   return guiRowOffset(guiRoot, "node_data", node, property);
 }
 
-export type GuiPartProperty =
-  | "color"
-  | "opacity"
-  | "scale"
-  | "align_x"
-  | "asset"
-  | "corner_radius"
-  | "border_width"
-  | "border_color"
-  | "fill_mode"
-  | "gradient_start"
-  | "gradient_end"
-  | "gradient_color0"
-  | "gradient_color1"
-  | "gradient_radius"
-  | "glow_color"
-  | "glow_intensity"
-  | "glow_radius"
-  | "glow_falloff"
-  | "motion"
-  | "duration"
-  | "easing"
-  | "track"
-  | "time";
+/** A `GuiRoot.part_state` property: an appearance override or one of the
+ * live channels skin transitions animate. */
+export type GuiPartStateProperty =
+  | Exclude<
+      keyof GuiPartValues,
+      "motion" | "duration" | "easing" | "track" | "time"
+    >
+  | "liveColor"
+  | "liveOpacity"
+  | "liveScale"
+  | "liveAlignX";
 
-/** Target name for ordinary property animation and StateOverlay commands on a named node skin part. */
-export function guiPartProperty(
-  id: GuiNodeId,
-  part: string,
-  property: GuiPartProperty,
-): string {
-  if (!Number.isInteger(id) || id <= 0 || id > 0xffffffff)
-    throw new RangeError("GUI node identity must be a nonzero u32");
-  if (!/^[A-Za-z0-9_]+$/.test(part))
-    throw new RangeError("Part name must be a nonempty ASCII identifier");
-  return `node_${id}_part_${part}_${property}`;
+/**
+ * Field offset of one `GuiRoot.theme_parts` property at a row slot, for
+ * animation targets, overlays and field writes. Inspection reports each
+ * theme's slots with its `theme` key.
+ */
+export function guiThemePartOffset(
+  guiRoot: ComponentDescriptor,
+  slot: number,
+  property: keyof GuiPartValues,
+): number {
+  return guiRowOffset(guiRoot, "theme_parts", slot, property);
+}
+
+/**
+ * Field offset of one `GuiRoot.part_state` property at a row slot. Skin
+ * motion clips name a slot-0 live channel as each track's target hint; the
+ * runtime binds the tracks to the transitioning node's own channels.
+ */
+export function guiPartStateOffset(
+  guiRoot: ComponentDescriptor,
+  slot: number,
+  property: GuiPartStateProperty,
+): number {
+  return guiRowOffset(guiRoot, "part_state", slot, property);
 }
 
 /** Machine-observer role for one semantic snapshot node. */

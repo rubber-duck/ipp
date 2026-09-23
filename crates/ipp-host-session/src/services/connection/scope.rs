@@ -208,6 +208,21 @@ fn scope_gui_command(
             patch,
             ..
         } => patch.asset.as_ref().and_then(Option::as_ref),
+        GuiCommand::UpdateTheme {
+            patch,
+            ..
+        }
+        | GuiCommand::UpdatePart {
+            patch,
+            ..
+        } => {
+            for value in patch.changes.values().flatten() {
+                if let ipp_core::DynamicValue::Asset(asset) = value {
+                    scope_source(world, &asset.uri)?;
+                }
+            }
+            None
+        }
         GuiCommand::MoveNode {
             ..
         }
@@ -215,6 +230,9 @@ fn scope_gui_command(
             ..
         }
         | GuiCommand::SetControlValue {
+            ..
+        }
+        | GuiCommand::RemoveTheme {
             ..
         } => None,
     };

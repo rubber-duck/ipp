@@ -56,6 +56,9 @@ pub struct GuiNodeStyleRow {
     pub padding: Option<[f32; 4]>,
     /// Outer margin [top, right, bottom, left].
     pub margin: Option<[f32; 4]>,
+    /// Handle of the root theme skinning this node; a handle without a live
+    /// theme resolves as no theme.
+    pub theme: Option<u32>,
 }
 
 impl Default for GuiNodeStyleRow {
@@ -87,6 +90,7 @@ impl From<&GuiNodeStyle> for GuiNodeStyleRow {
             scale: style.scale,
             padding: style.padding,
             margin: style.margin,
+            theme: style.theme,
         }
     }
 }
@@ -114,6 +118,7 @@ impl From<&GuiNodeStyleRow> for GuiNodeStyle {
             asset: row.asset.clone(),
             position: row.position,
             scale: row.scale,
+            theme: row.theme,
         }
     }
 }
@@ -147,6 +152,7 @@ impl GuiNodeStyleRow {
         set(&mut self.margin, &patch.margin);
         set(&mut self.position, &patch.position);
         set(&mut self.scale, &patch.scale);
+        set(&mut self.theme, &patch.theme);
     }
 
     /// Check every present property against its declared range.
@@ -203,6 +209,7 @@ impl GuiNodePatch {
             P::Scale => required(&self.scale),
             P::Padding => optional(&self.padding),
             P::Margin => optional(&self.margin),
+            P::Theme => optional(&self.theme),
         }
     }
 
@@ -259,6 +266,7 @@ impl GuiNodePatch {
             P::Scale => required(&mut self.scale, change),
             P::Padding => optional(&mut self.padding, change),
             P::Margin => optional(&mut self.margin, change),
+            P::Theme => optional(&mut self.theme, change),
         }
     }
 }
@@ -305,11 +313,13 @@ pub enum GuiNodeStyleProperty {
     Padding,
     /// `margin`: optional Vec4.
     Margin,
+    /// `theme`: optional U32 theme handle; command-owned.
+    Theme,
 }
 
 impl GuiNodeStyleProperty {
     /// Number of node style properties.
-    pub const COUNT: u32 = 19;
+    pub const COUNT: u32 = 20;
 
     /// Every property in layout order; `ALL[i] as u32 == i`.
     pub const ALL: [Self; Self::COUNT as usize] = [
@@ -332,6 +342,7 @@ impl GuiNodeStyleProperty {
         Self::Scale,
         Self::Padding,
         Self::Margin,
+        Self::Theme,
     ];
 
     /// Property at a layout index.
@@ -659,7 +670,9 @@ impl GuiNodeRowProperty {
         match self {
             Self::Style(property) => !matches!(
                 property,
-                GuiNodeStyleProperty::Enabled | GuiNodeStyleProperty::Asset
+                GuiNodeStyleProperty::Enabled
+                    | GuiNodeStyleProperty::Asset
+                    | GuiNodeStyleProperty::Theme
             ),
             Self::Data(property) => !property.command_owned(),
         }

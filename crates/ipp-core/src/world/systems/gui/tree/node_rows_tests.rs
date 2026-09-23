@@ -6,7 +6,7 @@ use crate::components::schema::{
 use crate::services::asset_management::font::FONT_TYPE;
 use crate::world::systems::gui::{GuiContainerKind, GuiNodeData, GuiNodeId, GuiRoot};
 
-const NAMES: [&str; 19] = [
+const NAMES: [&str; 20] = [
     "enabled",
     "width",
     "height",
@@ -26,6 +26,7 @@ const NAMES: [&str; 19] = [
     "scale",
     "padding",
     "margin",
+    "theme",
 ];
 
 fn font() -> AssetSource {
@@ -57,6 +58,7 @@ fn styled() -> GuiNodeStyle {
         asset: Some(font()),
         position: [0.3, -0.2],
         scale: [2.0, 0.5],
+        theme: Some(4),
     }
 }
 
@@ -117,11 +119,11 @@ fn node_property_offsets_address_slot_by_node_id() {
     assert_eq!(base, 0x1000_0000);
     assert_eq!(
         GuiRoot::node_style_offset(GuiNodeId(1), GuiNodeStyleProperty::Enabled),
-        Some(base + 19)
+        Some(base + GuiNodeStyleProperty::COUNT)
     );
     assert_eq!(
         GuiRoot::node_style_offset(GuiNodeId(2), GuiNodeStyleProperty::Margin),
-        Some(base + 2 * 19 + 18)
+        Some(base + 2 * GuiNodeStyleProperty::COUNT + 18)
     );
 
     for id in [1, 7, 65_536] {
@@ -296,7 +298,8 @@ fn gui_root_exposes_node_style_rows_by_offset() {
 
 const DATA_NAMES: [&str; 6] = ["image_size", "checked", "value", "min", "max", "step"];
 
-/// Real offsets of the exposed rows fields: `node_style`, then `node_data`.
+/// Real offsets of the exposed rows fields: `node_style`, `node_data`,
+/// `theme_parts`, then `part_state`.
 fn rows_fields() -> Vec<u32> {
     let rows: Vec<u32> = GuiRoot::default()
         .fields()
@@ -304,7 +307,7 @@ fn rows_fields() -> Vec<u32> {
         .filter(|(_, value)| value.kind() == FieldKind::Rows)
         .map(|(offset, _)| offset)
         .collect();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 4);
     rows
 }
 
@@ -417,7 +420,7 @@ fn numeric_animation_targets_only_numeric_style_and_image_size() {
 
     for property in GuiNodeStyleProperty::ALL {
         let offset = GuiRoot::node_style_offset(GuiNodeId(4), property).unwrap();
-        let expected = !matches!(property, S::Enabled | S::Asset);
+        let expected = !matches!(property, S::Enabled | S::Asset | S::Theme);
         assert_eq!(
             GuiRoot::numeric_animatable(offset),
             expected,
@@ -433,7 +436,11 @@ fn numeric_animation_targets_only_numeric_style_and_image_size() {
         );
     }
     assert!(!GuiRoot::numeric_animatable(0));
-    assert!(!GuiRoot::numeric_animatable(0x3000_0000 + 20));
+    // Row keys and regions without a table are never animatable.
+    assert!(!GuiRoot::numeric_animatable(
+        0x3000_0000 + crate::systems::gui::GuiThemePartRow::THEME
+    ));
+    assert!(!GuiRoot::numeric_animatable(0x5000_0000));
     assert!(!GuiRoot::numeric_animatable(0x8000_0001));
 }
 

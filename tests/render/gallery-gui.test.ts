@@ -165,13 +165,13 @@ function dynamicProperty(
 
 /**
  * Node animated by a GuiRoot `node_style.position` offset. The row layout is
- * region 0 (base 0x1000_0000) with 19 properties, position at index 15;
+ * region 0 (base 0x1000_0000) with 20 properties, position at index 15;
  * offsets of other properties name no position driver.
  */
 function drivenNode(offset: number): number | undefined {
   const relative = offset - 0x1000_0000;
-  if (relative < 0 || relative % 19 !== 15) return undefined;
-  return Math.floor(relative / 19);
+  if (relative < 0 || relative % 20 !== 15) return undefined;
+  return Math.floor(relative / 20);
 }
 
 /** Effective node style row of the node a waveform controller animates. */
@@ -571,8 +571,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
           await g.call("releaseGalleryGuiTransform");
         }
       };
-      // Named background lanes: `background` carries the animated appearance,
-      // `background_disabled` the authored disabled state lane.
+      // `background` reads the node's live channels, which carry the animated
+      // appearance; `background_disabled` reads its theme's authored disabled
+      // state.
       const partValue = (
         tree: GuiSemanticTree,
         node: GuiSemanticNode,
@@ -1125,8 +1126,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(overview.summary.coverage > 0.08);
       assert.deepEqual(overview.inspection.renderDiagnostics, []);
 
-      // UPLINK is mounted disabled while SCAN runs. Its disabled lane is an
-      // ordinary named part property and paints a solid dim fill.
+      // UPLINK is mounted disabled while SCAN runs. Its disabled state is an
+      // ordinary theme part row and paints a solid dim fill.
       const disabledUplink = semanticNode(initial.semantic, "button", "UPLINK");
       assert.equal(disabledUplink.enabled, false);
       assert.deepEqual(disabledUplink.actions, []);

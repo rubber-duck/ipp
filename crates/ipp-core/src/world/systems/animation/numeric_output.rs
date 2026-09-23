@@ -218,27 +218,18 @@ impl AnimationNumericOutput {
             }
             #[cfg(feature = "gui")]
             Self::GuiRoot(binding) => {
-                // Node properties are rows: guard every written row property
-                // (animatable, present, in range) before publishing any, then
-                // write through the derived field path, which resolves the row
-                // at write time. Named part properties stay dynamic.
+                // Every GUI property is a row property: guard every written
+                // one (animatable, present, in range) before publishing any,
+                // then write through the derived field path, which resolves
+                // the row at write time.
                 let component = binding.get_mut(storage);
                 for ((_, offset), value) in fields() {
-                    if crate::components::rows::row_region(*offset).is_some() {
-                        component.validate_numeric_properties(&[(*offset, value.clone())])?;
-                    }
+                    component.validate_numeric_properties(&[(*offset, value.clone())])?;
                 }
                 for ((_, offset), value) in fields() {
-                    if crate::components::dynamic_properties::is_dynamic_field(*offset) {
-                        component
-                            .properties
-                            .set_field(*offset, value.clone())
-                            .map_err(|_| ErrorReason::InvalidField)?;
-                    } else {
-                        component
-                            .set_field(*offset, value.clone())
-                            .map_err(|_| ErrorReason::InvalidField)?;
-                    }
+                    component
+                        .set_field(*offset, value.clone())
+                        .map_err(|_| ErrorReason::InvalidField)?;
                 }
             }
             _ => unreachable!("bound patch output"),

@@ -21,8 +21,9 @@ fn offset(node: u32, property: GuiNodeStyleProperty) -> u32 {
     GuiRoot::node_style_offset(GuiNodeId(node), property).unwrap()
 }
 
-/// Real offsets of the exposed rows fields: `node_style`, then `node_data`.
-fn rows_fields() -> [u32; 2] {
+/// Real offsets of the exposed rows fields: `node_style`, `node_data`,
+/// `theme_parts`, then `part_state`.
+fn rows_fields() -> [u32; 4] {
     let rows: Vec<u32> = GuiRoot::default()
         .fields()
         .into_iter()

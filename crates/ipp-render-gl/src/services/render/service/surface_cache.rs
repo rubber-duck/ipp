@@ -371,7 +371,6 @@ impl<D: RenderDevice> RenderService<D> {
                     .presented(world_id, item.entity, world.time());
                 // A repainted Surface used its retained batches this frame; a
                 // reused one keeps them like a culled Surface.
-                #[cfg(feature = "gui")]
                 if action == Some(SurfaceCacheAction::Repaint)
                     && let Some(submitted) = &mut self.submitted_surfaces
                 {
@@ -423,6 +422,7 @@ impl<D: RenderDevice> RenderService<D> {
             stats.surface_cache_reuses = counts.reuses;
             stats.surface_cache_direct = counts.direct;
             stats.surface_cache_fallbacks = counts.fallbacks;
+            stats.surface_cache_animated = counts.animated;
             stats.surface_cache_allocations = counts.allocations;
         }
 

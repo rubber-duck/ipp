@@ -171,6 +171,10 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget;
 
+    /// Context-owned retained instance stream for one analytic path run.
+    #[cfg(feature = "surfaces")]
+    type SurfaceInstances;
+
     /// Context-owned depth texture and framebuffer for the bounded spot shadow pass.
     #[cfg(feature = "shadows")]
     type ShadowMap;
@@ -333,13 +337,46 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "surfaces")]
     fn delete_surface_path(&mut self, _path: Self::SurfacePath) {}
 
-    /// Draw compatible contiguous path instances in one submission.
+    /// Validate `instances` against `path` and upload them as a retained stream.
+    /// `instances` is not empty.
     #[cfg(feature = "surfaces")]
-    fn draw_surface_path_instances(
+    fn create_surface_instances(
+        &mut self,
+        _path: &Self::SurfacePath,
+        _instances: &[SurfacePathInstance],
+    ) -> Result<Self::SurfaceInstances, RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface instancing unavailable".into(),
+        ))
+    }
+
+    /// Replace a retained stream's complete contents through storage replacement.
+    ///
+    /// Queued draws keep the previous storage. On failure the contents are unknown
+    /// and callers release the stream.
+    #[cfg(feature = "surfaces")]
+    fn update_surface_instances(
+        &mut self,
+        _stream: &mut Self::SurfaceInstances,
+        _path: &Self::SurfacePath,
+        _instances: &[SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "surface instancing unavailable".into(),
+        ))
+    }
+
+    /// Release a retained stream, tolerating handles invalidated by context loss.
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_instances(&mut self, _stream: Self::SurfaceInstances) {}
+
+    /// Draw every instance of a retained stream against `path` in one submission.
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_instances(
         &mut self,
         _program: &Self::Program,
         _path: &Self::SurfacePath,
-        _instances: &[SurfacePathInstance],
+        _stream: &Self::SurfaceInstances,
         _mvp: &[f32; 16],
         _clip: &[f32; 4],
         _fill_rule: u32,
@@ -534,7 +571,8 @@ pub trait RenderDevice: 'static {
         ))
     }
 
-    /// Allocate an atlas page texture with linear filtering and render target.
+    /// Allocate a single-channel R8 coverage page texture, cleared to zero, with
+    /// linear filtering and a render target.
     #[cfg(feature = "gui")]
     fn create_glyph_atlas_page(
         &mut self,

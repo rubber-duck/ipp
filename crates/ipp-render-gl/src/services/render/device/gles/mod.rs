@@ -73,10 +73,6 @@ pub struct GlesRenderDevice {
     #[cfg(feature = "surfaces")]
     surface_quad_vao: u32,
     #[cfg(feature = "surfaces")]
-    surface_instance_buffer: u32,
-    #[cfg(feature = "surfaces")]
-    surface_instance_capacity: usize,
-    #[cfg(feature = "surfaces")]
     surface_instance_scratch: Vec<[f32; 16]>,
     /// Pixel size that Surface antialiasing derives from: the drawing buffer,
     /// a bound Surface cache target or a bound glyph atlas page.
@@ -160,6 +156,14 @@ pub struct GlesSurfacePath {
     texture_width: i32,
     band_count: u32,
     band_width: i32,
+}
+
+/// Native vertex array and buffer holding one retained analytic instance stream.
+#[cfg(feature = "surfaces")]
+pub struct GlesSurfaceInstances {
+    vao: u32,
+    vbo: u32,
+    count: i32,
 }
 
 mod commands;

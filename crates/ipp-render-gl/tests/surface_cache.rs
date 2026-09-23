@@ -120,7 +120,6 @@ fn diagnostics(
     out
 }
 
-#[cfg(feature = "gui")]
 fn record(
     renderer: &RenderService<TestDevice>,
     world: WorldId,
@@ -612,6 +611,127 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
     assert_eq!(work(&returned), [0, 1, 0, 0, 0], "{returned:?}");
 }
 
+/// Retained box batches of a directly presented panel whose paint revision is
+/// published rebuild exactly when its paint changes, although unchanged frames
+/// reuse their hashes instead of hashing every box.
+#[cfg(feature = "gui")]
+#[test]
+fn published_paint_revisions_rebuild_retained_boxes_exactly_when_paint_changes() {
+    use ipp_core::{GuiCommand, GuiNodeHandle, GuiNodeId, GuiNodePatch};
+
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, _state, world_id, _) = scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+    let (panel, incarnation) = gui_panel(&mut world, -1.0);
+    // Always inside its direct distance: presented directly with a revision.
+    set_policy(
+        &mut world,
+        panel,
+        Some(SurfaceCache {
+            direct_distance: 1000.0,
+            ..ALWAYS
+        }),
+    );
+    let checkbox = GuiNodeHandle::new(GUI_SESSION, panel, incarnation, GuiNodeId(2), 1);
+
+    let cold = frame(&mut renderer, &mut world, 0.01);
+    assert!(cold.gui_rebuilds > 0, "{cold:?}");
+    assert_eq!(work(&cold), [0, 0, 1, 0, 0]);
+    let paint = revisions(&world, panel).0;
+    assert_ne!(paint, 0);
+    for _ in 0..3 {
+        let warm = frame(&mut renderer, &mut world, 0.01);
+        assert_eq!((warm.gui_rebuilds, warm.uploaded_bytes), (0, 0), "{warm:?}");
+        assert!(warm.gui_batches > 0);
+    }
+    assert_eq!(revisions(&world, panel).0, paint);
+
+    world
+        .enqueue_gui_command(
+            GUI_SESSION,
+            GuiCommand::UpdateNode {
+                handle: checkbox,
+                patch: GuiNodePatch {
+                    background_color: Some(Some([0.9, 0.1, 0.1, 1.0])),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+    let edited = frame(&mut renderer, &mut world, 0.01);
+    assert!(revisions(&world, panel).0 > paint);
+    assert!(edited.gui_rebuilds > 0, "{edited:?}");
+    assert!(edited.uploaded_bytes > 0);
+
+    let settled = frame(&mut renderer, &mut world, 0.01);
+    assert_eq!((settled.gui_rebuilds, settled.uploaded_bytes), (0, 0));
+}
+
+/// A cached Surface whose paint changes every frame at its refresh cap draws
+/// directly after a streak of repaints, and returns to a current image once its
+/// paint holds.
+#[test]
+fn surfaces_repainting_every_frame_present_directly_until_their_paint_settles() {
+    use ipp_render_gl::{SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_SETTLE_FRAMES};
+
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, entity) = scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+    // A cap above the 60 Hz frame rate: every changed frame is due.
+    set_policy(
+        &mut world,
+        entity,
+        Some(SurfaceCache {
+            max_refresh_hz: 120.0,
+            ..ALWAYS
+        }),
+    );
+    let dt = 1.0 / 60.0;
+    frame(&mut renderer, &mut world, dt);
+    take_events(&state);
+
+    let mut step = 0;
+    for _ in 0..SURFACE_CACHE_ANIMATED_FRAMES {
+        step += 1;
+        recolor(&mut world, entity, step);
+        let repainted = frame(&mut renderer, &mut world, dt);
+        assert_eq!(work(&repainted), [1, 0, 0, 0, 0], "{repainted:?}");
+    }
+    take_events(&state);
+
+    // The next due repaint draws directly instead: no cache target, no composite.
+    for _ in 0..3 {
+        step += 1;
+        recolor(&mut world, entity, step);
+        let animated = frame(&mut renderer, &mut world, dt);
+        assert_eq!(work(&animated), [0, 0, 1, 0, 0], "{animated:?}");
+        assert_eq!(animated.surface_cache_animated, 1);
+    }
+    let events = take_events(&state);
+    assert!(!events.contains('B') && !events.contains('C'), "{events}");
+    let diagnostic = record(&renderer, world_id, entity);
+    assert_eq!(diagnostic.presentation, SurfaceCachePresentation::Animated);
+    assert_eq!(diagnostic.presentation.code(), 7);
+    // The image stays resident for the return.
+    assert_eq!(
+        diagnostic.resident_bytes,
+        4 * diagnostic.size[0] * diagnostic.size[1]
+    );
+
+    // Once the paint holds, the stale image repaints and is reused.
+    for _ in 1..SURFACE_CACHE_SETTLE_FRAMES {
+        assert_eq!(
+            frame(&mut renderer, &mut world, dt).surface_cache_animated,
+            1
+        );
+    }
+    let returned = frame(&mut renderer, &mut world, dt);
+    assert_eq!(work(&returned), [1, 0, 0, 0, 0], "{returned:?}");
+    assert_eq!(returned.surface_cache_animated, 0);
+    let warm = frame(&mut renderer, &mut world, dt);
+    assert_eq!(work(&warm), [0, 1, 0, 0, 0], "{warm:?}");
+}
+
 #[test]
 fn culled_surfaces_skip_repaints_and_refresh_stale_content_on_return() {
     let mut host = ipp_core::HostRuntime::new();
@@ -1075,11 +1195,13 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
 #[cfg(feature = "gui")]
 #[test]
 fn text_drawn_analytically_under_the_population_bound_is_refined_next_frame() {
-    let budget = ipp_render_gl::glyph_atlas::MAX_POPULATES_PER_FRAME as u32;
+    let budget = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..budget + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, entity) =
         text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
+    // Only the per-frame floor populates, so the first repaint defers glyphs.
+    renderer.set_glyph_population_budget_ms(0.0);
     state.cache_limit.set(4096);
     let mut world = host.world_mut(world_id).unwrap();
     set_policy(&mut world, entity, Some(ALWAYS));

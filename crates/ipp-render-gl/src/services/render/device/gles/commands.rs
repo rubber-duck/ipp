@@ -17,6 +17,9 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget = super::GlesSurfaceCacheTarget;
 
+    #[cfg(feature = "surfaces")]
+    type SurfaceInstances = super::GlesSurfaceInstances;
+
     #[cfg(feature = "shadows")]
     type ShadowMap = lighting::GlesShadowMap;
 
@@ -155,16 +158,40 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     #[cfg(feature = "surfaces")]
-    fn draw_surface_path_instances(
+    fn create_surface_instances(
+        &mut self,
+        path: &Self::SurfacePath,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<Self::SurfaceInstances, RenderError> {
+        self.create_surface_instances(path, instances)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn update_surface_instances(
+        &mut self,
+        stream: &mut Self::SurfaceInstances,
+        path: &Self::SurfacePath,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        self.update_surface_instances(stream, path, instances)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_instances(&mut self, stream: Self::SurfaceInstances) {
+        self.delete_surface_instances(stream);
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_instances(
         &mut self,
         program: &Self::Program,
         path: &Self::SurfacePath,
-        instances: &[super::SurfacePathInstance],
+        stream: &Self::SurfaceInstances,
         mvp: &[f32; 16],
         clip: &[f32; 4],
         fill_rule: u32,
     ) -> Result<(), RenderError> {
-        self.draw_surface_path_instances(program, path, instances, mvp, clip, fill_rule)
+        self.draw_surface_instances(program, path, stream, mvp, clip, fill_rule)
     }
 
     #[cfg(feature = "surfaces")]

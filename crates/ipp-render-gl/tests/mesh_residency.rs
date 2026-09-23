@@ -934,17 +934,19 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
 #[cfg(feature = "gui")]
 #[test]
 fn population_budget_defers_misses_and_resumes_next_frame() {
-    let budget = ipp_render_gl::glyph_atlas::MAX_POPULATES_PER_FRAME as u32;
-    let ids: Vec<u32> = (0..budget + 8).collect();
+    let floor = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32;
+    let ids: Vec<u32> = (0..floor + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) =
-        text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
+        text_run_scene(&mut host, glyph_font(floor + 8, 1000, 1.0), &ids);
+    renderer.set_glyph_population_budget_ms(0.0);
     let mut world = host.world_mut(world_id).unwrap();
 
-    // The budget stops population; the incomplete run stays analytic this frame.
+    // Without time beyond the floor, population stops there; the incomplete run
+    // stays analytic this frame.
     let first = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
-    assert_eq!(first.glyph_misses, budget + 8, "{first:?}");
-    assert_eq!(first.glyph_populates, budget);
+    assert_eq!(first.glyph_misses, floor + 8, "{first:?}");
+    assert_eq!(first.glyph_populates, floor);
     assert_eq!(first.gui_batches, 0);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
@@ -957,6 +959,26 @@ fn population_budget_defers_misses_and_resumes_next_frame() {
     let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
     assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
     assert_eq!(warm.uploaded_bytes, 0);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
+    // More glyphs than the per-frame floor; the scene's Surface shows up to 50.
+    let count = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32 + 16;
+    let ids: Vec<u32> = (0..count).collect();
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) =
+        text_run_scene(&mut host, glyph_font(count, 1000, 1.0), &ids);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    // The default budget covers them at the estimated cost: one population pass,
+    // and the run samples the atlas in its first frame.
+    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((cold.glyph_misses, cold.glyph_populates), (count, count));
+    assert_eq!(cold.gui_batches, 1, "{cold:?}");
+    assert_eq!(state.analytic_glyph_draws.get(), 0);
+    assert_eq!(state.atlas_restores.get(), 1);
 }
 
 #[cfg(feature = "gui")]
@@ -1026,4 +1048,115 @@ fn context_loss_during_glyph_batch_upload_reaches_recovery() {
     assert_eq!(recovered.gui_resident_bytes, 6 * 32);
     let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));
+}
+
+/// Glyphs projected far above the atlas bands draw analytically in every build.
+#[cfg(feature = "surfaces")]
+const ANALYTIC_VIEWPORT: u32 = 1000;
+
+#[cfg(feature = "surfaces")]
+#[test]
+fn analytic_text_uploads_its_instances_once_and_draws_them_every_frame() {
+    let ids: Vec<u32> = (0..4).collect();
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) =
+        text_run_scene(&mut host, glyph_font(4, 1000, 1.0), &ids);
+    let mut world = host.world_mut(world_id).unwrap();
+    let bytes = 4 * 16 * std::mem::size_of::<f32>() as u32;
+
+    let cold = render_frame(
+        &mut renderer,
+        &mut world,
+        ANALYTIC_VIEWPORT,
+        ANALYTIC_VIEWPORT,
+    )
+    .unwrap();
+    assert_eq!(state.analytic_glyph_draws.get(), 1, "{cold:?}");
+    assert_eq!(state.analytic_glyph_uploads.get(), 1);
+    assert_eq!(cold.analytic_glyph_resident_bytes, bytes);
+
+    for frame in 2..5 {
+        let idle = render_frame(
+            &mut renderer,
+            &mut world,
+            ANALYTIC_VIEWPORT,
+            ANALYTIC_VIEWPORT,
+        )
+        .unwrap();
+        assert_eq!(idle.uploaded_bytes, 0, "{idle:?}");
+        assert_eq!(idle.analytic_glyph_resident_bytes, bytes);
+        assert_eq!(state.analytic_glyph_draws.get(), frame);
+    }
+    assert_eq!(state.analytic_glyph_uploads.get(), 1);
+    assert_eq!(state.live_analytic_streams.get(), 1);
+}
+
+#[cfg(feature = "surfaces")]
+#[test]
+fn analytic_text_streams_release_with_their_surface_world_and_context() {
+    let ids: Vec<u32> = (0..4).collect();
+    let font = glyph_font(4, 1000, 1.0);
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, entity) = text_run_scene(&mut host, font.clone(), &ids);
+    let mut world = host.world_mut(world_id).unwrap();
+    render_frame(
+        &mut renderer,
+        &mut world,
+        ANALYTIC_VIEWPORT,
+        ANALYTIC_VIEWPORT,
+    )
+    .unwrap();
+    assert_eq!(state.live_analytic_streams.get(), 1);
+    drop(world);
+
+    // Context loss releases the stream; the recovered frame uploads it again.
+    recover_context(&mut renderer, &mut host, world_id, &font);
+    assert_eq!(state.live_analytic_streams.get(), 0);
+    let mut world = host.world_mut(world_id).unwrap();
+    let recovered = render_frame(
+        &mut renderer,
+        &mut world,
+        ANALYTIC_VIEWPORT,
+        ANALYTIC_VIEWPORT,
+    )
+    .unwrap();
+    assert_eq!(state.live_analytic_streams.get(), 1, "{recovered:?}");
+    assert_eq!(state.analytic_glyph_uploads.get(), 2);
+
+    // Deleting the Surface releases its stream at the end of the next frame.
+    world
+        .enqueue(ipp_core::Batch {
+            id: world.tick() + 1,
+            operations: vec![ipp_core::Command::Delete {
+                entity: ipp_core::EntityRef::Handle(entity),
+            }],
+        })
+        .unwrap();
+    update(&mut world).unwrap();
+    let removed = render_frame(
+        &mut renderer,
+        &mut world,
+        ANALYTIC_VIEWPORT,
+        ANALYTIC_VIEWPORT,
+    )
+    .unwrap();
+    assert_eq!(state.live_analytic_streams.get(), 0);
+    assert_eq!(removed.analytic_glyph_resident_bytes, 0);
+    drop(world);
+
+    // Forgetting a World releases every stream it still holds.
+    let mut other_host = ipp_core::HostRuntime::new();
+    let (mut other, other_state, other_id, _) = text_run_scene(&mut other_host, font, &ids);
+    let mut other_world = other_host.world_mut(other_id).unwrap();
+    render_frame(
+        &mut other,
+        &mut other_world,
+        ANALYTIC_VIEWPORT,
+        ANALYTIC_VIEWPORT,
+    )
+    .unwrap();
+    drop(other_world);
+    assert_eq!(other_state.live_analytic_streams.get(), 1);
+    other.forget_world(other_id);
+    assert_eq!(other_state.live_analytic_streams.get(), 0);
 }

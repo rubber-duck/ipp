@@ -46,6 +46,12 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             glyph_frame: Default::default(),
             #[cfg(feature = "gui")]
+            glyph_population: Default::default(),
+            #[cfg(feature = "surfaces")]
+            surface_paint: BTreeMap::new(),
+            #[cfg(feature = "surfaces")]
+            analytic_glyphs: BTreeMap::new(),
+            #[cfg(feature = "surfaces")]
             submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
@@ -192,6 +198,10 @@ impl<D: RenderDevice> RenderService<D> {
         // Cache images are rebuilt from current evaluated inputs; the budget survives.
         #[cfg(feature = "surfaces")]
         self.clear_surface_caches();
+        #[cfg(feature = "surfaces")]
+        for cache in self.analytic_glyphs.values_mut() {
+            cache.clear();
+        }
         #[cfg(feature = "gui")]
         if let Some(program) = self.surface_box_program.take() {
             self.device.borrow_mut().delete_program(program);
@@ -281,6 +291,11 @@ impl<D: RenderDevice> RenderService<D> {
         self.light_selections.remove(&world);
         #[cfg(feature = "surfaces")]
         self.forget_surface_caches(world);
+        #[cfg(feature = "surfaces")]
+        {
+            self.surface_paint.remove(&world);
+            self.analytic_glyphs.remove(&world);
+        }
         #[cfg(feature = "gui")]
         {
             self.gui_batch_cache.remove(&world);
@@ -299,6 +314,17 @@ impl<D: RenderDevice> RenderService<D> {
     #[cfg(feature = "gui")]
     pub fn set_glyph_atlas_limits(&mut self, limits: super::super::glyph_atlas::GlyphAtlasLimits) {
         self.glyph_atlas.set_limits(limits);
+    }
+
+    /// Bound the time one frame spends populating glyph atlas entries beyond
+    /// [`super::super::glyph_atlas::MIN_POPULATES_PER_FRAME`], in milliseconds.
+    ///
+    /// The default is [`super::super::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero
+    /// populates only that floor per frame; an infinite budget populates up to
+    /// [`super::super::glyph_atlas::MAX_POPULATES_PER_FRAME`].
+    #[cfg(feature = "gui")]
+    pub fn set_glyph_population_budget_ms(&mut self, budget_ms: f64) {
+        self.glyph_population.set_budget_ms(budget_ms);
     }
 
     /// Linked programs actually demanded in this graphics context.
@@ -322,6 +348,8 @@ impl<D: RenderDevice> Drop for RenderService<D> {
         }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
+        #[cfg(feature = "surfaces")]
+        self.analytic_glyphs.clear();
         #[cfg(feature = "shadows")]
         self.clear_shadows();
     }

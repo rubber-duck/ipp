@@ -66,11 +66,15 @@ impl<D: RenderDevice> RenderService<D> {
             self.surface_analytic_text = false;
         }
 
+        // Unchanged paint lets retained work skip hashing its inputs.
+        let paint = self.surface_paint.get(&world.id()).map_or(
+            super::super::retained_surfaces::SurfacePaint::UNKNOWN,
+            |tracker| tracker.paint(item),
+        );
+
+        // Clip of the contiguous box run being collected.
         #[cfg(feature = "gui")]
-        let mut current_box_batch: Option<(
-            ipp_core::systems::surface::SurfaceClipRect,
-            super::super::gui_batch::GuiPartClass,
-        )> = None;
+        let mut current_box_batch: Option<ipp_core::systems::surface::SurfaceClipRect> = None;
 
         #[cfg(feature = "gui")]
         let mut pending_boxes: Vec<&ipp_core::SurfaceRenderPrimitive> = Vec::new();
@@ -96,45 +100,35 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 }
 
-                let part_class = super::super::gui_batch::GuiPartClass::from_identity(
-                    primitive.style().identity,
-                );
-
-                match current_box_batch {
-                    Some((batch_clip, batch_class))
-                        if batch_clip == clip && batch_class == part_class =>
-                    {
-                        pending_boxes.push(primitive);
-                    }
-                    Some((batch_clip, batch_class)) => {
-                        self.flush_gui_boxes(
-                            world.id(),
-                            item.entity,
-                            batch_clip,
-                            batch_class,
-                            &mut pending_boxes,
-                            mvp,
-                            stats,
-                        )?;
-                        current_box_batch = Some((clip, part_class));
-                        pending_boxes.push(primitive);
-                    }
-                    None => {
-                        current_box_batch = Some((clip, part_class));
-                        pending_boxes.push(primitive);
-                    }
+                // Boxes batch across part classes; the retained cache isolates
+                // recently changed boxes by volatility instead.
+                if let Some(batch_clip) = current_box_batch
+                    && batch_clip != clip
+                {
+                    self.flush_gui_boxes(
+                        world.id(),
+                        item.entity,
+                        batch_clip,
+                        paint,
+                        &mut pending_boxes,
+                        mvp,
+                        stats,
+                    )?;
                 }
+
+                current_box_batch = Some(clip);
+                pending_boxes.push(primitive);
 
                 continue;
             }
 
             #[cfg(feature = "gui")]
-            if let Some((batch_clip, batch_class)) = current_box_batch.take() {
+            if let Some(batch_clip) = current_box_batch.take() {
                 self.flush_gui_boxes(
                     world.id(),
                     item.entity,
                     batch_clip,
-                    batch_class,
+                    paint,
                     &mut pending_boxes,
                     mvp,
                     stats,
@@ -190,67 +184,63 @@ impl<D: RenderDevice> RenderService<D> {
                         }
                         continue;
                     };
-                    instances.clear();
-                    if !ipp_core::render_buffer_reuse_enabled() {
-                        *instances = Vec::new();
+                    if self.surface_instance_program.is_none() {
+                        self.surface_instance_program =
+                            Some(self.device.borrow_mut().create_program(
+                                crate::services::render::embedded_shader!(
+                                    "shaders/surface_instanced.vert"
+                                ),
+                                crate::services::render::embedded_shader!("shaders/surface.frag"),
+                            )?);
                     }
-                    for glyph in glyphs {
-                        let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
-                            continue;
-                        };
-                        if range.curve_range[1] == 0 {
-                            continue;
+
+                    let run = super::super::analytic_glyphs::AnalyticGlyphRun {
+                        entity: item.entity,
+                        style,
+                        clip,
+                        font_key: font.key,
+                        font_size: *font_size,
+                        glyphs,
+                    };
+                    let build = |instances: &mut Vec<super::super::device::SurfacePathInstance>| {
+                        for glyph in glyphs {
+                            let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
+                                continue;
+                            };
+                            if range.curve_range[1] == 0 {
+                                continue;
+                            }
+                            let bounds = data.glyph_bounds[glyph.glyph_id as usize];
+                            #[cfg(feature = "gui")]
+                            if !super::super::glyph_atlas::glyph_intersects_clip(
+                                style, glyph, bounds, unit, clip,
+                            ) {
+                                continue;
+                            }
+                            let tint = glyph.color.unwrap_or(style.color);
+                            let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
+                            let placement = [
+                                style.position[0] + glyph.position[0] * style.scale[0],
+                                style.position[1] + glyph.position[1] * style.scale[1],
+                                style.scale[0] * unit,
+                                style.scale[1] * unit,
+                            ];
+                            instances.push(super::super::device::SurfacePathInstance {
+                                bounds,
+                                placement,
+                                color,
+                                descriptor: range,
+                            });
                         }
-                        let bounds = data.glyph_bounds[glyph.glyph_id as usize];
-                        #[cfg(feature = "gui")]
-                        if !super::super::glyph_atlas::glyph_intersects_clip(
-                            style, glyph, bounds, unit, clip,
-                        ) {
-                            continue;
-                        }
-                        let tint = glyph.color.unwrap_or(style.color);
-                        let color = [tint[0], tint[1], tint[2], tint[3] * style.opacity];
-                        let placement = [
-                            style.position[0] + glyph.position[0] * style.scale[0],
-                            style.position[1] + glyph.position[1] * style.scale[1],
-                            style.scale[0] * unit,
-                            style.scale[1] * unit,
-                        ];
-                        instances.push(super::super::device::SurfacePathInstance {
-                            bounds,
-                            placement,
-                            color,
-                            descriptor: range,
-                        });
-                    }
-                    if !instances.is_empty() {
-                        if self.surface_instance_program.is_none() {
-                            self.surface_instance_program =
-                                Some(self.device.borrow_mut().create_program(
-                                    crate::services::render::embedded_shader!(
-                                        "shaders/surface_instanced.vert"
-                                    ),
-                                    crate::services::render::embedded_shader!(
-                                        "shaders/surface.frag"
-                                    ),
-                                )?);
-                        }
-                        self.device.borrow_mut().draw_surface_path_instances(
-                            self.surface_instance_program.as_ref().unwrap(),
-                            path,
-                            instances,
-                            mvp,
-                            &clip,
-                            0,
-                        )?;
-                        stats.draw_calls += 1;
-                        stats.triangles += instances.len() as u32 * 2;
-                        // The device packs sixteen f32 lanes per analytic
-                        // instance and uploads that stream on every draw.
-                        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(
-                            (instances.len() * 16 * std::mem::size_of::<f32>()) as u32,
-                        );
-                    }
+                    };
+                    let program = self.surface_instance_program.as_ref().unwrap();
+                    let device = &self.device;
+                    self.analytic_glyphs
+                        .entry(world.id())
+                        .or_insert_with(|| {
+                            super::super::analytic_glyphs::AnalyticGlyphCache::new(device.clone())
+                        })
+                        .draw_run(program, path, &run, paint, mvp, instances, build, stats)?;
                 }
                 ipp_core::SurfaceRenderPrimitive::Drawing {
                     style,
@@ -381,17 +371,22 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         #[cfg(feature = "gui")]
-        if let Some((batch_clip, batch_class)) = current_box_batch.take() {
+        if let Some(batch_clip) = current_box_batch.take() {
             self.flush_gui_boxes(
                 world.id(),
                 item.entity,
                 batch_clip,
-                batch_class,
+                paint,
                 &mut pending_boxes,
                 mvp,
                 stats,
             )?;
         }
+
+        self.surface_paint
+            .entry(world.id())
+            .or_default()
+            .drawn(item, paint);
 
         Ok(())
     }
@@ -418,6 +413,7 @@ impl<D: RenderDevice> RenderService<D> {
         let atlas = &mut self.glyph_atlas;
         let work = &mut self.glyph_frame;
         let device = &self.device;
+        let tracker = self.surface_paint.entry(world.id()).or_default();
         let cache = self
             .glyph_batch_cache
             .entry(world.id())
@@ -442,6 +438,7 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 super::surface_cache::SurfaceRaster::Draw(mvp, viewport) => (mvp, viewport),
             };
+            let paint = tracker.paint(item);
 
             for primitive in &item.primitives {
                 let ipp_core::SurfaceRenderPrimitive::Glyphs {
@@ -490,7 +487,7 @@ impl<D: RenderDevice> RenderService<D> {
                         .filter(|range| range.curve_range[1] != 0)
                         .and_then(|_| data.glyph_bounds.get(glyph_id as usize).copied())
                 };
-                cache.publish_run(atlas, &run, height, bounds, work);
+                cache.publish_run(atlas, &run, paint, height, bounds, work);
             }
         }
 
@@ -510,12 +507,25 @@ impl<D: RenderDevice> RenderService<D> {
         &mut self,
         world: &WorldContext<'_>,
     ) -> Result<(), RenderError> {
-        let queue = self.glyph_frame.take_queue();
-        let result = if queue.is_empty() {
-            Ok(())
-        } else {
-            self.populate_glyphs(world, &queue)
-        };
+        let queue = self
+            .glyph_frame
+            .take_queue(self.glyph_population.allowance());
+        if queue.is_empty() {
+            self.glyph_frame.restore_queue(queue);
+            return Ok(());
+        }
+
+        // Native passes refine the per-glyph cost; WebGL keeps its estimate because
+        // its draws execute in another process.
+        #[cfg(not(target_arch = "wasm32"))]
+        let started = std::time::Instant::now();
+        let result = self.populate_glyphs(world, &queue);
+        #[cfg(not(target_arch = "wasm32"))]
+        if result.is_ok() {
+            self.glyph_population
+                .record(queue.len(), started.elapsed().as_secs_f64() * 1e3);
+        }
+
         self.glyph_frame.restore_queue(queue);
         result
     }
@@ -740,10 +750,10 @@ impl<D: RenderDevice> RenderService<D> {
     /// Publish context-wide retained Surface residency and this frame's glyph work.
     ///
     /// Only a successful submission that reached its Surfaces can distinguish stale GUI
-    /// batches from those of culled Surfaces. Failed, cameraless and invalid-camera
-    /// frames keep everything, so a transient failure or pan never forces re-uploads.
-    /// Text runs follow the demand published before drawing.
-    #[cfg(feature = "gui")]
+    /// batches and analytic text streams from those of culled Surfaces. Failed,
+    /// cameraless and invalid-camera frames keep everything, so a transient failure or
+    /// pan never forces re-uploads. Atlas text runs follow the demand published before
+    /// drawing.
     pub(super) fn finish_retained_surfaces(
         &mut self,
         world: ipp_core::WorldId,
@@ -753,19 +763,40 @@ impl<D: RenderDevice> RenderService<D> {
         let submitted = self.submitted_surfaces.take().filter(|_| stats.is_some());
         let live: std::collections::BTreeSet<_> = items.iter().map(|item| item.entity).collect();
         let surfaces = submitted.as_ref().map(|submitted| {
-            super::super::gui_batch::RetainedSurfaceSubmission {
+            super::super::retained_surfaces::RetainedSurfaceSubmission {
                 live: &live,
                 submitted,
             }
         });
 
+        #[cfg(feature = "gui")]
         if let Some(cache) = self.gui_batch_cache.get_mut(&world) {
             cache.finish_frame(surfaces.as_ref());
+        }
+
+        if let Some(cache) = self.analytic_glyphs.get_mut(&world) {
+            cache.finish_frame(surfaces.as_ref());
+        }
+
+        if let (Some(tracker), Some(_)) = (self.surface_paint.get_mut(&world), &surfaces) {
+            tracker.retain(&live);
         }
 
         let Some(stats) = stats else {
             return;
         };
+        stats.analytic_glyph_resident_bytes = self
+            .analytic_glyphs
+            .values()
+            .map(|cache| cache.resident_bytes())
+            .sum::<usize>() as u32;
+        #[cfg(feature = "gui")]
+        self.publish_glyph_work(stats);
+    }
+
+    /// Publish retained GUI and glyph residency and this frame's atlas work.
+    #[cfg(feature = "gui")]
+    fn publish_glyph_work(&mut self, stats: &mut RenderStats) {
         stats.gui_resident_bytes = self
             .gui_batch_cache
             .values()
@@ -789,7 +820,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: ipp_core::WorldId,
         entity: ipp_core::EntityId,
         batch_clip: ipp_core::systems::surface::SurfaceClipRect,
-        part_class: super::super::gui_batch::GuiPartClass,
+        paint: super::super::retained_surfaces::SurfacePaint,
         boxes: &mut Vec<&ipp_core::SurfaceRenderPrimitive>,
         mvp: &[f32; 16],
         stats: &mut RenderStats,
@@ -811,7 +842,7 @@ impl<D: RenderDevice> RenderService<D> {
             super::super::gui_batch::GuiBatchRenderCache::new(self.device.clone())
         });
         // The cache splits the run into bounded batches with stable boundaries.
-        cache.draw_box_batch(program, entity, batch_clip, part_class, boxes, mvp, stats)?;
+        cache.draw_box_batch(program, entity, batch_clip, paint, boxes, mvp, stats)?;
 
         boxes.clear();
 

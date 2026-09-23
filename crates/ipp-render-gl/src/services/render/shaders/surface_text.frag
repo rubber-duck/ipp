@@ -17,7 +17,8 @@ void main() {
     vec4 tex = texture(u_atlas, v_uv);
     vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
-    float coverage = max(tex.a, tex.r);
+    // R8 atlas pages store coverage in red; their alpha always samples as one.
+    float coverage = tex.r;
     float alpha = v_color.a * coverage * clip_coverage;
     if (alpha <= 0.0) discard;
 

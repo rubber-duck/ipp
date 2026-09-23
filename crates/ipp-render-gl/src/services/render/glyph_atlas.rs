@@ -27,13 +27,34 @@ use ipp_core::systems::surface::{
     SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
 };
 
+use super::retained_surfaces::SurfacePaint;
 use crate::{RenderDevice, RenderError, RenderStats};
 
 /// Page width and height in texels for each atlas page texture.
 pub const ATLAS_PAGE_SIZE: u32 = 512;
 
-/// Maximum number of new glyph coverage entries populated per frame.
-pub const MAX_POPULATES_PER_FRAME: usize = 32;
+/// Bytes per atlas texel: pages store single-channel R8 coverage.
+pub const ATLAS_BYTES_PER_TEXEL: usize = 1;
+
+/// Glyph coverage entries a frame populates whenever that many are missing, however
+/// long they take.
+pub const MIN_POPULATES_PER_FRAME: usize = 32;
+
+/// Glyph coverage entries one frame populates at most; later misses wait a frame.
+pub const MAX_POPULATES_PER_FRAME: usize = 512;
+
+/// Default time one frame may spend populating glyphs beyond
+/// [`MIN_POPULATES_PER_FRAME`], in milliseconds.
+pub const DEFAULT_POPULATE_BUDGET_MS: f64 = 2.0;
+
+/// Estimated population cost per glyph, in milliseconds, before a measurement and on
+/// platforms without a clock. Native population measures its own passes; WebGL draws
+/// are queued to another process, so its estimate stays fixed. Both are calibrated
+/// from cold terminal and dashboard populations (see `RenderStats::glyph_populates`).
+#[cfg(not(target_arch = "wasm32"))]
+const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.005;
+#[cfg(target_arch = "wasm32")]
+const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.02;
 
 /// Demand publications a glyph waits after its first failed population.
 pub const POPULATE_RETRY_TICKS: u64 = 4;
@@ -494,9 +515,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             .count() as u32
     }
 
-    /// Total resident bytes occupied by atlas page textures (RGBA8).
+    /// Total resident bytes occupied by atlas page textures (R8 coverage).
     pub fn resident_bytes(&self) -> usize {
-        self.page_count() as usize * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * 4)
+        self.page_count() as usize
+            * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * ATLAS_BYTES_PER_TEXEL)
     }
 
     /// Pages retired since the last call, by idle expiry, pressure or lost demand.
@@ -696,6 +718,63 @@ impl<D: RenderDevice> GlyphAtlas<D> {
     }
 }
 
+/// Per-frame glyph population allowance from a time budget and a per-glyph cost.
+///
+/// Each frame populates at least [`MIN_POPULATES_PER_FRAME`] missing entries and at
+/// most [`MAX_POPULATES_PER_FRAME`], and between those as many as the budget covers at
+/// the estimated cost. Where the platform has a clock, measured population passes
+/// refine the estimate, so cold text reaches the atlas in one frame when the budget
+/// allows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphPopulationBudget {
+    budget_ms: f64,
+    ms_per_glyph: f64,
+}
+
+impl Default for GlyphPopulationBudget {
+    fn default() -> Self {
+        Self {
+            budget_ms: DEFAULT_POPULATE_BUDGET_MS,
+            ms_per_glyph: ESTIMATED_POPULATE_MS_PER_GLYPH,
+        }
+    }
+}
+
+impl GlyphPopulationBudget {
+    /// Samples smaller than this many glyphs are dominated by fixed pass costs.
+    const MIN_SAMPLE_GLYPHS: usize = 8;
+
+    /// Replace the time budget; zero populates only the floor, and an infinite or
+    /// non-finite budget populates up to the cap.
+    pub fn set_budget_ms(&mut self, budget_ms: f64) {
+        self.budget_ms = if budget_ms.is_nan() {
+            f64::INFINITY
+        } else {
+            budget_ms.max(0.0)
+        };
+    }
+
+    /// Entries this frame may populate.
+    pub fn allowance(&self) -> usize {
+        let covered = self.budget_ms / self.ms_per_glyph;
+        if covered >= MAX_POPULATES_PER_FRAME as f64 {
+            return MAX_POPULATES_PER_FRAME;
+        }
+
+        (covered as usize).clamp(MIN_POPULATES_PER_FRAME, MAX_POPULATES_PER_FRAME)
+    }
+
+    /// Fold one measured population pass into the per-glyph estimate.
+    pub fn record(&mut self, glyphs: usize, elapsed_ms: f64) {
+        if glyphs < Self::MIN_SAMPLE_GLYPHS || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
+            return;
+        }
+
+        let sample = (elapsed_ms / glyphs as f64).max(f64::MIN_POSITIVE);
+        self.ms_per_glyph = 0.5 * self.ms_per_glyph + 0.5 * sample;
+    }
+}
+
 /// Glyph atlas work one World frame found and performed.
 #[derive(Debug, Default)]
 pub struct GlyphFrameWork {
@@ -707,7 +786,8 @@ pub struct GlyphFrameWork {
     pub populates: u32,
     /// Recoverable allocation or rasterization failures.
     pub failures: u32,
-    /// Missing entries left for a later frame by the per-frame population bound.
+    /// Missing entries left for a later frame by the per-frame population cap or
+    /// time budget.
     capped: u32,
 }
 
@@ -722,7 +802,7 @@ impl GlyphFrameWork {
         self.capped = 0;
     }
 
-    /// Record a missing entry; queue it within the per-frame budget unless it backs off.
+    /// Record a missing entry; queue it within the per-frame cap unless it backs off.
     fn miss(&mut self, atlas: &GlyphAtlas<impl RenderDevice>, key: GlyphKey) {
         if !self.missing.insert(key) {
             return;
@@ -740,15 +820,22 @@ impl GlyphFrameWork {
         }
     }
 
-    /// Whether the per-frame bound left missing entries that a following
-    /// frame will populate; entries backing off after failures do not count.
+    /// Whether the per-frame cap or time budget left missing entries that a
+    /// following frame will populate; entries backing off after failures do not count.
     pub fn population_capped(&self) -> bool {
         self.capped > 0
     }
 
-    /// Take the population queue, in the order its runs published their demand.
-    pub fn take_queue(&mut self) -> Vec<GlyphKey> {
-        std::mem::take(&mut self.queue)
+    /// Take at most `allowance` queued entries, in the order their runs published
+    /// their demand; the rest wait for a later frame.
+    pub fn take_queue(&mut self, allowance: usize) -> Vec<GlyphKey> {
+        let mut queue = std::mem::take(&mut self.queue);
+        if queue.len() > allowance {
+            self.capped += (queue.len() - allowance) as u32;
+            queue.truncate(allowance);
+        }
+
+        queue
     }
 
     /// Return a consumed queue so its capacity serves later frames.
@@ -841,6 +928,8 @@ struct RetainedGlyphRun<D: RenderDevice> {
     band: Option<u16>,
     demand_hash: Option<u64>,
     geometry_hash: u64,
+    /// Paint revision and band the hashes were computed under.
+    hashed: Option<(u64, Option<u16>)>,
     /// Sorted demanded entries.
     keys: Vec<GlyphKey>,
     /// Residency generation at which every demanded entry was resident.
@@ -866,6 +955,8 @@ pub struct GlyphBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     surfaces: BTreeMap<ipp_core::EntityId, RetainedGlyphSurface<D>>,
     publication: u64,
+    /// Sum of `bytes` over every retained batch.
+    resident: usize,
     scratch_keys: Vec<GlyphKey>,
 }
 
@@ -876,6 +967,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
             device,
             surfaces: BTreeMap::new(),
             publication: 0,
+            resident: 0,
             scratch_keys: Vec::new(),
         }
     }
@@ -890,6 +982,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                 }
             }
         }
+        self.resident = 0;
     }
 
     /// Release retained batches before the graphics context goes away.
@@ -909,6 +1002,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
             run.built_hash = None;
             run.resident = None;
         }
+        self.resident = 0;
     }
 
     /// Release this World's demand from the atlas and every retained batch.
@@ -923,12 +1017,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
 
     /// Total resident bytes occupied by retained text run GPU batches.
     pub fn resident_bytes(&self) -> usize {
-        self.surfaces
-            .values()
-            .flat_map(|surface| surface.runs.values())
-            .flat_map(|run| &run.batches)
-            .map(|batch| batch.bytes)
-            .sum()
+        self.resident
     }
 
     /// Start publishing this World's demand for one frame.
@@ -947,11 +1036,14 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     /// Publish one visible run's band and demand, recording entries missing from the atlas.
     ///
     /// `glyph_bounds` returns font-unit bounds for glyphs with coverage; other glyphs need
-    /// no entry. Unchanged runs only hash their inputs.
+    /// no entry. Unchanged runs only hash their inputs, and not even that when the
+    /// Surface's reusable `paint` revision and the band match their last hashes.
+    #[allow(clippy::too_many_arguments)]
     pub fn publish_run(
         &mut self,
         atlas: &mut GlyphAtlas<D>,
         run: &TextRun<'_>,
+        paint: SurfacePaint,
         projected_height: f32,
         glyph_bounds: impl Fn(u32) -> Option<[f32; 4]>,
         work: &mut GlyphFrameWork,
@@ -980,10 +1072,19 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
         }
 
         record.band = select_resolution_band(projected_height, record.band);
-        let (demand_hash, geometry_hash) = run.hashes(record.band);
-        record.geometry_hash = geometry_hash;
+        let hashed = record
+            .hashed
+            .is_some_and(|(revision, band)| paint.reuses(revision) && band == record.band);
+        let demand_hash = if hashed {
+            record.demand_hash
+        } else {
+            let (demand_hash, geometry_hash) = run.hashes(record.band);
+            record.geometry_hash = geometry_hash;
+            record.hashed = Some((paint.revision, record.band));
+            Some(demand_hash)
+        };
 
-        if record.demand_hash != Some(demand_hash) {
+        if record.demand_hash != demand_hash {
             self.scratch_keys.clear();
             if let Some(band) = record.band {
                 let unit = run.font_size / run.units_per_em as f32;
@@ -1006,7 +1107,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
             atlas.acquire(&self.scratch_keys);
             atlas.release(&record.keys);
             std::mem::swap(&mut record.keys, &mut self.scratch_keys);
-            record.demand_hash = Some(demand_hash);
+            record.demand_hash = demand_hash;
             record.resident = None;
         }
 
@@ -1032,10 +1133,11 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     pub fn end_publication(&mut self, atlas: &mut GlyphAtlas<D>) {
         let publication = self.publication;
         let mut device = self.device.borrow_mut();
+        let resident = &mut self.resident;
         self.surfaces.retain(|_, surface| {
             if surface.seen != publication {
                 for (_, run) in std::mem::take(&mut surface.runs) {
-                    release_run(atlas, &mut device, run);
+                    *resident -= release_run(atlas, &mut device, run);
                 }
                 return false;
             }
@@ -1049,7 +1151,8 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                         return true;
                     }
 
-                    release_run(atlas, &mut device, std::mem::replace(run, empty_run()));
+                    *resident -=
+                        release_run(atlas, &mut device, std::mem::replace(run, empty_run()));
                     false
                 });
             }
@@ -1095,7 +1198,11 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                 .iter()
                 .all(|batch| atlas.has_page(batch.page_index));
         if !reusable {
-            rebuild_batches(&self.device, atlas, record, run, band, stats)?;
+            let before: usize = record.batches.iter().map(|batch| batch.bytes).sum();
+            let rebuilt = rebuild_batches(&self.device, atlas, record, run, band, stats);
+            let after: usize = record.batches.iter().map(|batch| batch.bytes).sum();
+            self.resident = self.resident - before + after;
+            rebuilt?;
         }
 
         for batch in &record.batches {
@@ -1120,6 +1227,7 @@ fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
         band: None,
         demand_hash: None,
         geometry_hash: 0,
+        hashed: None,
         keys: Vec::new(),
         resident: None,
         seen: 0,
@@ -1128,15 +1236,20 @@ fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
     }
 }
 
+/// Release a run's demand and batches, returning the batch bytes released.
 fn release_run<D: RenderDevice>(
     atlas: &mut GlyphAtlas<D>,
     device: &mut D,
     run: RetainedGlyphRun<D>,
-) {
+) -> usize {
     atlas.release(&run.keys);
+    let mut bytes = 0;
     for batch in run.batches {
+        bytes += batch.bytes;
         device.delete_glyph_batch(batch.gpu);
     }
+
+    bytes
 }
 
 /// Glyph quads of one atlas page, in the order they paint.

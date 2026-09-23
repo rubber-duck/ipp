@@ -30,6 +30,13 @@
 //!    either was not presented cached by the previous frame or the band's
 //!    refresh interval has elapsed since the last paint. Everything else
 //!    reuses the image, so paint edits coalesce until the next refresh.
+//! 4. A Surface whose paint changed and was repainted at its refresh cap on
+//!    [`SURFACE_CACHE_ANIMATED_FRAMES`] consecutive frames presents directly
+//!    as animated instead of its next due repaint: repainting every frame costs
+//!    more than drawing directly. It keeps its image and returns to the rules
+//!    above once its paint revision holds for [`SURFACE_CACHE_SETTLE_FRAMES`]
+//!    frames, repainting the stale image first. Caps below the frame rate never
+//!    repaint on consecutive frames, so their animated content stays cached.
 //!
 //! A repaint that skips a primitive because its resource or GPU data is not
 //! resident (after context recovery, or while it is still loading) leaves the
@@ -76,6 +83,16 @@ pub const SURFACE_CACHE_IDLE_SECONDS: f64 = 10.0;
 /// World seconds a Surface presents directly after a recoverable cache failure.
 pub const SURFACE_CACHE_RETRY_SECONDS: f64 = 1.0;
 
+/// Consecutive planned frames whose paint changed and were each repainted at the
+/// refresh cap, after which a cached Surface presents directly as
+/// [`SurfaceCachePresentation::Animated`]. A repaint then costs more than drawing the
+/// Surface directly, since every such frame also composites the new image.
+pub const SURFACE_CACHE_ANIMATED_FRAMES: u32 = 4;
+
+/// Consecutive planned frames without a paint change after which an animated
+/// Surface returns to cached presentation, repainting its stale image first.
+pub const SURFACE_CACHE_SETTLE_FRAMES: u32 = 8;
+
 /// How an opted-in Surface was presented by the last completed frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SurfaceCachePresentation {
@@ -89,6 +106,10 @@ pub enum SurfaceCachePresentation {
     /// Direct presentation because this context cannot provide cache targets
     /// or the Surface has no usable content size.
     Unavailable,
+    /// Direct presentation because the Surface's paint changed and was repainted at
+    /// its refresh cap on [`SURFACE_CACHE_ANIMATED_FRAMES`] consecutive frames; it
+    /// returns to its image once the paint holds for [`SURFACE_CACHE_SETTLE_FRAMES`].
+    Animated,
     /// Outside the view; neither drawn nor repainted.
     Culled,
     /// Composited from the existing image without repainting.
@@ -108,6 +129,7 @@ impl SurfaceCachePresentation {
             Self::Culled => 4,
             Self::Reused => 5,
             Self::Repainted => 6,
+            Self::Animated => 7,
         }
     }
 
@@ -115,7 +137,7 @@ impl SurfaceCachePresentation {
     pub const fn is_direct(self) -> bool {
         matches!(
             self,
-            Self::Near | Self::Interaction | Self::Fallback | Self::Unavailable
+            Self::Near | Self::Interaction | Self::Fallback | Self::Unavailable | Self::Animated
         )
     }
 }
@@ -196,6 +218,8 @@ pub(crate) struct SurfaceCacheFrameCounts {
     pub direct: u32,
     pub fallbacks: u32,
     pub allocations: u32,
+    /// Direct presentations of animated Surfaces; also counted in `direct`.
+    pub animated: u32,
 }
 
 /// Revisions an image was last painted from.
@@ -236,6 +260,14 @@ struct SurfaceCacheEntry<T> {
     retry_at: f64,
     /// Composited by the previous planned frame of this World.
     shown: bool,
+    /// Consecutive planned frames repainted for a paint change at the refresh cap.
+    repaint_streak: u32,
+    /// Presenting directly while the paint keeps changing every frame.
+    animated: bool,
+    /// Consecutive planned frames without a paint change while animated.
+    settled: u32,
+    /// Paint revision seen by the previous planned frame.
+    seen_paint: u64,
     /// Plan stamp of the last frame that listed this Surface as live and opted in.
     live: u64,
     presentation: SurfaceCachePresentation,
@@ -259,6 +291,10 @@ impl<T> SurfaceCacheEntry<T> {
             used: 0,
             retry_at: f64::NEG_INFINITY,
             shown: false,
+            repaint_streak: 0,
+            animated: false,
+            settled: 0,
+            seen_paint: 0,
             live: 0,
             presentation: SurfaceCachePresentation::Near,
             repaints: 0,
@@ -359,8 +395,10 @@ impl<T> SurfaceTextureCache<T> {
                 SurfaceCacheAction::Culled | SurfaceCacheAction::Repaint => {}
             }
 
-            if entry.presentation == SurfaceCachePresentation::Fallback {
-                self.counts.fallbacks += 1;
+            match entry.presentation {
+                SurfaceCachePresentation::Fallback => self.counts.fallbacks += 1,
+                SurfaceCachePresentation::Animated => self.counts.animated += 1,
+                _ => {}
             }
         }
 
@@ -382,11 +420,16 @@ impl<T> SurfaceTextureCache<T> {
         entry.revisions = (input.paint_revision, input.resource_revision);
         let shown = std::mem::replace(&mut entry.shown, false);
 
-        let direct = if !input.visible {
+        // Culled frames neither advance nor break the animated-paint tracking.
+        if !input.visible {
             entry.action = SurfaceCacheAction::Culled;
             entry.presentation = P::Culled;
             return;
-        } else if input.interaction {
+        }
+
+        let paint_changed =
+            std::mem::replace(&mut entry.seen_paint, input.paint_revision) != input.paint_revision;
+        let direct = if input.interaction {
             Some(P::Interaction)
         } else if entry.band == 0 {
             Some(P::Near)
@@ -411,14 +454,36 @@ impl<T> SurfaceTextureCache<T> {
         let (Some(desired), None) = (desired, direct) else {
             entry.action = SurfaceCacheAction::Direct;
             entry.presentation = direct.unwrap_or(P::Unavailable);
+            entry.repaint_streak = 0;
+            entry.animated = false;
             return;
         };
+
+        // An animated Surface draws directly until its paint holds, then repaints
+        // its stale image through the ordinary rules below.
+        if entry.animated {
+            entry.settled = if paint_changed {
+                0
+            } else {
+                entry.settled + 1
+            };
+            if entry.settled < SURFACE_CACHE_SETTLE_FRAMES {
+                entry.action = SurfaceCacheAction::Direct;
+                entry.presentation = P::Animated;
+                return;
+            }
+
+            entry.animated = false;
+            entry.repaint_streak = 0;
+        }
 
         entry.desired = desired;
         let resized = entry
             .image
             .as_ref()
             .is_none_or(|image| image.size != desired);
+        // Whether an out-of-date image repaints because its refresh interval elapsed.
+        let mut capped = false;
         let repaint = match entry.painted {
             _ if resized => true,
             None => true,
@@ -433,8 +498,29 @@ impl<T> SurfaceTextureCache<T> {
             // Out-of-date content may stay on screen only while it was on screen.
             Some(_) if !shown => true,
             Some(_) => {
-                time - entry.painted_at >= input.policy.refresh_interval_at(entry.band) - 1e-9
+                let due =
+                    time - entry.painted_at >= input.policy.refresh_interval_at(entry.band) - 1e-9;
+                capped = due;
+                due
             }
+        };
+
+        // Paint that changes and is repainted at the refresh cap on consecutive frames
+        // costs more cached than direct: after that many repaints, the next one
+        // presents directly instead until the paint settles.
+        let capped_repaint = capped && paint_changed;
+        if capped_repaint && entry.repaint_streak >= SURFACE_CACHE_ANIMATED_FRAMES {
+            entry.animated = true;
+            entry.settled = 0;
+            entry.action = SurfaceCacheAction::Direct;
+            entry.presentation = P::Animated;
+            return;
+        }
+
+        entry.repaint_streak = if capped_repaint {
+            entry.repaint_streak + 1
+        } else {
+            0
         };
 
         if repaint {

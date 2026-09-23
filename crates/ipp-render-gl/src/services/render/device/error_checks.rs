@@ -4,8 +4,9 @@
 //! so each poll is a CPU/GPU synchronization. Allocations, compilation, resource
 //! uploads and passes whose results are kept (Surface cache repaints, glyph
 //! atlas population and shadow passes) check when they finish. Draws, uniforms,
-//! transient streams, retained-batch replacement and the frame start check only
-//! in exhaustive mode, which attributes an error to the call that raised it.
+//! transient streams, retained-batch and instance-stream replacement and the
+//! frame start check only in exhaustive mode, which attributes an error to the
+//! call that raised it.
 //!
 //! The frame end checks in exhaustive mode, after a frame that replaced retained
 //! storage and otherwise on every [`FRAME_CHECK_INTERVAL`]th frame, starting with
@@ -54,7 +55,7 @@ impl RenderDeviceErrorChecks {
     }
 
     /// Record a retained-storage replacement whose own check was deferred.
-    #[cfg(any(feature = "gui", test))]
+    #[cfg(any(feature = "surfaces", test))]
     pub(super) fn note_retained_upload(&mut self) {
         self.retained_upload = true;
     }

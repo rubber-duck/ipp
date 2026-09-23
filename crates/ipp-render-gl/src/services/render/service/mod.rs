@@ -68,7 +68,8 @@ pub struct RenderStats {
     pub triangles: u32,
     /// Vertex/index/pixel uploads accounted by this submission, including pending
     /// shared service work once. Later worlds do not recount the same allocation.
-    /// Analytic Surface glyph instance streams count on every draw that uploads them.
+    /// Analytic Surface glyph runs count when their retained instance stream is
+    /// created or replaced; unchanged runs upload nothing.
     pub uploaded_bytes: u32,
     /// Instances skipped because their mesh could not acquire GPU residency.
     /// CPU geometry remains usable; resource reload permits another upload.
@@ -105,8 +106,11 @@ pub struct RenderStats {
     /// back-off defers to a later frame.
     #[cfg(feature = "gui")]
     pub glyph_misses: u32,
-    /// Glyph atlas entries rasterized during this submission, at most
-    /// [`crate::glyph_atlas::MAX_POPULATES_PER_FRAME`], before the main pass.
+    /// Glyph atlas entries rasterized during this submission, before the main pass.
+    /// A frame populates at least [`crate::glyph_atlas::MIN_POPULATES_PER_FRAME`]
+    /// missing entries, then as many as the population time budget covers, up to
+    /// [`crate::glyph_atlas::MAX_POPULATES_PER_FRAME`]; later entries count as misses
+    /// and their text stays analytic until a following frame populates them.
     #[cfg(feature = "gui")]
     pub glyph_populates: u32,
     /// Recoverable glyph atlas allocation or rasterization failures during this
@@ -121,9 +125,14 @@ pub struct RenderStats {
     /// Number of resident glyph atlas pages shared by every World on this context.
     #[cfg(feature = "gui")]
     pub glyph_pages: u32,
-    /// Total resident bytes occupied by the shared glyph atlas page textures.
+    /// Total resident bytes occupied by the shared glyph atlas page textures: one
+    /// byte per texel of single-channel coverage.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
+    /// Resident bytes of retained analytic Surface glyph instance streams across every
+    /// World presented through this context, sixteen `f32` lanes per instance.
+    #[cfg(feature = "surfaces")]
+    pub analytic_glyph_resident_bytes: u32,
     /// Opted-in Surfaces repainted into their cache images during this submission,
     /// before the main pass. Each repaint also counts its primitive draws.
     #[cfg(feature = "surfaces")]
@@ -133,8 +142,8 @@ pub struct RenderStats {
     #[cfg(feature = "surfaces")]
     pub surface_cache_reuses: u32,
     /// Opted-in visible Surfaces presented directly: inside their direct distance,
-    /// under GUI interaction, after a fallback or without cache support. Culled
-    /// Surfaces count in none of the cache counters.
+    /// under GUI interaction, after a fallback, while animated or without cache
+    /// support. Culled Surfaces count in none of the cache counters.
     #[cfg(feature = "surfaces")]
     pub surface_cache_direct: u32,
     /// Opted-in Surfaces presented directly because the byte budget, a zero budget,
@@ -142,6 +151,11 @@ pub struct RenderStats {
     /// interval left no usable image. Also counted in `surface_cache_direct`.
     #[cfg(feature = "surfaces")]
     pub surface_cache_fallbacks: u32,
+    /// Opted-in visible Surfaces presented directly because their paint changed and
+    /// was repainted at the refresh cap on every recent frame, where repainting costs
+    /// more than drawing directly. Also counted in `surface_cache_direct`.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_animated: u32,
     /// Cache images created or resized during this submission; each is repainted
     /// before it is shown.
     #[cfg(feature = "surfaces")]
@@ -222,9 +236,18 @@ pub struct RenderService<D: RenderDevice> {
     /// Glyph misses, population queue and outcomes of the current World frame.
     #[cfg(feature = "gui")]
     glyph_frame: super::glyph_atlas::GlyphFrameWork,
-    /// Surfaces the current frame submitted; `None` until submission reaches them.
+    /// Per-frame population allowance, shared by every World on this context.
     #[cfg(feature = "gui")]
+    glyph_population: super::glyph_atlas::GlyphPopulationBudget,
+    /// Surfaces the current frame submitted; `None` until submission reaches them.
+    #[cfg(feature = "surfaces")]
     submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,
+    /// Each World's last drawn Surface paint revisions and identity orders.
+    #[cfg(feature = "surfaces")]
+    surface_paint: BTreeMap<ipp_core::WorldId, super::retained_surfaces::SurfacePaintTracker>,
+    /// Each World's retained analytic glyph instance streams.
+    #[cfg(feature = "surfaces")]
+    analytic_glyphs: BTreeMap<ipp_core::WorldId, super::analytic_glyphs::AnalyticGlyphCache<D>>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

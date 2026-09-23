@@ -12,6 +12,8 @@ macro_rules! embedded_shader {
 }
 pub(crate) use embedded_shader;
 
+#[cfg(feature = "surfaces")]
+mod analytic_glyphs;
 mod assets;
 mod custom_material;
 mod custom_shader;
@@ -42,6 +44,8 @@ mod template;
 pub mod glyph_atlas;
 #[cfg(feature = "gui")]
 pub mod gui_batch;
+#[cfg(feature = "surfaces")]
+pub mod retained_surfaces;
 
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathDescriptor;
@@ -51,7 +55,7 @@ pub use device::{PlatformRenderDevice, RenderDevice};
 #[cfg(feature = "gui")]
 pub use glyph_atlas::{GlyphAtlasLimits, GlyphVertex};
 #[cfg(feature = "gui")]
-pub use gui_batch::{GuiBoxVertex, GuiPartClass};
+pub use gui_batch::GuiBoxVertex;
 
 #[cfg(target_arch = "wasm32")]
 pub use device::WebGlRenderDevice;
@@ -63,5 +67,6 @@ pub use lighting::RenderLightingFrame;
 pub use service::{RenderError, RenderService, RenderStats};
 #[cfg(feature = "surfaces")]
 pub use surface_cache::{
-    DEFAULT_SURFACE_CACHE_BUDGET_BYTES, SurfaceCacheDiagnostic, SurfaceCachePresentation,
+    DEFAULT_SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_SETTLE_FRAMES,
+    SurfaceCacheDiagnostic, SurfaceCachePresentation,
 };

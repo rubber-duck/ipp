@@ -250,18 +250,12 @@ impl GlesRenderDevice {
         }
     }
 
-    pub(super) fn draw_surface_path_instances(
+    /// Validate descriptors of `instances` against `path` and pack them.
+    fn pack_surface_instances(
         &mut self,
-        program: &GlesRenderProgram,
         path: &GlesSurfacePath,
         instances: &[super::SurfacePathInstance],
-        mvp: &[f32; 16],
-        clip: &[f32; 4],
-        fill_rule: u32,
-    ) -> Result<(), RenderError> {
-        if instances.is_empty() {
-            return Ok(());
-        }
+    ) -> Result<i32, RenderError> {
         if !super::super::surface_instances_exact(instances) {
             return Err(RenderError::RenderDevice(
                 "surface instance atlas exceeds exact descriptor limits".into(),
@@ -278,39 +272,48 @@ impl GlesRenderDevice {
                 "invalid surface instance range".into(),
             ));
         }
+
+        let count = i32::try_from(instances.len())
+            .map_err(|_| RenderError::RenderDevice("too many surface instances".into()))?;
         super::super::pack_surface_instances(instances, &mut self.surface_instance_scratch);
-        self.alpha_blend(true)?;
+        Ok(count)
+    }
+
+    pub(super) fn create_surface_instances(
+        &mut self,
+        path: &GlesSurfacePath,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<super::GlesSurfaceInstances, RenderError> {
+        self.submission.invalidate();
+        let count = self.pack_surface_instances(path, instances)?;
         let bytes = std::mem::size_of_val(self.surface_instance_scratch.as_slice());
-        if self.surface_instance_buffer == 0 {
-            // SAFETY: GL writes one new name owned by this current context.
-            unsafe { (self.gl.gen_buffers)(1, &mut self.surface_instance_buffer) };
-            if self.surface_instance_buffer == 0 {
+        let mut vao = 0;
+        let mut vbo = 0;
+
+        // SAFETY: GL allocates exclusive handles for the current context and copies the
+        // packed instance slice synchronously. Attribute pointers are byte offsets into
+        // the newly bound buffer; the instanced shader reads no per-vertex attributes.
+        unsafe {
+            (self.gl.gen_vertex_arrays)(1, &mut vao);
+            (self.gl.gen_buffers)(1, &mut vbo);
+            if vao == 0 || vbo == 0 {
+                if vao != 0 {
+                    (self.gl.delete_vertex_arrays)(1, &vao);
+                }
+                if vbo != 0 {
+                    (self.gl.delete_buffers)(1, &vbo);
+                }
                 return Err(RenderError::RenderDevice(
                     "surface instance allocation failed".into(),
                 ));
             }
-        }
-        self.bind_vertex_array(path.vao);
-        // SAFETY: GL copies the packed instance slice synchronously. Attribute
-        // pointers are byte offsets into the exclusively owned instance buffer
-        // and are disabled again on the path's VAO after the draw.
-        unsafe {
-            (self.gl.bind_buffer)(super::ARRAY_BUFFER, self.surface_instance_buffer);
-            if bytes > self.surface_instance_capacity {
-                self.surface_instance_capacity =
-                    bytes.max(self.surface_instance_capacity.saturating_mul(2));
-                (self.gl.buffer_data)(
-                    super::ARRAY_BUFFER,
-                    self.surface_instance_capacity as isize,
-                    std::ptr::null(),
-                    0x88E8,
-                );
-            }
-            (self.gl.buffer_sub_data)(
+            self.bind_vertex_array(vao);
+            (self.gl.bind_buffer)(super::ARRAY_BUFFER, vbo);
+            (self.gl.buffer_data)(
                 super::ARRAY_BUFFER,
-                0,
                 bytes as isize,
                 self.surface_instance_scratch.as_ptr().cast(),
+                super::STATIC_DRAW,
             );
             for slot in 0..4u32 {
                 (self.gl.enable_attrib)(slot);
@@ -324,7 +327,80 @@ impl GlesRenderDevice {
                 );
                 (self.gl.attrib_divisor)(slot, 1);
             }
+            self.bind_vertex_array(0);
+            (self.gl.bind_buffer)(super::ARRAY_BUFFER, 0);
         }
+
+        let stream = super::GlesSurfaceInstances {
+            vao,
+            vbo,
+            count,
+        };
+        if let Err(error) = self.check() {
+            self.delete_surface_instances(stream);
+            return Err(error);
+        }
+
+        Ok(stream)
+    }
+
+    pub(super) fn update_surface_instances(
+        &mut self,
+        stream: &mut super::GlesSurfaceInstances,
+        path: &GlesSurfacePath,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        let count = self.pack_surface_instances(path, instances)?;
+        let bytes = std::mem::size_of_val(self.surface_instance_scratch.as_slice());
+
+        // SAFETY: BufferData replaces the complete store and copies the packed slice
+        // synchronously. GL preserves storage needed by queued draws.
+        unsafe {
+            (self.gl.bind_buffer)(super::ARRAY_BUFFER, stream.vbo);
+            (self.gl.buffer_data)(
+                super::ARRAY_BUFFER,
+                bytes as isize,
+                self.surface_instance_scratch.as_ptr().cast(),
+                super::STATIC_DRAW,
+            );
+            (self.gl.bind_buffer)(super::ARRAY_BUFFER, 0);
+        }
+
+        // Outside exhaustive mode this frame's end checks the replacement.
+        self.check_draw()?;
+        self.error_checks.note_retained_upload();
+        stream.count = count;
+        Ok(())
+    }
+
+    pub(super) fn delete_surface_instances(&mut self, stream: super::GlesSurfaceInstances) {
+        self.submission.invalidate();
+
+        // SAFETY: Consumes exclusive context handles; zero and invalid handles are tolerated.
+        unsafe {
+            if stream.vao != 0 {
+                (self.gl.delete_vertex_arrays)(1, &stream.vao);
+            }
+            if stream.vbo != 0 {
+                (self.gl.delete_buffers)(1, &stream.vbo);
+            }
+        }
+    }
+
+    pub(super) fn draw_surface_instances(
+        &mut self,
+        program: &GlesRenderProgram,
+        path: &GlesSurfacePath,
+        stream: &super::GlesSurfaceInstances,
+        mvp: &[f32; 16],
+        clip: &[f32; 4],
+        fill_rule: u32,
+    ) -> Result<(), RenderError> {
+        if stream.count == 0 {
+            return Ok(());
+        }
+
+        self.alpha_blend(true)?;
         self.use_program(program.id);
         let location = |name| self.surface_location(program, name);
         self.program_mat4(program, program.mvp, mvp);
@@ -336,15 +412,12 @@ impl GlesRenderDevice {
         self.program_int(program, location(c"u_fill_rule"), fill_rule as i32);
         let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
         self.program_vec4(program, location(c"u_viewport"), &viewport);
-        // SAFETY: The path's textures and VAO are live in this current context;
-        // the instanced draw reads the owned buffer bound above.
+        self.bind_vertex_array(stream.vao);
+        // SAFETY: The stream's vertex array points at its own live instance buffer
+        // and the path's textures are live in this current context.
         unsafe {
             self.bind_path_textures(path);
-            (self.gl.draw_arrays_instances)(0x0005, 0, 4, instances.len() as i32);
-            for slot in 0..4u32 {
-                (self.gl.attrib_divisor)(slot, 0);
-                (self.gl.disable_attrib)(slot);
-            }
+            (self.gl.draw_arrays_instances)(0x0005, 0, 4, stream.count);
             self.release_band_texture();
         }
         self.check_draw()
@@ -659,7 +732,8 @@ impl GlesRenderDevice {
         let mut framebuffer = 0;
 
         // SAFETY: Context owns new texture and framebuffer handles. Texture is initialized
-        // to RGBA8 with linear filtering and edge clamping, and cleared to zero alpha.
+        // to single-channel R8 coverage with linear filtering and edge clamping, and
+        // cleared to zero coverage.
         let complete = unsafe {
             (self.gl.gen_textures)(1, &mut texture);
             (self.gl.gen_framebuffers)(1, &mut framebuffer);
@@ -671,11 +745,11 @@ impl GlesRenderDevice {
             (self.gl.tex_image)(
                 0x0DE1,
                 0,
-                0x8058, // RGBA8
+                0x8229, // R8
                 width as i32,
                 height as i32,
                 0,
-                0x1908, // RGBA
+                0x1903, // RED
                 0x1401, // UNSIGNED_BYTE
                 ptr::null(),
             );

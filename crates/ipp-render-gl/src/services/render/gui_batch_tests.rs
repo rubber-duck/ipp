@@ -5,9 +5,10 @@ use std::rc::Rc;
 
 use std::collections::BTreeSet;
 
+use super::super::retained_surfaces::SurfacePaint;
 use super::{
-    GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
-    VOLATILE_FRAMES, generate_box_vertices,
+    GuiBatchRenderCache, GuiBoxVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission, VOLATILE_FRAMES,
+    generate_box_vertices,
 };
 use crate::{GlyphVertex, RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
@@ -38,6 +39,7 @@ impl RenderDevice for MockGuiDevice {
     type Texture = u32;
     type SurfacePath = u32;
     type SurfaceCacheTarget = ();
+    type SurfaceInstances = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockGuiBatch;
@@ -594,7 +596,7 @@ fn warm_frame_uploads_zero_geometry_bytes() {
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &boxes,
             &mvp,
             &mut stats1,
@@ -617,7 +619,7 @@ fn warm_frame_uploads_zero_geometry_bytes() {
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &boxes,
             &mvp,
             &mut stats2,
@@ -665,7 +667,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &boxes_initial,
             &mvp,
             &mut stats1,
@@ -690,7 +692,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &boxes_modified,
             &mvp,
             &mut stats2,
@@ -742,7 +744,7 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
                 &1,
                 ipp_core::EntityId::from_bits(1),
                 [0.0, 0.0, 4.0, 2.0],
-                GuiPartClass::Background,
+                SurfacePaint::UNKNOWN,
                 &[primitive],
                 &[0.0; 16],
                 &mut stats,
@@ -769,31 +771,95 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
 }
 
 #[test]
-fn cursor_work_is_separated_from_background_batches() {
-    let bg_class = GuiPartClass::from_identity(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(1),
-        lifetime: 1,
-        part: GuiPrimitivePart::Background,
-    }));
-    let fill_class = GuiPartClass::from_identity(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(2),
-        lifetime: 1,
-        part: GuiPrimitivePart::Fill,
-    }));
-    let focus_class = GuiPartClass::from_identity(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(1),
-        lifetime: 1,
-        part: GuiPrimitivePart::FocusRing,
-    }));
+fn boxes_of_every_part_class_share_one_batch() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let part_box = |node: u32, part: GuiPrimitivePart, x: f32| {
+        sample_box_primitive(node, 1, part, [x, 0.0], [0.4, 0.4], None)
+    };
 
-    assert_eq!(bg_class, GuiPartClass::Background);
-    assert_eq!(fill_class, GuiPartClass::Fill);
-    assert_eq!(focus_class, GuiPartClass::FocusRing);
-    assert_ne!(bg_class, fill_class);
-    assert_ne!(bg_class, focus_class);
+    // A row's background, slider track, fill, checkbox icon and focus ring paint in
+    // this order under one clip; none of them changed recently.
+    let row = [
+        part_box(1, GuiPrimitivePart::Background, 0.0),
+        part_box(2, GuiPrimitivePart::Background, 0.5),
+        part_box(2, GuiPrimitivePart::Fill, 0.6),
+        part_box(3, GuiPrimitivePart::Icon, 1.0),
+        part_box(3, GuiPrimitivePart::FocusRing, 1.0),
+    ];
+    let boxes: Vec<_> = row.iter().collect();
+    let mut stats = RenderStats::default();
+    cache
+        .draw_box_batch(
+            &1,
+            ipp_core::EntityId::from_bits(1),
+            [0.0, 0.0, 4.0, 2.0],
+            SurfacePaint::UNKNOWN,
+            &boxes,
+            &[0.0; 16],
+            &mut stats,
+        )
+        .unwrap();
+
+    assert_eq!(stats.gui_batches, 1, "{stats:?}");
+    assert_eq!(stats.draw_calls, 1);
+    assert_eq!(device.borrow().created_batches.len(), 1);
+    assert_eq!(device.borrow().created_batches[0].1, 5 * 6);
+}
+
+#[test]
+fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let entity = ipp_core::EntityId::from_bits(1);
+    let clip = [0.0, 0.0, 4.0, 2.0];
+    let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>,
+                paint: SurfacePaint,
+                boxes: &[&SurfaceRenderPrimitive]| {
+        let mut stats = RenderStats::default();
+        cache
+            .draw_box_batch(&1, entity, clip, paint, boxes, &[0.0; 16], &mut stats)
+            .unwrap();
+        stats
+    };
+    let first = sample_box_primitive(1, 1, GuiPrimitivePart::Background, [0.0; 2], [1.0; 2], None);
+    let second = sample_box_primitive(
+        2,
+        1,
+        GuiPrimitivePart::Background,
+        [1.5, 0.0],
+        [1.0; 2],
+        None,
+    );
+    let revision = |revision, reusable| SurfacePaint {
+        revision,
+        reusable,
+    };
+
+    assert_eq!(
+        draw(&mut cache, revision(5, false), &[&first, &second]).gui_rebuilds,
+        2
+    );
+
+    // A reusable revision promises unchanged inputs: the boxes are not hashed, so
+    // even inputs that differ do not rebuild.
+    let mut edited = second.clone();
+    set_fill(&mut edited, 0.9);
+    let reused = draw(&mut cache, revision(5, true), &[&first, &edited]);
+    assert_eq!((reused.gui_rebuilds, reused.uploaded_bytes), (0, 0));
+
+    // A new revision hashes every box and rebuilds only the edited one.
+    let rebuilt = draw(&mut cache, revision(6, false), &[&first, &edited]);
+    assert_eq!(rebuilt.gui_rebuilds, 1);
+    assert!(rebuilt.uploaded_bytes > 0);
+
+    // Hashes from another revision are never reused.
+    let mut again = edited.clone();
+    set_fill(&mut again, 0.1);
+    assert_eq!(
+        draw(&mut cache, revision(7, true), &[&first, &again]).gui_rebuilds,
+        1
+    );
 }
 
 #[test]
@@ -819,7 +885,7 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &[&box_gen1],
             &mvp,
             &mut stats1,
@@ -843,7 +909,7 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &[&box_gen2],
             &mvp,
             &mut stats2,
@@ -889,7 +955,7 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
             &1,
             entity1,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &[&box1],
             &mvp,
             &mut stats,
@@ -900,7 +966,7 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
             &1,
             entity2,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &[&box2],
             &mvp,
             &mut stats,
@@ -948,7 +1014,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
                 &1,
                 entity,
                 clip,
-                GuiPartClass::Background,
+                SurfacePaint::UNKNOWN,
                 &[&panel],
                 &mvp,
                 stats,
@@ -1027,7 +1093,7 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &[primitive],
             &mvp,
             &mut RenderStats::default(),
@@ -1103,7 +1169,7 @@ fn draw_run_frame(
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
+            SurfacePaint::UNKNOWN,
             &refs,
             &[0.0; 16],
             &mut stats,

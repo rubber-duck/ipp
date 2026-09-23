@@ -114,10 +114,6 @@ impl GlesRenderDevice {
             #[cfg(feature = "gui")]
             glyph_atlas_target: None,
             #[cfg(feature = "surfaces")]
-            surface_instance_buffer: 0,
-            #[cfg(feature = "surfaces")]
-            surface_instance_capacity: 0,
-            #[cfg(feature = "surfaces")]
             surface_instance_scratch: Vec::new(),
             #[cfg(feature = "surfaces")]
             surface_viewport: [1.0, 1.0],

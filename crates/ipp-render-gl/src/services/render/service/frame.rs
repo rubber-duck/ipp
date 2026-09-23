@@ -93,7 +93,7 @@ impl<D: RenderDevice> RenderService<D> {
         let prepass = match begun {
             Ok(stats) => stats,
             Err(error) => {
-                #[cfg(feature = "gui")]
+                #[cfg(feature = "surfaces")]
                 self.finish_retained_surfaces(world.id(), surface_items, None);
                 #[cfg(feature = "surfaces")]
                 self.finish_surface_caches(world, None);
@@ -123,7 +123,7 @@ impl<D: RenderDevice> RenderService<D> {
             )
         });
         let finish = self.device.borrow_mut().end_frame();
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         self.finish_retained_surfaces(world.id(), surface_items, result.as_mut().ok());
         #[cfg(feature = "surfaces")]
         self.finish_surface_caches(world, result.as_mut().ok());
@@ -214,7 +214,7 @@ impl<D: RenderDevice> RenderService<D> {
             }
         };
         // From here every visible Surface reaches submission unless the frame fails.
-        #[cfg(feature = "gui")]
+        #[cfg(feature = "surfaces")]
         {
             self.submitted_surfaces = Some(Default::default());
         }
@@ -306,7 +306,6 @@ impl<D: RenderDevice> RenderService<D> {
                         if self.composite_surface_cache(world, item, view_projection, &mut stats)? {
                             continue;
                         }
-                        #[cfg(feature = "gui")]
                         if let Some(submitted) = &mut self.submitted_surfaces {
                             submitted.insert(item.entity);
                         }

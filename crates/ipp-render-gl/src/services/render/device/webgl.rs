@@ -259,7 +259,7 @@ unsafe extern "C" {
 
     fn set_draw_checks(enabled: u32);
 
-    fn end_frame() -> u32;
+    fn end_frame(check: u32) -> u32;
 
     fn delete_mesh(id: u32);
 
@@ -280,6 +280,7 @@ unsafe extern "C" {
 #[derive(Default)]
 pub struct WebGlRenderDevice {
     uniform_epoch: u64,
+    error_checks: super::error_checks::RenderDeviceErrorChecks,
     #[cfg(feature = "surfaces")]
     surface_instance_scratch: Vec<[f32; 16]>,
 }
@@ -354,6 +355,7 @@ fn retained_upload<V, const N: usize>(
 
 impl RenderDevice for WebGlRenderDevice {
     fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
+        self.error_checks.set_exhaustive(enabled);
         // SAFETY: The bridge copies a scalar diagnostic setting, retaining no pointers.
         unsafe {
             set_draw_checks(u32::from(enabled));
@@ -736,7 +738,9 @@ impl RenderDevice for WebGlRenderDevice {
         // `#[repr(C)]` vertices. The bridge rejects stale batch handles, then
         // bounds-checks and copies that range before returning. It keeps no view of
         // WASM memory and cannot reenter Rust.
-        self.check(unsafe { update_gui_batch(*batch, vertices.as_ptr().cast(), bytes) })
+        self.check(unsafe { update_gui_batch(*batch, vertices.as_ptr().cast(), bytes) })?;
+        self.error_checks.note_retained_upload();
+        Ok(())
     }
 
     #[cfg(feature = "gui")]
@@ -790,7 +794,9 @@ impl RenderDevice for WebGlRenderDevice {
         // `#[repr(C)]` vertices. The bridge rejects stale batch handles, then
         // bounds-checks and copies that range before returning. It keeps no view of
         // WASM memory and cannot reenter Rust.
-        self.check(unsafe { update_glyph_batch(*batch, vertices.as_ptr().cast(), bytes) })
+        self.check(unsafe { update_glyph_batch(*batch, vertices.as_ptr().cast(), bytes) })?;
+        self.error_checks.note_retained_upload();
+        Ok(())
     }
 
     #[cfg(feature = "gui")]
@@ -998,8 +1004,8 @@ impl RenderDevice for WebGlRenderDevice {
         self.uniform_epoch = self.uniform_epoch.wrapping_add(1);
         // SAFETY: The bridge reads exactly four live f32 values synchronously.
         {
-            let vertex = include_str!("../shaders/present.vert");
-            let fragment = include_str!("../shaders/present.frag");
+            let vertex = crate::services::render::embedded_shader!("shaders/present.vert");
+            let fragment = crate::services::render::embedded_shader!("shaders/present.frag");
             // SAFETY: Imports synchronously copy source/clear bytes; every slice
             // remains live for the call and no views survive memory growth.
             self.check(unsafe {
@@ -1073,8 +1079,11 @@ impl RenderDevice for WebGlRenderDevice {
     }
 
     fn end_frame(&mut self) -> Result<(), RenderError> {
-        // SAFETY: The import checks context state and retains no Rust data.
-        self.check(unsafe { end_frame() })
+        let check = u32::from(self.error_checks.frame_end_checks());
+        // SAFETY: A scalar flag crosses the boundary. The import presents and,
+        // when asked, polls the error state; it always reports a lost context
+        // and retains no Rust data.
+        self.check(unsafe { end_frame(check) })
     }
 
     fn delete_mesh(&mut self, mesh: u32) {

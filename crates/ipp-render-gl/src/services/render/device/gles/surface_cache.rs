@@ -8,6 +8,7 @@
 //! test passes every fragment. Scene depth applies only when the image is
 //! composited in the main pass.
 
+use super::targets::GlesTarget;
 use super::{GlesRenderDevice, GlesRenderProgram};
 use crate::RenderError;
 use std::ptr;
@@ -18,12 +19,6 @@ const SURFACE_CACHE_MAX_DIMENSION: u32 = 2048;
 
 const TEXTURE_2D: u32 = 0x0DE1;
 const FRAMEBUFFER: u32 = 0x8D40;
-const READ_FRAMEBUFFER: u32 = 0x8CA8;
-const DRAW_FRAMEBUFFER: u32 = 0x8CA9;
-const DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
-const READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
-const VIEWPORT: u32 = 0x0BA2;
-const DEPTH_WRITEMASK: u32 = 0x0B72;
 const FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
 const COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 
@@ -41,11 +36,8 @@ pub struct GlesSurfaceCacheTarget {
 /// State saved by `begin_surface_cache_target` and restored by its end.
 pub(super) struct GlesSurfaceCacheBinding {
     framebuffer: u32,
-    draw: u32,
-    read: u32,
-    viewport: [i32; 4],
+    host: GlesTarget,
     surface_viewport: [f32; 2],
-    depth_mask: bool,
 }
 
 impl GlesRenderDevice {
@@ -107,10 +99,12 @@ impl GlesRenderDevice {
             height,
         };
 
-        // SAFETY: The current context writes new exclusively owned names and the
-        // saved bindings into locals. Storage uses no client pointer. The previous
-        // draw/read framebuffers and viewport are borrowed host state, rebound
-        // unchanged before returning, so no binding refers to a partial target.
+        let previous = self.current_target();
+
+        // SAFETY: The current context writes new exclusively owned names into
+        // locals. Storage uses no client pointer. The previous draw/read
+        // framebuffers and viewport are borrowed host state, rebound unchanged
+        // before returning, so no binding refers to a partial target.
         let complete = unsafe {
             (self.gl.gen_textures)(1, &mut target.texture);
             (self.gl.gen_framebuffers)(1, &mut target.framebuffer);
@@ -124,13 +118,7 @@ impl GlesRenderDevice {
             (self.gl.tex_parameter)(TEXTURE_2D, 0x813D, 0); // MAX_LEVEL
             self.specify_surface_cache_storage(width, height);
             (self.gl.bind_texture)(TEXTURE_2D, 0);
-            let mut draw = 0;
-            let mut read = 0;
-            let mut viewport = [0i32; 4];
-            (self.gl.get_integer)(DRAW_FRAMEBUFFER_BINDING, &mut draw);
-            (self.gl.get_integer)(READ_FRAMEBUFFER_BINDING, &mut read);
-            (self.gl.get_integer)(VIEWPORT, viewport.as_mut_ptr());
-            (self.gl.bind_framebuffer)(FRAMEBUFFER, target.framebuffer);
+            self.bind_framebuffers(target.framebuffer, target.framebuffer);
             (self.gl.framebuffer_texture)(
                 FRAMEBUFFER,
                 0x8CE0, // COLOR_ATTACHMENT0
@@ -141,13 +129,12 @@ impl GlesRenderDevice {
             let complete = (self.gl.check_framebuffer)(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE;
             if complete {
                 // Uninitialized storage must never be composited as an image.
-                (self.gl.viewport)(0, 0, width as i32, height as i32);
+                self.set_viewport([0, 0, width as i32, height as i32]);
                 (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
                 (self.gl.clear)(COLOR_BUFFER_BIT);
             }
-            (self.gl.bind_framebuffer)(DRAW_FRAMEBUFFER, draw as u32);
-            (self.gl.bind_framebuffer)(READ_FRAMEBUFFER, read as u32);
-            (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
+            self.bind_framebuffers(previous.draw, previous.read);
+            self.set_viewport(previous.viewport);
             complete && target.texture != 0 && target.framebuffer != 0
         };
 
@@ -213,45 +200,33 @@ impl GlesRenderDevice {
         }
         self.submission.invalidate();
 
-        // SAFETY: Queries write the borrowed host bindings, viewport and depth
-        // mask into exclusive locals; nothing is retained by GL.
-        let binding = unsafe {
-            let mut draw = 0;
-            let mut read = 0;
-            let mut viewport = [0i32; 4];
-            let mut depth_mask = 1;
-            (self.gl.get_integer)(DRAW_FRAMEBUFFER_BINDING, &mut draw);
-            (self.gl.get_integer)(READ_FRAMEBUFFER_BINDING, &mut read);
-            (self.gl.get_integer)(VIEWPORT, viewport.as_mut_ptr());
-            (self.gl.get_integer)(DEPTH_WRITEMASK, &mut depth_mask);
-            GlesSurfaceCacheBinding {
-                framebuffer: target.framebuffer,
-                draw: draw as u32,
-                read: read as u32,
-                viewport,
-                surface_viewport: self.surface_viewport,
-                depth_mask: depth_mask != 0,
-            }
-        };
-        self.surface_cache_target = Some(binding);
+        // The host target is known without a synchronous query once this device
+        // has set it; otherwise it is read once for the frame.
+        self.surface_cache_target = Some(GlesSurfaceCacheBinding {
+            framebuffer: target.framebuffer,
+            host: self.current_target(),
+            surface_viewport: self.surface_viewport,
+        });
 
         // Box, path and glyph antialiasing now sizes pixels from the target.
         self.surface_viewport = [target.width as f32, target.height as f32];
 
-        // SAFETY: The target's framebuffer is live and owned by this context; the
-        // saved host bindings are restored by end. Scalar state only.
+        // The target's framebuffer is live and owned by this context; end
+        // restores the saved host bindings.
+        self.bind_framebuffers(target.framebuffer, target.framebuffer);
+        self.set_viewport([0, 0, target.width as i32, target.height as i32]);
+        self.set_depth_mask(false);
+        // SAFETY: Scalar context state in the current context only.
         unsafe {
-            (self.gl.bind_framebuffer)(FRAMEBUFFER, target.framebuffer);
-            (self.gl.viewport)(0, 0, target.width as i32, target.height as i32);
             (self.gl.disable)(0x0C11); // SCISSOR_TEST
             (self.gl.disable)(0x0B90); // STENCIL_TEST
-            (self.gl.depth_mask)(0);
             (self.gl.color_mask)(1, 1, 1, 1);
             (self.gl.clear_color)(0.0, 0.0, 0.0, 0.0);
             (self.gl.clear)(COLOR_BUFFER_BIT);
         }
 
-        if let Err(error) = self.check() {
+        // The end of the repaint checks the whole pass.
+        if let Err(error) = self.check_draw() {
             self.restore_surface_cache_binding();
             return Err(error);
         }
@@ -276,19 +251,9 @@ impl GlesRenderDevice {
         self.submission.invalidate();
         self.surface_viewport = binding.surface_viewport;
 
-        // SAFETY: Rebinds borrowed host handles and scalar state captured at begin
-        // in this same current context; the device takes no ownership of them.
-        unsafe {
-            (self.gl.bind_framebuffer)(DRAW_FRAMEBUFFER, binding.draw);
-            (self.gl.bind_framebuffer)(READ_FRAMEBUFFER, binding.read);
-            (self.gl.viewport)(
-                binding.viewport[0],
-                binding.viewport[1],
-                binding.viewport[2],
-                binding.viewport[3],
-            );
-            (self.gl.depth_mask)(u8::from(binding.depth_mask));
-        }
+        // Rebinds borrowed host handles and state saved at begin in this same
+        // current context; the device takes no ownership of them.
+        self.restore_target(binding.host);
     }
 
     pub(super) fn draw_surface_cache(
@@ -322,42 +287,42 @@ impl GlesRenderDevice {
             }
         }
 
-        let placement_location = self.surface_location(program, c"u_placement");
-        let clip_location = self.surface_location(program, c"u_clip");
-        let texture_location = self.surface_location(program, c"u_surface_cache");
         let rectangle = [0.0, 0.0, size[0], size[1]];
         let premultiplied =
             self.submission.blend.replace(Some(PREMULTIPLIED_BLEND)) != Some(PREMULTIPLIED_BLEND);
-
-        // SAFETY: Program, texture and VAO are live names of this current context,
-        // borrowed through the draw. Uniform calls copy the fixed local arrays
-        // synchronously. The attribute-less VAO derives corners from gl_VertexID,
-        // so no buffer or client pointer is read.
-        unsafe {
-            if premultiplied {
-                // Opacity was applied once while painting; the image's colour is
-                // already multiplied by its coverage alpha.
+        if premultiplied {
+            // Opacity was applied once while painting; the image's colour is
+            // already multiplied by its coverage alpha.
+            // SAFETY: Scalar blend state in the current context.
+            unsafe {
                 (self.gl.enable)(0x0BE2); // BLEND
                 (self.gl.blend_equation)(0x8006); // FUNC_ADD
                 (self.gl.blend_func)(1, 0x0303, 1, 0x0303); // ONE, ONE_MINUS_SRC_ALPHA
-                (self.gl.depth_mask)(0);
             }
-            self.use_program(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(placement_location, 1, rectangle.as_ptr());
-            (self.gl.uniform_vec4)(clip_location, 1, rectangle.as_ptr());
-            (self.gl.uniform_int)(texture_location, 0);
+            self.set_depth_mask(false);
+        }
+        self.use_program(program.id);
+        let location = |name| self.surface_location(program, name);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, location(c"u_placement"), &rectangle);
+        self.program_vec4(program, location(c"u_clip"), &rectangle);
+        self.program_int(program, location(c"u_surface_cache"), 0);
+        self.bind_vertex_array(self.surface_quad_vao);
+
+        // SAFETY: The texture and attribute-less VAO are live names of this
+        // current context, borrowed through the draw; corners derive from
+        // gl_VertexID, so no buffer or client pointer is read. The image is
+        // unbound again so a later repaint of it never samples its own target.
+        unsafe {
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_sampler)(0, 0);
             (self.gl.bind_texture)(TEXTURE_2D, target.texture);
-            self.bind_vertex_array(self.surface_quad_vao);
             (self.gl.draw_arrays)(0x0005, 0, 4); // TRIANGLE_STRIP
-            self.bind_vertex_array(0);
             (self.gl.bind_texture)(TEXTURE_2D, 0);
         }
 
-        // One check per composited Surface so context loss reaches recovery.
-        self.check()
+        // Composites are routine draws; the frame end reports their errors.
+        self.check_draw()
     }
 
     pub(super) fn delete_surface_cache_target(&mut self, target: GlesSurfaceCacheTarget) {
@@ -370,6 +335,8 @@ impl GlesRenderDevice {
         {
             self.restore_surface_cache_binding();
         }
+
+        self.forget_framebuffer(target.framebuffer);
 
         // SAFETY: Consumes names exclusively owned by this target once. GL defers
         // releasing storage still referenced by queued draws, ignores zero names

@@ -2,7 +2,7 @@ use super::*;
 
 impl RenderDevice for GlesRenderDevice {
     fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
-        self.exhaustive_draw_checks = enabled;
+        self.error_checks.set_exhaustive(enabled);
     }
 
     type Program = GlesRenderProgram;
@@ -359,7 +359,7 @@ impl RenderDevice for GlesRenderDevice {
             }
             (self.gl.buffer_sub_data)(ARRAY_BUFFER, 0, bytes as isize, instances.as_ptr().cast());
         }
-        self.check()
+        self.check_draw()
     }
 
     #[cfg(feature = "particles")]
@@ -434,6 +434,7 @@ impl RenderDevice for GlesRenderDevice {
                 material,
                 lighting: lighting::GlesLightingLocations::load(&self.gl, id),
                 uniforms: Default::default(),
+                values: Default::default(),
                 #[cfg(feature = "skeletal-animation")]
                 joints: (self.gl.uniform_location)(id, c"u_joints[0]".as_ptr()),
                 #[cfg(feature = "mesh-poses")]
@@ -665,10 +666,11 @@ impl RenderDevice for GlesRenderDevice {
             self.surface_viewport = [width as f32, height as f32];
         }
         self.begin_linear_target(width, height)?;
+        self.set_viewport([0, 0, width as i32, height as i32]);
+        self.set_depth_mask(true);
         // SAFETY: The host keeps its framebuffer/context current. These calls
         // only set context state and copy scalar arguments; no CPU pointers.
         unsafe {
-            (self.gl.viewport)(0, 0, width as i32, height as i32);
             (self.gl.enable)(0x0B71); // DEPTH_TEST
             (self.gl.enable)(0x0B44); // CULL_FACE
             (self.gl.disable)(0x0BE2); // BLEND
@@ -680,7 +682,6 @@ impl RenderDevice for GlesRenderDevice {
             (self.gl.disable)(0x8C89); // RASTERIZER_DISCARD
             (self.gl.disable)(0x0B90); // STENCIL_TEST
             (self.gl.depth_func)(0x0201); // LESS
-            (self.gl.depth_mask)(1);
             (self.gl.color_mask)(1, 1, 1, 1);
             (self.gl.front_face)(0x0901); // CCW
             (self.gl.cull_face)(0x0405); // BACK
@@ -689,7 +690,7 @@ impl RenderDevice for GlesRenderDevice {
             (self.gl.clear)(0x00004000 | 0x00000100);
         }
 
-        self.check()
+        self.check_draw()
     }
 
     #[cfg(feature = "skeletal-animation")]
@@ -744,7 +745,7 @@ impl RenderDevice for GlesRenderDevice {
                 (self.gl.active_texture)(0x84C0);
                 (self.gl.bind_sampler)(0, 0);
                 (self.gl.bind_texture)(0x0DE1, texture.copied().unwrap_or(0));
-                (self.gl.uniform_int)(program.texture, 0);
+                self.program_int(program, program.texture, 0);
             }
             self.bind_vertex_array(mesh.vao);
             #[cfg(feature = "mesh-poses")]
@@ -823,7 +824,7 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn end_frame(&mut self) -> Result<(), RenderError> {
-        self.present_linear_target()?;
+        self.present_linear_target();
         // SAFETY: The context remains current; unbinding retains no Rust data.
         unsafe {
             self.bind_vertex_array(0);
@@ -841,7 +842,10 @@ impl RenderDevice for GlesRenderDevice {
             }
         }
 
-        self.check()
+        let checked = self.check_frame_end();
+        // The Host regains the context and may bind its own targets.
+        self.targets.forget();
+        checked
     }
 
     fn delete_mesh(&mut self, mesh: GlesRenderMesh) {

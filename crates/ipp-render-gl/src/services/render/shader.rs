@@ -133,8 +133,8 @@ impl RenderShaderConfig {
     pub(crate) fn sources(self) -> Result<(String, String), RenderError> {
         if self.debug_geometry {
             return Ok((
-                include_str!("shaders/debug-vertex.glsl").into(),
-                include_str!("shaders/debug-fragment.glsl").into(),
+                crate::services::render::embedded_shader!("shaders/debug-vertex.glsl").into(),
+                crate::services::render::embedded_shader!("shaders/debug-fragment.glsl").into(),
             ));
         }
 
@@ -142,12 +142,12 @@ impl RenderShaderConfig {
         let mut values = vec![
             (
                 "texture_declarations",
-                include_str!("shaders/texture-fragment.glsl"),
+                crate::services::render::embedded_shader!("shaders/texture-fragment.glsl"),
             ),
             ("texture_body", "sampled = texture(u_texture, v_uv).rgb;"),
             (
                 "weight_declarations",
-                include_str!("shaders/weight-fragment.glsl"),
+                crate::services::render::embedded_shader!("shaders/weight-fragment.glsl"),
             ),
             (
                 "weight_body",
@@ -159,7 +159,7 @@ impl RenderShaderConfig {
         values.extend([
             (
                 "shadow_declarations",
-                include_str!("shaders/shadow-sampling.glsl"),
+                crate::services::render::embedded_shader!("shaders/shadow-sampling.glsl"),
             ),
             (
                 "shadow_body",
@@ -181,9 +181,15 @@ impl RenderShaderConfig {
         ];
         if self.lit {
             return Ok((
-                self.vertex_source(include_str!("shaders/lit.vert"))?,
-                template::evaluate(include_str!("shaders/lit.frag"), &values, &conditions)
-                    .map_err(|error| RenderError::RenderDevice(error.0))?,
+                self.vertex_source(crate::services::render::embedded_shader!(
+                    "shaders/lit.vert"
+                ))?,
+                template::evaluate(
+                    crate::services::render::embedded_shader!("shaders/lit.frag"),
+                    &values,
+                    &conditions,
+                )
+                .map_err(|error| RenderError::RenderDevice(error.0))?,
             ));
         }
 
@@ -192,20 +198,28 @@ impl RenderShaderConfig {
                 .map_err(|error| RenderError::RenderDevice(error.0))
         };
         #[allow(unused_mut)]
-        let mut fragment = expand(include_str!("unlit.frag"), &values)?;
+        let mut fragment = expand(
+            crate::services::render::embedded_shader!("unlit.frag"),
+            &values,
+        )?;
         #[cfg(feature = "particles")]
         if self.sprite {
             fragment = fragment.replace("out vec4 out_color;", "in vec2 v_particle_uv;\nin float v_particle_opacity;\nout vec4 out_color;")
                 .replace("vec4(linear_rgb, 1.0)", "vec4(linear_rgb, v_particle_opacity * (1.0 - smoothstep(0.35, 0.5, length(v_particle_uv - vec2(0.5)))))");
         }
-        Ok((self.vertex_source(include_str!("unlit.vert"))?, fragment))
+        Ok((
+            self.vertex_source(crate::services::render::embedded_shader!("unlit.vert"))?,
+            fragment,
+        ))
     }
 
     #[cfg(feature = "shadows")]
     pub(crate) fn shadow_sources(self) -> Result<(String, String), RenderError> {
         Ok((
-            self.vertex_source(include_str!("shaders/shadow.vert"))?,
-            include_str!("shaders/shadow.frag").into(),
+            self.vertex_source(crate::services::render::embedded_shader!(
+                "shaders/shadow.vert"
+            ))?,
+            crate::services::render::embedded_shader!("shaders/shadow.frag").into(),
         ))
     }
 
@@ -235,7 +249,7 @@ impl RenderShaderConfig {
             #[cfg(feature = "mesh-poses")]
             (
                 "pose_declarations",
-                include_str!("shaders/pose-vertex.glsl"),
+                crate::services::render::embedded_shader!("shaders/pose-vertex.glsl"),
             ),
             #[cfg(feature = "mesh-poses")]
             (
@@ -248,20 +262,23 @@ impl RenderShaderConfig {
                 "layout(location = 8) in vec3 a_pose_normal;",
             ),
             #[cfg(feature = "mesh-poses")]
-            ("pose_normal_body", include_str!("shaders/pose-normal.glsl")),
+            (
+                "pose_normal_body",
+                crate::services::render::embedded_shader!("shaders/pose-normal.glsl"),
+            ),
             #[cfg(feature = "skeletal-animation")]
             (
                 "skin_declarations",
-                include_str!("shaders/skin-vertex.glsl"),
+                crate::services::render::embedded_shader!("shaders/skin-vertex.glsl"),
             ),
             (
                 "texture_declarations",
-                include_str!("shaders/texture-vertex.glsl"),
+                crate::services::render::embedded_shader!("shaders/texture-vertex.glsl"),
             ),
             ("texture_body", "v_uv = a_uv;"),
             (
                 "weight_declarations",
-                include_str!("shaders/weight-vertex.glsl"),
+                crate::services::render::embedded_shader!("shaders/weight-vertex.glsl"),
             ),
             ("weight_body", "v_weight = a_weight;"),
         ];
@@ -341,6 +358,29 @@ mod tests {
         let (_, fragment) = RenderShaderConfig::default().sources().unwrap();
         assert!(!fragment.contains("sampler2D"));
         assert!(!fragment.contains("v_weight"));
+    }
+}
+
+#[cfg(test)]
+mod embedded_tests {
+    #[test]
+    fn embedded_shaders_drop_comments_and_blank_lines() {
+        let raw = include_str!("shaders/lit.frag");
+        let embedded = embedded_shader!("shaders/lit.frag");
+        assert!(embedded.len() < raw.len());
+        assert!(embedded.starts_with("#version 300 es\n"));
+        assert!(!embedded.contains("//"));
+        assert!(
+            embedded
+                .lines()
+                .all(|line| line == line.trim() && !line.is_empty())
+        );
+    }
+
+    #[test]
+    fn embedded_shaders_keep_composition_placeholders() {
+        let embedded = embedded_shader!("shaders/custom.vert");
+        assert!(embedded.starts_with("// CUSTOM_DECLARATIONS\n"));
     }
 }
 

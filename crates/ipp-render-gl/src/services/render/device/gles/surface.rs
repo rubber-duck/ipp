@@ -157,7 +157,6 @@ impl GlesRenderDevice {
         color: &[f32; 4],
         fill_rule: u32,
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         if descriptor.curve_range[1] == 0
             || descriptor.curve_range[0].saturating_add(descriptor.curve_range[1])
                 > path.segment_count as u32
@@ -168,56 +167,81 @@ impl GlesRenderDevice {
             ));
         }
         self.alpha_blend(true)?;
-        let locations = (
-            program.id,
-            program.mvp,
-            self.surface_location(program, c"u_bounds"),
-            self.surface_location(program, c"u_placement"),
-            self.surface_location(program, c"u_clip"),
-            self.surface_location(program, c"u_color"),
-            self.surface_location(program, c"u_curves"),
-            self.surface_location(program, c"u_curve_count"),
-            self.surface_location(program, c"u_fill_rule"),
-            self.surface_location(program, c"u_curve_start"),
-            self.surface_location(program, c"u_curve_width"),
-            self.surface_location(program, c"u_bands"),
-            self.surface_location(program, c"u_band_offset"),
-            self.surface_location(program, c"u_band_width"),
-            self.surface_location(program, c"u_viewport"),
+        self.use_program(program.id);
+        let location = |name| self.surface_location(program, name);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, location(c"u_bounds"), bounds);
+        self.program_vec4(program, location(c"u_placement"), placement);
+        self.program_vec4(program, location(c"u_clip"), clip);
+        self.program_vec4(program, location(c"u_color"), color);
+        self.program_int(program, location(c"u_curves"), 0);
+        self.program_int(
+            program,
+            location(c"u_curve_count"),
+            descriptor.curve_range[1] as i32,
         );
-        // SAFETY: Uniform calls synchronously copy fixed live arrays. Handles are
-        // owned by this current context; the VAO needs no vertex buffers.
+        self.program_int(program, location(c"u_fill_rule"), fill_rule as i32);
+        self.program_int(
+            program,
+            location(c"u_curve_start"),
+            descriptor.curve_range[0] as i32,
+        );
+        self.program_int(program, location(c"u_curve_width"), path.texture_width);
+        self.program_int(program, location(c"u_bands"), 1);
+        self.program_int(
+            program,
+            location(c"u_band_offset"),
+            descriptor.band_offset as i32,
+        );
+        self.program_int(program, location(c"u_band_width"), path.band_width);
+        let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
+        self.program_vec4(program, location(c"u_viewport"), &viewport);
+        self.bind_vertex_array(path.vao);
+        // SAFETY: Textures and the attribute-less VAO are owned by this current
+        // context and stay bound only for the draw; no client pointer is read.
         unsafe {
-            (self.gl.use_program)(locations.0);
-            (self.gl.uniform_matrix)(locations.1, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(locations.2, 1, bounds.as_ptr());
-            (self.gl.uniform_vec4)(locations.3, 1, placement.as_ptr());
-            (self.gl.uniform_vec4)(locations.4, 1, clip.as_ptr());
-            (self.gl.uniform_vec4)(locations.5, 1, color.as_ptr());
-            (self.gl.uniform_int)(locations.6, 0);
-            (self.gl.uniform_int)(locations.7, descriptor.curve_range[1] as i32);
-            (self.gl.uniform_int)(locations.8, fill_rule as i32);
-            (self.gl.uniform_int)(locations.9, descriptor.curve_range[0] as i32);
-            (self.gl.uniform_int)(locations.10, path.texture_width);
-            (self.gl.uniform_int)(locations.11, 1);
-            (self.gl.uniform_int)(locations.12, descriptor.band_offset as i32);
-            (self.gl.uniform_int)(locations.13, path.band_width);
-            let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
-            (self.gl.uniform_vec4)(locations.14, 1, viewport.as_ptr());
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, path.texture);
-            (self.gl.active_texture)(0x84C1);
-            (self.gl.bind_texture)(0x0DE1, path.band_texture);
-            (self.gl.bind_vertex_array)(path.vao);
+            self.bind_path_textures(path);
             (self.gl.draw_arrays)(0x0005, 0, 4); // TRIANGLE_STRIP
-            (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_vertex_array)(0);
+            self.release_band_texture();
         }
         self.check_draw()
     }
 
+    /// Bind a path's curve texture to unit 0 and its band texture to unit 1.
+    ///
+    /// # Safety
+    ///
+    /// The device context is current and `path` owns live textures in it.
+    unsafe fn bind_path_textures(&self, path: &GlesSurfacePath) {
+        // SAFETY: Upheld by the caller; binding copies scalar names only.
+        unsafe {
+            (self.gl.active_texture)(0x84C0);
+            (self.gl.bind_texture)(0x0DE1, path.texture);
+            (self.gl.active_texture)(0x84C1);
+            (self.gl.bind_texture)(0x0DE1, path.band_texture);
+        }
+    }
+
+    /// Unbind unit 1 after a path draw and select unit 0 again. Unit 1 also
+    /// holds the shadow map, so its binding cache is cleared.
+    ///
+    /// # Safety
+    ///
+    /// The device context is current with texture unit 1 active.
+    unsafe fn release_band_texture(&self) {
+        // SAFETY: Upheld by the caller; unbinding copies scalar names only.
+        unsafe {
+            (self.gl.bind_texture)(0x0DE1, 0);
+            (self.gl.active_texture)(0x84C0);
+        }
+        #[cfg(feature = "shadows")]
+        self.submission.shadow_texture.set(None);
+    }
+
     pub(super) fn delete_surface_path(&mut self, path: GlesSurfacePath) {
+        // A deleted bound VAO rebinds zero and GL may reuse its name.
+        self.submission.invalidate();
+
         // SAFETY: Consumes exclusive context handles; zero is accepted by GL.
         unsafe {
             (self.gl.delete_textures)(1, &path.texture);
@@ -235,7 +259,6 @@ impl GlesRenderDevice {
         clip: &[f32; 4],
         fill_rule: u32,
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         if instances.is_empty() {
             return Ok(());
         }
@@ -258,18 +281,20 @@ impl GlesRenderDevice {
         super::super::pack_surface_instances(instances, &mut self.surface_instance_scratch);
         self.alpha_blend(true)?;
         let bytes = std::mem::size_of_val(self.surface_instance_scratch.as_slice());
-        // SAFETY: GL copies the packed instance slice synchronously. Attribute
-        // pointers are byte offsets into the exclusively owned instance buffer.
-        unsafe {
-            if self.surface_instance_buffer == 0 {
-                (self.gl.gen_buffers)(1, &mut self.surface_instance_buffer);
-            }
+        if self.surface_instance_buffer == 0 {
+            // SAFETY: GL writes one new name owned by this current context.
+            unsafe { (self.gl.gen_buffers)(1, &mut self.surface_instance_buffer) };
             if self.surface_instance_buffer == 0 {
                 return Err(RenderError::RenderDevice(
                     "surface instance allocation failed".into(),
                 ));
             }
-            (self.gl.bind_vertex_array)(path.vao);
+        }
+        self.bind_vertex_array(path.vao);
+        // SAFETY: GL copies the packed instance slice synchronously. Attribute
+        // pointers are byte offsets into the exclusively owned instance buffer
+        // and are disabled again on the path's VAO after the draw.
+        unsafe {
             (self.gl.bind_buffer)(super::ARRAY_BUFFER, self.surface_instance_buffer);
             if bytes > self.surface_instance_capacity {
                 self.surface_instance_capacity =
@@ -299,41 +324,28 @@ impl GlesRenderDevice {
                 );
                 (self.gl.attrib_divisor)(slot, 1);
             }
-            (self.gl.use_program)(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(self.surface_location(program, c"u_clip"), 1, clip.as_ptr());
-            (self.gl.uniform_int)(self.surface_location(program, c"u_curves"), 0);
-            (self.gl.uniform_int)(
-                self.surface_location(program, c"u_curve_width"),
-                path.texture_width,
-            );
-            (self.gl.uniform_int)(self.surface_location(program, c"u_bands"), 1);
-            (self.gl.uniform_int)(
-                self.surface_location(program, c"u_band_width"),
-                path.band_width,
-            );
-            (self.gl.uniform_int)(
-                self.surface_location(program, c"u_fill_rule"),
-                fill_rule as i32,
-            );
-            let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
-            (self.gl.uniform_vec4)(
-                self.surface_location(program, c"u_viewport"),
-                1,
-                viewport.as_ptr(),
-            );
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, path.texture);
-            (self.gl.active_texture)(0x84C1);
-            (self.gl.bind_texture)(0x0DE1, path.band_texture);
+        }
+        self.use_program(program.id);
+        let location = |name| self.surface_location(program, name);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, location(c"u_clip"), clip);
+        self.program_int(program, location(c"u_curves"), 0);
+        self.program_int(program, location(c"u_curve_width"), path.texture_width);
+        self.program_int(program, location(c"u_bands"), 1);
+        self.program_int(program, location(c"u_band_width"), path.band_width);
+        self.program_int(program, location(c"u_fill_rule"), fill_rule as i32);
+        let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
+        self.program_vec4(program, location(c"u_viewport"), &viewport);
+        // SAFETY: The path's textures and VAO are live in this current context;
+        // the instanced draw reads the owned buffer bound above.
+        unsafe {
+            self.bind_path_textures(path);
             (self.gl.draw_arrays_instances)(0x0005, 0, 4, instances.len() as i32);
             for slot in 0..4u32 {
                 (self.gl.attrib_divisor)(slot, 0);
                 (self.gl.disable_attrib)(slot);
             }
-            (self.gl.bind_vertex_array)(0);
-            (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.active_texture)(0x84C0);
+            self.release_band_texture();
         }
         self.check_draw()
     }
@@ -401,7 +413,6 @@ impl GlesRenderDevice {
         batch: &mut super::GlesGuiBatch,
         vertices: &[crate::services::render::gui_batch::GuiBoxVertex],
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         let vertex_count = i32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
         let bytes = std::mem::size_of_val(vertices);
@@ -419,8 +430,9 @@ impl GlesRenderDevice {
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
 
-        // Counts describe the store only after GL accepted the replacement.
-        self.check()?;
+        // Outside exhaustive mode this frame's end checks the replacement.
+        self.check_draw()?;
+        self.error_checks.note_retained_upload();
         batch.vertex_count = vertex_count;
         batch.bytes = bytes;
         Ok(())
@@ -448,22 +460,20 @@ impl GlesRenderDevice {
         mvp: &[f32; 16],
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         self.alpha_blend(true)?;
-        let clip_location = self.surface_location(program, c"u_clip");
-        let viewport_location = self.surface_location(program, c"u_viewport");
-        // SAFETY: The VAO encapsulates vertex attribute pointers; draw_arrays draws the
-        // current vertex count. Uniforms are synchronously copied.
-        unsafe {
-            (self.gl.use_program)(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
-            let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
-            (self.gl.uniform_vec4)(viewport_location, 1, viewport.as_ptr());
-            self.bind_vertex_array(batch.vao);
-            (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count);
-            self.bind_vertex_array(0);
-        }
+        self.use_program(program.id);
+        let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, self.surface_location(program, c"u_clip"), clip);
+        self.program_vec4(
+            program,
+            self.surface_location(program, c"u_viewport"),
+            &viewport,
+        );
+        self.bind_vertex_array(batch.vao);
+        // SAFETY: The bound VAO encapsulates this batch's attribute pointers into
+        // its owned buffer; the draw reads its current vertex count.
+        unsafe { (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count) };
         self.check_draw()
     }
 
@@ -476,7 +486,6 @@ impl GlesRenderDevice {
         clip: &[f32; 4],
         color: &[f32; 4],
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         self.alpha_blend(true)?;
         if self.surface_quad_vao == 0 {
             // SAFETY: GL writes one new name owned by this current context.
@@ -487,25 +496,20 @@ impl GlesRenderDevice {
                 ));
             }
         }
-        let placement_location = self.surface_location(program, c"u_placement");
-        let clip_location = self.surface_location(program, c"u_clip");
-        let color_location = self.surface_location(program, c"u_color");
-        let texture_location = self.surface_location(program, c"u_texture");
-        // SAFETY: Uniform calls copy fixed arrays synchronously. The context owns
-        // every handle and the texture remains borrowed through the draw.
+        self.use_program(program.id);
+        let location = |name| self.surface_location(program, name);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, location(c"u_placement"), placement);
+        self.program_vec4(program, location(c"u_clip"), clip);
+        self.program_vec4(program, location(c"u_color"), color);
+        self.program_int(program, location(c"u_texture"), 0);
+        self.bind_vertex_array(self.surface_quad_vao);
+        // SAFETY: The texture and attribute-less VAO are live names of this
+        // current context; unit 0 keeps the texture until another draw binds one.
         unsafe {
-            (self.gl.use_program)(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(placement_location, 1, placement.as_ptr());
-            (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
-            (self.gl.uniform_vec4)(color_location, 1, color.as_ptr());
-            (self.gl.uniform_int)(texture_location, 0);
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_texture)(0x0DE1, *texture);
-            (self.gl.bind_vertex_array)(self.surface_quad_vao);
             (self.gl.draw_arrays)(0x0005, 0, 4);
-            (self.gl.bind_vertex_array)(0);
-            (self.gl.bind_texture)(0x0DE1, 0);
         }
         self.check_draw()
     }
@@ -576,7 +580,6 @@ impl GlesRenderDevice {
         batch: &mut super::GlesGlyphBatch,
         vertices: &[crate::services::render::glyph_atlas::GlyphVertex],
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         let vertex_count = i32::try_from(vertices.len())
             .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
         let bytes = std::mem::size_of_val(vertices);
@@ -595,8 +598,9 @@ impl GlesRenderDevice {
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
 
-        // Counts describe the store only after GL accepted the replacement.
-        self.check()?;
+        // Outside exhaustive mode this frame's end checks the replacement.
+        self.check_draw()?;
+        self.error_checks.note_retained_upload();
         batch.vertex_count = vertex_count;
         batch.bytes = bytes;
         Ok(())
@@ -626,24 +630,19 @@ impl GlesRenderDevice {
         mvp: &[f32; 16],
         clip: &[f32; 4],
     ) -> Result<(), RenderError> {
-        self.submission.invalidate();
         self.alpha_blend(true)?;
-        let clip_location = self.surface_location(program, c"u_clip");
-        let atlas_location = self.surface_location(program, c"u_atlas");
+        self.use_program(program.id);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, self.surface_location(program, c"u_clip"), clip);
+        self.program_int(program, self.surface_location(program, c"u_atlas"), 0);
+        self.bind_vertex_array(batch.vao);
 
-        // SAFETY: Attribute pointers are bound in VAO; draw_arrays draws vertex_count.
-        // Texture and uniforms are bound and synchronously copied.
+        // SAFETY: The bound VAO encapsulates this batch's attribute pointers; the
+        // draw reads its vertex count. The atlas stays on unit 0 until rebound.
         unsafe {
-            (self.gl.use_program)(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(clip_location, 1, clip.as_ptr());
-            (self.gl.uniform_int)(atlas_location, 0);
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_texture)(0x0DE1, *atlas_texture);
-            self.bind_vertex_array(batch.vao);
             (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count);
-            self.bind_vertex_array(0);
-            (self.gl.bind_texture)(0x0DE1, 0);
         }
 
         self.check_draw()
@@ -728,6 +727,7 @@ impl GlesRenderDevice {
     #[cfg(feature = "gui")]
     pub(super) fn delete_glyph_atlas_page(&mut self, page: super::GlesGlyphAtlasPage) {
         self.submission.invalidate();
+        self.forget_framebuffer(page.framebuffer);
 
         // SAFETY: Context owns these handles and tolerates invalid handles.
         unsafe {
@@ -747,29 +747,16 @@ impl GlesRenderDevice {
     ) -> Result<(), RenderError> {
         self.submission.invalidate();
 
-        // Switching between pages keeps the host target saved by the first begin.
+        // Switching between pages keeps the target saved by the first begin: the
+        // host target, or a Surface cache target when population nests in a repaint.
         if self.glyph_atlas_target.is_none() {
-            // SAFETY: Saves the borrowed host framebuffer and viewport bindings before
-            // directing rendering into the atlas page framebuffer.
-            let (draw, read, viewport) = unsafe {
-                let mut draw = 0;
-                let mut read = 0;
-                let mut vp = [0i32; 4];
-                (self.gl.get_integer)(0x8CA6, &mut draw);
-                (self.gl.get_integer)(0x8CAA, &mut read);
-                (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
-                (draw as u32, read as u32, vp)
-            };
-
-            self.glyph_atlas_target = Some((draw, read, viewport, self.surface_viewport));
+            self.glyph_atlas_target = Some((self.current_target(), self.surface_viewport));
         }
         self.surface_viewport = [page.width as f32, page.height as f32];
 
-        // SAFETY: Directs subsequent draw commands to the atlas page framebuffer and viewport.
-        unsafe {
-            (self.gl.bind_framebuffer)(0x8D40, page.framebuffer);
-            (self.gl.viewport)(0, 0, page.width as i32, page.height as i32);
-        }
+        // Directs subsequent draw commands to the atlas page framebuffer and viewport.
+        self.bind_framebuffers(page.framebuffer, page.framebuffer);
+        self.set_viewport([0, 0, page.width as i32, page.height as i32]);
 
         Ok(())
     }
@@ -778,15 +765,12 @@ impl GlesRenderDevice {
     pub(super) fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.submission.invalidate();
 
-        if let Some((draw, read, viewport, surface_vp)) = self.glyph_atlas_target.take() {
-            self.surface_viewport = surface_vp;
+        if let Some((target, surface_viewport)) = self.glyph_atlas_target.take() {
+            self.surface_viewport = surface_viewport;
 
-            // SAFETY: Restores the saved host framebuffer bindings and viewport.
-            unsafe {
-                (self.gl.bind_framebuffer)(0x8CA9, draw);
-                (self.gl.bind_framebuffer)(0x8CA8, read);
-                (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
-            }
+            // Restores the saved framebuffer bindings and viewport.
+            self.bind_framebuffers(target.draw, target.read);
+            self.set_viewport(target.viewport);
         }
 
         self.check()

@@ -133,6 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     std::fs::write(evidence.join("surface-line-regression.rgba"), &slash_pixels)?;
     smoke::surface_cache_target::run(&context, &mut device, &evidence)?;
+    smoke::error_checks::run(&context, &evidence)?;
     device.delete_surface_path(slash);
     device.delete_surface_path(path);
     device.delete_texture(texture);

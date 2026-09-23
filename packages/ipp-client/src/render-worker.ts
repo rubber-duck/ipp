@@ -418,7 +418,10 @@ export class RenderWorkerService {
     if (!runtime || !this.attached || this.device.isContextLost()) return;
     const tick = runtime.ipp_render_tick();
     if (tick === 0n) return;
-    if (tick !== this.observedRenderTick) {
+    // The drawing buffer holds a frame only until the browser composites it,
+    // after this task; capture only a frame rendered in this task.
+    const rendered = tick !== this.observedRenderTick;
+    if (rendered) {
       this.totalUploadedBytes += runtime.ipp_render_uploaded_bytes();
       const retained = this.retainedStatistics;
       if (retained)
@@ -445,7 +448,7 @@ export class RenderWorkerService {
     // Most frames have no pending capture; skip creating the entry iterator.
     if (this.captures.size === 0) return;
     for (const [id, request] of this.captures) {
-      if (tick < request.afterTick) continue;
+      if (!rendered || tick < request.afterTick) continue;
       // capture finishes pending GPU work and copies top-left RGBA pixels.
       const readbackStarted = performance.now();
       const pixels = this.device.capture();

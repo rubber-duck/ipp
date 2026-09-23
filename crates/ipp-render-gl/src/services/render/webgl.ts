@@ -13,7 +13,11 @@ export interface WebGlHostExports {
   imports: WebAssembly.Imports[string];
   setMemory(memory: WebAssembly.Memory): void;
   resize(width: number, height: number): void;
-  /** Completed drawing buffer RGBA bytes in top-left row order. */
+  /**
+   * Completed drawing buffer RGBA bytes in top-left row order. The drawing
+   * buffer is not preserved after presentation, so call this in the same task
+   * as the frame's `end_frame`, before the browser composites the canvas.
+   */
   capture(): Uint8Array<ArrayBuffer>;
   isContextLost(): boolean;
   dispose(): void;
@@ -26,7 +30,11 @@ type WebGlRenderProgram = {
   object: WebGLProgram;
   mvp: WebGLUniformLocation | null;
   parameters: number;
+  /** Whether the parameter block is bound to uniform buffer binding zero. */
+  parametersBound: boolean;
   parameterLocations: Map<string, WebGLUniformLocation | null>;
+  /** Per-draw uniform values last uploaded to this program, by location. */
+  values: Map<WebGLUniformLocation, number | Float32Array>;
   material: WebGLUniformLocation | null;
   lighting?: Record<string, WebGLUniformLocation | null>;
   texture?: WebGLUniformLocation | null;
@@ -63,7 +71,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     depth: true,
     stencil: false,
     premultipliedAlpha: false,
-    preserveDrawingBuffer: true,
+    // Capture reads back in the rendering task, so compositing may swap buffers
+    // instead of copying the frame.
+    preserveDrawingBuffer: false,
   });
   if (!context) throw new Error("WebGL 2 is unavailable");
   const gl = context;
@@ -113,6 +123,79 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let boundVertexArray: WebGLVertexArrayObject | null | undefined;
   let blendMode: number | undefined;
   let boundShadowMap: number | undefined;
+
+  /*
+   * Framebuffer bindings, viewport and depth writes as this bridge last set
+   * them. Passes that interrupt a target (Surface cache repaints, glyph atlas
+   * population, shadow maps and the linear frame target) save and restore it
+   * without synchronous getParameter queries. Only this bridge changes the
+   * worker-owned context; creation and restoration read the defaults.
+   */
+  let drawFramebuffer: WebGLFramebuffer | null = null;
+  let readFramebuffer: WebGLFramebuffer | null = null;
+  let viewportState: readonly number[] = Array.from(
+    gl.getParameter(gl.VIEWPORT) as Int32Array,
+  );
+  let depthWrite = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
+
+  function bindFramebuffers(
+    draw: WebGLFramebuffer | null,
+    read: WebGLFramebuffer | null,
+  ): void {
+    const drawChanged = draw !== drawFramebuffer;
+    const readChanged = read !== readFramebuffer;
+    if (drawChanged && readChanged && draw === read)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, draw);
+    else {
+      if (drawChanged) gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, draw);
+      if (readChanged) gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read);
+    }
+    drawFramebuffer = draw;
+    readFramebuffer = read;
+  }
+
+  function setViewport(viewport: readonly number[]): void {
+    const [x, y, width, height] = viewport as [number, number, number, number];
+    const known = viewportState;
+    if (
+      known[0] === x &&
+      known[1] === y &&
+      known[2] === width &&
+      known[3] === height
+    )
+      return;
+    gl.viewport(x, y, width, height);
+    viewportState = [x, y, width, height];
+  }
+
+  function setDepthMask(enabled: boolean): void {
+    if (depthWrite === enabled) return;
+    gl.depthMask(enabled);
+    depthWrite = enabled;
+  }
+
+  type WebGlTarget = {
+    framebuffer: WebGLFramebuffer | null;
+    readFramebuffer: WebGLFramebuffer | null;
+    viewport: readonly number[];
+    depthMask: boolean;
+  };
+
+  /** The bound target; the viewport array is replaced, never mutated. */
+  function currentTarget(): WebGlTarget {
+    return {
+      framebuffer: drawFramebuffer,
+      readFramebuffer,
+      viewport: viewportState,
+      depthMask: depthWrite,
+    };
+  }
+
+  /** Deleting a bound framebuffer binds the default framebuffer. */
+  function forgetFramebuffer(framebuffer: WebGLFramebuffer): void {
+    if (drawFramebuffer === framebuffer) drawFramebuffer = null;
+    if (readFramebuffer === framebuffer) readFramebuffer = null;
+  }
 
   function invalidateSubmission(): void {
     boundProgram = undefined;
@@ -171,14 +254,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         }
       >()
     : undefined;
+  /** The bound atlas page and the target saved by the first begin. */
   let glyphAtlasTarget:
-    | {
-        width: number;
-        height: number;
-        framebuffer: WebGLFramebuffer | null;
-        readFramebuffer: WebGLFramebuffer | null;
-        viewport: Int32Array;
-      }
+    | { width: number; height: number; saved: WebGlTarget }
     | undefined;
   /** Whole-Surface cache images keyed by never-reused `id()` handles. */
   const surfaceCacheTargets = IPP_SURFACES
@@ -194,15 +272,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     : undefined;
   /** The bound cache target and the host state saved when it was bound. */
   let surfaceCacheTarget:
-    | {
-        handle: number;
-        width: number;
-        height: number;
-        framebuffer: WebGLFramebuffer | null;
-        readFramebuffer: WebGLFramebuffer | null;
-        viewport: Int32Array;
-        depthMask: boolean;
-      }
+    | { handle: number; width: number; height: number; saved: WebGlTarget }
     | undefined;
 
   /** Rebind the host state saved when the cache target was bound, if any. */
@@ -210,18 +280,30 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     const saved = surfaceCacheTarget;
     if (!saved) return;
     surfaceCacheTarget = undefined;
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, saved.framebuffer);
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, saved.readFramebuffer);
-    gl.viewport(
-      saved.viewport[0]!,
-      saved.viewport[1]!,
-      saved.viewport[2]!,
-      saved.viewport[3]!,
-    );
-    gl.depthMask(saved.depthMask);
+    bindFramebuffers(saved.saved.framebuffer, saved.saved.readFramebuffer);
+    setViewport(saved.saved.viewport);
+    setDepthMask(saved.saved.depthMask);
     // Repaint draws changed blending and depth writes behind the submission
     // cache; the next draw reapplies its state.
     blendMode = undefined;
+  }
+
+  /** Bind a path's curve texture to unit 0 and its band texture to unit 1. */
+  function bindPathTextures(path: {
+    texture: WebGLTexture;
+    bandTexture: WebGLTexture;
+  }): void {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, path.texture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
+  }
+
+  /** Unbind unit 1 after a path draw, which also holds the shadow map. */
+  function releaseBandTexture(): void {
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    boundShadowMap = undefined;
   }
 
   /** Antialiasing viewport of Surface draws: atlas page, then cache target, then drawing buffer. */
@@ -238,13 +320,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         { texture: WebGLTexture; framebuffer: WebGLFramebuffer; size: number }
       >()
     : undefined;
-  let shadowTarget:
-    | {
-        framebuffer: WebGLFramebuffer | null;
-        readFramebuffer: WebGLFramebuffer | null;
-        viewport: Int32Array;
-      }
-    | undefined;
+  let shadowTarget: WebGlTarget | undefined;
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
   let memory: WebAssembly.Memory | undefined;
@@ -254,6 +330,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let instanceCapacity = 0;
   let nextId = 1;
   let parameterBuffer: WebGLBuffer | null = null;
+  /** Whether `parameterBuffer` is bound to uniform buffer binding zero. */
+  let parameterBufferBound = false;
   let linearTarget:
     | {
         framebuffer: WebGLFramebuffer;
@@ -261,20 +339,17 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         depth: WebGLRenderbuffer;
         vao: WebGLVertexArrayObject;
         program: WebGLProgram;
+        /** Whether the program's sampler selects unit 0; set on first use. */
+        samplerSet: boolean;
         width: number;
         height: number;
       }
     | undefined;
-  let presentationTarget:
-    | {
-        framebuffer: WebGLFramebuffer | null;
-        readFramebuffer: WebGLFramebuffer | null;
-        viewport: Int32Array;
-      }
-    | undefined;
+  let presentationTarget: WebGlTarget | undefined;
 
   function releaseLinearTarget() {
     if (!linearTarget) return;
+    forgetFramebuffer(linearTarget.framebuffer);
     gl.deleteFramebuffer(linearTarget.framebuffer);
     gl.deleteTexture(linearTarget.color);
     gl.deleteRenderbuffer(linearTarget.depth);
@@ -291,15 +366,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   ) {
     if (width > maxTextureSize || height > maxTextureSize)
       throw new Error("Linear target exceeds texture limits");
-    const previous = {
-      framebuffer: gl.getParameter(
-        gl.FRAMEBUFFER_BINDING,
-      ) as WebGLFramebuffer | null,
-      readFramebuffer: gl.getParameter(
-        gl.READ_FRAMEBUFFER_BINDING,
-      ) as WebGLFramebuffer | null,
-      viewport: gl.getParameter(gl.VIEWPORT) as Int32Array,
-    };
+    const previous = currentTarget();
     if (
       linearTarget &&
       (linearTarget.width !== width || linearTarget.height !== height)
@@ -349,7 +416,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           width,
           height,
         );
-        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        bindFramebuffers(framebuffer, framebuffer);
         gl.framebufferTexture2D(
           gl.FRAMEBUFFER,
           gl.COLOR_ATTACHMENT0,
@@ -374,17 +441,18 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           depth,
           vao,
           program,
+          samplerSet: false,
           width,
           height,
         };
       } catch (error) {
+        if (framebuffer) forgetFramebuffer(framebuffer);
         gl.deleteFramebuffer(framebuffer);
         gl.deleteTexture(color);
         gl.deleteRenderbuffer(depth);
         gl.deleteVertexArray(vao);
         gl.deleteProgram(program);
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, previous.framebuffer);
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, previous.readFramebuffer);
+        bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
         throw error;
       } finally {
         if (vs) gl.deleteShader(vs);
@@ -392,7 +460,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       }
     }
     presentationTarget = previous;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, linearTarget.framebuffer);
+    bindFramebuffers(linearTarget.framebuffer, linearTarget.framebuffer);
   }
 
   function presentLinearTarget() {
@@ -400,13 +468,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       target = linearTarget;
     if (!previous || !target) return;
     presentationTarget = undefined;
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, previous.framebuffer);
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, previous.readFramebuffer);
-    gl.viewport(0, 0, target.width, target.height);
+    bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+    setViewport([0, 0, target.width, target.height]);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
-    gl.depthMask(false);
+    setDepthMask(false);
     // Draws before the next begin_frame, such as Surface cache repaints,
     // must reapply their blending.
     blendMode = undefined;
@@ -414,16 +481,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindSampler(0, null);
     gl.bindTexture(gl.TEXTURE_2D, target.color);
-    gl.uniform1i(gl.getUniformLocation(target.program, "u_texture"), 0);
+    if (!target.samplerSet) {
+      gl.uniform1i(gl.getUniformLocation(target.program, "u_texture"), 0);
+      target.samplerSet = true;
+    }
     bindVertexArray(target.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.viewport(
-      previous.viewport[0]!,
-      previous.viewport[1]!,
-      previous.viewport[2]!,
-      previous.viewport[3]!,
-    );
-    gl.depthMask(true);
+    setViewport(previous.viewport);
+    setDepthMask(true);
   }
 
   function parameterLocation(program: WebGlRenderProgram, name: string) {
@@ -433,6 +498,96 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.getUniformLocation(program.object, name),
       );
     return program.parameterLocations.get(name)!;
+  }
+
+  /*
+   * Uniform values belong to their program and persist across draws, frames
+   * and targets. Only this bridge sets them and programs are never relinked,
+   * so these helpers skip values the current program already holds. Values
+   * compare with Object.is, so a signed zero still uploads.
+   */
+  function programInt(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    value: number,
+  ): void {
+    if (!location || Object.is(program.values.get(location), value)) return;
+    program.values.set(location, value);
+    gl.uniform1i(location, value);
+  }
+
+  function programFloat(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    value: number,
+  ): void {
+    if (!location || Object.is(program.values.get(location), value)) return;
+    program.values.set(location, value);
+    gl.uniform1f(location, value);
+  }
+
+  /** Record `count` floats for `location`; true when they must be uploaded. */
+  function changedFloats(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation,
+    values: ArrayLike<number>,
+    offset: number,
+    count: number,
+  ): boolean {
+    let known = program.values.get(location);
+    if (!(known instanceof Float32Array) || known.length !== count) {
+      known = new Float32Array(count);
+      program.values.set(location, known);
+      for (let index = 0; index < count; index++)
+        known[index] = values[offset + index]!;
+      return true;
+    }
+    let changed = false;
+    for (let index = 0; index < count; index++) {
+      const value = values[offset + index]!;
+      if (!Object.is(known[index], value)) {
+        known[index] = value;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function programVec4(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    x: number,
+    y: number,
+    z: number,
+    w: number,
+  ): void {
+    if (!location || !changedFloats(program, location, [x, y, z, w], 0, 4))
+      return;
+    gl.uniform4f(location, x, y, z, w);
+  }
+
+  /** Set a vec4 uniform from WASM memory if it changed. */
+  function programVec4At(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    pointer: number,
+  ): void {
+    if (!location) return;
+    const memory = wholeFloats(pointer, 4);
+    if (changedFloats(program, location, memory, pointer / 4, 4))
+      gl.uniform4fv(location, memory, pointer / 4, 4);
+  }
+
+  /** Set a mat4 uniform from WASM memory if it changed. */
+  function programMatrixAt(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    pointer: number,
+  ): void {
+    if (!location) return;
+    const memory = wholeFloats(pointer, 16);
+    if (changedFloats(program, location, memory, pointer / 4, 16))
+      gl.uniformMatrix4fv(location, false, memory, pointer / 4, 16);
   }
 
   let shaderProgramsCreated = 0;
@@ -445,6 +600,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     if (gl.isContextLost()) throw new Error("WebGL context lost");
   }
 
+  /**
+   * Draws, uniforms, streams, retained-batch replacement and the frame start
+   * poll `getError`, a synchronous round trip, only in exhaustive mode. The
+   * Rust device decides which frame ends poll; every import checks loss.
+   */
   let exhaustiveDrawChecks = false;
   function checkDraw(): void {
     if (exhaustiveDrawChecks) check();
@@ -574,7 +734,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
         gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        check();
+        // Outside exhaustive mode the device checks this frame's end instead.
+        checkDraw();
         batch.count = byteLength / batch.stride;
         batch.bytes = byteLength;
       }
@@ -688,13 +849,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     if (gl.drawingBufferWidth !== width || gl.drawingBufferHeight !== height) {
       throw new Error("WebGL drawing buffer allocation did not match viewport");
     }
-    check();
+    checkDraw();
   }
 
   function lost(event: Event): void {
     linearTarget = undefined;
     presentationTarget = undefined;
     parameterBuffer = null;
+    parameterBufferBound = false;
     parameterCapacity = 0;
     instanceCapacity = 0;
     if (IPP_PARTICLES) {
@@ -729,6 +891,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   function restored(): void {
     initializeAttributeDefaults();
+    parameterBufferBound = false;
+    // A restored context starts from default bindings and state.
+    drawFramebuffer = null;
+    readFramebuffer = null;
+    viewportState = Array.from(gl.getParameter(gl.VIEWPORT) as Int32Array);
+    depthWrite = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
     programs.clear();
     meshes.clear();
     textures.clear();
@@ -933,7 +1101,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindSampler(0, null);
         gl.bindTexture(gl.TEXTURE_2D, texture);
-        if (program.texture) gl.uniform1i(program.texture, 0);
+        programInt(program, program.texture, 0);
       }
       const target =
         IPP_MESH_POSES && poseId !== 0 ? meshes.get(poseId >>> 0) : undefined;
@@ -1110,12 +1278,26 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             (pointer >>> 0) / 4,
             count,
           );
-          gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, parameterBuffer);
-          gl.uniformBlockBinding(program.object, program.parameters, 0);
+          if (!parameterBufferBound) {
+            gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, parameterBuffer);
+            parameterBufferBound = true;
+          }
+          if (!program.parametersBound) {
+            gl.uniformBlockBinding(program.object, program.parameters, 0);
+            program.parametersBound = true;
+          }
         }
-        gl.uniform1i(parameterLocation(program, "u_alpha_mode"), alphaMode);
-        gl.uniform1f(parameterLocation(program, "u_alpha_cutoff"), alphaCutoff);
-        check();
+        programInt(
+          program,
+          parameterLocation(program, "u_alpha_mode"),
+          alphaMode,
+        );
+        programFloat(
+          program,
+          parameterLocation(program, "u_alpha_cutoff"),
+          alphaCutoff,
+        );
+        checkDraw();
         return 1;
       });
     },
@@ -1135,14 +1317,15 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindSampler(unit, null);
         gl.bindTexture(gl.TEXTURE_2D, object);
-        gl.uniform1i(
+        programInt(
+          program,
           parameterLocation(
             program,
             `p_${source(pointer >>> 0, length >>> 0)}`,
           ),
           unit,
         );
-        check();
+        checkDraw();
         return 1;
       });
     },
@@ -1164,7 +1347,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.ONE_MINUS_SRC_ALPHA,
           );
         } else gl.disable(gl.BLEND);
-        gl.depthMask(!enabled);
+        setDepthMask(!enabled);
         checkDraw();
         return 1;
       });
@@ -1342,74 +1525,42 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   gl.ONE,
                   gl.ONE_MINUS_SRC_ALPHA,
                 );
-                gl.depthMask(false);
+                setDepthMask(false);
                 blendMode = 2;
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_bounds"),
-                boundsPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_placement"),
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(program, uniform("u_bounds"), boundsPointer >>> 0);
+              programVec4At(
+                program,
+                uniform("u_placement"),
                 placementPointer >>> 0,
-                4,
               );
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_color"),
-                colorPointer >>> 0,
-                4,
-              );
-              gl.uniform1i(parameterLocation(program, "u_curves"), 0);
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_start"),
-                curveStart,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_count"),
-                curveCount,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_width"),
-                path.width,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_fill_rule"),
-                fillRule >>> 0,
-              );
-              gl.uniform1i(parameterLocation(program, "u_bands"), 1);
-              gl.uniform1i(
-                parameterLocation(program, "u_band_offset"),
-                bandOffset,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_band_width"),
-                path.bandWidth,
-              );
+              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+              programVec4At(program, uniform("u_color"), colorPointer >>> 0);
+              programInt(program, uniform("u_curves"), 0);
+              programInt(program, uniform("u_curve_start"), curveStart);
+              programInt(program, uniform("u_curve_count"), curveCount);
+              programInt(program, uniform("u_curve_width"), path.width);
+              programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
+              programInt(program, uniform("u_bands"), 1);
+              programInt(program, uniform("u_band_offset"), bandOffset);
+              programInt(program, uniform("u_band_width"), path.bandWidth);
               const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              gl.uniform4f(
-                parameterLocation(program, "u_viewport"),
+              programVec4(
+                program,
+                uniform("u_viewport"),
                 viewportWidth,
                 viewportHeight,
                 0,
                 0,
               );
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, path.texture);
-              gl.activeTexture(gl.TEXTURE1);
-              gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
+              bindPathTextures(path);
               bindVertexArray(path.vao);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              gl.activeTexture(gl.TEXTURE0);
+              releaseBandTexture();
               checkDraw();
               return 1;
             });
@@ -1462,7 +1613,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   gl.ONE,
                   gl.ONE_MINUS_SRC_ALPHA,
                 );
-                gl.depthMask(false);
+                setDepthMask(false);
                 blendMode = 2;
               }
               surfaceInstanceBuffer ??= gl.createBuffer();
@@ -1489,46 +1640,31 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 gl.vertexAttribDivisor(slot, 1);
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              gl.uniform1i(parameterLocation(program, "u_curves"), 0);
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_width"),
-                path.width,
-              );
-              gl.uniform1i(parameterLocation(program, "u_bands"), 1);
-              gl.uniform1i(
-                parameterLocation(program, "u_band_width"),
-                path.bandWidth,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_fill_rule"),
-                fillRule >>> 0,
-              );
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+              programInt(program, uniform("u_curves"), 0);
+              programInt(program, uniform("u_curve_width"), path.width);
+              programInt(program, uniform("u_bands"), 1);
+              programInt(program, uniform("u_band_width"), path.bandWidth);
+              programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
               const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              gl.uniform4f(
-                parameterLocation(program, "u_viewport"),
+              programVec4(
+                program,
+                uniform("u_viewport"),
                 viewportWidth,
                 viewportHeight,
                 0,
                 0,
               );
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, path.texture);
-              gl.activeTexture(gl.TEXTURE1);
-              gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
+              bindPathTextures(path);
               gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
               for (let slot = 0; slot < 4; slot += 1) {
                 gl.vertexAttribDivisor(slot, 0);
                 gl.disableVertexAttribArray(slot);
               }
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              gl.activeTexture(gl.TEXTURE0);
+              releaseBandTexture();
               checkDraw();
               return 1;
             });
@@ -1555,36 +1691,29 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   gl.ONE,
                   gl.ONE_MINUS_SRC_ALPHA,
                 );
-                gl.depthMask(false);
+                setDepthMask(false);
                 blendMode = 2;
               }
               if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
               if (!surfaceQuadVao)
                 throw new Error("Surface quad allocation failed");
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_placement"),
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(
+                program,
+                uniform("u_placement"),
                 placementPointer >>> 0,
-                4,
               );
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_color"),
-                colorPointer >>> 0,
-                4,
-              );
-              gl.uniform1i(parameterLocation(program, "u_texture"), 0);
+              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+              programVec4At(program, uniform("u_color"), colorPointer >>> 0);
+              programInt(program, uniform("u_texture"), 0);
+              // Unit 0 keeps the texture until the next draw that samples it.
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, texture);
               bindVertexArray(surfaceQuadVao);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
               checkDraw();
               return 1;
             });
@@ -1644,14 +1773,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 gl.CLAMP_TO_EDGE,
               );
               gl.bindTexture(gl.TEXTURE_2D, null);
-              const prevDraw = gl.getParameter(
-                gl.DRAW_FRAMEBUFFER_BINDING,
-              ) as WebGLFramebuffer | null;
-              const prevRead = gl.getParameter(
-                gl.READ_FRAMEBUFFER_BINDING,
-              ) as WebGLFramebuffer | null;
-              const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
-              gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+              const previous = currentTarget();
+              bindFramebuffers(framebuffer, framebuffer);
               gl.framebufferTexture2D(
                 gl.FRAMEBUFFER,
                 gl.COLOR_ATTACHMENT0,
@@ -1663,18 +1786,12 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
                 gl.FRAMEBUFFER_COMPLETE;
               if (complete) {
-                gl.viewport(0, 0, width, height);
+                setViewport([0, 0, width, height]);
                 gl.clearColor(0, 0, 0, 0);
                 gl.clear(gl.COLOR_BUFFER_BIT);
               }
-              gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevDraw);
-              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevRead);
-              gl.viewport(
-                prevViewport[0]!,
-                prevViewport[1]!,
-                prevViewport[2]!,
-                prevViewport[3]!,
-              );
+              bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+              setViewport(previous.viewport);
               try {
                 if (!complete)
                   throw new Error("Surface cache framebuffer incomplete");
@@ -1752,26 +1869,20 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 handle: handle >>> 0,
                 width: target.width,
                 height: target.height,
-                framebuffer: gl.getParameter(
-                  gl.DRAW_FRAMEBUFFER_BINDING,
-                ) as WebGLFramebuffer | null,
-                readFramebuffer: gl.getParameter(
-                  gl.READ_FRAMEBUFFER_BINDING,
-                ) as WebGLFramebuffer | null,
-                viewport: gl.getParameter(gl.VIEWPORT) as Int32Array,
-                depthMask: gl.getParameter(gl.DEPTH_WRITEMASK) as boolean,
+                saved: currentTarget(),
               };
-              gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-              gl.viewport(0, 0, target.width, target.height);
+              bindFramebuffers(target.framebuffer, target.framebuffer);
+              setViewport([0, 0, target.width, target.height]);
               gl.disable(gl.SCISSOR_TEST);
               gl.disable(gl.STENCIL_TEST);
-              gl.depthMask(false);
+              setDepthMask(false);
               // Repaints run outside begin_frame: every draw reapplies its blending.
               blendMode = undefined;
               gl.clearColor(0, 0, 0, 0);
               gl.clear(gl.COLOR_BUFFER_BIT);
+              // The end of the repaint checks the whole pass.
               try {
-                check();
+                checkDraw();
               } catch (error) {
                 restoreSurfaceCacheTarget();
                 throw error;
@@ -1815,36 +1926,27 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   gl.ONE,
                   gl.ONE_MINUS_SRC_ALPHA,
                 );
-                gl.depthMask(false);
+                setDepthMask(false);
                 blendMode = 4;
               }
               if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
               if (!surfaceQuadVao)
                 throw new Error("Surface quad allocation failed");
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              gl.uniform4f(
-                parameterLocation(program, "u_placement"),
-                0,
-                0,
-                width,
-                height,
-              );
-              gl.uniform4f(
-                parameterLocation(program, "u_clip"),
-                0,
-                0,
-                width,
-                height,
-              );
-              gl.uniform1i(parameterLocation(program, "u_surface_cache"), 0);
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4(program, uniform("u_placement"), 0, 0, width, height);
+              programVec4(program, uniform("u_clip"), 0, 0, width, height);
+              programInt(program, uniform("u_surface_cache"), 0);
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, target.texture);
               bindVertexArray(surfaceQuadVao);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              bindVertexArray(null);
+              // A later repaint of this image never samples its own target.
               gl.bindTexture(gl.TEXTURE_2D, null);
-              check();
+              // Composites are routine draws; the frame end reports their errors.
+              checkDraw();
               return 1;
             });
           },
@@ -1852,6 +1954,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             const target = surfaceCacheTargets!.get(handle >>> 0);
             if (!target) return;
             surfaceCacheTargets!.delete(handle >>> 0);
+            forgetFramebuffer(target.framebuffer);
             if (!disposed && !gl.isContextLost()) {
               gl.deleteFramebuffer(target.framebuffer);
               gl.deleteTexture(target.texture);
@@ -1920,27 +2023,27 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   gl.ONE,
                   gl.ONE_MINUS_SRC_ALPHA,
                 );
-                gl.depthMask(false);
+                setDepthMask(false);
                 blendMode = 2;
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
               const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              gl.uniform4f(
+              programVec4(
+                program,
                 parameterLocation(program, "u_viewport"),
                 viewportWidth,
                 viewportHeight,
                 0,
                 0,
               );
-              vector4Uniform(
+              programVec4At(
+                program,
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
-                4,
               );
               bindVertexArray(batch.vao);
               gl.drawArrays(gl.TRIANGLES, 0, batch.count);
-              bindVertexArray(null);
               checkDraw();
               return 1;
             });
@@ -2006,26 +2109,22 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   gl.ONE,
                   gl.ONE_MINUS_SRC_ALPHA,
                 );
-                gl.depthMask(false);
+                setDepthMask(false);
                 blendMode = 2;
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(
+                program,
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
-                4,
               );
-              const atlasLoc = parameterLocation(program, "u_atlas");
-              if (atlasLoc) {
-                gl.uniform1i(atlasLoc, 0);
-              }
+              programInt(program, parameterLocation(program, "u_atlas"), 0);
+              // Unit 0 keeps the atlas until the next draw that samples it.
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, atlas);
               bindVertexArray(batch.vao);
               gl.drawArrays(gl.TRIANGLES, 0, batch.count);
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
               checkDraw();
               return 1;
             });
@@ -2120,6 +2219,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             const page = glyphAtlasPages!.get(pageHandle >>> 0);
             if (page) {
               glyphAtlasPages!.delete(pageHandle >>> 0);
+              forgetFramebuffer(page.framebuffer);
               gl.deleteFramebuffer(page.framebuffer);
               const tex = textures.get(page.texture);
               if (tex) {
@@ -2132,46 +2232,24 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             return status(() => {
               const page = glyphAtlasPages!.get(pageHandle >>> 0);
               if (!page) throw new Error("Stale glyph atlas page handle");
-              // Switching between pages keeps the host target saved by the first begin.
+              // Switching between pages keeps the target saved by the first
+              // begin: the host target, or a cache target inside a repaint.
               glyphAtlasTarget = {
                 width: page.width,
                 height: page.height,
-                framebuffer: glyphAtlasTarget
-                  ? glyphAtlasTarget.framebuffer
-                  : (gl.getParameter(
-                      gl.DRAW_FRAMEBUFFER_BINDING,
-                    ) as WebGLFramebuffer | null),
-                readFramebuffer: glyphAtlasTarget
-                  ? glyphAtlasTarget.readFramebuffer
-                  : (gl.getParameter(
-                      gl.READ_FRAMEBUFFER_BINDING,
-                    ) as WebGLFramebuffer | null),
-                viewport: glyphAtlasTarget
-                  ? glyphAtlasTarget.viewport
-                  : (gl.getParameter(gl.VIEWPORT) as Int32Array),
+                saved: glyphAtlasTarget?.saved ?? currentTarget(),
               };
-              gl.bindFramebuffer(gl.FRAMEBUFFER, page.framebuffer);
-              gl.viewport(0, 0, page.width, page.height);
+              bindFramebuffers(page.framebuffer, page.framebuffer);
+              setViewport([0, 0, page.width, page.height]);
               return 1;
             });
           },
           end_glyph_atlas_page(): number {
             return status(() => {
               if (glyphAtlasTarget) {
-                gl.bindFramebuffer(
-                  gl.DRAW_FRAMEBUFFER,
-                  glyphAtlasTarget.framebuffer,
-                );
-                gl.bindFramebuffer(
-                  gl.READ_FRAMEBUFFER,
-                  glyphAtlasTarget.readFramebuffer,
-                );
-                gl.viewport(
-                  glyphAtlasTarget.viewport[0]!,
-                  glyphAtlasTarget.viewport[1]!,
-                  glyphAtlasTarget.viewport[2]!,
-                  glyphAtlasTarget.viewport[3]!,
-                );
+                const { saved } = glyphAtlasTarget;
+                bindFramebuffers(saved.framebuffer, saved.readFramebuffer);
+                setViewport(saved.viewport);
                 glyphAtlasTarget = undefined;
               }
               // Atlas draws skip per-draw checks; a failed population must not be
@@ -2241,7 +2319,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           programs.set(handle, {
             object,
             parameters: gl.getUniformBlockIndex(object, "IppParameters"),
+            parametersBound: false,
             parameterLocations: new Map(),
+            values: new Map(),
             mvp,
             material,
             lighting: Object.fromEntries(
@@ -2297,7 +2377,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           source(vptr >>> 0, vlen >>> 0),
           source(fptr >>> 0, flen >>> 0),
         );
-        gl.viewport(0, 0, width, height);
+        setViewport([0, 0, width, height]);
         gl.enable(gl.DEPTH_TEST);
         gl.enable(gl.CULL_FACE);
         gl.disable(gl.BLEND);
@@ -2309,14 +2389,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.disable(gl.RASTERIZER_DISCARD);
         gl.disable(gl.STENCIL_TEST);
         gl.depthFunc(gl.LESS);
-        gl.depthMask(true);
+        setDepthMask(true);
         gl.colorMask(true, true, true, true);
         gl.frontFace(gl.CCW);
         gl.cullFace(gl.BACK);
         gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
         gl.clearDepth(1);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        check();
+        checkDraw();
         return 1;
       });
     },
@@ -2356,7 +2436,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   count * 20,
                 );
               }
-              check();
+              checkDraw();
               return 1;
             }),
           set_additive: (enabled: number) =>
@@ -2371,7 +2451,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         }
       : {}),
     draw: drawMesh,
-    end_frame(): number {
+    /**
+     * Present, then poll the error state only when `poll` is set. Loss during
+     * the frame always fails, so recovery never waits for a sampled check.
+     */
+    end_frame(poll: number): number {
       return status(() => {
         presentLinearTarget();
         bindVertexArray(null);
@@ -2387,7 +2471,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           gl.bindTexture(gl.TEXTURE_2D, null);
           gl.bindSampler(0, null);
         }
-        check();
+        if (poll) check();
+        else live();
         return 1;
       });
     },
@@ -2464,12 +2549,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           throw new Error("Shadow map exceeds WebGL limits");
         const texture = gl.createTexture();
         const framebuffer = gl.createFramebuffer();
-        const draw = gl.getParameter(
-          gl.DRAW_FRAMEBUFFER_BINDING,
-        ) as WebGLFramebuffer | null;
-        const read = gl.getParameter(
-          gl.READ_FRAMEBUFFER_BINDING,
-        ) as WebGLFramebuffer | null;
+        const previous = currentTarget();
         let retained = false;
         try {
           if (!texture || !framebuffer)
@@ -2494,7 +2574,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.UNSIGNED_INT,
             null,
           );
-          gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+          bindFramebuffers(framebuffer, framebuffer);
           gl.framebufferTexture2D(
             gl.FRAMEBUFFER,
             gl.DEPTH_ATTACHMENT,
@@ -2515,8 +2595,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           retained = true;
           return handle;
         } finally {
-          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, draw);
-          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read);
+          bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
           gl.bindTexture(gl.TEXTURE_2D, null);
           if (!retained) {
             gl.deleteTexture(texture);
@@ -2532,30 +2611,22 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       status(() => {
         const map = shadows!.get(handle >>> 0);
         if (!map) throw new Error("Stale shadow map");
-        shadowTarget = {
-          framebuffer: gl.getParameter(
-            gl.DRAW_FRAMEBUFFER_BINDING,
-          ) as WebGLFramebuffer | null,
-          readFramebuffer: gl.getParameter(
-            gl.READ_FRAMEBUFFER_BINDING,
-          ) as WebGLFramebuffer | null,
-          viewport: gl.getParameter(gl.VIEWPORT) as Int32Array,
-        };
+        shadowTarget = currentTarget();
         boundShadowMap = undefined;
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, null);
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, map.framebuffer);
+        bindFramebuffers(map.framebuffer, readFramebuffer);
         const tile = map.size / grid;
-        gl.viewport(
+        setViewport([
           (slot % grid) * tile,
           Math.floor(slot / grid) * tile,
           tile,
           tile,
-        );
+        ]);
         gl.colorMask(false, false, false, false);
         if (slot === 0) {
           blendMode = undefined;
-          gl.depthMask(true);
+          setDepthMask(true);
           gl.clearDepth(1);
           gl.clear(gl.DEPTH_BUFFER_BIT);
         }
@@ -2565,11 +2636,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     imports.end_shadow = (): number =>
       status(() => {
         if (shadowTarget) {
-          const { framebuffer, readFramebuffer, viewport } = shadowTarget;
+          const saved = shadowTarget;
           shadowTarget = undefined;
-          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, framebuffer);
-          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFramebuffer);
-          gl.viewport(viewport[0]!, viewport[1]!, viewport[2]!, viewport[3]!);
+          bindFramebuffers(saved.framebuffer, saved.readFramebuffer);
+          setViewport(saved.viewport);
           gl.colorMask(true, true, true, true);
         }
         check();
@@ -2622,6 +2692,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       boundShadowMap = undefined;
       const map = shadows!.get(handle >>> 0);
       shadows!.delete(handle >>> 0);
+      if (map) forgetFramebuffer(map.framebuffer);
       if (map && !disposed && !gl.isContextLost()) {
         gl.deleteTexture(map.texture);
         gl.deleteFramebuffer(map.framebuffer);
@@ -2780,7 +2851,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       const width = gl.drawingBufferWidth;
       const height = gl.drawingBufferHeight;
       const pixels = new Uint8Array(width * height * 4);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      bindFramebuffers(null, null);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
       gl.pixelStorei(gl.PACK_ROW_LENGTH, 0);

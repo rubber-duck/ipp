@@ -145,11 +145,15 @@ mod tests {
     #[test]
     fn shader_inputs_match_retained_vertex_layouts() {
         assert_eq!(
-            shader_inputs(include_str!("../shaders/surface_box.vert")),
+            shader_inputs(crate::services::render::embedded_shader!(
+                "shaders/surface_box.vert"
+            )),
             layout_inputs(&GUI_BOX_VERTEX_LAYOUT)
         );
         assert_eq!(
-            shader_inputs(include_str!("../shaders/surface_text.vert")),
+            shader_inputs(crate::services::render::embedded_shader!(
+                "shaders/surface_text.vert"
+            )),
             layout_inputs(&GLYPH_VERTEX_LAYOUT)
         );
     }
@@ -167,7 +171,7 @@ mod tests {
 
     #[test]
     fn box_shader_pad_matches_generated_geometry() {
-        let declared = include_str!("../shaders/surface_box.vert")
+        let declared = crate::services::render::embedded_shader!("shaders/surface_box.vert")
             .lines()
             .find_map(|line| {
                 line.trim()

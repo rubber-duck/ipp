@@ -19,15 +19,7 @@ impl GlesRenderDevice {
         if width > self.max_texture_size || height > self.max_texture_size {
             return Err(RenderError::InvalidViewport);
         }
-        let mut previous = 0;
-        let mut previous_read = 0;
-        let mut viewport = [0; 4];
-        // SAFETY: Current context writes only exclusive local state snapshots.
-        unsafe {
-            (self.gl.get_integer)(0x8CA6, &mut previous);
-            (self.gl.get_integer)(0x8CAA, &mut previous_read);
-            (self.gl.get_integer)(0x0BA2, viewport.as_mut_ptr());
-        }
+        let previous = self.current_target();
         if self
             .linear_target
             .as_ref()
@@ -37,8 +29,8 @@ impl GlesRenderDevice {
         }
         if self.linear_target.is_none() {
             let program = self.create_program(
-                include_str!("../../shaders/present.vert"),
-                include_str!("../../shaders/present.frag"),
+                crate::services::render::embedded_shader!("shaders/present.vert"),
+                crate::services::render::embedded_shader!("shaders/present.frag"),
             )?;
             let mut target = GlesLinearTarget {
                 framebuffer: 0,
@@ -76,7 +68,7 @@ impl GlesRenderDevice {
                 );
                 (self.gl.bind_renderbuffer)(0x8D41, target.depth);
                 (self.gl.renderbuffer_storage)(0x8D41, 0x81A6, width as i32, height as i32);
-                (self.gl.bind_framebuffer)(0x8D40, target.framebuffer);
+                self.bind_framebuffers(target.framebuffer, target.framebuffer);
                 (self.gl.framebuffer_texture)(0x8D40, 0x8CE0, 0x0DE1, target.color, 0);
                 (self.gl.framebuffer_renderbuffer)(0x8D40, 0x8D00, 0x8D41, target.depth);
                 (self.gl.check_framebuffer)(0x8D40) == 0x8CD5
@@ -88,54 +80,50 @@ impl GlesRenderDevice {
             self.linear_target = Some(target);
             if !complete || self.check().is_err() {
                 self.release_linear_target();
-                // SAFETY: Restores the borrowed host handle without taking ownership.
-                unsafe {
-                    (self.gl.bind_framebuffer)(0x8CA9, previous as u32);
-                    (self.gl.bind_framebuffer)(0x8CA8, previous_read as u32);
-                }
+                // Restores the borrowed host handles without taking ownership.
+                self.bind_framebuffers(previous.draw, previous.read);
                 return Err(RenderError::RenderDevice(
                     "linear render target allocation failed".into(),
                 ));
             }
         }
-        self.presentation_target = Some((previous as u32, previous_read as u32, viewport));
-        // SAFETY: Target belongs to this current device and survives through presentation.
-        unsafe {
-            (self.gl.bind_framebuffer)(0x8D40, self.linear_target.as_ref().unwrap().framebuffer);
-        }
+        self.presentation_target = Some(previous);
+        // The target belongs to this current device and survives through presentation.
+        let framebuffer = self.linear_target.as_ref().unwrap().framebuffer;
+        self.bind_framebuffers(framebuffer, framebuffer);
         Ok(())
     }
 
-    pub(super) fn present_linear_target(&mut self) -> Result<(), RenderError> {
-        let Some((previous, previous_read, viewport)) = self.presentation_target.take() else {
-            return Ok(());
+    /// Resolve the frame into the saved host target. The frame end checks errors.
+    pub(super) fn present_linear_target(&mut self) {
+        let Some(previous) = self.presentation_target.take() else {
+            return;
         };
         let target = self.linear_target.as_ref().expect("active linear target");
+        self.bind_framebuffers(previous.draw, previous.read);
+        self.set_viewport([0, 0, target.width as i32, target.height as i32]);
+        self.set_depth_mask(false);
         // SAFETY: Target and program remain live; fullscreen geometry uses gl_VertexID
         // without any CPU pointer. The host framebuffer and viewport are restored.
         unsafe {
-            (self.gl.bind_framebuffer)(0x8CA9, previous);
-            (self.gl.bind_framebuffer)(0x8CA8, previous_read);
-            (self.gl.viewport)(0, 0, target.width as i32, target.height as i32);
             (self.gl.disable)(0x0B71);
             (self.gl.disable)(0x0B44);
             (self.gl.disable)(0x0BE2);
-            (self.gl.depth_mask)(0);
             self.use_program(target.program.id);
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_sampler)(0, 0);
             (self.gl.bind_texture)(0x0DE1, target.color);
-            (self.gl.uniform_int)(target.program.texture, 0);
+            self.program_int(&target.program, target.program.texture, 0);
             self.bind_vertex_array(target.vao);
             (self.gl.draw_arrays)(TRIANGLES, 0, 3);
-            (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
-            (self.gl.depth_mask)(1);
         }
-        self.check()
+        self.set_viewport(previous.viewport);
+        self.set_depth_mask(true);
     }
 
     fn release_linear_target(&mut self) {
         if let Some(target) = self.linear_target.take() {
+            self.forget_framebuffer(target.framebuffer);
             // SAFETY: These are exclusively owned handles in the current context;
             // no later draw or Rust reference can use them after removal.
             unsafe {

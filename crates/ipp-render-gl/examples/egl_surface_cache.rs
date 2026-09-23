@@ -1320,6 +1320,7 @@ fn main() -> Result<()> {
     let mut device = context.device()?;
     smoke::surface_cache_target::run(&context, &mut device, &evidence)?;
     drop(device);
+    smoke::error_checks::run(&context, &evidence)?;
 
     let mut renderer = ipp_render_gl::RenderService::new(context.device()?)?;
     let scene = scenario::Scene::new(&mut renderer, &context, &assets, &fonts, &evidence)?;

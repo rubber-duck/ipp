@@ -111,14 +111,11 @@ impl GlesRenderDevice {
             framebuffer: 0,
             size,
         };
-        let mut draw = 0;
-        let mut read = 0;
+        let previous = self.current_target();
         // SAFETY: Context lifetime is guaranteed by from_loader. GL writes only
         // exclusive locals; null pixel input allocates storage. Partial names are
         // deleted on failure, framebuffer bindings restored, no CPU borrow retained.
         let complete = unsafe {
-            (self.gl.get_integer)(0x8CA6, &mut draw);
-            (self.gl.get_integer)(0x8CAA, &mut read);
             (self.gl.gen_textures)(1, &mut map.texture);
             (self.gl.gen_framebuffers)(1, &mut map.framebuffer);
             if map.texture == 0 || map.framebuffer == 0 {
@@ -147,13 +144,12 @@ impl GlesRenderDevice {
                 0x1405,
                 ptr::null(),
             );
-            (self.gl.bind_framebuffer)(0x8D40, map.framebuffer);
+            self.bind_framebuffers(map.framebuffer, map.framebuffer);
             (self.gl.framebuffer_texture)(0x8D40, 0x8D00, 0x0DE1, map.texture, 0);
             (self.gl.draw_buffers)(1, &0);
             (self.gl.read_buffer)(0);
             let complete = (self.gl.check_framebuffer)(0x8D40) == 0x8CD5;
-            (self.gl.bind_framebuffer)(0x8CA9, draw as u32);
-            (self.gl.bind_framebuffer)(0x8CA8, read as u32);
+            self.bind_framebuffers(previous.draw, previous.read);
             (self.gl.bind_texture)(0x0DE1, 0);
             complete
         };
@@ -180,28 +176,27 @@ impl GlesRenderDevice {
         grid: u32,
     ) -> Result<(), RenderError> {
         self.submission.blend.set(None);
-        let mut target = 0;
-        let mut viewport = [0; 4];
-        // SAFETY: Queries write their scalar/four-element outputs to exclusive
-        // locals. Bound names belong to this live context; no CPU pointers retained.
+        // Only the draw framebuffer and viewport change; the pass restores them.
+        self.shadow_target = Some(self.current_target());
+        self.submission.shadow_texture.set(None);
+        self.bind_draw_framebuffer(map.framebuffer);
+        let tile = (map.size / grid) as i32;
+        self.set_viewport([
+            (slot % grid) as i32 * tile,
+            (slot / grid) as i32 * tile,
+            tile,
+            tile,
+        ]);
+        if slot == 0 {
+            self.set_depth_mask(true);
+        }
+        // SAFETY: Bound names belong to this live context; these calls copy
+        // scalar state and retain no CPU pointer.
         unsafe {
-            (self.gl.get_integer)(0x8CA6, &mut target);
-            (self.gl.get_integer)(0x0BA2, viewport.as_mut_ptr());
-            self.shadow_target = Some((target as u32, viewport));
-            self.submission.shadow_texture.set(None);
             (self.gl.active_texture)(0x84C1);
             (self.gl.bind_texture)(0x0DE1, 0);
-            (self.gl.bind_framebuffer)(0x8CA9, map.framebuffer);
-            let tile = (map.size / grid) as i32;
-            (self.gl.viewport)(
-                (slot % grid) as i32 * tile,
-                (slot / grid) as i32 * tile,
-                tile,
-                tile,
-            );
             (self.gl.color_mask)(0, 0, 0, 0);
             if slot == 0 {
-                (self.gl.depth_mask)(1);
                 (self.gl.clear_depth)(1.0);
                 (self.gl.clear)(0x00000100);
             }
@@ -210,14 +205,13 @@ impl GlesRenderDevice {
     }
 
     pub(super) fn finish_shadow(&mut self) -> Result<(), RenderError> {
-        if let Some((target, viewport)) = self.shadow_target.take() {
-            // SAFETY: Restores the host-owned live target and copied viewport, with
-            // no retained CPU pointer or alias. Handles are never transferred.
-            unsafe {
-                (self.gl.bind_framebuffer)(0x8CA9, target);
-                (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
-                (self.gl.color_mask)(1, 1, 1, 1);
-            }
+        if let Some(target) = self.shadow_target.take() {
+            // Restores the host-owned live target and copied viewport; handles
+            // are never transferred.
+            self.bind_draw_framebuffer(target.draw);
+            self.set_viewport(target.viewport);
+            // SAFETY: Scalar colour-write state in the current context only.
+            unsafe { (self.gl.color_mask)(1, 1, 1, 1) };
         }
         self.check()
     }
@@ -271,6 +265,7 @@ impl GlesRenderDevice {
 
     pub(super) fn free_shadow(&self, map: GlesShadowMap) {
         self.submission.shadow_texture.set(None);
+        self.forget_framebuffer(map.framebuffer);
         // SAFETY: Consumes exclusively owned names once in the current context;
         // GL tolerates zero names and context loss. No CPU data is accessed.
         unsafe {

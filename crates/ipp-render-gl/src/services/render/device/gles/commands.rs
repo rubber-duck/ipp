@@ -434,6 +434,7 @@ impl RenderDevice for GlesRenderDevice {
                 material,
                 lighting: lighting::GlesLightingLocations::load(&self.gl, id),
                 uniforms: Default::default(),
+                values: Default::default(),
                 #[cfg(feature = "skeletal-animation")]
                 joints: (self.gl.uniform_location)(id, c"u_joints[0]".as_ptr()),
                 #[cfg(feature = "mesh-poses")]
@@ -744,7 +745,7 @@ impl RenderDevice for GlesRenderDevice {
                 (self.gl.active_texture)(0x84C0);
                 (self.gl.bind_sampler)(0, 0);
                 (self.gl.bind_texture)(0x0DE1, texture.copied().unwrap_or(0));
-                (self.gl.uniform_int)(program.texture, 0);
+                self.program_int(program, program.texture, 0);
             }
             self.bind_vertex_array(mesh.vao);
             #[cfg(feature = "mesh-poses")]

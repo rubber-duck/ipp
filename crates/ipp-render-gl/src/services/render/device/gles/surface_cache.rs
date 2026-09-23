@@ -322,37 +322,37 @@ impl GlesRenderDevice {
             }
         }
 
-        let placement_location = self.surface_location(program, c"u_placement");
-        let clip_location = self.surface_location(program, c"u_clip");
-        let texture_location = self.surface_location(program, c"u_surface_cache");
         let rectangle = [0.0, 0.0, size[0], size[1]];
         let premultiplied =
             self.submission.blend.replace(Some(PREMULTIPLIED_BLEND)) != Some(PREMULTIPLIED_BLEND);
-
-        // SAFETY: Program, texture and VAO are live names of this current context,
-        // borrowed through the draw. Uniform calls copy the fixed local arrays
-        // synchronously. The attribute-less VAO derives corners from gl_VertexID,
-        // so no buffer or client pointer is read.
-        unsafe {
-            if premultiplied {
-                // Opacity was applied once while painting; the image's colour is
-                // already multiplied by its coverage alpha.
+        if premultiplied {
+            // Opacity was applied once while painting; the image's colour is
+            // already multiplied by its coverage alpha.
+            // SAFETY: Scalar blend and depth-write state in the current context.
+            unsafe {
                 (self.gl.enable)(0x0BE2); // BLEND
                 (self.gl.blend_equation)(0x8006); // FUNC_ADD
                 (self.gl.blend_func)(1, 0x0303, 1, 0x0303); // ONE, ONE_MINUS_SRC_ALPHA
                 (self.gl.depth_mask)(0);
             }
-            self.use_program(program.id);
-            (self.gl.uniform_matrix)(program.mvp, 1, 0, mvp.as_ptr());
-            (self.gl.uniform_vec4)(placement_location, 1, rectangle.as_ptr());
-            (self.gl.uniform_vec4)(clip_location, 1, rectangle.as_ptr());
-            (self.gl.uniform_int)(texture_location, 0);
+        }
+        self.use_program(program.id);
+        let location = |name| self.surface_location(program, name);
+        self.program_mat4(program, program.mvp, mvp);
+        self.program_vec4(program, location(c"u_placement"), &rectangle);
+        self.program_vec4(program, location(c"u_clip"), &rectangle);
+        self.program_int(program, location(c"u_surface_cache"), 0);
+        self.bind_vertex_array(self.surface_quad_vao);
+
+        // SAFETY: The texture and attribute-less VAO are live names of this
+        // current context, borrowed through the draw; corners derive from
+        // gl_VertexID, so no buffer or client pointer is read. The image is
+        // unbound again so a later repaint of it never samples its own target.
+        unsafe {
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_sampler)(0, 0);
             (self.gl.bind_texture)(TEXTURE_2D, target.texture);
-            self.bind_vertex_array(self.surface_quad_vao);
             (self.gl.draw_arrays)(0x0005, 0, 4); // TRIANGLE_STRIP
-            self.bind_vertex_array(0);
             (self.gl.bind_texture)(TEXTURE_2D, 0);
         }
 

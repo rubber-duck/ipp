@@ -20,6 +20,7 @@ mod submission;
 mod surface;
 #[cfg(feature = "surfaces")]
 mod surface_cache;
+mod uniform_values;
 #[cfg(feature = "surfaces")]
 pub use surface_cache::GlesSurfaceCacheTarget;
 
@@ -98,6 +99,8 @@ pub struct GlesRenderProgram {
     material: i32,
     lighting: lighting::GlesLightingLocations,
     uniforms: std::cell::RefCell<super::uniform_cache::RenderUniformCache>,
+    /// Per-draw uniform values last uploaded to this program.
+    values: std::cell::RefCell<uniform_values::GlesUniformValues>,
     #[cfg(feature = "skeletal-animation")]
     joints: i32,
     #[cfg(feature = "mesh-poses")]

@@ -65,7 +65,7 @@ impl GlesRenderDevice {
                 (self.gl.active_texture)(0x84C0 + unit);
                 (self.gl.bind_sampler)(unit, 0);
                 (self.gl.bind_texture)(0x0DE1, *texture);
-                (self.gl.uniform_int)(location, unit as i32);
+                self.program_int(program, location, unit as i32);
             }
             (self.gl.uniform_int)(program.alpha_mode, alpha_mode as i32);
             (self.gl.uniform_float)(program.alpha_cutoff, alpha_cutoff);

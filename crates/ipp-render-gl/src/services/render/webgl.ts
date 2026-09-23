@@ -26,7 +26,11 @@ type WebGlRenderProgram = {
   object: WebGLProgram;
   mvp: WebGLUniformLocation | null;
   parameters: number;
+  /** Whether the parameter block is bound to uniform buffer binding zero. */
+  parametersBound: boolean;
   parameterLocations: Map<string, WebGLUniformLocation | null>;
+  /** Per-draw uniform values last uploaded to this program, by location. */
+  values: Map<WebGLUniformLocation, number | Float32Array>;
   material: WebGLUniformLocation | null;
   lighting?: Record<string, WebGLUniformLocation | null>;
   texture?: WebGLUniformLocation | null;
@@ -224,6 +228,24 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     blendMode = undefined;
   }
 
+  /** Bind a path's curve texture to unit 0 and its band texture to unit 1. */
+  function bindPathTextures(path: {
+    texture: WebGLTexture;
+    bandTexture: WebGLTexture;
+  }): void {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, path.texture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
+  }
+
+  /** Unbind unit 1 after a path draw, which also holds the shadow map. */
+  function releaseBandTexture(): void {
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    boundShadowMap = undefined;
+  }
+
   /** Antialiasing viewport of Surface draws: atlas page, then cache target, then drawing buffer. */
   function activeSurfaceViewport(): [number, number] {
     if (IPP_GUI && glyphAtlasTarget)
@@ -254,6 +276,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let instanceCapacity = 0;
   let nextId = 1;
   let parameterBuffer: WebGLBuffer | null = null;
+  /** Whether `parameterBuffer` is bound to uniform buffer binding zero. */
+  let parameterBufferBound = false;
   let linearTarget:
     | {
         framebuffer: WebGLFramebuffer;
@@ -261,6 +285,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         depth: WebGLRenderbuffer;
         vao: WebGLVertexArrayObject;
         program: WebGLProgram;
+        /** Whether the program's sampler selects unit 0; set on first use. */
+        samplerSet: boolean;
         width: number;
         height: number;
       }
@@ -374,6 +400,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           depth,
           vao,
           program,
+          samplerSet: false,
           width,
           height,
         };
@@ -414,7 +441,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindSampler(0, null);
     gl.bindTexture(gl.TEXTURE_2D, target.color);
-    gl.uniform1i(gl.getUniformLocation(target.program, "u_texture"), 0);
+    if (!target.samplerSet) {
+      gl.uniform1i(gl.getUniformLocation(target.program, "u_texture"), 0);
+      target.samplerSet = true;
+    }
     bindVertexArray(target.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.viewport(
@@ -433,6 +463,96 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.getUniformLocation(program.object, name),
       );
     return program.parameterLocations.get(name)!;
+  }
+
+  /*
+   * Uniform values belong to their program and persist across draws, frames
+   * and targets. Only this bridge sets them and programs are never relinked,
+   * so these helpers skip values the current program already holds. Values
+   * compare with Object.is, so a signed zero still uploads.
+   */
+  function programInt(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    value: number,
+  ): void {
+    if (!location || Object.is(program.values.get(location), value)) return;
+    program.values.set(location, value);
+    gl.uniform1i(location, value);
+  }
+
+  function programFloat(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    value: number,
+  ): void {
+    if (!location || Object.is(program.values.get(location), value)) return;
+    program.values.set(location, value);
+    gl.uniform1f(location, value);
+  }
+
+  /** Record `count` floats for `location`; true when they must be uploaded. */
+  function changedFloats(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation,
+    values: ArrayLike<number>,
+    offset: number,
+    count: number,
+  ): boolean {
+    let known = program.values.get(location);
+    if (!(known instanceof Float32Array) || known.length !== count) {
+      known = new Float32Array(count);
+      program.values.set(location, known);
+      for (let index = 0; index < count; index++)
+        known[index] = values[offset + index]!;
+      return true;
+    }
+    let changed = false;
+    for (let index = 0; index < count; index++) {
+      const value = values[offset + index]!;
+      if (!Object.is(known[index], value)) {
+        known[index] = value;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function programVec4(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    x: number,
+    y: number,
+    z: number,
+    w: number,
+  ): void {
+    if (!location || !changedFloats(program, location, [x, y, z, w], 0, 4))
+      return;
+    gl.uniform4f(location, x, y, z, w);
+  }
+
+  /** Set a vec4 uniform from WASM memory if it changed. */
+  function programVec4At(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    pointer: number,
+  ): void {
+    if (!location) return;
+    const memory = wholeFloats(pointer, 4);
+    if (changedFloats(program, location, memory, pointer / 4, 4))
+      gl.uniform4fv(location, memory, pointer / 4, 4);
+  }
+
+  /** Set a mat4 uniform from WASM memory if it changed. */
+  function programMatrixAt(
+    program: WebGlRenderProgram,
+    location: WebGLUniformLocation | null | undefined,
+    pointer: number,
+  ): void {
+    if (!location) return;
+    const memory = wholeFloats(pointer, 16);
+    if (changedFloats(program, location, memory, pointer / 4, 16))
+      gl.uniformMatrix4fv(location, false, memory, pointer / 4, 16);
   }
 
   let shaderProgramsCreated = 0;
@@ -701,6 +821,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     linearTarget = undefined;
     presentationTarget = undefined;
     parameterBuffer = null;
+    parameterBufferBound = false;
     parameterCapacity = 0;
     instanceCapacity = 0;
     if (IPP_PARTICLES) {
@@ -735,6 +856,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   function restored(): void {
     initializeAttributeDefaults();
+    parameterBufferBound = false;
     programs.clear();
     meshes.clear();
     textures.clear();
@@ -939,7 +1061,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindSampler(0, null);
         gl.bindTexture(gl.TEXTURE_2D, texture);
-        if (program.texture) gl.uniform1i(program.texture, 0);
+        programInt(program, program.texture, 0);
       }
       const target =
         IPP_MESH_POSES && poseId !== 0 ? meshes.get(poseId >>> 0) : undefined;
@@ -1116,11 +1238,25 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             (pointer >>> 0) / 4,
             count,
           );
-          gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, parameterBuffer);
-          gl.uniformBlockBinding(program.object, program.parameters, 0);
+          if (!parameterBufferBound) {
+            gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, parameterBuffer);
+            parameterBufferBound = true;
+          }
+          if (!program.parametersBound) {
+            gl.uniformBlockBinding(program.object, program.parameters, 0);
+            program.parametersBound = true;
+          }
         }
-        gl.uniform1i(parameterLocation(program, "u_alpha_mode"), alphaMode);
-        gl.uniform1f(parameterLocation(program, "u_alpha_cutoff"), alphaCutoff);
+        programInt(
+          program,
+          parameterLocation(program, "u_alpha_mode"),
+          alphaMode,
+        );
+        programFloat(
+          program,
+          parameterLocation(program, "u_alpha_cutoff"),
+          alphaCutoff,
+        );
         checkDraw();
         return 1;
       });
@@ -1141,7 +1277,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindSampler(unit, null);
         gl.bindTexture(gl.TEXTURE_2D, object);
-        gl.uniform1i(
+        programInt(
+          program,
           parameterLocation(
             program,
             `p_${source(pointer >>> 0, length >>> 0)}`,
@@ -1352,70 +1489,38 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 blendMode = 2;
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_bounds"),
-                boundsPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_placement"),
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(program, uniform("u_bounds"), boundsPointer >>> 0);
+              programVec4At(
+                program,
+                uniform("u_placement"),
                 placementPointer >>> 0,
-                4,
               );
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_color"),
-                colorPointer >>> 0,
-                4,
-              );
-              gl.uniform1i(parameterLocation(program, "u_curves"), 0);
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_start"),
-                curveStart,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_count"),
-                curveCount,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_width"),
-                path.width,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_fill_rule"),
-                fillRule >>> 0,
-              );
-              gl.uniform1i(parameterLocation(program, "u_bands"), 1);
-              gl.uniform1i(
-                parameterLocation(program, "u_band_offset"),
-                bandOffset,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_band_width"),
-                path.bandWidth,
-              );
+              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+              programVec4At(program, uniform("u_color"), colorPointer >>> 0);
+              programInt(program, uniform("u_curves"), 0);
+              programInt(program, uniform("u_curve_start"), curveStart);
+              programInt(program, uniform("u_curve_count"), curveCount);
+              programInt(program, uniform("u_curve_width"), path.width);
+              programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
+              programInt(program, uniform("u_bands"), 1);
+              programInt(program, uniform("u_band_offset"), bandOffset);
+              programInt(program, uniform("u_band_width"), path.bandWidth);
               const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              gl.uniform4f(
-                parameterLocation(program, "u_viewport"),
+              programVec4(
+                program,
+                uniform("u_viewport"),
                 viewportWidth,
                 viewportHeight,
                 0,
                 0,
               );
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, path.texture);
-              gl.activeTexture(gl.TEXTURE1);
-              gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
+              bindPathTextures(path);
               bindVertexArray(path.vao);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              gl.activeTexture(gl.TEXTURE0);
+              releaseBandTexture();
               checkDraw();
               return 1;
             });
@@ -1495,46 +1600,31 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 gl.vertexAttribDivisor(slot, 1);
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              gl.uniform1i(parameterLocation(program, "u_curves"), 0);
-              gl.uniform1i(
-                parameterLocation(program, "u_curve_width"),
-                path.width,
-              );
-              gl.uniform1i(parameterLocation(program, "u_bands"), 1);
-              gl.uniform1i(
-                parameterLocation(program, "u_band_width"),
-                path.bandWidth,
-              );
-              gl.uniform1i(
-                parameterLocation(program, "u_fill_rule"),
-                fillRule >>> 0,
-              );
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+              programInt(program, uniform("u_curves"), 0);
+              programInt(program, uniform("u_curve_width"), path.width);
+              programInt(program, uniform("u_bands"), 1);
+              programInt(program, uniform("u_band_width"), path.bandWidth);
+              programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
               const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              gl.uniform4f(
-                parameterLocation(program, "u_viewport"),
+              programVec4(
+                program,
+                uniform("u_viewport"),
                 viewportWidth,
                 viewportHeight,
                 0,
                 0,
               );
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, path.texture);
-              gl.activeTexture(gl.TEXTURE1);
-              gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
+              bindPathTextures(path);
               gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
               for (let slot = 0; slot < 4; slot += 1) {
                 gl.vertexAttribDivisor(slot, 0);
                 gl.disableVertexAttribArray(slot);
               }
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
-              gl.activeTexture(gl.TEXTURE0);
+              releaseBandTexture();
               checkDraw();
               return 1;
             });
@@ -1568,29 +1658,22 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               if (!surfaceQuadVao)
                 throw new Error("Surface quad allocation failed");
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
-                parameterLocation(program, "u_placement"),
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(
+                program,
+                uniform("u_placement"),
                 placementPointer >>> 0,
-                4,
               );
-              vector4Uniform(
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-                4,
-              );
-              vector4Uniform(
-                parameterLocation(program, "u_color"),
-                colorPointer >>> 0,
-                4,
-              );
-              gl.uniform1i(parameterLocation(program, "u_texture"), 0);
+              programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
+              programVec4At(program, uniform("u_color"), colorPointer >>> 0);
+              programInt(program, uniform("u_texture"), 0);
+              // Unit 0 keeps the texture until the next draw that samples it.
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, texture);
               bindVertexArray(surfaceQuadVao);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
               checkDraw();
               return 1;
             });
@@ -1828,27 +1911,17 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               if (!surfaceQuadVao)
                 throw new Error("Surface quad allocation failed");
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              gl.uniform4f(
-                parameterLocation(program, "u_placement"),
-                0,
-                0,
-                width,
-                height,
-              );
-              gl.uniform4f(
-                parameterLocation(program, "u_clip"),
-                0,
-                0,
-                width,
-                height,
-              );
-              gl.uniform1i(parameterLocation(program, "u_surface_cache"), 0);
+              const uniform = (name: string) =>
+                parameterLocation(program, name);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4(program, uniform("u_placement"), 0, 0, width, height);
+              programVec4(program, uniform("u_clip"), 0, 0, width, height);
+              programInt(program, uniform("u_surface_cache"), 0);
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, target.texture);
               bindVertexArray(surfaceQuadVao);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-              bindVertexArray(null);
+              // A later repaint of this image never samples its own target.
               gl.bindTexture(gl.TEXTURE_2D, null);
               check();
               return 1;
@@ -1930,23 +2003,23 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 blendMode = 2;
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
               const [viewportWidth, viewportHeight] = activeSurfaceViewport();
-              gl.uniform4f(
+              programVec4(
+                program,
                 parameterLocation(program, "u_viewport"),
                 viewportWidth,
                 viewportHeight,
                 0,
                 0,
               );
-              vector4Uniform(
+              programVec4At(
+                program,
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
-                4,
               );
               bindVertexArray(batch.vao);
               gl.drawArrays(gl.TRIANGLES, 0, batch.count);
-              bindVertexArray(null);
               checkDraw();
               return 1;
             });
@@ -2016,22 +2089,18 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 blendMode = 2;
               }
               useProgram(program.object);
-              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
-              vector4Uniform(
+              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
+              programVec4At(
+                program,
                 parameterLocation(program, "u_clip"),
                 clipPointer >>> 0,
-                4,
               );
-              const atlasLoc = parameterLocation(program, "u_atlas");
-              if (atlasLoc) {
-                gl.uniform1i(atlasLoc, 0);
-              }
+              programInt(program, parameterLocation(program, "u_atlas"), 0);
+              // Unit 0 keeps the atlas until the next draw that samples it.
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, atlas);
               bindVertexArray(batch.vao);
               gl.drawArrays(gl.TRIANGLES, 0, batch.count);
-              bindVertexArray(null);
-              gl.bindTexture(gl.TEXTURE_2D, null);
               checkDraw();
               return 1;
             });
@@ -2247,7 +2316,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           programs.set(handle, {
             object,
             parameters: gl.getUniformBlockIndex(object, "IppParameters"),
+            parametersBound: false,
             parameterLocations: new Map(),
+            values: new Map(),
             mvp,
             material,
             lighting: Object.fromEntries(

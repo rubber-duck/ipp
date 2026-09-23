@@ -126,7 +126,7 @@ impl GlesRenderDevice {
             (self.gl.active_texture)(0x84C0);
             (self.gl.bind_sampler)(0, 0);
             (self.gl.bind_texture)(0x0DE1, target.color);
-            (self.gl.uniform_int)(target.program.texture, 0);
+            self.program_int(&target.program, target.program.texture, 0);
             self.bind_vertex_array(target.vao);
             (self.gl.draw_arrays)(TRIANGLES, 0, 3);
             (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);

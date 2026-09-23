@@ -13,7 +13,11 @@ export interface WebGlHostExports {
   imports: WebAssembly.Imports[string];
   setMemory(memory: WebAssembly.Memory): void;
   resize(width: number, height: number): void;
-  /** Completed drawing buffer RGBA bytes in top-left row order. */
+  /**
+   * Completed drawing buffer RGBA bytes in top-left row order. The drawing
+   * buffer is not preserved after presentation, so call this in the same task
+   * as the frame's `end_frame`, before the browser composites the canvas.
+   */
   capture(): Uint8Array<ArrayBuffer>;
   isContextLost(): boolean;
   dispose(): void;
@@ -67,7 +71,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     depth: true,
     stencil: false,
     premultipliedAlpha: false,
-    preserveDrawingBuffer: true,
+    // Capture reads back in the rendering task, so compositing may swap buffers
+    // instead of copying the frame.
+    preserveDrawingBuffer: false,
   });
   if (!context) throw new Error("WebGL 2 is unavailable");
   const gl = context;

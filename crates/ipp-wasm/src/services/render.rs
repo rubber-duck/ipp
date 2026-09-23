@@ -580,3 +580,18 @@ pub extern "C" fn ipp_render_surface_cache_records_len() -> u32 {
         })
     })
 }
+
+/// Bound the resident bytes of Surface cache images on this context. Images
+/// beyond the budget are evicted before new allocations and Surfaces that do
+/// not fit present directly; zero disables caching. Survives context loss.
+// SAFETY: Unique symbol; scalar argument and exclusive access to owned renderer state.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_set_surface_cache_budget(bytes: u32) -> u32 {
+    update(|presentation, _host| {
+        presentation
+            .renderer
+            .set_surface_cache_budget(bytes as usize);
+        Ok(())
+    })
+}

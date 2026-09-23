@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: warn
 
   retained-gui:
-    name: Retained GUI browser suite
+    name: Retained GUI and Surface cache browser suites
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -92,9 +92,12 @@ jobs:
           python tools/ipp.py setup browser --with-deps
       - name: Require the browser and WebGL environment
         # A missing browser or graphics environment fails here; it is never skipped.
-        run: python tools/ipp.py doctor --for retained-gui
+        run: python tools/ipp.py doctor --for retained-gui surface-cache
       - name: Compare analytic and retained GUI frames
         run: python tools/ipp.py test retained-gui
+      - name: Compare cached and direct Surface frames
+        if: ${{ !cancelled() }}
+        run: python tools/ipp.py test surface-cache
       - name: Preserve retained GUI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -103,6 +106,7 @@ jobs:
           path: |
             target/pipeline/runs/
             target/integration-artifacts/retained-gui/
+            target/integration-artifacts/surface-cache/
           if-no-files-found: warn
 
   deploy:

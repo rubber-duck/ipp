@@ -1,6 +1,7 @@
 import {
   SURFACE_CACHE_MODES,
   validateGlyphAtlasLimits,
+  validateSurfaceCacheBudget,
   validateViewport,
 } from "./presentation.js";
 import type {
@@ -82,10 +83,11 @@ const SURFACE_CACHE_STATISTICS = {
   surfaceCacheResidentBytes: "ipp_render_surface_cache_resident_bytes",
 } as const;
 
-/** Per-record exports belonging to the same complete Surface cache set. */
+/** Record and budget exports belonging to the same complete Surface cache set. */
 const SURFACE_CACHE_RECORD_EXPORTS = [
   "ipp_render_surface_cache_records_ptr",
   "ipp_render_surface_cache_records_len",
+  "ipp_render_set_surface_cache_budget",
 ] as const;
 
 /** Words per exported Surface cache record; see `ipp-wasm` `services/render.rs`. */
@@ -100,6 +102,7 @@ interface SurfaceCacheExports {
   statistics: SurfaceCacheStatistics;
   recordsPointer: () => number;
   recordsLength: () => number;
+  setBudget: (bytes: number) => number;
 }
 
 /** Per-submission cache counters also accumulated across every rendered tick. */
@@ -146,6 +149,8 @@ export class RenderWorkerService {
   /** Absent for builds without Surfaces: cache counters are unavailable, not zero. */
   private surfaceCacheExports: SurfaceCacheExports | undefined;
   private readonly surfaceCacheTotals: Record<string, number> = {};
+  /** Latest requested cache image budget, applied again for a later World session. */
+  private surfaceCacheBudget: number | undefined;
   private session = 0n;
   private generation = 0;
   private totalUploadedBytes = 0;
@@ -266,6 +271,9 @@ export class RenderWorkerService {
             candidate.ipp_render_surface_cache_records_ptr as () => number,
           recordsLength:
             candidate.ipp_render_surface_cache_records_len as () => number,
+          setBudget: candidate.ipp_render_set_surface_cache_budget as (
+            bytes: number,
+          ) => number,
         }
       : undefined;
     this.runtime = exports as RenderHostExports;
@@ -273,7 +281,24 @@ export class RenderWorkerService {
     this.observedRenderTick = 0n;
     this.device.setMemory(this.runtime.memory);
     this.applyGlyphAtlasLimits();
+    this.applySurfaceCacheBudget();
     if (!this.device.isContextLost()) this.attach();
+  }
+
+  /** The renderer keeps its budget through context loss; a later session receives it again. */
+  private applySurfaceCacheBudget(): void {
+    const bytes = this.surfaceCacheBudget;
+    if (bytes === undefined || !this.runtime) return;
+    if (!this.surfaceCacheExports)
+      throw new Error(
+        "WASM runtime has no Surface cache; select a render build with Surfaces",
+      );
+    if (this.surfaceCacheExports.setBudget(bytes >>> 0) !== 1)
+      throw new Error("Rust renderer rejected the Surface cache budget");
+    this.logger.log("debug", "renderer.surface_cache_budget", () => ({
+      session: this.session,
+      bytes,
+    }));
   }
 
   /** The renderer keeps limits through context loss; a later session receives them again. */
@@ -552,6 +577,13 @@ export class RenderWorkerService {
       validateGlyphAtlasLimits(limits);
       this.glyphAtlasLimits = limits;
       this.applyGlyphAtlasLimits();
+      return true;
+    }
+    if (data.type === "surface-cache-budget") {
+      const bytes = data.bytes as number;
+      validateSurfaceCacheBudget(bytes);
+      this.surfaceCacheBudget = bytes;
+      this.applySurfaceCacheBudget();
       return true;
     }
     if (data.type === "context-loss") {

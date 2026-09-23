@@ -26,6 +26,7 @@ import {
   surfaceProperty,
 } from "@ipp/client";
 import { compareGlyph } from "./surface-glyph-oracle.js";
+import { probeSurfaceCacheBridge } from "./surface-cache-bridge.js";
 import type {
   FrameCapture,
   GlyphAtlasLimits,
@@ -202,7 +203,12 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
     devicePixelRatio: window.devicePixelRatio,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
-    backend: frame.backend,
+    // Cache records carry bigint entity identities; report them as decimal text.
+    backend: JSON.parse(
+      JSON.stringify(frame.backend, (_, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+    ) as Record<string, unknown>,
     textPixels,
     background: sample(frame.width >> 1, Math.round(frame.height * 0.875)),
     corner: sample(0, 0),
@@ -220,6 +226,8 @@ export async function workload(
     angle?: number;
     width?: number;
     height?: number;
+    /** Opt every panel into whole-Surface caching with this policy. */
+    cache?: SurfaceCachePolicy;
   },
 ) {
   client.presentation!.resize(config.width ?? 640, config.height ?? 480);
@@ -245,6 +253,9 @@ export async function workload(
       </Entity>
     )),
   );
+  if (config.cache)
+    for (let index = 0; index < (config.panels ?? 1); index++)
+      await setSurfaceCache(`workload-${index}`, config.cache);
 }
 
 /** Sizes of the application's printable and unseen glyph sets. */
@@ -929,4 +940,141 @@ export async function close() {
   await root?.unmount();
   await host?.close();
   frames.clear();
+}
+
+/** Authored `SurfaceCache` fields; see `ipp_core::SurfaceCachePolicy`. */
+export interface SurfaceCachePolicy {
+  direct_distance: number;
+  texels_per_metre: number;
+  max_refresh_hz: number;
+}
+
+/** Policies this fixture inserted, by generational entity identity. */
+const cachedSurfaces = new Map<bigint, string>();
+
+async function entityBySymbol(symbolicId: string) {
+  const entity = (await client.inspect()).entities.find(
+    (candidate) => candidate.metadata.symbolicId === symbolicId,
+  );
+  if (!entity) throw new Error(`No entity ${symbolicId}`);
+  return entity.id;
+}
+
+/**
+ * Opt a Surface into whole-Surface caching, replace its policy, or with `null`
+ * return it to direct presentation. React has no SurfaceCache declaration yet
+ * (ipp-s1ge.1), so this writes the generated component through World batches.
+ */
+export async function setSurfaceCache(
+  symbolicId: string,
+  policy: SurfaceCachePolicy | null,
+) {
+  const entity = await entityBySymbol(symbolicId);
+  const reference = { kind: "handle", id: entity } as const;
+  const authored = policy ? JSON.stringify(policy) : undefined;
+  if (cachedSurfaces.get(entity) === authored) return String(entity);
+  const component = client.components.SurfaceCache;
+  if (!component) throw new Error("Target does not expose SurfaceCache");
+  successfulBatch(
+    await client.batch([
+      ...(cachedSurfaces.has(entity)
+        ? [
+            {
+              kind: "removeComponent" as const,
+              entity: reference,
+              component: component.id,
+            },
+          ]
+        : []),
+      ...(policy
+        ? [
+            {
+              kind: "insertComponent" as const,
+              entity: reference,
+              component: component.id,
+              fields: componentFields(client, "SurfaceCache", { ...policy }),
+            },
+          ]
+        : []),
+    ]),
+  );
+  if (authored) cachedSurfaces.set(entity, authored);
+  else cachedSurfaces.delete(entity);
+  return String(entity);
+}
+
+/** Generational identity of a named entity, as decimal text. */
+export async function entityId(symbolicId: string) {
+  return String(await entityBySymbol(symbolicId));
+}
+
+/** Move the orthographic fixture camera along +Z; the projected size is unchanged. */
+export async function cameraDistance(distance: number) {
+  successfulBatch(
+    await client.batch(
+      componentFields(client, "Transform", { z: distance }).map((field) => ({
+        kind: "setField",
+        entity: { kind: "handle", id: camera },
+        component: client.components.Transform!.id,
+        field,
+      })),
+    ),
+  );
+}
+
+/**
+ * The terminal application Surface in a controlled state: `cursor` recolours
+ * the cursor item, `translucent` widens it over the text at half opacity, and
+ * `font` selects the pending font source used for resource arrival.
+ */
+export async function cacheTerminal(config: {
+  cursor?: readonly [number, number, number, number];
+  translucent?: boolean;
+  font?: "ready" | "pending";
+  angle?: number;
+}) {
+  client.presentation!.resize(320, 240);
+  const items = terminalItems(assets);
+  const cursor = items[3]!;
+  const color = config.cursor ?? cursor.color ?? [1, 1, 1, 1];
+  items[3] = {
+    ...cursor,
+    color: config.translucent ? [color[0], color[1], color[2], 0.5] : color,
+    ...(config.translucent
+      ? { position: [1.2, 1.1] as const, scale: [1.8, 0.5] as const }
+      : {}),
+  };
+  if (config.font === "pending")
+    items[2] = {
+      ...items[2]!,
+      asset: clientAssetSource(client.session, 17, 9000n),
+    };
+  await root.render(
+    <Terminal assets={assets} items={items} angle={config.angle ?? 0} />,
+  );
+}
+
+/** Hover the centre of the presented GUI panel through production GUI input, or leave it. */
+export async function hoverPanel(active: boolean) {
+  const gui = client as unknown as {
+    submitGuiInput(input: Record<string, unknown>): Promise<unknown>;
+  };
+  return gui.submitGuiInput(
+    active
+      ? { kind: "pointerMove", pointer: 1, position: [0.5, 0.5] }
+      : { kind: "pointerCancel", pointer: 1 },
+  );
+}
+
+/** Bound resident cache image bytes on this graphics context. */
+export function surfaceCacheBudget(bytes: number) {
+  client.presentation!.setSurfaceCacheBudget(bytes);
+}
+
+/** Run the device-level cache target oracle against a build's shipped WebGL bridge. */
+export function bridgeProbe(build: string, gui: boolean) {
+  return probeSurfaceCacheBridge(
+    `/target/browser-build/${build}/webgl.js`,
+    gui,
+  );
 }

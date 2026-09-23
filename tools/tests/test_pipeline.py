@@ -174,6 +174,24 @@ class PlanningTests(unittest.TestCase):
         config = json.loads(stress.tasks[-1].command[-1])
         self.assertEqual((config["preset"], config["group"]), ("smoke", 64))
 
+    def test_retained_gui_benchmark_surface_cache_mode(self):
+        plain = plan("benchmark", "browser", "--scene", "retained-gui").tasks[-1]
+        self.assertNotIn("--surface-cache", plain.command)
+        cached = plan(
+            "benchmark", "browser", "--scene", "retained-gui", "--surface-cache"
+        ).tasks[-1]
+        self.assertEqual(cached.id, "benchmark:retained-gui")
+        self.assertEqual(cached.command[-1], "--surface-cache")
+        self.assertEqual(
+            cached.command[3], "target/performance/retained-gui-surface-cache"
+        )
+        for backend in ("browser", "native"):
+            with (
+                self.subTest(backend=backend),
+                self.assertRaisesRegex(ValueError, "--scene retained-gui"),
+            ):
+                plan("benchmark", backend, "--surface-cache")
+
     def test_ci_runs_retained_gui_as_its_own_bounded_cached_job(self):
         # Job blocks at two-space indentation below `jobs:`; no YAML dependency.
         jobs: dict[str, list[str]] = {}
@@ -188,10 +206,12 @@ class PlanningTests(unittest.TestCase):
         retained = jobs["retained-gui"]
         self.assertTrue(any(line.startswith("timeout-minutes: ") for line in retained))
         for step in (
-            "run: python tools/ipp.py doctor --for retained-gui",
+            "run: python tools/ipp.py doctor --for retained-gui surface-cache",
             "run: python tools/ipp.py test retained-gui",
+            "run: python tools/ipp.py test surface-cache",
             "~/.cargo/registry/cache/",
             "target/integration-artifacts/retained-gui/",
+            "target/integration-artifacts/surface-cache/",
             "if: always()",
         ):
             self.assertIn(step, retained)
@@ -286,6 +306,39 @@ class PlanningTests(unittest.TestCase):
             with self.subTest(source=source):
                 ids, _ = affected([source], [])
                 self.assertTrue(set(suite_ids(["retained-gui"])).issubset(ids))
+
+    def test_surface_cache_participant_changes_select_the_suite(self):
+        for source in (
+            "crates/ipp-render-gl/src/services/render/surface_cache.rs",
+            "crates/ipp-render-gl/src/services/render/webgl.ts",
+            "crates/ipp-core/src/world/systems/surface/cache_policy.rs",
+            "crates/ipp-core/src/world/systems/render/system.rs",
+            "packages/ipp-client/src/render-worker.ts",
+            "crates/ipp-wasm/src/services/render.rs",
+            "tools/build/verify-browser.mjs",
+            "tests/render/surface-cache-bridge.ts",
+            "tests/render/surface-cache-scenario.ts",
+            "tests/render/surface-cache-environment.ts",
+            "tests/render/surface-cache.test.ts",
+            "tests/render/surface-fixture.tsx",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(set(suite_ids(["surface-cache"])).issubset(ids))
+
+    def test_surface_cache_gles_check_follows_its_probe_and_runner(self):
+        for source in (
+            "crates/ipp-render-gl/examples/egl_surface_cache.rs",
+            "crates/ipp-render-gl/examples/smoke/surface_cache_target.rs",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertIn("check:gles-surface-cache", ids)
+        ids, _ = affected(["crates/ipp-render-gl/examples/egl_surface_cache.rs"], [])
+        self.assertEqual(
+            [id_ for id_ in ids if id_.startswith("check:gles-")],
+            ["check:gles-surface-cache"],
+        )
 
     def test_gallery_gui_participant_changes_select_the_suite(self):
         for source in (

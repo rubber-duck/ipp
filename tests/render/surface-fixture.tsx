@@ -2,8 +2,10 @@ import {
   createRoot,
   Entity,
   Surface,
+  SurfaceCache,
   Transform,
   type ReactWorldRoot,
+  type SurfaceCacheProps,
 } from "@ipp/react";
 import {
   Drawing,
@@ -46,6 +48,7 @@ import {
 } from "../integration/camera-fixtures.js";
 import {
   exerciseSurfaceLifecycle,
+  surfaceCachePolicy,
   surfaceSnapshot,
   waitSurfaceAssets,
   type SurfaceTestClient,
@@ -616,6 +619,43 @@ export async function keyedLifecycle() {
     removedProperty: removed.properties[surfaceProperty(4, "color")] ?? null,
     restoredIds: restored.collection.items.map((item) => item.id),
     nextId: restored.collection.nextId,
+  };
+}
+
+/**
+ * React authoring of the SurfaceCache opt-in on its own root: mount without a
+ * policy, opt in, edit, opt out and unmount, observed through inspection.
+ */
+export async function surfaceCacheDeclarations() {
+  const policyRoot = createRoot(client);
+  const panel = (cache?: SurfaceCacheProps) => (
+    <Entity id="surface-cache-policy">
+      <Surface bound={false} width={1} height={1} />
+      {cache ? <SurfaceCache bound={false} {...cache} /> : null}
+    </Entity>
+  );
+  const observed: unknown[] = [];
+  await policyRoot.render(panel());
+  const entity = (await client.inspect()).entities.find(
+    (item) => item.metadata.symbolicId === "surface-cache-policy",
+  )!.id;
+  const observe = async () =>
+    observed.push((await surfaceCachePolicy(client, entity)) ?? null);
+  await observe();
+  await policyRoot.render(panel({ direct_distance: 1.5, max_refresh_hz: 4 }));
+  await observe();
+  await policyRoot.render(
+    panel({ direct_distance: 0, texels_per_metre: 64, max_refresh_hz: 4 }),
+  );
+  await observe();
+  await policyRoot.render(panel());
+  await observe();
+  await policyRoot.unmount();
+  return {
+    observed,
+    released: !(await client.inspect()).entities.some(
+      (item) => item.id === entity,
+    ),
   };
 }
 

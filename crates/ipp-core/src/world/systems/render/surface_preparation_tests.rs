@@ -1,23 +1,28 @@
 use super::*;
+#[cfg(feature = "gui")]
 use crate::services::asset_management::drawing::DRAWING_TYPE;
 use crate::services::asset_management::{AssetSource, AssetUpload, AssetUploadIdentity};
+#[cfg(feature = "gui")]
 use crate::systems::animation::{
     ANIMATION_TYPE, AnimationClip, AnimationInterpolation, AnimationKeyframe, AnimationTrack,
     AnimationTrackTarget, AnimationTransitionEasing, AnimationValue,
 };
+#[cfg(feature = "gui")]
 use crate::systems::gui::{
     GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCancelReason, GuiInputCommand,
     GuiInputEffectKind, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
     GuiPointerButton, GuiRoot, GuiUnhandledReason,
 };
+#[cfg(feature = "gui")]
 use crate::systems::surface::{GuiPrimitivePart, GuiShapeFill, SurfacePrimitiveIdentity};
 use crate::{
-    Batch, Command, ComponentValue, DynamicValue, EntityMetadata, EntityRef, FieldValue,
-    FieldWrite, HostRuntime, Surface, SurfaceCommand, SurfaceGlyph, SurfaceItemContent,
-    SurfaceItemId, SurfaceItemPatch, SurfaceItemStyle, SurfaceRenderPrimitive, WorldContext,
-    WorldId,
+    Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, Surface, SurfaceCommand,
+    SurfaceGlyph, SurfaceItemContent, SurfaceItemId, SurfaceItemPatch, SurfaceItemStyle,
+    SurfaceRenderPrimitive, WorldContext,
     components::{MeshInstance, Scalar, Transform},
 };
+#[cfg(feature = "gui")]
+use crate::{DynamicValue, EntityMetadata, HostRuntime, WorldId};
 
 fn font_bytes() -> Vec<u8> {
     let mut bytes = b"IPPF".to_vec();
@@ -259,8 +264,10 @@ fn model_recovery_rebuilds_primitives_for_the_reappearing_surface() {
 // with scroll translation wrapping the skinned output.
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "gui")]
 const SESSION: u64 = 7;
 
+#[cfg(feature = "gui")]
 fn part_color(root: &mut GuiRoot, node: u32, part: &str, value: [f32; 4]) {
     let name = GuiRoot::part_property_name(GuiNodeId(node), part, "color").unwrap();
     root.properties
@@ -268,6 +275,7 @@ fn part_color(root: &mut GuiRoot, node: u32, part: &str, value: [f32; 4]) {
         .unwrap();
 }
 
+#[cfg(feature = "gui")]
 fn part_asset(root: &mut GuiRoot, node: u32, part: &str, source: AssetSource) {
     let name = GuiRoot::part_property_name(GuiNodeId(node), part, "asset").unwrap();
     root.properties
@@ -275,6 +283,7 @@ fn part_asset(root: &mut GuiRoot, node: u32, part: &str, source: AssetSource) {
         .unwrap();
 }
 
+#[cfg(feature = "gui")]
 fn part_f32(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: f32) {
     let name = GuiRoot::part_property_name(GuiNodeId(node), part, lane).unwrap();
     root.properties
@@ -282,6 +291,7 @@ fn part_f32(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: f32) {
         .unwrap();
 }
 
+#[cfg(feature = "gui")]
 fn part_vec2(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: [f32; 2]) {
     let name = GuiRoot::part_property_name(GuiNodeId(node), part, lane).unwrap();
     root.properties
@@ -289,6 +299,7 @@ fn part_vec2(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: [f32;
         .unwrap();
 }
 
+#[cfg(feature = "gui")]
 fn part_motion(root: &mut GuiRoot, node: u32, part: &str, source: AssetSource) {
     let name = GuiRoot::part_property_name(GuiNodeId(node), part, "motion").unwrap();
     root.properties
@@ -296,6 +307,7 @@ fn part_motion(root: &mut GuiRoot, node: u32, part: &str, source: AssetSource) {
         .unwrap();
 }
 
+#[cfg(feature = "gui")]
 /// GuiRoot with checkbox skin parts preset for node 2: idle, hovered,
 /// pressed and disabled colors under the production paint part.
 fn skinned_root() -> GuiRoot {
@@ -313,6 +325,7 @@ fn skinned_root() -> GuiRoot {
     root
 }
 
+#[cfg(feature = "gui")]
 fn skin_motion_source(name: &str) -> AssetSource {
     AssetSource {
         kind: ANIMATION_TYPE,
@@ -321,10 +334,12 @@ fn skin_motion_source(name: &str) -> AssetSource {
     }
 }
 
+#[cfg(feature = "gui")]
 fn skin_motion_clip(color: [f32; 4]) -> AnimationClip {
     AnimationClip::new(1.0, skin_motion_tracks(color)).unwrap()
 }
 
+#[cfg(feature = "gui")]
 fn skin_motion_tracks(color: [f32; 4]) -> Vec<AnimationTrack<AnimationValue>> {
     let dynamic =
         |value| AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value));
@@ -346,6 +361,7 @@ fn skin_motion_tracks(color: [f32; 4]) -> Vec<AnimationTrack<AnimationValue>> {
     ]
 }
 
+#[cfg(feature = "gui")]
 fn animated_skinned_root(sources: &[AssetSource; 3]) -> GuiRoot {
     let mut root = skinned_root();
     part_color(&mut root, 2, "background", [0.25, 0.25, 0.25, 1.0]);
@@ -365,6 +381,7 @@ fn animated_skinned_root(sources: &[AssetSource; 3]) -> GuiRoot {
     root
 }
 
+#[cfg(feature = "gui")]
 fn register_skin_motion_assets(host: &mut HostRuntime, world: WorldId) -> [AssetSource; 3] {
     let sources = [
         skin_motion_source("skin-idle"),
@@ -383,10 +400,12 @@ fn register_skin_motion_assets(host: &mut HostRuntime, world: WorldId) -> [Asset
     sources
 }
 
+#[cfg(feature = "gui")]
 fn skin_panel() -> (HostRuntime, WorldId, crate::EntityId) {
     skin_panel_with_root(skinned_root())
 }
 
+#[cfg(feature = "gui")]
 fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId) {
     let mut host = HostRuntime::new();
     let world = host.create_world(Default::default()).unwrap();
@@ -467,6 +486,7 @@ fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId
     (host, world, panel)
 }
 
+#[cfg(feature = "gui")]
 /// Retained rectangle centre of one evaluated node in logical units.
 fn node_centre(
     host: &mut HostRuntime,
@@ -489,6 +509,7 @@ fn node_centre(
     [rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0]
 }
 
+#[cfg(feature = "gui")]
 /// Painted background fill of node 2 in the prepared Surface primitives.
 ///
 /// The renderer paints a box from its `fill`; the style colour lane only
@@ -535,6 +556,7 @@ fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityI
         .unwrap()
 }
 
+#[cfg(feature = "gui")]
 fn pointer_down(pointer: u32, position: [f32; 2]) -> GuiInputCommand {
     GuiInputCommand::PointerDown {
         pointer,
@@ -546,6 +568,7 @@ fn pointer_down(pointer: u32, position: [f32; 2]) -> GuiInputCommand {
     }
 }
 
+#[cfg(feature = "gui")]
 fn pointer_up(pointer: u32, position: [f32; 2]) -> GuiInputCommand {
     GuiInputCommand::PointerUp {
         pointer,
@@ -557,6 +580,7 @@ fn pointer_up(pointer: u32, position: [f32; 2]) -> GuiInputCommand {
     }
 }
 
+#[cfg(feature = "gui")]
 fn pointer_move(pointer: u32, position: [f32; 2]) -> GuiInputCommand {
     GuiInputCommand::PointerMove {
         pointer,
@@ -567,6 +591,7 @@ fn pointer_move(pointer: u32, position: [f32; 2]) -> GuiInputCommand {
     }
 }
 
+#[cfg(feature = "gui")]
 fn committed_bool(
     host: &mut HostRuntime,
     world: WorldId,
@@ -585,6 +610,7 @@ fn committed_bool(
     (node.control_value.clone(), node.control_revision)
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn skinned_paint_resolves_hover_and_pressed_in_prepared_primitives() {
     let (mut host, world, panel) = skin_panel();
@@ -662,6 +688,7 @@ fn skinned_paint_resolves_hover_and_pressed_in_prepared_primitives() {
     );
 }
 
+#[cfg(feature = "gui")]
 fn assert_color_near(actual: [f32; 4], expected: [f32; 4]) {
     for (actual, expected) in actual.into_iter().zip(expected) {
         assert!(
@@ -671,6 +698,7 @@ fn assert_color_near(actual: [f32; 4], expected: [f32; 4]) {
     }
 }
 
+#[cfg(feature = "gui")]
 fn background_skin_owner(
     host: &mut HostRuntime,
     world: WorldId,
@@ -693,6 +721,7 @@ fn background_skin_owner(
     }
 }
 
+#[cfg(feature = "gui")]
 fn skin_controller_snapshot(
     host: &mut HostRuntime,
     world: WorldId,
@@ -711,6 +740,7 @@ fn skin_controller_snapshot(
         .unwrap()
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn skin_controller_description_has_exactly_three_consecutive_drivers() {
     let entity = crate::EntityId::from_bits(7);
@@ -758,6 +788,7 @@ fn skin_controller_description_has_exactly_three_consecutive_drivers() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn automatic_skin_motion_uses_animation_samples_and_interrupts_continuously() {
     let sources = [
@@ -878,6 +909,7 @@ fn automatic_skin_motion_uses_animation_samples_and_interrupts_continuously() {
     assert!(skin_controller_snapshot(&mut host, world, owner).is_none());
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() {
     use crate::systems::animation::{
@@ -1095,6 +1127,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
     assert!(skin_controller_snapshot(&mut host, world, owner).is_none());
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn live_restore_invalidates_skin_ownership_without_commandeering_reused_id() {
     use crate::systems::animation::{
@@ -1227,6 +1260,7 @@ fn live_restore_invalidates_skin_ownership_without_commandeering_reused_id() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn mismatched_skin_endpoint_settles_static_and_corrected_motion_recovers() {
     let sources = [
@@ -1291,6 +1325,7 @@ fn mismatched_skin_endpoint_settles_static_and_corrected_motion_recovers() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn malformed_ready_skin_tracks_refuse_once_and_use_static_destination() {
     let sources = [
@@ -1349,6 +1384,7 @@ fn malformed_ready_skin_tracks_refuse_once_and_use_static_destination() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn delayed_skin_assets_retry_and_terminal_failure_stays_private() {
     let sources = ["idle", "hover", "pressed"].map(|name| AssetSource {
@@ -1455,6 +1491,7 @@ fn delayed_skin_assets_retry_and_terminal_failure_stays_private() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn skinned_paint_discards_drag_off_and_cancelled_presses() {
     let (mut host, world, panel) = skin_panel();
@@ -1555,6 +1592,7 @@ fn skinned_paint_discards_drag_off_and_cancelled_presses() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn disabled_nodes_never_activate_and_paint_disabled() {
     let (mut host, world, panel) = skin_panel();
@@ -1613,6 +1651,7 @@ fn disabled_nodes_never_activate_and_paint_disabled() {
     );
 }
 
+#[cfg(feature = "gui")]
 /// Minimal zero-layer IPPD payload: magic, version 1, view box, bounds,
 /// tolerance and no layers.
 fn drawing_fixture_bytes() -> Vec<u8> {
@@ -1628,6 +1667,7 @@ fn drawing_fixture_bytes() -> Vec<u8> {
     bytes
 }
 
+#[cfg(feature = "gui")]
 fn drawing_source(uri: &str) -> AssetSource {
     AssetSource {
         kind: DRAWING_TYPE,
@@ -1636,6 +1676,7 @@ fn drawing_source(uri: &str) -> AssetSource {
     }
 }
 
+#[cfg(feature = "gui")]
 fn drawing_decoded(host: &HostRuntime, source: &AssetSource) -> bool {
     host.asset_resources()
         .find(source)
@@ -1643,6 +1684,7 @@ fn drawing_decoded(host: &HostRuntime, source: &AssetSource) -> bool {
         .is_some_and(|provider| provider.decoded_available())
 }
 
+#[cfg(feature = "gui")]
 fn register_drawing(host: &mut HostRuntime, world: WorldId, uri: &str, pump: bool) -> AssetSource {
     let source = drawing_source(uri);
     host.asset_resources_mut()
@@ -1667,6 +1709,7 @@ fn register_drawing(host: &mut HostRuntime, world: WorldId, uri: &str, pump: boo
     source
 }
 
+#[cfg(feature = "gui")]
 /// Drawing panel with a ready base asset and a skin part asset behind the
 /// base part: the part swaps the prepared resource through the runtime
 /// resource mechanism. Pending parts retain the prior resource while
@@ -1749,6 +1792,7 @@ fn drawing_panel(
     (host, world, panel, base, part)
 }
 
+#[cfg(feature = "gui")]
 /// Drawing panel whose base and skin resources have only ordinary component
 /// demand. The external stream owns recovery bytes; no client upload or
 /// prepared-source producer pins either resource in the catalog.
@@ -1836,6 +1880,7 @@ fn demand_only_drawing_panel(
     (host, world, panel, base, ready)
 }
 
+#[cfg(feature = "gui")]
 fn replace_skin_with_pending_drawing(
     host: &mut HostRuntime,
     world: WorldId,
@@ -1868,6 +1913,7 @@ fn replace_skin_with_pending_drawing(
     (pending, request.id)
 }
 
+#[cfg(feature = "gui")]
 fn insert_drawing_tree(
     context: &mut WorldContext<'_>,
     panel: crate::EntityId,
@@ -1908,12 +1954,14 @@ fn insert_drawing_tree(
     context.step(0.0).unwrap();
 }
 
+#[cfg(feature = "gui")]
 fn root_with_icon_asset(source: AssetSource) -> GuiRoot {
     let mut root = GuiRoot::default();
     part_asset(&mut root, 2, "icon", source);
     root
 }
 
+#[cfg(feature = "gui")]
 /// Resource URI and color of node 2 in the prepared Surface primitives.
 fn panel_drawing(
     host: &mut HostRuntime,
@@ -1952,6 +2000,7 @@ fn panel_drawing(
         .unwrap()
 }
 
+#[cfg(feature = "gui")]
 fn panel_root(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) -> GuiRoot {
     host.world_mut(world)
         .unwrap()
@@ -1966,6 +2015,7 @@ fn panel_root(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) ->
         .unwrap()
 }
 
+#[cfg(feature = "gui")]
 fn render_skin_resources(
     host: &mut HostRuntime,
     world: WorldId,
@@ -1978,6 +2028,7 @@ fn render_skin_resources(
         .unwrap()
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn asset_backed_skin_paints_through_runtime_resources() {
     let (mut host, world, panel, base, part) = drawing_panel("skin-ready", true);
@@ -1994,6 +2045,7 @@ fn asset_backed_skin_paints_through_runtime_resources() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn pending_skin_asset_retains_prior_resource_in_prepared_paint() {
     let (mut host, world, panel, base, part) = drawing_panel("skin-pending", false);
@@ -2012,6 +2064,7 @@ fn pending_skin_asset_retains_prior_resource_in_prepared_paint() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn pending_skin_replacement_retains_last_ready_skin_resource() {
     let (mut host, world, panel, base, ready) = drawing_panel("skin-ready-prior", true);
@@ -2043,6 +2096,7 @@ fn pending_skin_replacement_retains_last_ready_skin_resource() {
     assert_eq!(panel_drawing(&mut host, world, panel).0, ready.uri);
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_removal() {
     let (mut host, world, panel, _, ready) = demand_only_drawing_panel("replace-node");
@@ -2111,6 +2165,7 @@ fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_
     assert!(host.asset_resources().find(&pending).is_none());
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn clearing_demand_only_skin_appearance_releases_before_pending_replacement() {
     let (mut host, world, panel, base, ready) = demand_only_drawing_panel("clear-appearance");
@@ -2159,6 +2214,7 @@ fn clearing_demand_only_skin_appearance_releases_before_pending_replacement() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn derived_only_skin_demand_withdraws_before_post_unload_service_poll() {
     let (mut host, world, panel, _, ready) = demand_only_drawing_panel("unload-derived-only");
@@ -2188,6 +2244,7 @@ fn derived_only_skin_demand_withdraws_before_post_unload_service_poll() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn root_and_world_teardown_release_demand_only_retained_skin_resources() {
     let (mut host, world, panel, _, ready) = demand_only_drawing_panel("root-teardown");
@@ -2229,6 +2286,7 @@ fn root_and_world_teardown_release_demand_only_retained_skin_resources() {
     assert!(host.asset_resources().find(&pending).is_none());
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn root_replacement_cannot_reuse_a_retained_skin_resource() {
     let (mut host, world, panel, base, ready) = drawing_panel("skin-ready-old-root", true);
@@ -2265,6 +2323,7 @@ fn root_replacement_cannot_reuse_a_retained_skin_resource() {
     );
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn root_removal_clears_retained_skin_resources_before_reinsertion() {
     let (mut host, world, panel, base, ready) = drawing_panel("skin-ready-removed-root", true);
@@ -2310,6 +2369,7 @@ fn root_removal_clears_retained_skin_resources_before_reinsertion() {
     assert_eq!(panel_drawing(&mut host, world, panel).0, base.uri);
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn released_skin_resource_is_purged_before_reacquisition() {
     let (mut host, world, panel, base, ready) = drawing_panel("skin-ready-released", true);
@@ -2348,6 +2408,7 @@ fn released_skin_resource_is_purged_before_reacquisition() {
     panic!("released skin resource did not recover through ordinary demand");
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn skin_property_edit_repaints_without_hover_or_layout_work() {
     let (mut host, world, panel) = skin_panel();
@@ -2403,9 +2464,11 @@ fn skin_property_edit_repaints_without_hover_or_layout_work() {
     assert_eq!(after, before);
 }
 
+#[cfg(feature = "gui")]
 /// One skin destination in a shared motion clip: time, colour, opacity, scale.
 type SkinMotionSample = (f64, [f32; 4], f32, [f32; 2]);
 
+#[cfg(feature = "gui")]
 /// One motion clip holding every destination at its own sample time, like
 /// the gallery skins: idle, hovered, pressed and disabled share the tracks
 /// that animate the idle `background` lanes.
@@ -2443,6 +2506,7 @@ fn shared_skin_motion_clip(samples: &[SkinMotionSample]) -> AnimationClip {
     .unwrap()
 }
 
+#[cfg(feature = "gui")]
 fn set_node_enabled(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId, enabled: bool) {
     let mut context = host.world_mut(world).unwrap();
     let incarnation = context
@@ -2463,6 +2527,7 @@ fn set_node_enabled(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
         .unwrap();
 }
 
+#[cfg(feature = "gui")]
 fn skin_controller_refused(
     host: &mut HostRuntime,
     world: WorldId,
@@ -2483,6 +2548,7 @@ fn skin_controller_refused(
         .unwrap()
 }
 
+#[cfg(feature = "gui")]
 /// Base (authored) and effective idle `background` lanes of node 2.
 fn idle_background_lanes(
     host: &mut HostRuntime,
@@ -2503,6 +2569,7 @@ fn idle_background_lanes(
     [lanes(inspected.base), lanes(inspected.effective)]
 }
 
+#[cfg(feature = "gui")]
 /// How an unrelated edit reaches the GuiRoot while a skin transition runs.
 #[derive(Clone, Copy, Debug)]
 enum UnrelatedGuiEdit {
@@ -2514,6 +2581,7 @@ enum UnrelatedGuiEdit {
     Input,
 }
 
+#[cfg(feature = "gui")]
 /// Step one frame after an unrelated GUI edit, as React and input commit
 /// other nodes while a skin transition runs.
 fn step_with_unrelated_edit(
@@ -2573,6 +2641,7 @@ fn step_with_unrelated_edit(
     context.step(1.0 / 60.0).unwrap();
 }
 
+#[cfg(feature = "gui")]
 #[test]
 fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
     let idle = ([0.38, 0.85, 1.0, 0.9], 1.0, [1.0, 1.0]);

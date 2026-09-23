@@ -3,8 +3,9 @@
 
 use ipp_core::services::asset_management::{AssetSource, AssetTypeId};
 use ipp_core::{
-    Batch, Command, ComponentValue, EntityRef, HostRuntime, Surface, SurfaceCommand,
-    SurfaceItemContent, SurfaceItemId, SurfaceItemPatch, SurfaceItemStyle, WorldLimits,
+    Batch, Command, ComponentValue, EntityRef, HostRuntime, Surface, SurfaceCache,
+    SurfaceCachePolicy, SurfaceCommand, SurfaceItemContent, SurfaceItemId, SurfaceItemPatch,
+    SurfaceItemStyle, WorldLimits,
 };
 
 fn create_surface(host: &mut HostRuntime, world: ipp_core::WorldId) -> ipp_core::EntityId {
@@ -316,4 +317,64 @@ fn content_update_reuses_the_live_label_allocation() {
         &surface.items()[0].content,
         SurfaceItemContent::Label(label) if label == "short line"
     ));
+}
+
+#[test]
+fn snapshots_keep_the_authored_cache_policy_and_rebuild_prepared_inputs() {
+    let mut host = HostRuntime::new();
+    let world = host.create_world(WorldLimits::default()).unwrap();
+    let entity = create_surface(&mut host, world);
+    let policy = SurfaceCache {
+        direct_distance: 0.5,
+        texels_per_metre: 128.0,
+        max_refresh_hz: 2.0,
+    };
+    let prepared = |host: &mut HostRuntime, world| {
+        let mut context = host.world_mut(world).unwrap();
+        context.step(0.0).unwrap();
+        let item = &context.surface_render_items()[0];
+        (item.cache, item.paint_revision, item.resource_revision)
+    };
+    {
+        let mut context = host.world_mut(world).unwrap();
+        context
+            .enqueue(Batch {
+                id: 2,
+                operations: vec![Command::InsertComponentValue {
+                    entity: EntityRef::Handle(entity),
+                    value: ComponentValue::SurfaceCache(policy),
+                }],
+            })
+            .unwrap();
+        assert!(context.step(0.0).unwrap().outcomes[0].result.is_ok());
+    }
+    let expected = Some(SurfaceCachePolicy::new(&policy).unwrap());
+    let (cache, paint, resource) = prepared(&mut host, world);
+    assert_eq!(cache, expected);
+    assert!(paint > 0 && resource > 0);
+
+    let bytes = host.save_world(world, 44, Default::default()).unwrap();
+    let restored = host
+        .load_world(
+            &bytes,
+            44,
+            ipp_core::services::world_serialization::WorldLoadOptions {
+                symbolic_id: Some("surface-cache-copy".into()),
+                ..Default::default()
+            },
+            WorldLimits::default(),
+            Default::default(),
+        )
+        .unwrap();
+    let snapshot = host.world_mut(restored).unwrap().entities().remove(0);
+    assert!(
+        snapshot
+            .base
+            .contains(&ComponentValue::SurfaceCache(policy))
+    );
+    // Revisions and interaction are rebuilt by the restored World's own
+    // preparation rather than restored from the snapshot.
+    let (cache, paint, resource) = prepared(&mut host, restored);
+    assert_eq!(cache, expected);
+    assert_eq!((paint, resource), (1, 2));
 }

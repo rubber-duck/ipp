@@ -40,6 +40,7 @@ export type {
   BoundingGeometryProps,
   ComponentProps,
   SurfaceProps,
+  SurfaceCacheProps,
   SurfaceItemProps,
 } from "./components.js";
 export {
@@ -59,6 +60,7 @@ export {
   PickingGeometry,
   BoundingGeometry,
   Surface,
+  SurfaceCache,
 } from "./components.js";
 
 export interface ReactWorldRoot {

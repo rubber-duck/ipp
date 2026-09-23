@@ -46,6 +46,7 @@ import {
   Transform,
   UnlitMaterial,
   MeshInstance,
+  SurfaceCache,
   UnlitTexture,
 } from "../src/index.js";
 import type { ReactWorldClient } from "../src/index.js";
@@ -1104,4 +1105,66 @@ test("feature-off public texture component rejects locally against the connected
   );
   assert.equal(client.calls.length, 0);
   await root.unmount();
+});
+
+test("SurfaceCache opts in through the connected contract and removal returns to direct", async () => {
+  const client = new DeliveryBoundary();
+  // Deliberately different IDs/offsets: the tree must use the connected contract.
+  client.components = {
+    ...client.components,
+    SurfaceCache: {
+      id: 27,
+      fields: {
+        direct_distance: { offset: 0, kind: 1 },
+        texels_per_metre: { offset: 4, kind: 1 },
+        max_refresh_hz: { offset: 8, kind: 1 },
+      },
+    },
+  };
+  const root = createRoot(client);
+  const world = (cache: { direct_distance?: number } | null) =>
+    createElement(
+      Entity,
+      { id: "panel" },
+      createElement(Scalar, { value: 1 }),
+      cache
+        ? createElement(SurfaceCache, {
+            ...cache,
+            texels_per_metre: 128,
+            bound: false,
+          })
+        : null,
+    );
+  await settle(client, root.render(world({ direct_distance: 2 })));
+  const policy = client.calls[0]!.find(
+    (op) => op.kind === "attachComponentStateOverlay" && op.component === 27,
+  );
+  assert.ok(policy && policy.kind === "attachComponentStateOverlay");
+  assert.equal(policy.mode, "owned");
+  assert.deepEqual(policy.fields, [
+    { offset: 0, value: { kind: "f32", value: 2 } },
+    { offset: 4, value: { kind: "f32", value: 128 } },
+  ]);
+  await settle(client, root.render(world({ direct_distance: 0 })));
+  const [update] = client.calls[1]!;
+  assert.equal(client.calls[1]!.length, 1);
+  assert.ok(update && update.kind === "updateComponentStateOverlay");
+  assert.deepEqual(update.fields, [
+    { offset: 0, value: { kind: "f32", value: 0 } },
+  ]);
+  assert.deepEqual(update.clear, []);
+  await settle(client, root.render(world(null)));
+  assert.equal(client.calls[2]!.length, 1);
+  assert.equal(client.calls[2]![0]!.kind, "releaseComponentStateOverlay");
+  await settle(client, root.unmount());
+
+  // Targets compiled without Surfaces reject the element before sending.
+  const lean = new DeliveryBoundary();
+  const leanRoot = createRoot(lean, { onError: () => {} });
+  await assert.rejects(
+    leanRoot.render(world({ direct_distance: 2 })),
+    /does not support SurfaceCache/,
+  );
+  assert.equal(lean.calls.length, 0);
+  await leanRoot.unmount();
 });

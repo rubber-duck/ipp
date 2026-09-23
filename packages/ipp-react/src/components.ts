@@ -13,6 +13,14 @@ export const componentContract = {
     host: "ipp-surface",
     fields: { width: "number", height: "number", items: "bytes" },
   },
+  SurfaceCache: {
+    host: "ipp-surface-cache",
+    fields: {
+      direct_distance: "number",
+      texels_per_metre: "number",
+      max_refresh_hz: "number",
+    },
+  },
   ParticleEmitter: {
     host: "ipp-particle-emitter",
     fields: {
@@ -247,6 +255,38 @@ export type SurfaceProps = ComponentProps &
 
 export function Surface(props: SurfaceProps) {
   return createElement(componentContract.Surface.host, props);
+}
+
+/**
+ * Opt the Surface on the same entity into whole-Surface texture caching.
+ *
+ * Without this component the Surface always presents directly. Cached
+ * presentation is a renderer optimization for distant Surfaces: nearby
+ * Surfaces and GUI roots with focus, hover, press or capture still present
+ * directly, and World, input and animation updates are never throttled.
+ * Omitted props use the runtime defaults; the runtime rejects values outside
+ * the documented ranges without changing other state. Only these authored
+ * values persist in World snapshots; cached images and schedules do not.
+ */
+export type SurfaceCacheProps = ComponentProps & {
+  /**
+   * Camera-to-Surface distance in metres below which the Surface presents
+   * directly. Farther distances select cached bands that halve resolution
+   * and refresh rate each time the distance doubles. `0` caches at every
+   * distance. Finite and non-negative.
+   */
+  direct_distance?: number | undefined;
+  /** Cache texel density per Surface metre in the nearest cached band; positive. */
+  texels_per_metre?: number | undefined;
+  /**
+   * Maximum content refresh rate in hertz in the nearest cached band;
+   * positive. Pending content changes wait for the next refresh.
+   */
+  max_refresh_hz?: number | undefined;
+};
+
+export function SurfaceCache(props: SurfaceCacheProps) {
+  return createElement(componentContract.SurfaceCache.host, props);
 }
 
 export interface ChildrenProps {

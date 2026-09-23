@@ -934,17 +934,19 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
 #[cfg(feature = "gui")]
 #[test]
 fn population_budget_defers_misses_and_resumes_next_frame() {
-    let budget = ipp_render_gl::glyph_atlas::MAX_POPULATES_PER_FRAME as u32;
-    let ids: Vec<u32> = (0..budget + 8).collect();
+    let floor = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32;
+    let ids: Vec<u32> = (0..floor + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) =
-        text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
+        text_run_scene(&mut host, glyph_font(floor + 8, 1000, 1.0), &ids);
+    renderer.set_glyph_population_budget_ms(0.0);
     let mut world = host.world_mut(world_id).unwrap();
 
-    // The budget stops population; the incomplete run stays analytic this frame.
+    // Without time beyond the floor, population stops there; the incomplete run
+    // stays analytic this frame.
     let first = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
-    assert_eq!(first.glyph_misses, budget + 8, "{first:?}");
-    assert_eq!(first.glyph_populates, budget);
+    assert_eq!(first.glyph_misses, floor + 8, "{first:?}");
+    assert_eq!(first.glyph_populates, floor);
     assert_eq!(first.gui_batches, 0);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
@@ -957,6 +959,26 @@ fn population_budget_defers_misses_and_resumes_next_frame() {
     let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
     assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
     assert_eq!(warm.uploaded_bytes, 0);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
+    // More glyphs than the per-frame floor; the scene's Surface shows up to 50.
+    let count = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32 + 16;
+    let ids: Vec<u32> = (0..count).collect();
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, _) =
+        text_run_scene(&mut host, glyph_font(count, 1000, 1.0), &ids);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    // The default budget covers them at the estimated cost: one population pass,
+    // and the run samples the atlas in its first frame.
+    let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((cold.glyph_misses, cold.glyph_populates), (count, count));
+    assert_eq!(cold.gui_batches, 1, "{cold:?}");
+    assert_eq!(state.analytic_glyph_draws.get(), 0);
+    assert_eq!(state.atlas_restores.get(), 1);
 }
 
 #[cfg(feature = "gui")]

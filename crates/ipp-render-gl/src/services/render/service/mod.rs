@@ -105,8 +105,11 @@ pub struct RenderStats {
     /// back-off defers to a later frame.
     #[cfg(feature = "gui")]
     pub glyph_misses: u32,
-    /// Glyph atlas entries rasterized during this submission, at most
-    /// [`crate::glyph_atlas::MAX_POPULATES_PER_FRAME`], before the main pass.
+    /// Glyph atlas entries rasterized during this submission, before the main pass.
+    /// A frame populates at least [`crate::glyph_atlas::MIN_POPULATES_PER_FRAME`]
+    /// missing entries, then as many as the population time budget covers, up to
+    /// [`crate::glyph_atlas::MAX_POPULATES_PER_FRAME`]; later entries count as misses
+    /// and their text stays analytic until a following frame populates them.
     #[cfg(feature = "gui")]
     pub glyph_populates: u32,
     /// Recoverable glyph atlas allocation or rasterization failures during this
@@ -223,6 +226,9 @@ pub struct RenderService<D: RenderDevice> {
     /// Glyph misses, population queue and outcomes of the current World frame.
     #[cfg(feature = "gui")]
     glyph_frame: super::glyph_atlas::GlyphFrameWork,
+    /// Per-frame population allowance, shared by every World on this context.
+    #[cfg(feature = "gui")]
+    glyph_population: super::glyph_atlas::GlyphPopulationBudget,
     /// Surfaces the current frame submitted; `None` until submission reaches them.
     #[cfg(feature = "gui")]
     submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,

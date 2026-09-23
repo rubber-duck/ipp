@@ -46,6 +46,8 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             glyph_frame: Default::default(),
             #[cfg(feature = "gui")]
+            glyph_population: Default::default(),
+            #[cfg(feature = "gui")]
             submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
@@ -299,6 +301,17 @@ impl<D: RenderDevice> RenderService<D> {
     #[cfg(feature = "gui")]
     pub fn set_glyph_atlas_limits(&mut self, limits: super::super::glyph_atlas::GlyphAtlasLimits) {
         self.glyph_atlas.set_limits(limits);
+    }
+
+    /// Bound the time one frame spends populating glyph atlas entries beyond
+    /// [`super::super::glyph_atlas::MIN_POPULATES_PER_FRAME`], in milliseconds.
+    ///
+    /// The default is [`super::super::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero
+    /// populates only that floor per frame; an infinite budget populates up to
+    /// [`super::super::glyph_atlas::MAX_POPULATES_PER_FRAME`].
+    #[cfg(feature = "gui")]
+    pub fn set_glyph_population_budget_ms(&mut self, budget_ms: f64) {
+        self.glyph_population.set_budget_ms(budget_ms);
     }
 
     /// Linked programs actually demanded in this graphics context.

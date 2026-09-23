@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
-    GlyphVertex, MAX_POPULATES_PER_FRAME, POPULATE_RETRY_TICKS, RESOLUTION_BANDS, TextRun,
-    select_resolution_band,
+    GlyphPopulationBudget, GlyphVertex, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME,
+    POPULATE_RETRY_TICKS, RESOLUTION_BANDS, TextRun, select_resolution_band,
 };
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::services::asset_management::AssetKey;
@@ -335,7 +335,11 @@ impl TestWorld {
 
     /// Allocate every queued miss at `size` texels, as population does before drawing.
     fn populate(&mut self, atlas: &mut Atlas, size: u32) -> usize {
-        let queue = self.work.take_queue();
+        self.populate_within(atlas, size, MAX_POPULATES_PER_FRAME)
+    }
+
+    fn populate_within(&mut self, atlas: &mut Atlas, size: u32, allowance: usize) -> usize {
+        let queue = self.work.take_queue(allowance);
         for key in &queue {
             atlas.allocate_slot(*key, size, size, INK).unwrap();
         }
@@ -849,7 +853,7 @@ fn pressure_reclaims_a_partially_live_page_when_no_page_is_idle() {
         &[(text_run(1, &style, &all), BAND_32_HEIGHT)],
         &[],
     );
-    let queue = world.work.take_queue();
+    let queue = world.work.take_queue(MAX_POPULATES_PER_FRAME);
     for key in &queue {
         atlas.allocate_slot(*key, 500, 240, INK).unwrap();
     }
@@ -1044,18 +1048,87 @@ fn population_queue_is_bounded_per_frame_and_resumes_next_frame() {
     let (_, mut atlas, mut world) = setup();
     let style = style(1);
     let ids: Vec<u32> = (100..100 + MAX_POPULATES_PER_FRAME as u32 + 8).collect();
-    let glyphs = glyphs(&ids);
+    // Rows of 64 keep every glyph inside the clip.
+    let glyphs: Vec<SurfaceGlyph> = ids
+        .iter()
+        .enumerate()
+        .map(|(index, &glyph_id)| SurfaceGlyph {
+            glyph_id,
+            position: [0.1 * (index % 64) as f32, 0.1 + 0.5 * (index / 64) as f32],
+            color: None,
+        })
+        .collect();
     let run = text_run(1, &style, &glyphs);
 
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
     assert_eq!(world.work.misses, ids.len() as u32);
     assert_eq!(world.populate(&mut atlas, 4), MAX_POPULATES_PER_FRAME);
+    assert!(world.work.population_capped());
     assert!(!world.draw(&atlas, &run).0);
 
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
     assert_eq!(world.work.misses, 8);
     assert_eq!(world.populate(&mut atlas, 4), 8);
+    assert!(!world.work.population_capped());
     assert!(world.draw(&atlas, &run).0);
+}
+
+#[test]
+fn population_allowance_defers_the_rest_of_the_queue() {
+    let (_, mut atlas, mut world) = setup();
+    let style = style(1);
+    let ids: Vec<u32> = (100..140).collect();
+    let glyphs = glyphs(&ids);
+    let run = text_run(1, &style, &glyphs);
+
+    world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
+    assert_eq!(
+        world.populate_within(&mut atlas, 4, MIN_POPULATES_PER_FRAME),
+        32
+    );
+    assert!(
+        world.work.population_capped(),
+        "deferred entries count as capped"
+    );
+    assert!(!world.draw(&atlas, &run).0);
+
+    world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
+    assert_eq!(world.work.misses, 8, "deferred entries miss again");
+    assert_eq!(
+        world.populate_within(&mut atlas, 4, MIN_POPULATES_PER_FRAME),
+        8
+    );
+    assert!(world.draw(&atlas, &run).0);
+}
+
+#[test]
+fn population_budget_covers_glyphs_between_the_floor_and_the_cap() {
+    let mut budget = GlyphPopulationBudget::default();
+
+    // Measured passes set the per-glyph cost: 0.01 ms per glyph fills 2 ms with 200.
+    for _ in 0..32 {
+        budget.record(100, 1.0);
+    }
+    assert_eq!(budget.allowance(), 200);
+
+    // A slow platform still populates the floor; a fast one stops at the cap.
+    for _ in 0..32 {
+        budget.record(10, 10.0);
+    }
+    assert_eq!(budget.allowance(), MIN_POPULATES_PER_FRAME);
+    for _ in 0..64 {
+        budget.record(1000, 0.001);
+    }
+    assert_eq!(budget.allowance(), MAX_POPULATES_PER_FRAME);
+
+    // Tiny passes are dominated by fixed costs and leave the estimate alone.
+    budget.record(2, 100.0);
+    assert_eq!(budget.allowance(), MAX_POPULATES_PER_FRAME);
+
+    budget.set_budget_ms(0.0);
+    assert_eq!(budget.allowance(), MIN_POPULATES_PER_FRAME);
+    budget.set_budget_ms(f64::INFINITY);
+    assert_eq!(budget.allowance(), MAX_POPULATES_PER_FRAME);
 }
 
 #[test]
@@ -1084,7 +1157,7 @@ fn failed_population_backs_off_without_invalidating_retained_runs() {
     let deferred_publications = |atlas: &mut Atlas, world: &mut TestWorld| {
         for publications in 1..=64 {
             world.publish(atlas, &shown, &[]);
-            let queue = world.work.take_queue();
+            let queue = world.work.take_queue(MAX_POPULATES_PER_FRAME);
             let queued = queue == [key(2, 32)];
             world.work.restore_queue(queue);
             if queued {

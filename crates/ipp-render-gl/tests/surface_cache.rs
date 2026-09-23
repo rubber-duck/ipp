@@ -1075,11 +1075,13 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
 #[cfg(feature = "gui")]
 #[test]
 fn text_drawn_analytically_under_the_population_bound_is_refined_next_frame() {
-    let budget = ipp_render_gl::glyph_atlas::MAX_POPULATES_PER_FRAME as u32;
+    let budget = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..budget + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, entity) =
         text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
+    // Only the per-frame floor populates, so the first repaint defers glyphs.
+    renderer.set_glyph_population_budget_ms(0.0);
     state.cache_limit.set(4096);
     let mut world = host.world_mut(world_id).unwrap();
     set_policy(&mut world, entity, Some(ALWAYS));

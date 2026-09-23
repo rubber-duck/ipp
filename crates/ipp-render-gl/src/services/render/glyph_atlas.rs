@@ -35,8 +35,25 @@ pub const ATLAS_PAGE_SIZE: u32 = 512;
 /// Bytes per atlas texel: pages store single-channel R8 coverage.
 pub const ATLAS_BYTES_PER_TEXEL: usize = 1;
 
-/// Maximum number of new glyph coverage entries populated per frame.
-pub const MAX_POPULATES_PER_FRAME: usize = 32;
+/// Glyph coverage entries a frame populates whenever that many are missing, however
+/// long they take.
+pub const MIN_POPULATES_PER_FRAME: usize = 32;
+
+/// Glyph coverage entries one frame populates at most; later misses wait a frame.
+pub const MAX_POPULATES_PER_FRAME: usize = 512;
+
+/// Default time one frame may spend populating glyphs beyond
+/// [`MIN_POPULATES_PER_FRAME`], in milliseconds.
+pub const DEFAULT_POPULATE_BUDGET_MS: f64 = 2.0;
+
+/// Estimated population cost per glyph, in milliseconds, before a measurement and on
+/// platforms without a clock. Native population measures its own passes; WebGL draws
+/// are queued to another process, so its estimate stays fixed. Both are calibrated
+/// from cold terminal and dashboard populations (see `RenderStats::glyph_populates`).
+#[cfg(not(target_arch = "wasm32"))]
+const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.005;
+#[cfg(target_arch = "wasm32")]
+const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.02;
 
 /// Demand publications a glyph waits after its first failed population.
 pub const POPULATE_RETRY_TICKS: u64 = 4;
@@ -700,6 +717,63 @@ impl<D: RenderDevice> GlyphAtlas<D> {
     }
 }
 
+/// Per-frame glyph population allowance from a time budget and a per-glyph cost.
+///
+/// Each frame populates at least [`MIN_POPULATES_PER_FRAME`] missing entries and at
+/// most [`MAX_POPULATES_PER_FRAME`], and between those as many as the budget covers at
+/// the estimated cost. Where the platform has a clock, measured population passes
+/// refine the estimate, so cold text reaches the atlas in one frame when the budget
+/// allows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphPopulationBudget {
+    budget_ms: f64,
+    ms_per_glyph: f64,
+}
+
+impl Default for GlyphPopulationBudget {
+    fn default() -> Self {
+        Self {
+            budget_ms: DEFAULT_POPULATE_BUDGET_MS,
+            ms_per_glyph: ESTIMATED_POPULATE_MS_PER_GLYPH,
+        }
+    }
+}
+
+impl GlyphPopulationBudget {
+    /// Samples smaller than this many glyphs are dominated by fixed pass costs.
+    const MIN_SAMPLE_GLYPHS: usize = 8;
+
+    /// Replace the time budget; zero populates only the floor, and an infinite or
+    /// non-finite budget populates up to the cap.
+    pub fn set_budget_ms(&mut self, budget_ms: f64) {
+        self.budget_ms = if budget_ms.is_nan() {
+            f64::INFINITY
+        } else {
+            budget_ms.max(0.0)
+        };
+    }
+
+    /// Entries this frame may populate.
+    pub fn allowance(&self) -> usize {
+        let covered = self.budget_ms / self.ms_per_glyph;
+        if covered >= MAX_POPULATES_PER_FRAME as f64 {
+            return MAX_POPULATES_PER_FRAME;
+        }
+
+        (covered as usize).clamp(MIN_POPULATES_PER_FRAME, MAX_POPULATES_PER_FRAME)
+    }
+
+    /// Fold one measured population pass into the per-glyph estimate.
+    pub fn record(&mut self, glyphs: usize, elapsed_ms: f64) {
+        if glyphs < Self::MIN_SAMPLE_GLYPHS || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
+            return;
+        }
+
+        let sample = (elapsed_ms / glyphs as f64).max(f64::MIN_POSITIVE);
+        self.ms_per_glyph = 0.5 * self.ms_per_glyph + 0.5 * sample;
+    }
+}
+
 /// Glyph atlas work one World frame found and performed.
 #[derive(Debug, Default)]
 pub struct GlyphFrameWork {
@@ -711,7 +785,8 @@ pub struct GlyphFrameWork {
     pub populates: u32,
     /// Recoverable allocation or rasterization failures.
     pub failures: u32,
-    /// Missing entries left for a later frame by the per-frame population bound.
+    /// Missing entries left for a later frame by the per-frame population cap or
+    /// time budget.
     capped: u32,
 }
 
@@ -726,7 +801,7 @@ impl GlyphFrameWork {
         self.capped = 0;
     }
 
-    /// Record a missing entry; queue it within the per-frame budget unless it backs off.
+    /// Record a missing entry; queue it within the per-frame cap unless it backs off.
     fn miss(&mut self, atlas: &GlyphAtlas<impl RenderDevice>, key: GlyphKey) {
         if !self.missing.insert(key) {
             return;
@@ -744,15 +819,22 @@ impl GlyphFrameWork {
         }
     }
 
-    /// Whether the per-frame bound left missing entries that a following
-    /// frame will populate; entries backing off after failures do not count.
+    /// Whether the per-frame cap or time budget left missing entries that a
+    /// following frame will populate; entries backing off after failures do not count.
     pub fn population_capped(&self) -> bool {
         self.capped > 0
     }
 
-    /// Take the population queue, in the order its runs published their demand.
-    pub fn take_queue(&mut self) -> Vec<GlyphKey> {
-        std::mem::take(&mut self.queue)
+    /// Take at most `allowance` queued entries, in the order their runs published
+    /// their demand; the rest wait for a later frame.
+    pub fn take_queue(&mut self, allowance: usize) -> Vec<GlyphKey> {
+        let mut queue = std::mem::take(&mut self.queue);
+        if queue.len() > allowance {
+            self.capped += (queue.len() - allowance) as u32;
+            queue.truncate(allowance);
+        }
+
+        queue
     }
 
     /// Return a consumed queue so its capacity serves later frames.

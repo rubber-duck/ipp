@@ -487,12 +487,25 @@ impl<D: RenderDevice> RenderService<D> {
         &mut self,
         world: &WorldContext<'_>,
     ) -> Result<(), RenderError> {
-        let queue = self.glyph_frame.take_queue();
-        let result = if queue.is_empty() {
-            Ok(())
-        } else {
-            self.populate_glyphs(world, &queue)
-        };
+        let queue = self
+            .glyph_frame
+            .take_queue(self.glyph_population.allowance());
+        if queue.is_empty() {
+            self.glyph_frame.restore_queue(queue);
+            return Ok(());
+        }
+
+        // Native passes refine the per-glyph cost; WebGL keeps its estimate because
+        // its draws execute in another process.
+        #[cfg(not(target_arch = "wasm32"))]
+        let started = std::time::Instant::now();
+        let result = self.populate_glyphs(world, &queue);
+        #[cfg(not(target_arch = "wasm32"))]
+        if result.is_ok() {
+            self.glyph_population
+                .record(queue.len(), started.elapsed().as_secs_f64() * 1e3);
+        }
+
         self.glyph_frame.restore_queue(queue);
         result
     }

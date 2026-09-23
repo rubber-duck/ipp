@@ -4,6 +4,15 @@ use crate::components::{Hierarchy, LookAt};
 use crate::{Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime};
 use std::time::Instant;
 
+/// Debug builds stop at 4k: debug-only commit validation makes large batch
+/// deletion quadratic there. The registered `scaling` suite runs these
+/// tests in release, where 16k stays affordable.
+#[cfg(debug_assertions)]
+const SCALING_SIZES: &[usize] = &[1_000, 4_000];
+
+#[cfg(not(debug_assertions))]
+const SCALING_SIZES: &[usize] = &[1_000, 4_000, 16_000];
+
 fn measure<T>(size: usize, shape: &str, operation: &str, f: impl FnOnce() -> T) -> T {
     VISITS.set(0);
     let start = Instant::now();
@@ -42,7 +51,7 @@ fn apply(host: &mut HostRuntime, world: crate::WorldId, operations: Vec<Command>
 
 #[test]
 fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
-    for size in [1_000, 4_000, 16_000] {
+    for &size in SCALING_SIZES {
         for deep in [false, true] {
             let shape = if deep {
                 "deep"
@@ -122,13 +131,13 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
 
 #[test]
 fn maintained_scaling_sparse_look_at_edit_keeps_unrelated_graph_work_constant() {
-    for size in [1_000, 4_000, 16_000] {
+    for &size in SCALING_SIZES {
         let mut host = HostRuntime::default();
         let world = host.create_world(Default::default()).unwrap();
         let entities = apply(
             &mut host,
             world,
-            (0..size)
+            (0..size as u32)
                 .map(|alias| Command::Create {
                     alias,
                     metadata: Default::default(),
@@ -215,7 +224,7 @@ fn maintained_scaling_empty_extension_dispatch() {
         "probe.8", "probe.9", "probe.10", "probe.11", "probe.12", "probe.13", "probe.14",
         "probe.15",
     ];
-    for size in [1_000, 4_000, 16_000] {
+    for &size in SCALING_SIZES {
         for width in [0, 16] {
             let calls = Arc::new(AtomicUsize::new(0));
             let mut factories = compiled_system_factories();

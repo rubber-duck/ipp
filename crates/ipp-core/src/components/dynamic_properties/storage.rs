@@ -103,6 +103,34 @@ impl DynamicProperties {
         DynamicValue::decode(&bytes).ok()
     }
 
+    /// Borrow the asset selection behind a prepared asset descriptor.
+    #[cfg(feature = "gui")]
+    pub(crate) fn descriptor_asset(
+        &self,
+        descriptor: DynamicPropertyDescriptor,
+    ) -> Option<&AssetSource> {
+        (descriptor.kind == DynamicPropertyKind::Asset)
+            .then(|| self.assets.get(&descriptor.key))
+            .flatten()
+    }
+
+    /// Names starting with `prefix`, in name order, with the remainder of
+    /// each name after the prefix: one ordered seek instead of a lookup
+    /// per candidate name.
+    #[cfg(feature = "gui")]
+    pub(crate) fn with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, DynamicPropertyDescriptor)> + 'a {
+        self.descriptors
+            .range::<str, _>((
+                std::ops::Bound::Included(prefix),
+                std::ops::Bound::Unbounded,
+            ))
+            .take_while(move |(name, _)| name.starts_with(prefix))
+            .map(move |(name, descriptor)| (&name[prefix.len()..], *descriptor))
+    }
+
     /// Resolve a name once for a prepared property binding.
     pub fn key(&self, name: &str) -> Option<u32> {
         self.descriptors.get(name).map(|descriptor| descriptor.key)

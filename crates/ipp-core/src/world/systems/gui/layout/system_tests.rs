@@ -448,3 +448,66 @@ fn root_membership_follows_component_lifecycle_among_plain_entities() {
     );
     assert_eq!(evaluated(&mut host, world), vec![first]);
 }
+
+#[test]
+fn unchanged_roots_keep_output_without_fingerprinting() {
+    let (mut host, world, panel) = setup();
+    apply(&mut host, world, Vec::new());
+    super::super::evaluation::take_fingerprint_passes();
+
+    for _ in 0..5 {
+        host.world_mut(world).unwrap().step(0.0).unwrap();
+    }
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 0);
+    let tick = host.world_mut(world).unwrap().tick();
+    let view = host
+        .world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap();
+    assert_eq!(
+        view.evaluation_tick,
+        tick - 1,
+        "no-op frames still advance the tick"
+    );
+
+    // A commit to the root, its Surface or its density re-evaluates it once.
+    apply(
+        &mut host,
+        world,
+        vec![Command::SetDynamicProperty {
+            entity: EntityRef::Handle(panel),
+            component: ComponentValue::GUI_ROOT,
+            name: "node_1_opacity".into(),
+            value: crate::DynamicValue::F32(0.5),
+        }],
+    );
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
+
+    apply(
+        &mut host,
+        world,
+        vec![Command::InsertComponentValue {
+            entity: EntityRef::Handle(panel),
+            value: panel_surface(),
+        }],
+    );
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
+    assert_eq!(
+        host.world_mut(world)
+            .unwrap()
+            .gui_layout_view(panel)
+            .unwrap()
+            .root_bounds,
+        [0.0, 0.0, 2.0, 1.0]
+    );
+
+    host.world_mut(world)
+        .unwrap()
+        .set_gui_units_per_metre(panel, 2.0)
+        .unwrap();
+    host.world_mut(world).unwrap().step(0.0).unwrap();
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
+    host.world_mut(world).unwrap().step(0.0).unwrap();
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 0);
+}

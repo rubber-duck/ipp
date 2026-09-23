@@ -340,106 +340,71 @@ pub fn part_style(root: &GuiRoot, node: GuiNodeId, part: &str) -> GuiPartStyle {
     let Some(_) = skin_part_key(node, part) else {
         return style;
     };
-    if let Some(name) = GuiRoot::part_property_name(node, part, "color")
-        && let Some(DynamicValue::Vec4(color)) = root.properties.get(&name)
-        && valid_color(color)
-    {
-        style.color = Some(color);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "opacity")
-        && let Some(DynamicValue::F32(opacity)) = root.properties.get(&name)
-        && valid_opacity(opacity)
-    {
-        style.opacity = Some(opacity);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "scale")
-        && let Some(DynamicValue::Vec2(scale)) = root.properties.get(&name)
-        && valid_scale(scale)
-    {
-        style.scale = Some(scale);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "asset")
-        && let Some(source) = root.properties.asset(&name).cloned()
-    {
-        style.asset = Some(source);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "corner_radius")
-        && let Some(DynamicValue::Vec2(cr)) = root.properties.get(&name)
-        && valid_non_negative_vec2(cr)
-    {
-        style.corner_radius = Some(cr);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "border_width")
-        && let Some(DynamicValue::F32(bw)) = root.properties.get(&name)
-        && valid_non_negative_f32(bw)
-    {
-        style.border_width = Some(bw);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "border_color")
-        && let Some(DynamicValue::Vec4(bc)) = root.properties.get(&name)
-        && valid_color(bc)
-    {
-        style.border_color = Some(bc);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "fill_mode")
-        && let Some(DynamicValue::F32(fm)) = root.properties.get(&name)
-        && matches!(fm, 0.0 | 1.0 | 2.0)
-    {
-        style.fill_mode = Some(fm);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_start")
-        && let Some(DynamicValue::Vec2(gs)) = root.properties.get(&name)
-        && valid_scale(gs)
-    {
-        style.gradient_start = Some(gs);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_end")
-        && let Some(DynamicValue::Vec2(ge)) = root.properties.get(&name)
-        && valid_scale(ge)
-    {
-        style.gradient_end = Some(ge);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_color0")
-        && let Some(DynamicValue::Vec4(c0)) = root.properties.get(&name)
-        && valid_color(c0)
-    {
-        style.gradient_color0 = Some(c0);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_color1")
-        && let Some(DynamicValue::Vec4(c1)) = root.properties.get(&name)
-        && valid_color(c1)
-    {
-        style.gradient_color1 = Some(c1);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "gradient_radius")
-        && let Some(DynamicValue::F32(gr)) = root.properties.get(&name)
-        && valid_non_negative_f32(gr)
-    {
-        style.gradient_radius = Some(gr);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_color")
-        && let Some(DynamicValue::Vec4(gc)) = root.properties.get(&name)
-        && valid_color(gc)
-    {
-        style.glow_color = Some(gc);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_intensity")
-        && let Some(DynamicValue::F32(gi)) = root.properties.get(&name)
-        && valid_non_negative_f32(gi)
-    {
-        style.glow_intensity = Some(gi);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_radius")
-        && let Some(DynamicValue::F32(gr)) = root.properties.get(&name)
-        && valid_non_negative_f32(gr)
-    {
-        style.glow_radius = Some(gr);
-    }
-    if let Some(name) = GuiRoot::part_property_name(node, part, "glow_falloff")
-        && let Some(DynamicValue::F32(gf)) = root.properties.get(&name)
-        && valid_non_negative_f32(gf)
-    {
-        style.glow_falloff = Some(gf);
+
+    // One ordered scan of `node_<id>_part_<part>_*` reads the same names the
+    // per-lane lookups would; remainders that are not a lane (another part
+    // sharing this prefix) are ignored.
+    let prefix = super::super::tree::component::part_property_prefix(node, part);
+    for (lane, descriptor) in root.part_lanes(&prefix) {
+        if lane == "asset" {
+            style.asset = root.properties.descriptor_asset(descriptor).cloned();
+            continue;
+        }
+
+        let Some(value) = root.properties.get_descriptor(descriptor) else {
+            continue;
+        };
+        match (lane, value) {
+            ("color", DynamicValue::Vec4(color)) if valid_color(color) => {
+                style.color = Some(color);
+            }
+            ("opacity", DynamicValue::F32(opacity)) if valid_opacity(opacity) => {
+                style.opacity = Some(opacity);
+            }
+            ("scale", DynamicValue::Vec2(scale)) if valid_scale(scale) => {
+                style.scale = Some(scale);
+            }
+            ("corner_radius", DynamicValue::Vec2(cr)) if valid_non_negative_vec2(cr) => {
+                style.corner_radius = Some(cr);
+            }
+            ("border_width", DynamicValue::F32(bw)) if valid_non_negative_f32(bw) => {
+                style.border_width = Some(bw);
+            }
+            ("border_color", DynamicValue::Vec4(bc)) if valid_color(bc) => {
+                style.border_color = Some(bc);
+            }
+            ("fill_mode", DynamicValue::F32(fm)) if matches!(fm, 0.0 | 1.0 | 2.0) => {
+                style.fill_mode = Some(fm);
+            }
+            ("gradient_start", DynamicValue::Vec2(gs)) if valid_scale(gs) => {
+                style.gradient_start = Some(gs);
+            }
+            ("gradient_end", DynamicValue::Vec2(ge)) if valid_scale(ge) => {
+                style.gradient_end = Some(ge);
+            }
+            ("gradient_color0", DynamicValue::Vec4(c0)) if valid_color(c0) => {
+                style.gradient_color0 = Some(c0);
+            }
+            ("gradient_color1", DynamicValue::Vec4(c1)) if valid_color(c1) => {
+                style.gradient_color1 = Some(c1);
+            }
+            ("gradient_radius", DynamicValue::F32(gr)) if valid_non_negative_f32(gr) => {
+                style.gradient_radius = Some(gr);
+            }
+            ("glow_color", DynamicValue::Vec4(gc)) if valid_color(gc) => {
+                style.glow_color = Some(gc);
+            }
+            ("glow_intensity", DynamicValue::F32(gi)) if valid_non_negative_f32(gi) => {
+                style.glow_intensity = Some(gi);
+            }
+            ("glow_radius", DynamicValue::F32(gr)) if valid_non_negative_f32(gr) => {
+                style.glow_radius = Some(gr);
+            }
+            ("glow_falloff", DynamicValue::F32(gf)) if valid_non_negative_f32(gf) => {
+                style.glow_falloff = Some(gf);
+            }
+            _ => {}
+        }
     }
     style
 }

@@ -122,13 +122,23 @@ impl DynamicProperties {
         &'a self,
         prefix: &'a str,
     ) -> impl Iterator<Item = (&'a str, DynamicPropertyDescriptor)> + 'a {
+        self.named_with_prefix(prefix)
+            .map(move |(name, descriptor)| (&name[prefix.len()..], descriptor))
+    }
+
+    /// Full names starting with `prefix`, in name order.
+    #[cfg(feature = "gui")]
+    pub(crate) fn named_with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, DynamicPropertyDescriptor)> + 'a {
         self.descriptors
             .range::<str, _>((
                 std::ops::Bound::Included(prefix),
                 std::ops::Bound::Unbounded,
             ))
             .take_while(move |(name, _)| name.starts_with(prefix))
-            .map(move |(name, descriptor)| (&name[prefix.len()..], *descriptor))
+            .map(|(name, descriptor)| (name.as_str(), *descriptor))
     }
 
     /// Resolve a name once for a prepared property binding.

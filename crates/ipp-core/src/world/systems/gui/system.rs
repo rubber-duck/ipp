@@ -454,123 +454,183 @@ impl System for GuiSystem {
             .input(crate::ComponentValue::GUI_ROOT)
             .ok_or(ErrorReason::MissingComponent)?
             .incarnation;
-        let crate::ComponentValue::GuiRoot(mut root) = context
-            .world
-            .world
-            .state
-            .producer_value(
-                &context.world.world.components,
-                entity,
-                crate::ComponentValue::GUI_ROOT,
-            )
-            .ok_or(ErrorReason::MissingComponent)?
-        else {
-            unreachable!("gui_root component")
-        };
-        match command {
-            GuiCommand::InsertNode {
-                root_incarnation: expected,
-                ..
-            } if *expected != root_incarnation => return Err(ErrorReason::InvalidValue),
-            GuiCommand::InsertNode {
-                ..
-            } => {}
-            GuiCommand::UpdateNode {
-                handle,
-                ..
-            }
-            | GuiCommand::MoveNode {
-                handle,
-                ..
-            }
-            | GuiCommand::RemoveNode {
-                handle,
-            }
-            | GuiCommand::SetControlValue {
-                handle,
-                ..
-            } => validate_handle(&root, root_incarnation, session, handle)?,
-        }
+        let root = producer_root(
+            &context.world.world.state,
+            &context.world.world.components,
+            entity,
+        )
+        .ok_or(ErrorReason::MissingComponent)?;
+        let commands = edit_commands(entity, &root, root_incarnation, session, command)?;
+        drop(root);
 
-        let previous = root.clone();
-        match command.clone() {
-            GuiCommand::InsertNode {
-                id,
-                parent,
-                index,
-                content,
-                style,
-                ..
-            } => {
-                validate_node_style(&style).map_err(|_| ErrorReason::InvalidValue)?;
-                root.nodes_mut()
-                    .insert_node(id, parent, index as usize, content.clone())
-                    .map_err(|_| ErrorReason::InvalidValue)?;
-                root.controls_mut().insert_initial(id, &content);
-                root.install_node_style(id, &style)?;
-            }
-            GuiCommand::UpdateNode {
-                handle,
-                patch,
-            } => {
-                if let Some(content) = patch.content.clone() {
-                    root.nodes_mut()
-                        .replace_content(handle.node_id, content.clone())
-                        .map_err(|_| ErrorReason::InvalidValue)?;
-                    root.controls_mut()
-                        .reconcile_content(handle.node_id, &content)
-                        .map_err(|_| ErrorReason::InvalidValue)?;
-                }
-                root.apply_patch(handle.node_id, &patch)?;
-                let style = root
-                    .style(handle.node_id)
-                    .ok_or(ErrorReason::InvalidValue)?;
-                validate_node_style(&style).map_err(|_| ErrorReason::InvalidValue)?;
-            }
-            GuiCommand::MoveNode {
-                handle,
-                parent,
-                index,
-            } => {
-                root.nodes_mut()
-                    .move_node(handle.node_id, parent, index as usize)
-                    .map_err(|_| ErrorReason::InvalidValue)?;
-            }
-            GuiCommand::RemoveNode {
-                handle,
-            } => {
-                let removed = root
-                    .nodes_mut()
-                    .remove_node(handle.node_id)
-                    .map_err(|_| ErrorReason::InvalidValue)?;
-                for id in removed {
-                    root.controls_mut().remove(id);
-                    root.remove_node_properties(id);
-                }
-            }
-            GuiCommand::SetControlValue {
-                handle,
-                expected_revision,
-                value,
-            } => {
-                commit_control_value(
-                    &mut root,
-                    root_incarnation,
-                    session,
-                    &handle,
-                    expected_revision,
-                    &value,
-                )?;
-            }
-        }
-
-        root.validate_complete()?;
-        let commands = authored_diff(entity, &previous, &root);
         self.state.committing = Some(entity);
         let result = context.world.apply_authored_commands(Some(self), &commands);
         self.state.committing = None;
         result
     }
+}
+
+/// Borrow the producer GuiRoot that authored edits start from: the retained
+/// base beneath overlays, or live storage with any hidden overlay originals
+/// restored (copying only in that case).
+fn producer_root<'a>(
+    state: &'a crate::world::WorldEntityState,
+    components: &'a crate::components::registry::ComponentStorage,
+    entity: EntityId,
+) -> Option<std::borrow::Cow<'a, GuiRoot>> {
+    let layer = state
+        .entities
+        .get(&entity)?
+        .layers
+        .get(&crate::ComponentValue::GUI_ROOT)?;
+    layer.inputs.base()?;
+    if let Some(value) = layer.inputs.base_value() {
+        let crate::ComponentValue::GuiRoot(root) = value else {
+            return None;
+        };
+        return Some(std::borrow::Cow::Borrowed(root));
+    }
+
+    let root = components.gui_root(entity.index() as usize)?;
+    if layer.inputs.hidden_fields.is_empty() {
+        return Some(std::borrow::Cow::Borrowed(root));
+    }
+    let mut value = crate::ComponentValue::GuiRoot(root.clone());
+    layer.inputs.restore_producer(&mut value);
+    let crate::ComponentValue::GuiRoot(root) = value else {
+        unreachable!("restored GUI root remains a GUI root")
+    };
+    Some(std::borrow::Cow::Owned(root))
+}
+
+/// Ordinary authored writes that apply one GuiCommand to the producer root.
+///
+/// A command edits the tree and committed values plus the lanes of at most
+/// one node, or removes the lanes of a removed subtree. The edit runs on an
+/// [`GuiRoot::edit_scope`] copy holding only those lanes, so validation and
+/// the diff against the producer cover the edited node rather than every
+/// property; untouched lanes were validated when they were written. The
+/// writes equal a diff of complete roots, in the same order.
+pub(super) fn edit_commands(
+    entity: EntityId,
+    root: &GuiRoot,
+    root_incarnation: u64,
+    session: u64,
+    command: &GuiCommand,
+) -> Result<Vec<Command>, ErrorReason> {
+    match command {
+        GuiCommand::InsertNode {
+            root_incarnation: expected,
+            ..
+        } if *expected != root_incarnation => return Err(ErrorReason::InvalidValue),
+        GuiCommand::InsertNode {
+            ..
+        } => {}
+        GuiCommand::UpdateNode {
+            handle,
+            ..
+        }
+        | GuiCommand::MoveNode {
+            handle,
+            ..
+        }
+        | GuiCommand::RemoveNode {
+            handle,
+        }
+        | GuiCommand::SetControlValue {
+            handle,
+            ..
+        } => validate_handle(root, root_incarnation, session, handle)?,
+    }
+
+    let edited = match command {
+        GuiCommand::InsertNode {
+            id,
+            ..
+        } => Some(*id),
+        GuiCommand::UpdateNode {
+            handle,
+            ..
+        } => Some(handle.node_id),
+        _ => None,
+    };
+    let mut next = root.edit_scope(edited)?;
+    let mut touched: BTreeSet<GuiNodeId> = edited.into_iter().collect();
+
+    match command.clone() {
+        GuiCommand::InsertNode {
+            id,
+            parent,
+            index,
+            content,
+            style,
+            ..
+        } => {
+            validate_node_style(&style).map_err(|_| ErrorReason::InvalidValue)?;
+            next.nodes_mut()
+                .insert_node(id, parent, index as usize, content.clone())
+                .map_err(|_| ErrorReason::InvalidValue)?;
+            next.controls_mut().insert_initial(id, &content);
+            next.install_node_style(id, &style)?;
+        }
+        GuiCommand::UpdateNode {
+            handle,
+            patch,
+        } => {
+            if let Some(content) = patch.content.clone() {
+                next.nodes_mut()
+                    .replace_content(handle.node_id, content.clone())
+                    .map_err(|_| ErrorReason::InvalidValue)?;
+                next.controls_mut()
+                    .reconcile_content(handle.node_id, &content)
+                    .map_err(|_| ErrorReason::InvalidValue)?;
+            }
+            next.apply_patch(handle.node_id, &patch)?;
+            let style = next
+                .style(handle.node_id)
+                .ok_or(ErrorReason::InvalidValue)?;
+            validate_node_style(&style).map_err(|_| ErrorReason::InvalidValue)?;
+        }
+        GuiCommand::MoveNode {
+            handle,
+            parent,
+            index,
+        } => {
+            next.nodes_mut()
+                .move_node(handle.node_id, parent, index as usize)
+                .map_err(|_| ErrorReason::InvalidValue)?;
+        }
+        GuiCommand::RemoveNode {
+            handle,
+        } => {
+            let removed = next
+                .nodes_mut()
+                .remove_node(handle.node_id)
+                .map_err(|_| ErrorReason::InvalidValue)?;
+            for id in removed {
+                next.controls_mut().remove(id);
+                next.remove_node_properties(id);
+                touched.insert(id);
+            }
+        }
+        GuiCommand::SetControlValue {
+            handle,
+            expected_revision,
+            value,
+        } => {
+            commit_control_value(
+                &mut next,
+                root_incarnation,
+                session,
+                &handle,
+                expected_revision,
+                &value,
+            )?;
+        }
+    }
+
+    next.validate_complete()?;
+    Ok(scoped_authored_diff(entity, root, &next, &touched))
 }
 
 /// Whether any live restorable Surface content exists for `entity` outside
@@ -796,8 +856,18 @@ fn validate_handle(
     }
 }
 
-fn authored_diff(entity: EntityId, previous: &GuiRoot, next: &GuiRoot) -> Vec<Command> {
+/// Writes turning `previous` into `next` for the tree and the lanes of the
+/// touched nodes, which are the only lanes `next` holds. Lanes are visited
+/// in name order, removals and changes before additions, like a diff of
+/// complete roots.
+fn scoped_authored_diff(
+    entity: EntityId,
+    previous: &GuiRoot,
+    next: &GuiRoot,
+    touched: &BTreeSet<GuiNodeId>,
+) -> Vec<Command> {
     use crate::components::schema::SchemaField;
+    use std::collections::BTreeMap;
 
     let mut commands = Vec::new();
     if previous.nodes() != next.nodes() {
@@ -813,19 +883,39 @@ fn authored_diff(entity: EntityId, previous: &GuiRoot, next: &GuiRoot) -> Vec<Co
             },
         });
     }
-    for (name, descriptor) in previous.properties.descriptors() {
-        if !next.properties.descriptors().contains_key(name) {
-            commands.push(Command::RemoveDynamicProperty {
+
+    let prefixes: Vec<String> = touched
+        .iter()
+        .map(|&id| super::tree::component::node_property_prefix(id))
+        .collect();
+    let lanes = |root: &'_ GuiRoot| -> Vec<(String, crate::DynamicPropertyDescriptor)> {
+        prefixes
+            .iter()
+            .flat_map(|prefix| root.node_properties(prefix))
+            .map(|(name, descriptor)| (name.to_owned(), descriptor))
+            .collect()
+    };
+    let before: BTreeMap<_, _> = lanes(previous).into_iter().collect();
+    let after: BTreeMap<_, _> = lanes(next).into_iter().collect();
+
+    for (name, descriptor) in &before {
+        match after.get(name) {
+            None => commands.push(Command::RemoveDynamicProperty {
                 entity: crate::EntityRef::Handle(entity),
                 component: crate::ComponentValue::GUI_ROOT,
                 name: name.clone(),
-            });
-        } else if next.properties.get(name) != previous.properties.get_key(descriptor.key) {
-            commands.push(set_property(entity, next, name));
+            }),
+            Some(&current)
+                if next.properties.get_descriptor(current)
+                    != previous.properties.get_descriptor(*descriptor) =>
+            {
+                commands.push(set_property(entity, next, name));
+            }
+            Some(_) => {}
         }
     }
-    for name in next.properties.descriptors().keys() {
-        if !previous.properties.descriptors().contains_key(name) {
+    for name in after.keys() {
+        if !before.contains_key(name) {
             commands.push(set_property(entity, next, name));
         }
     }
@@ -998,3 +1088,7 @@ impl crate::WorldContext<'_> {
 #[cfg(test)]
 #[path = "system_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "command_tests.rs"]
+mod command_tests;

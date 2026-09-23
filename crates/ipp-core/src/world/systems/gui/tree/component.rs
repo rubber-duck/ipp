@@ -218,6 +218,39 @@ impl GuiRoot {
         self.properties.with_prefix(prefix)
     }
 
+    /// Copy of this root for editing at most one node: the complete tree and
+    /// committed values, with only `node`'s own and part lanes. Validating
+    /// and diffing the copy covers exactly what one command can change.
+    pub(in crate::world::systems::gui) fn edit_scope(
+        &self,
+        node: Option<GuiNodeId>,
+    ) -> Result<Self, ErrorReason> {
+        let mut scope = Self {
+            nodes: self.nodes.clone(),
+            properties: DynamicProperties::default(),
+        };
+        if let Some(id) = node {
+            let prefix = node_property_prefix(id);
+            for (name, descriptor) in self.properties.named_with_prefix(&prefix) {
+                let value = self
+                    .properties
+                    .get_descriptor(descriptor)
+                    .ok_or(ErrorReason::InvalidField)?;
+                scope.properties.set(name, value).map_err(field_error)?;
+            }
+        }
+        Ok(scope)
+    }
+
+    /// Full names and descriptors of every lane owned by `node`, including
+    /// its parts, in name order.
+    pub(in crate::world::systems::gui) fn node_properties<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, crate::DynamicPropertyDescriptor)> + 'a {
+        self.properties.named_with_prefix(prefix)
+    }
+
     /// Apply partial style changes to named properties, preserving omitted fields.
     /// An explicit clear removes the property, invalidating its bindings.
     pub(in crate::world::systems::gui) fn apply_patch(
@@ -450,7 +483,7 @@ fn node_property_name(id: GuiNodeId, suffix: &str) -> String {
 }
 
 /// Common prefix of every lane owned by one node, including its parts.
-fn node_property_prefix(id: GuiNodeId) -> String {
+pub(in crate::world::systems::gui) fn node_property_prefix(id: GuiNodeId) -> String {
     format!("node_{}_", id.0)
 }
 

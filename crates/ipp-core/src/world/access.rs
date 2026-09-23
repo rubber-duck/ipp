@@ -305,7 +305,9 @@ pub(in crate::world) fn commit_components(
         entities_state: std::mem::take(&mut world.state),
     };
     let mut cleanup = Vec::new();
-    let mut validation = Ok(());
+    // Copy-prepared inputs staged by the batch get their single effective copy
+    // before any commit observer reads prepared values.
+    let mut validation = staged.prepare_deferred_components();
     #[cfg(feature = "profiling")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitValidate);
 
@@ -474,6 +476,7 @@ pub(in crate::world) fn commit_components(
     }
     staged.changed.clear();
     staged.observed_components.clear();
+    staged.observed_writes.clear();
     staged.prepared_bytes = 0;
     world.state = staged.entities_state;
     validation

@@ -95,6 +95,8 @@ impl SystemRuntimeAccess<'_> {
         };
         staged.explicit_fields.clear();
         staged.operation_components.clear();
+        staged.operation_untracked.clear();
+        staged.operation_writes.clear();
         staged.operation_created.clear();
         staged.operation_deleted.clear();
         let mut result = Ok(());

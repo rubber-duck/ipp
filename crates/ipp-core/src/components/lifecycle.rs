@@ -68,8 +68,17 @@ pub(crate) trait ComponentLifecycle: Clone {
     /// Failure or superseded preparation drops only private resources. The world
     /// installs the result after invalidating bindings; replacing/removing effective
     /// storage releases its old resources through ordinary Rust ownership.
+    /// Implementations that override this also override [`Self::defers_preparation`].
     fn prepare_effective(&self, _max_activation_bytes: usize) -> Result<Self, crate::ErrorReason> {
         Ok(self.clone())
+    }
+
+    /// Whether preparation is an infallible copy without activation resources, so a
+    /// batch copies the staged value once at commit instead of after every
+    /// operation. Types with fallible or resource-owning preparation return false
+    /// and prepare after each operation, which attributes failure to it.
+    fn defers_preparation() -> bool {
+        true
     }
 
     /// Owned internal allocations in a prepared effective value. Exposed fields

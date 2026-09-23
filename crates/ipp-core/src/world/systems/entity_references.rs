@@ -112,7 +112,7 @@ impl ProducerReferenceIndex {
                 .find(|(field, _)| *field == offset)
             {
                 *value = crate::components::schema::FieldValue::Entity(EntityId::from_bits(0));
-            } else if let Some(value) = inputs.resolved_value.as_mut() {
+            } else if let Some(value) = inputs.layered_value_mut() {
                 value
                     .set_field(
                         offset,

@@ -167,12 +167,27 @@ impl WorldEntityRecord {
 pub(crate) struct WorldEntityState {
     pub(crate) dirty: BTreeSet<(EntityId, u16)>,
     operation_components: BTreeSet<(EntityId, u16)>,
+    // Keys this operation touched through a path other than in-place producer
+    // writes; their observation compares whole values.
+    operation_untracked: BTreeSet<(EntityId, u16)>,
+    // In-place producer writes of this operation and whether each changed the value.
+    operation_writes: Vec<(
+        (EntityId, u16),
+        component_state::observations::ComponentStagedWrite,
+        bool,
+    )>,
     operation_created: BTreeSet<EntityId>,
     operation_deleted: BTreeSet<EntityId>,
     lifecycle_effects: Vec<systems::lifecycle_publisher::LifecycleObservation>,
     observed_components: BTreeMap<(EntityId, u16), (Option<u64>, Option<ComponentValue>)>,
+    // In-place writes applied after a component's observed value (or retained
+    // storage when none was taken), replayed only for a whole-value comparison.
+    observed_writes:
+        BTreeMap<(EntityId, u16), Vec<component_state::observations::ComponentStagedWrite>>,
     changed: mutation_map::MutationMap<(EntityId, u16), Option<u64>>,
     prepared: mutation_map::MutationMap<(EntityId, u16), ComponentValue>,
+    // Staged inputs whose effective copy is made once at the next commit boundary.
+    deferred_preparation: BTreeSet<(EntityId, u16)>,
     // A sparse candidate for one existing-property commit. Cleared after publish;
     // the retained Vec is capacity only, not a second component value store.
     evaluated_target: Option<(EntityId, u16)>,

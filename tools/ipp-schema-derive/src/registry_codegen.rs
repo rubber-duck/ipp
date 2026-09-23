@@ -439,6 +439,12 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         quote! { #(#attrs)* Self::#component(value) => ::ipp_core::components::schema::ComponentLifecycle::activation_bytes(value), }
     });
 
+    let deferred_preparations = entries.iter().map(|e| {
+        let attrs = &e.attrs;
+        let component = &e.name;
+        quote! { #(#attrs)* Self::#component(_) => <crate::components::#component as ::ipp_core::components::schema::ComponentLifecycle>::defers_preparation(), }
+    });
+
     let preparations = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
@@ -694,6 +700,11 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
             /// Prepare typed effective resources before installing an affected component.
             pub(crate) fn prepare_effective(&self, max_activation_bytes: usize) -> Result<Self, crate::ErrorReason> {
                 match self { #(#preparations)* }
+            }
+
+            /// Whether effective preparation is an infallible copy made once per commit.
+            pub(crate) fn defers_preparation(&self) -> bool {
+                match self { #(#deferred_preparations)* }
             }
 
             /// Owned allocations created by effective activation, excluding exposed fields.

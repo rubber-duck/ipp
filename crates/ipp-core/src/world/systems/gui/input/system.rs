@@ -4571,7 +4571,7 @@ fn stage_producer_root(
     let unlayered = layer.inputs.overlay_handles.is_empty()
         && layer.inputs.hidden_fields.is_empty()
         && layer.inputs.base_value().is_none()
-        && layer.inputs.resolved_value.is_none()
+        && !layer.inputs.is_staged()
         && !sim.state.prepared.contains_key(&key)
         && !sim.state.dirty.contains(&key)
         && sim.state.evaluated_target != Some(key);
@@ -4599,11 +4599,15 @@ fn stage_producer_root(
         .and_then(|record| record.layers.get_mut(&ComponentValue::GUI_ROOT))
     {
         layer.inputs.hidden_fields = hidden;
-        layer.inputs.resolved_value = Some(Box::new(effective.clone()));
-        match layer.inputs.base_value_mut() {
-            Some(base) => *base = next_producer,
-            None => layer.inputs.base_value = Some(Box::new(next_producer)),
-        }
+        // Without contributions the staged producer is the effective input.
+        layer.inputs.staged = if unlayered {
+            crate::world::systems::state_overlay::ComponentStagedInput::Base
+        } else {
+            crate::world::systems::state_overlay::ComponentStagedInput::Layered(Box::new(
+                effective.clone(),
+            ))
+        };
+        layer.inputs.base_value = Some(Box::new(next_producer));
     }
     sim.state.changed.insert(key, Some(incarnation));
     sim.state.prepared.insert(key, effective);
@@ -5510,22 +5514,38 @@ impl System for GuiInputSystem {
                 incarnation,
                 ..
             } if *component == ComponentValue::GUI_ROOT => {
-                let targets = self
+                let targets: Vec<_> = self
                     .retained_targets()
                     .into_iter()
-                    .filter(|target| target.entity == *entity);
+                    .filter(|target| target.entity == *entity)
+                    .collect();
                 match kind {
+                    _ if targets.is_empty() => Vec::new(),
                     ComponentLifecycleKind::Removed | ComponentLifecycleKind::Replaced => targets
+                        .into_iter()
                         .map(|target| (target, GuiInputCancelReason::TargetRemoved))
                         .collect(),
                     ComponentLifecycleKind::Inserted | ComponentLifecycleKind::Updated => {
+                        // Borrow the committed root: an update batch may carry one
+                        // observation per ordered property write.
                         let root = context
                             .world
-                            .effective_component(*entity, ComponentValue::GUI_ROOT);
+                            .authored
+                            .allocator
+                            .contains(*entity)
+                            .then(|| {
+                                context
+                                    .world
+                                    .world
+                                    .components
+                                    .gui_root(entity.index() as usize)
+                            })
+                            .flatten();
                         targets
+                            .into_iter()
                             .filter_map(|target| {
-                                let validity = match &root {
-                                    Some(ComponentValue::GuiRoot(root)) => {
+                                let validity = match root {
+                                    Some(root) => {
                                         producer_validity(root, incarnation.unwrap_or(0), &target)
                                     }
                                     _ => GuiTargetValidity::Removed,

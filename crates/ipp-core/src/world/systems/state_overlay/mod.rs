@@ -26,7 +26,7 @@ pub use registry::{
 
 pub(crate) use batch::StateOverlayBatch;
 
-pub(in crate::world) use component_inputs::ComponentStateOverlayInputs;
+pub(in crate::world) use component_inputs::{ComponentStagedInput, ComponentStateOverlayInputs};
 
 use registry::{StateOverlayEntry, StateOverlayFields, StateOverlayRegistry};
 

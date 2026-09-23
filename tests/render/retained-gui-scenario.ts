@@ -429,6 +429,9 @@ export async function exerciseRetainedGui(
   );
 
   const gui = retained ? await exerciseRetainedControls(driver, settle) : null;
+  const worldSwitch = retained
+    ? await exercisePresentedWorldSwitch(driver, settle)
+    : null;
 
   await call("clearWorkload", [
     { width: terminal.width, height: terminal.height },
@@ -464,6 +467,7 @@ export async function exerciseRetainedGui(
     warmupCaptures: warmup,
     mirror: { terminal: terminalMirror, gui: gui?.mirror ?? null },
     gui,
+    worldSwitch,
     warm,
     samples,
     timing:
@@ -608,6 +612,82 @@ async function exerciseRetainedControls(
     `a sparse outline draws edge strips instead of an interior quad: ${JSON.stringify(sparseFilled.triangles)}`,
   );
   return { content, glow, mirror, sparseFilled };
+}
+
+/**
+ * Presenting another World on the same graphics context releases the previous
+ * World's retained batches and glyph atlas demand while the next World renders.
+ * Later scenario steps address the second World.
+ */
+async function exercisePresentedWorldSwitch(
+  driver: RetainedGuiDriver,
+  settle: (
+    label: string,
+  ) => Promise<{ frame: WorkloadFrame; attempts: number }>,
+) {
+  const { call } = driver;
+  const stats = (frame: WorkloadFrame) => ({
+    failedDrawCalls: Number(frame.backend.failedDrawCalls),
+    guiBatches: Number(frame.backend.guiBatches),
+    guiResidentBytes: Number(frame.backend.guiResidentBytes),
+    glyphPages: Number(frame.backend.glyphPages),
+    glyphResidentBytes: Number(frame.backend.glyphResidentBytes),
+  });
+  const panel = { shape: GUI_SHAPE };
+
+  // The text-free panel's own batches, measured while World A presents it.
+  await call("guiPanel", [{ ...panel, variant: "empty" }]);
+  const alone = stats((await settle("world-a-empty")).frame);
+  await call("guiPanel", [{ ...panel, variant: "mixed" }]);
+  const first = stats((await settle("world-a-mixed")).frame);
+  assert.ok(
+    first.guiResidentBytes > alone.guiResidentBytes && first.glyphPages > 0,
+    `World A must hold shape and glyph batches: ${JSON.stringify({ alone, first })}`,
+  );
+
+  // Pages without demand now retire at the next publication; World A's text
+  // keeps its pages resident while it is presented.
+  await call("glyphAtlasLimits", [{ maxPages: 3, idlePagePublications: 1 }]);
+  for (let frame = 0; frame < 3; frame++)
+    await driver.capture("world-a-held", true);
+  const held = stats(await driver.capture("world-a-held", true));
+  assert.ok(
+    held.glyphPages > 0,
+    `demanded pages retired: ${JSON.stringify(held)}`,
+  );
+
+  await call("presentSecondWorld", [{ ...panel, variant: "empty" }]);
+  let second = stats(await driver.capture("world-b-empty", true));
+  let attempts = 1;
+  while (
+    (second.guiResidentBytes !== alone.guiResidentBytes ||
+      second.glyphPages !== 0 ||
+      second.glyphResidentBytes !== 0) &&
+    attempts < 120
+  ) {
+    second = stats(await driver.capture("world-b-empty", true));
+    attempts++;
+  }
+  // Only World B's identical panel stays resident, and no World demands glyphs.
+  assert.deepEqual(
+    [second.guiResidentBytes, second.glyphPages, second.glyphResidentBytes],
+    [alone.guiResidentBytes, 0, 0],
+    `World A's render caches outlived its presentation: ${JSON.stringify({ alone, first, second, attempts })}`,
+  );
+  assert.ok(
+    second.guiBatches > 0 && second.failedDrawCalls === 0,
+    `World B did not render its panel: ${JSON.stringify(second)}`,
+  );
+  const presented = compareFrames(
+    driver.pixels("world-a-empty"),
+    driver.pixels("world-b-empty"),
+    8,
+  );
+  assert.ok(
+    presented.changedFraction < 0.001,
+    `World B must present the same panel through the same camera: ${JSON.stringify(presented)}`,
+  );
+  return { alone, first, held, second, attempts, presented };
 }
 
 export type RetainedGuiReport = Awaited<ReturnType<typeof exerciseRetainedGui>>;

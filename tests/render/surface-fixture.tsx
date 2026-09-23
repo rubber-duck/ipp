@@ -368,6 +368,55 @@ export async function guiPanel(config: {
   return { pixelsPerMetre: height / ORTHO_HEIGHT };
 }
 
+/**
+ * Present a second World on this Host's graphics context. Detaching the
+ * current World ends its presentation, so the shared renderer releases that
+ * World's retained batches and glyph demand while it stays resident on the
+ * Host. The second World copies the current camera and renders `panel`;
+ * later fixture calls address it.
+ */
+export async function presentSecondWorld(
+  panel: Parameters<typeof guiPanel>[0],
+) {
+  const inspection = await client.inspect();
+  const view = inspection.entities.find(({ id }) => id === camera)!;
+  const fields = (component: "Transform" | "Camera") =>
+    Object.fromEntries(
+      Object.entries(
+        view.effective.find(
+          (value) => value.component === client.components[component]!.id,
+        )!.fields,
+      ).filter(([, value]) => typeof value === "number"),
+    ) as Record<string, number>;
+  const placement = {
+    Transform: fields("Transform"),
+    Camera: fields("Camera"),
+  };
+  await host.detachWorld();
+  client = await host.createWorld({
+    symbolicId: "surface-second",
+    temporary: true,
+  });
+  client.onRuntimeFailure((failure) => {
+    failures.push(failure);
+    console.error("Second World runtime failure", failure.message);
+  });
+  camera = await activateFixtureCamera(client);
+  for (const [component, values] of Object.entries(placement))
+    successfulBatch(
+      await client.batch(
+        componentFields(client, component, values).map((field) => ({
+          kind: "setField",
+          entity: { kind: "handle", id: camera },
+          component: client.components[component]!.id,
+          field,
+        })),
+      ),
+    );
+  root = createRoot(client);
+  return guiPanel(panel);
+}
+
 /** Raw RGBA pixels of a completed capture, base64 encoded for Node-side comparison. */
 export async function capturePixels(label: string) {
   const frame = frames.get(label)!;

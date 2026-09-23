@@ -3,6 +3,15 @@
 //! Hosts own contexts, surfaces and scheduling; native context libraries and
 //! shims stay in hosts.
 
+/// A GLSL source under `src/services/render`, embedded without comments by
+/// the crate's build script; the source files keep their documentation.
+macro_rules! embedded_shader {
+    ($path:literal) => {
+        include_str!(concat!(env!("OUT_DIR"), "/render/", $path))
+    };
+}
+pub(crate) use embedded_shader;
+
 mod assets;
 mod custom_material;
 mod custom_shader;

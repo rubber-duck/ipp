@@ -34,8 +34,8 @@ impl<D: RenderDevice> RenderService<D> {
     pub(super) fn prepare_surface_program(&mut self) -> Result<(), RenderError> {
         if self.surface_program.is_none() {
             self.surface_program = Some(self.device.borrow_mut().create_program(
-                include_str!("../shaders/surface.vert"),
-                include_str!("../shaders/surface.frag"),
+                crate::services::render::embedded_shader!("shaders/surface.vert"),
+                crate::services::render::embedded_shader!("shaders/surface.frag"),
             )?);
         }
 
@@ -227,8 +227,12 @@ impl<D: RenderDevice> RenderService<D> {
                         if self.surface_instance_program.is_none() {
                             self.surface_instance_program =
                                 Some(self.device.borrow_mut().create_program(
-                                    include_str!("../shaders/surface_instanced.vert"),
-                                    include_str!("../shaders/surface.frag"),
+                                    crate::services::render::embedded_shader!(
+                                        "shaders/surface_instanced.vert"
+                                    ),
+                                    crate::services::render::embedded_shader!(
+                                        "shaders/surface.frag"
+                                    ),
                                 )?);
                         }
                         self.device.borrow_mut().draw_surface_path_instances(
@@ -333,8 +337,12 @@ impl<D: RenderDevice> RenderService<D> {
                     if self.surface_bitmap_program.is_none() {
                         self.surface_bitmap_program =
                             Some(self.device.borrow_mut().create_program(
-                                include_str!("../shaders/surface_bitmap.vert"),
-                                include_str!("../shaders/surface_bitmap.frag"),
+                                crate::services::render::embedded_shader!(
+                                    "shaders/surface_bitmap.vert"
+                                ),
+                                crate::services::render::embedded_shader!(
+                                    "shaders/surface_bitmap.frag"
+                                ),
                             )?);
                     }
                     let program = self.surface_bitmap_program.as_ref().unwrap();
@@ -530,8 +538,8 @@ impl<D: RenderDevice> RenderService<D> {
 
         if self.surface_program.is_none() {
             self.surface_program = Some(self.device.borrow_mut().create_program(
-                include_str!("../shaders/surface.vert"),
-                include_str!("../shaders/surface.frag"),
+                crate::services::render::embedded_shader!("shaders/surface.vert"),
+                crate::services::render::embedded_shader!("shaders/surface.frag"),
             )?);
         }
 
@@ -792,8 +800,8 @@ impl<D: RenderDevice> RenderService<D> {
 
         if self.surface_box_program.is_none() {
             self.surface_box_program = Some(self.device.borrow_mut().create_program(
-                include_str!("../shaders/surface_box.vert"),
-                include_str!("../shaders/surface_box.frag"),
+                crate::services::render::embedded_shader!("shaders/surface_box.vert"),
+                crate::services::render::embedded_shader!("shaders/surface_box.frag"),
             )?);
         }
 
@@ -828,8 +836,8 @@ impl<D: RenderDevice> RenderService<D> {
 
         if self.surface_text_program.is_none() {
             self.surface_text_program = Some(self.device.borrow_mut().create_program(
-                include_str!("../shaders/surface_text.vert"),
-                include_str!("../shaders/surface_text.frag"),
+                crate::services::render::embedded_shader!("shaders/surface_text.vert"),
+                crate::services::render::embedded_shader!("shaders/surface_text.frag"),
             )?);
         }
 

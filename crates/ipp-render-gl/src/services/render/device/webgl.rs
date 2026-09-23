@@ -1004,8 +1004,8 @@ impl RenderDevice for WebGlRenderDevice {
         self.uniform_epoch = self.uniform_epoch.wrapping_add(1);
         // SAFETY: The bridge reads exactly four live f32 values synchronously.
         {
-            let vertex = include_str!("../shaders/present.vert");
-            let fragment = include_str!("../shaders/present.frag");
+            let vertex = crate::services::render::embedded_shader!("shaders/present.vert");
+            let fragment = crate::services::render::embedded_shader!("shaders/present.frag");
             // SAFETY: Imports synchronously copy source/clear bytes; every slice
             // remains live for the call and no views survive memory growth.
             self.check(unsafe {

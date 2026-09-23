@@ -29,8 +29,8 @@ impl GlesRenderDevice {
         }
         if self.linear_target.is_none() {
             let program = self.create_program(
-                include_str!("../../shaders/present.vert"),
-                include_str!("../../shaders/present.frag"),
+                crate::services::render::embedded_shader!("shaders/present.vert"),
+                crate::services::render::embedded_shader!("shaders/present.frag"),
             )?;
             let mut target = GlesLinearTarget {
                 framebuffer: 0,

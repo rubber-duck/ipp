@@ -455,8 +455,8 @@ impl<D: RenderDevice> RenderService<D> {
     pub(super) fn surface_cache_program(&mut self) -> Result<&D::Program, RenderError> {
         if self.surface_cache_program.is_none() {
             self.surface_cache_program = Some(self.device.borrow_mut().create_program(
-                include_str!("../shaders/surface_bitmap.vert"),
-                include_str!("../shaders/surface_cache.frag"),
+                crate::services::render::embedded_shader!("shaders/surface_bitmap.vert"),
+                crate::services::render::embedded_shader!("shaders/surface_cache.frag"),
             )?);
         }
 

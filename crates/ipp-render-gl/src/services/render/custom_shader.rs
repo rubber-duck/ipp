@@ -104,7 +104,7 @@ pub(crate) fn sources(
         "#version 300 es\nprecision highp float;\nprecision highp int;\n#define IPP_SHADER_INTERFACE_VERSION 1\n#define IPP_PASS_SHADOW {pass}\n#define IPP_RECEIVES_LIGHT {}\n{declarations}\n",
         u8::from(lit)
     );
-    let template = include_str!("shaders/custom.vert");
+    let template = crate::services::render::embedded_shader!("shaders/custom.vert");
     let mut vertex = config.custom_vertex_source(template)?;
     vertex = vertex.replace("// CUSTOM_DECLARATIONS", &common);
     vertex.push_str(&backend.vertex);
@@ -117,11 +117,15 @@ pub(crate) fn sources(
         "{common}\nin vec3 v_position;\nin vec3 v_normal;\nin vec3 v_color;\nin vec2 v_uv;\nin float v_weight;\nuniform int u_alpha_mode;\nuniform float u_alpha_cutoff;\nout vec4 out_color;\n"
     );
     if lit {
-        fragment.push_str(include_str!("shaders/custom-lighting.glsl"));
+        fragment.push_str(crate::services::render::embedded_shader!(
+            "shaders/custom-lighting.glsl"
+        ));
     }
     #[cfg(feature = "shadows")]
     if lit {
-        fragment.push_str(include_str!("shaders/shadow-sampling.glsl"));
+        fragment.push_str(crate::services::render::embedded_shader!(
+            "shaders/shadow-sampling.glsl"
+        ));
     }
     if lit {
         fragment.push_str("uniform vec3 u_surface;\n");

@@ -680,9 +680,9 @@ export async function controlGalleryAnimation(
 export async function galleryGuiScrollPoint() {
   const { semantic, detailed } = await galleryGuiContext();
   const scrollViews = detailed.nodes.filter(
-    ({ content, style }) =>
-      content.kind === "container" &&
-      content.containerKind === "scrollView" &&
+    ({ data, style }) =>
+      data.kind === "container" &&
+      data.containerKind === "scrollView" &&
       style.enabled !== false,
   );
   if (scrollViews.length !== 1)
@@ -707,7 +707,6 @@ export async function galleryGuiAction(
     entity: semantic.entity,
     rootIncarnation: semantic.rootIncarnation,
     node: node.id,
-    lifetime: node.lifetime,
     expectedRevision: node.revision,
     action,
   });
@@ -903,9 +902,36 @@ function projectSnapshotPoints(
 }
 
 /** Wait for browser input batching, then use real inspection as an ingress barrier. */
+/**
+ * Replace decoded schema rows tables' `Map` rows with plain records keyed by
+ * slot, so inspections cross the page boundary intact.
+ */
+function plainRowsTables<T>(inspection: T): T {
+  const entities = (inspection as { entities?: readonly unknown[] }).entities;
+  for (const entity of entities ?? []) {
+    const record = entity as {
+      base?: readonly { fields: Record<string, unknown> }[];
+      effective?: readonly { fields: Record<string, unknown> }[];
+    };
+    for (const component of [
+      ...(record.base ?? []),
+      ...(record.effective ?? []),
+    ])
+      for (const [name, value] of Object.entries(component.fields)) {
+        const table = value as { nextSlot?: unknown; rows?: unknown };
+        if (table?.rows instanceof Map)
+          component.fields[name] = {
+            nextSlot: table.nextSlot,
+            rows: Object.fromEntries(table.rows),
+          };
+      }
+  }
+  return inspection;
+}
+
 export async function settleGalleryInput() {
   await awaitGalleryIngress();
-  return requireCanvas().client.inspect();
+  return plainRowsTables(await requireCanvas().client.inspect());
 }
 
 /** The same ingress barrier, answered by the World summary instead of a full inspection. */
@@ -1215,9 +1241,13 @@ export async function captureViewer(
   waitForResources = true,
 ): Promise<ViewerBrowserCapture> {
   if (!label) throw new Error("Capture label must be nonempty");
-  const { frame, ...observation } = await captureCanvas(requireCanvas(), {
+  const { frame, ...captured } = await captureCanvas(requireCanvas(), {
     waitForResources,
   });
+  const observation = {
+    ...captured,
+    inspection: plainRowsTables(captured.inspection),
+  };
   const stored = { ...frame, pixels: frame.pixels.slice(0) };
   captures.set(label, stored);
   const { pixels: _pixels, ...metadata } = frame;

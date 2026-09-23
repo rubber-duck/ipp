@@ -1,6 +1,6 @@
 import {
+  guiNodeStyleOffset,
   guiPartProperty,
-  guiProperty,
   type AnimationClipSource,
   type AnimationControllerState,
   type AnimationTrack,
@@ -273,9 +273,10 @@ function skinMotion(component: number, palette: Palette): AnimationClipSource {
 async function createMotionAssets(
   client: AnimationWorldClient,
 ): Promise<MotionAssets> {
-  const component = client.components.GuiRoot?.id;
+  const guiRoot = client.components.GuiRoot;
+  const component = guiRoot?.id;
   const material = client.components.CustomMaterial?.id;
-  if (component === undefined)
+  if (guiRoot === undefined || component === undefined)
     throw new Error("The gallery GUI profile does not expose GuiRoot");
   if (material === undefined)
     throw new Error("The gallery GUI profile does not expose CustomMaterial");
@@ -287,7 +288,7 @@ async function createMotionAssets(
       );
       created.push(await client.createAsset(10, bytes.slice().buffer));
     }
-    for (const clip of waveformClips(component)) {
+    for (const clip of waveformClips(guiRoot)) {
       const bytes = client.encodeAnimationClip(clip);
       created.push(await client.createAsset(10, bytes.slice().buffer));
     }
@@ -321,7 +322,7 @@ async function createMotionAssets(
       scan: created[3]!,
       wavePulse: created[4]!,
       dust: created[5]!,
-      guiComponent: component,
+      guiRoot,
       materialComponent: material,
     };
   } catch (failure) {
@@ -604,13 +605,19 @@ export function useGuiScene(
       const client = canvas.client;
       if (signal.session !== client.session || pulse.session !== client.session)
         throw new Error("The waveform nodes belong to a different session");
+      const guiRoot = client.components.GuiRoot!;
       const result = await client.batch(
         [signal, pulse].map((node) => ({
-          kind: "setDynamicProperty" as const,
+          kind: "setField" as const,
           entity: { kind: "handle" as const, id: node.entity },
-          component: client.components.GuiRoot!.id,
-          name: guiProperty(node.nodeId, "position"),
-          value: { kind: "vec2" as const, value: [0, 0] as const },
+          component: guiRoot.id,
+          field: {
+            offset: guiNodeStyleOffset(guiRoot, node.nodeId, "position"),
+            value: {
+              kind: "dynamic" as const,
+              value: { kind: "vec2" as const, value: [0, 0] as const },
+            },
+          },
         })),
       );
       if (!result.ok)
@@ -652,7 +659,8 @@ export function useGuiScene(
                   [motions?.scan.source, motions?.wavePulse.source].includes(
                     driver.source,
                   ) &&
-                  driver.property.name?.endsWith("_position"),
+                  "offsets" in driver.property &&
+                  driver.property.offsets !== undefined,
               ),
             );
             if (waves?.length === 2) setRevealed(true);

@@ -3,6 +3,7 @@
 use super::test_support::*;
 use super::*;
 use crate::CameraMotion;
+use crate::GuiNodeDataRow;
 use crate::components::{Camera, PickingGeometry, Transform};
 use crate::systems::geometry::{GeometryDefinition, GeometryShape};
 use crate::systems::surface::Surface;
@@ -10,7 +11,7 @@ use crate::{
     Batch, Command, ComponentValue, EntityMetadata, EntityRef, HostRuntime, WorldId, WorldLimits,
 };
 use crate::{
-    GuiCommand, GuiContainerKind, GuiNodeContent, GuiNodeId, GuiNodePatch, GuiNodeStyle,
+    GuiCommand, GuiContainerKind, GuiNodeData, GuiNodeId, GuiNodePatch, GuiNodeStyle,
     GuiSemanticAction,
 };
 
@@ -192,7 +193,7 @@ fn removal_before_routing_reports_unhandled() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::RemoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -235,7 +236,7 @@ fn disable_before_routing_reports_stale_target() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         opacity: Some(0.0),
                         ..Default::default()
@@ -563,14 +564,10 @@ fn slider_off_step_down_up_at_painted_centre_preserves_value() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(3), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(3)),
                     patch: GuiNodePatch {
-                        content: Some(GuiNodeContent::Slider {
-                            value: 5.0,
-                            min: 0.0,
-                            max: 10.0,
-                            step: 2.0,
-                        }),
+                        data: Some(GuiNodeData::Slider),
+                        values: Some(GuiNodeDataRow::slider(5.0, 0.0, 10.0, 2.0)),
                         ..Default::default()
                     },
                 },
@@ -584,7 +581,7 @@ fn slider_off_step_down_up_at_painted_centre_preserves_value() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::SetControlValue {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(3), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(3)),
                     expected_revision: 1,
                     value: GuiControlValue::Scalar(5.0),
                 },
@@ -679,12 +676,7 @@ fn slider_off_step_down_up_at_painted_centre_preserves_value() {
 
 #[test]
 fn slider_value_mapping_clamps_and_quantizes() {
-    let content = GuiNodeContent::Slider {
-        value: 0.0,
-        min: 0.0,
-        max: 10.0,
-        step: 2.0,
-    };
+    let content = GuiNodeDataRow::slider(0.0, 0.0, 10.0, 2.0);
     let rect = [0.0, 0.0, 4.0, 1.0];
     assert_eq!(
         slider_value_at(&content, rect, 1.0, &GuiControlValue::Scalar(0.0)),
@@ -738,12 +730,7 @@ fn slider_value_mapping_clamps_and_quantizes() {
 
 #[test]
 fn slider_painted_centres_round_trip_for_narrow_and_off_step_values() {
-    let content = GuiNodeContent::Slider {
-        value: 1.0,
-        min: -3.0,
-        max: 8.0,
-        step: 2.5,
-    };
+    let content = GuiNodeDataRow::slider(1.0, -3.0, 8.0, 2.5);
     for rect in [[2.0, 4.0, 0.5, 1.0], [2.0, 4.0, 1.0, 1.0]] {
         let rail = crate::systems::gui::slider_rail(rect).unwrap();
         for value in [-3.0, 1.0, 8.0] {
@@ -791,7 +778,7 @@ fn button_press_commits_button_pressed_with_source_and_effect_ticks() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::Button {
+        GuiNodeData::Button {
             label: "AVa".into(),
         },
     );
@@ -826,10 +813,9 @@ fn button_press_commits_button_pressed_with_source_and_effect_ticks() {
                 entity,
                 root_incarnation: effect_root,
                 node,
-                lifetime,
                 path,
             } => {
-                assert_eq!((*entity, *node, *lifetime), (panel, GuiNodeId(2), 1));
+                assert_eq!((*entity, *node), (panel, GuiNodeId(2)));
                 assert_eq!(*effect_root, root_incarnation);
                 Some((path.clone(), effect.source_tick, effect.effect_tick))
             }
@@ -870,7 +856,6 @@ fn programmatic_focus_then_blur_reports_ordered_focus_changes() {
     let target = GuiInputTarget {
         entity: panel,
         node: GuiNodeId(2),
-        lifetime: 1,
         root_incarnation,
     };
     let tick = world(&mut fixture).tick();
@@ -880,7 +865,7 @@ fn programmatic_focus_then_blur_reports_ordered_focus_changes() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -959,7 +944,7 @@ fn hidden_control_pointer_down_is_unhandled() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         opacity: Some(0.0),
                         ..Default::default()
@@ -1081,7 +1066,7 @@ fn focus_then_enter_activates_button_through_router() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::Button {
+        GuiNodeData::Button {
             label: "a".into(),
         },
     );
@@ -1094,7 +1079,7 @@ fn focus_then_enter_activates_button_through_router() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -1116,9 +1101,8 @@ fn focus_then_enter_activates_button_through_router() {
             GuiInputEffectKind::ButtonPressed {
                 entity,
                 node,
-                lifetime,
                 ..
-            } if *entity == panel && *node == GuiNodeId(2) && *lifetime == 1
+            } if *entity == panel && *node == GuiNodeId(2)
         )),
         "expected ButtonPressed, got {report:?}"
     );
@@ -1137,7 +1121,7 @@ fn semantic_action_press_resolves_and_activates_button() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::Button {
+        GuiNodeData::Button {
             label: "a".into(),
         },
     );
@@ -1170,9 +1154,8 @@ fn semantic_action_press_resolves_and_activates_button() {
             GuiInputEffectKind::ButtonPressed {
                 entity,
                 node,
-                lifetime,
                 ..
-            } if *entity == panel && *node == GuiNodeId(2) && *lifetime == 1
+            } if *entity == panel && *node == GuiNodeId(2)
         )),
         "expected ButtonPressed, got {report:?}"
     );
@@ -1192,7 +1175,7 @@ fn semantic_action_rejects_owner_conflict_without_side_effect() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -1247,7 +1230,7 @@ fn semantic_toggle_revalidates_revision_at_application() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::SetControlValue {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     expected_revision: 1,
                     value: GuiControlValue::Bool(true),
                 },
@@ -1376,7 +1359,7 @@ fn moved_checkbox_routes_against_current_evaluation() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::MoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(3), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(3)),
                     parent: Some(GuiNodeId(1)),
                     index: 0,
                 },
@@ -1448,7 +1431,7 @@ fn resized_checkbox_routes_against_current_evaluation() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         width: Some(Some(before[2] + 4.0)),
                         ..Default::default()
@@ -1547,7 +1530,8 @@ fn newly_populated_panel_routes_same_evaluation() {
                 id: GuiNodeId(1),
                 parent: None,
                 index: 0,
-                content: GuiNodeContent::Container(GuiContainerKind::Column),
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle {
                     width: Some(10.0),
                     height: Some(10.0),
@@ -1560,9 +1544,8 @@ fn newly_populated_panel_routes_same_evaluation() {
                 id: GuiNodeId(2),
                 parent: Some(GuiNodeId(1)),
                 index: 0,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle::default(),
             },
         ] {
@@ -1619,7 +1602,7 @@ fn second_session_cannot_use_focused_control() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a".into(),
             placeholder: "e".into(),
         },
@@ -1695,7 +1678,7 @@ fn second_session_cannot_use_focused_control() {
             .enqueue_gui_command(
                 OTHER,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(OTHER, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(OTHER, panel, root_incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         opacity: Some(0.5),
                         ..Default::default()
@@ -1809,7 +1792,7 @@ fn focus_replaces_context_and_cancels_in_flight() {
             .enqueue_gui_input_command(
                 OTHER,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(OTHER, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(OTHER, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -1901,7 +1884,7 @@ fn disconnect_frees_context_for_next_session() {
             .enqueue_gui_input_command(
                 OTHER,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(OTHER, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(OTHER, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -1961,7 +1944,7 @@ fn routed_envelope_wins_same_drain_revision_race_once() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::SetControlValue {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     expected_revision: 1,
                     value: GuiControlValue::Bool(true),
                 },
@@ -2120,9 +2103,8 @@ fn insert_full_checkbox(host: &mut HostRuntime, world: WorldId, panel: EntityId)
                 id: GuiNodeId(1),
                 parent: None,
                 index: 0,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle {
                     width: Some(4.0),
                     height: Some(3.0),
@@ -2146,14 +2128,10 @@ fn replace_full_checkbox_with_slider(host: &mut HostRuntime, world: WorldId, pan
         .enqueue_gui_command(
             SESSION,
             GuiCommand::UpdateNode {
-                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1), 1),
+                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1)),
                 patch: GuiNodePatch {
-                    content: Some(GuiNodeContent::Slider {
-                        value: 0.5,
-                        min: 0.0,
-                        max: 1.0,
-                        step: 0.05,
-                    }),
+                    data: Some(GuiNodeData::Slider),
+                    values: Some(GuiNodeDataRow::slider(0.5, 0.0, 1.0, 0.05)),
                     ..Default::default()
                 },
             },

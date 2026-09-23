@@ -12,7 +12,7 @@ use ipp_core::{
 };
 
 impl<P: HostServices> WorldSessionContext<'_, P> {
-    /// Bounded lifetime/revision-fenced semantic snapshot for one panel.
+    /// Bounded revision-fenced semantic snapshot for one panel.
     pub fn gui_semantic_snapshot(
         &self,
         query: &GuiSemanticSnapshotQuery,
@@ -47,8 +47,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 request.entity.to_bits()
             ));
         }
-        let node = match tree.node(request.node) {
-            Some(node) => node,
+        match tree.node(request.node) {
+            Some(_) => {}
             None => {
                 return WorldSessionReply::Rejected(format!(
                     "semantic action unknown node {}",
@@ -56,12 +56,6 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                 ));
             }
         };
-        if node.lifetime != request.lifetime {
-            return WorldSessionReply::Rejected(format!(
-                "semantic action unknown node {} (lifetime)",
-                request.node.0
-            ));
-        }
         let command = match ipp_core::action_command(
             &tree,
             request.node,

@@ -671,9 +671,10 @@ fn invalid_policies_are_rejected_without_changing_published_inputs() {
 mod gui {
     use super::*;
     use crate::systems::gui::{
-        GuiCommand, GuiContainerKind, GuiInputCommand, GuiNodeContent, GuiNodeHandle, GuiNodeId,
+        GuiCommand, GuiContainerKind, GuiInputCommand, GuiNodeData, GuiNodeHandle, GuiNodeId,
         GuiNodePatch, GuiNodeStyle, GuiPointerButton, GuiRoot,
     };
+    use crate::world::systems::gui::test_support::checkbox_node;
 
     const SESSION: u64 = 7;
 
@@ -745,13 +746,18 @@ mod gui {
             background_color: Some([0.2, 0.2, 0.2, 1.0]),
             ..Default::default()
         };
-        let node = |id: u32, parent: Option<u32>, index, content, style| GuiCommand::InsertNode {
+        let node = |id: u32,
+                    parent: Option<u32>,
+                    index,
+                    node: crate::world::systems::gui::test_support::AuthoredNode,
+                    style| GuiCommand::InsertNode {
             entity: panel,
             root_incarnation,
             id: GuiNodeId(id),
             parent: parent.map(GuiNodeId),
             index,
-            content,
+            data: node.data,
+            values: node.values,
             style,
         };
         for command in [
@@ -759,49 +765,34 @@ mod gui {
                 1,
                 None,
                 0,
-                GuiNodeContent::Container(GuiContainerKind::Column),
+                GuiNodeData::Container(GuiContainerKind::Column).into(),
                 sized(10.0, 10.0),
             ),
-            node(
-                2,
-                Some(1),
-                0,
-                GuiNodeContent::Checkbox {
-                    checked: false,
-                },
-                sized(2.0, 1.0),
-            ),
+            node(2, Some(1), 0, checkbox_node(false), sized(2.0, 1.0)),
             node(
                 3,
                 Some(1),
                 1,
-                GuiNodeContent::Container(GuiContainerKind::ScrollView),
+                GuiNodeData::Container(GuiContainerKind::ScrollView).into(),
                 sized(10.0, 4.0),
             ),
             node(
                 4,
                 Some(3),
                 0,
-                GuiNodeContent::Container(GuiContainerKind::Column),
+                GuiNodeData::Container(GuiContainerKind::Column).into(),
                 GuiNodeStyle::default(),
             ),
-            node(
-                5,
-                Some(4),
-                0,
-                GuiNodeContent::Checkbox {
-                    checked: false,
-                },
-                sized(10.0, 8.0),
-            ),
+            node(5, Some(4), 0, checkbox_node(false), sized(10.0, 8.0)),
             node(
                 6,
                 Some(1),
                 2,
-                GuiNodeContent::TextInput {
+                GuiNodeData::TextInput {
                     text: "AA".into(),
                     placeholder: String::new(),
-                },
+                }
+                .into(),
                 GuiNodeStyle {
                     width: Some(6.0),
                     height: Some(1.0),
@@ -824,7 +815,7 @@ mod gui {
             .inspect_gui(panel, None, 1, 1)
             .unwrap()
             .root_incarnation;
-        GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(node), 1)
+        GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(node))
     }
 
     fn centre(world: &mut WorldContext<'_>, panel: crate::EntityId, node: u32) -> [f32; 2] {

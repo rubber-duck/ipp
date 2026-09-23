@@ -16,7 +16,6 @@ fn skin_target(entity: EntityId, node: u32) -> crate::systems::gui::GuiInputTarg
     crate::systems::gui::GuiInputTarget {
         entity,
         node: GuiNodeId(node),
-        lifetime: 1,
         root_incarnation: 7,
     }
 }
@@ -86,7 +85,6 @@ impl GuiResourceResolver for MapResolver {
 fn evaluated_node(id: u32, content: GuiEvaluatedContent) -> GuiEvaluatedNode {
     GuiEvaluatedNode {
         node: GuiNodeId(id),
-        lifetime: 1,
         depth: 1,
         rect: [0.0, 0.0, 10.0, 5.0],
         clip: None,
@@ -354,7 +352,6 @@ fn cursors_build_interaction_per_node_from_frozen_sources() {
             target: crate::systems::gui::GuiInputTarget {
                 entity,
                 node: GuiNodeId(3),
-                lifetime: 1,
                 root_incarnation: 7,
             },
             session: 11,
@@ -518,7 +515,6 @@ fn ready_asset_replaces_drawing_while_missing_retains_prior() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 7,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Icon,
         }),
         position: [0.0, 0.0],
@@ -575,7 +571,6 @@ fn glyph_fonts_never_remeasure_for_skins() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 7,
             node: GuiNodeId(2),
-            lifetime: 1,
             part: GuiPrimitivePart::Label,
         }),
         position: [0.0, 0.0],
@@ -642,7 +637,6 @@ fn paint_keeps_order_identities_and_focus_border() {
             target: crate::systems::gui::GuiInputTarget {
                 entity,
                 node: GuiNodeId(2),
-                lifetime: 1,
                 root_incarnation: 7,
             },
             session: 3,
@@ -681,7 +675,6 @@ fn paint_keeps_order_identities_and_focus_border() {
                 SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                     root_incarnation: 7,
                     node: GuiNodeId(2),
-                    lifetime: 1,
                     part: GuiPrimitivePart::FocusRing,
                 })
             ));
@@ -798,7 +791,6 @@ fn background_label_icon_and_focus_ring_resolve_independently() {
             target: crate::systems::gui::GuiInputTarget {
                 entity: view.entity,
                 node: GuiNodeId(1),
-                lifetime: 1,
                 root_incarnation: view.root_incarnation,
             },
             session: 1,
@@ -1179,12 +1171,7 @@ fn slider_thumb_tracks_committed_ratio_without_changing_identity() {
             &MapResolver::empty(),
         )
     };
-    let content = crate::systems::gui::GuiNodeContent::Slider {
-        value: 0.0,
-        min: 0.0,
-        max: 10.0,
-        step: 0.0,
-    };
+    let content = crate::GuiNodeDataRow::slider(0.0, 0.0, 10.0, 0.0);
     let mut identity = None;
     for (value, expected_fraction) in [(0.0, 0.0), (5.0, 0.5), (10.0, 1.0)] {
         let painted = paint(value);
@@ -1399,7 +1386,6 @@ fn drawing_and_bitmap_parts_reject_incompatible_skin_asset_kinds() {
     let identity = SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
         root_incarnation: 7,
         node: GuiNodeId(1),
-        lifetime: 1,
         part: GuiPrimitivePart::Icon,
     });
     let style = SurfacePrimitiveStyle {
@@ -1953,7 +1939,6 @@ fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
             identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                 root_incarnation: 1,
                 node: GuiNodeId(1),
-                lifetime: 0,
                 part: GuiPrimitivePart::Background,
             }),
             position: [0.0, 0.0],
@@ -2014,7 +1999,6 @@ fn background_box() -> SurfaceRenderPrimitive {
             identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                 root_incarnation: 7,
                 node: GuiNodeId(1),
-                lifetime: 1,
                 part: GuiPrimitivePart::Background,
             }),
             position: [0.0, 0.0],
@@ -2154,7 +2138,6 @@ fn sampled_colour_reaches_solid_fill_and_focus_stroke_but_not_gradient_stops() {
                 let id = GuiPrimitiveId {
                     root_incarnation: 7,
                     node: GuiNodeId(1),
-                    lifetime: 1,
                     part,
                 };
                 (

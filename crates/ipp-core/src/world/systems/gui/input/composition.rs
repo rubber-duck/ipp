@@ -76,7 +76,6 @@ mod tests {
         GuiInputTarget {
             entity: EntityId::from_bits(1),
             node: GuiNodeId(2),
-            lifetime: 1,
             root_incarnation: 9,
         }
     }

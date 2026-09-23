@@ -27,8 +27,9 @@ mod scenario {
     };
     use ipp_core::{
         Batch, Command, ComponentValue, DynamicValue, EntityId, EntityRef, FieldValue, FieldWrite,
-        GuiCommand, GuiContainerKind, GuiInputCommand, GuiNodeContent, GuiNodeHandle, GuiNodeId,
-        GuiNodeStyle, GuiRoot, HostRuntime, Surface, SurfaceCache, TEXTURE_TYPE, WorldId,
+        GuiCommand, GuiContainerKind, GuiInputCommand, GuiNodeData, GuiNodeDataRow, GuiNodeHandle,
+        GuiNodeId, GuiNodeStyle, GuiRoot, HostRuntime, Surface, SurfaceCache, TEXTURE_TYPE,
+        WorldId,
     };
     use ipp_render_gl::{
         GlesRenderDevice, RenderService, RenderStats, SurfaceCacheDiagnostic,
@@ -292,7 +293,8 @@ mod scenario {
                 1,
                 None,
                 0,
-                GuiNodeContent::Container(GuiContainerKind::Stack),
+                GuiNodeData::Container(GuiContainerKind::Stack),
+                GuiNodeDataRow::default(),
                 GuiNodeStyle {
                     width: Some(4.0),
                     height: Some(3.0),
@@ -306,7 +308,8 @@ mod scenario {
                 2,
                 Some(1),
                 0,
-                GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                GuiNodeData::Container(GuiContainerKind::SizedBox),
+                GuiNodeDataRow::default(),
                 GuiNodeStyle {
                     width: Some(1.0),
                     height: Some(3.0),
@@ -317,11 +320,12 @@ mod scenario {
             )?;
 
             // The panel root is transparent: the backdrop shows through its gaps.
-            let panel_nodes: [(u32, Option<u32>, GuiNodeContent, GuiNodeStyle); 10] = [
+            let panel_nodes: [(u32, Option<u32>, GuiNodeData, GuiNodeDataRow, GuiNodeStyle); 10] = [
                 (
                     1,
                     None,
-                    GuiNodeContent::Container(GuiContainerKind::Stack),
+                    GuiNodeData::Container(GuiContainerKind::Stack),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(PANEL[0]),
                         height: Some(PANEL[1]),
@@ -332,7 +336,8 @@ mod scenario {
                 (
                     2,
                     Some(1),
-                    GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                    GuiNodeData::Container(GuiContainerKind::SizedBox),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(1.4),
                         height: Some(1.0),
@@ -345,7 +350,8 @@ mod scenario {
                 (
                     3,
                     Some(1),
-                    GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                    GuiNodeData::Container(GuiContainerKind::SizedBox),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(0.8),
                         height: Some(0.8),
@@ -357,7 +363,8 @@ mod scenario {
                 (
                     4,
                     Some(1),
-                    GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                    GuiNodeData::Container(GuiContainerKind::SizedBox),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(0.8),
                         height: Some(0.8),
@@ -370,7 +377,8 @@ mod scenario {
                 (
                     5,
                     Some(1),
-                    GuiNodeContent::Container(GuiContainerKind::ScrollView),
+                    GuiNodeData::Container(GuiContainerKind::ScrollView),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(0.6),
                         height: Some(0.4),
@@ -381,7 +389,8 @@ mod scenario {
                 (
                     6,
                     Some(5),
-                    GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                    GuiNodeData::Container(GuiContainerKind::SizedBox),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(1.5),
                         height: Some(1.5),
@@ -392,7 +401,8 @@ mod scenario {
                 (
                     7,
                     Some(1),
-                    GuiNodeContent::Text("Cache".into()),
+                    GuiNodeData::Text("Cache".into()),
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         font_size: 0.3,
                         margin: Some([1.45, 0.0, 0.0, 0.3]),
@@ -404,7 +414,8 @@ mod scenario {
                 (
                     8,
                     Some(1),
-                    GuiNodeContent::Drawing,
+                    GuiNodeData::Drawing,
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(0.6),
                         height: Some(0.45),
@@ -417,9 +428,8 @@ mod scenario {
                 (
                     9,
                     Some(1),
-                    GuiNodeContent::Image {
-                        size: [0.35, 0.35],
-                    },
+                    GuiNodeData::Image,
+                    GuiNodeDataRow::image([0.35, 0.35]),
                     GuiNodeStyle {
                         margin: Some([0.95, 0.0, 0.0, 3.3]),
                         asset: Some(bitmap.clone()),
@@ -429,9 +439,10 @@ mod scenario {
                 (
                     10,
                     Some(1),
-                    GuiNodeContent::Button {
+                    GuiNodeData::Button {
                         label: "Go".into(),
                     },
+                    GuiNodeDataRow::default(),
                     GuiNodeStyle {
                         width: Some(0.7),
                         height: Some(0.35),
@@ -443,9 +454,18 @@ mod scenario {
                 ),
             ];
             let mut children = BTreeMap::<Option<u32>, u32>::new();
-            for (id, parent, content, style) in panel_nodes {
+            for (id, parent, data, values, style) in panel_nodes {
                 let index = children.entry(parent).or_default();
-                scene.insert(panel, panel_incarnation, id, parent, *index, content, style)?;
+                scene.insert(
+                    panel,
+                    panel_incarnation,
+                    id,
+                    parent,
+                    *index,
+                    data,
+                    values,
+                    style,
+                )?;
                 *index += 1;
             }
             let part = |suffix, value| {
@@ -484,7 +504,8 @@ mod scenario {
             id: u32,
             parent: Option<u32>,
             index: u32,
-            content: GuiNodeContent,
+            data: GuiNodeData,
+            values: GuiNodeDataRow,
             style: GuiNodeStyle,
         ) -> Result<()> {
             self.host
@@ -498,7 +519,8 @@ mod scenario {
                         id: GuiNodeId(id),
                         parent: parent.map(GuiNodeId),
                         index,
-                        content,
+                        data,
+                        values,
                         style,
                     },
                 )?;
@@ -600,7 +622,7 @@ mod scenario {
         }
 
         fn node(&self, id: u32) -> GuiNodeHandle {
-            GuiNodeHandle::new(SESSION, self.panel, self.incarnation, GuiNodeId(id), 1)
+            GuiNodeHandle::new(SESSION, self.panel, self.incarnation, GuiNodeId(id))
         }
 
         /// One Host frame: deliver requested bytes, advance World time by `dt`

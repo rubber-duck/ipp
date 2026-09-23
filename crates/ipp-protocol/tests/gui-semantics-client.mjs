@@ -60,16 +60,7 @@ const queryBytes = (entity = 42n, maxDepth = 32, limit = 256) =>
   concatenate([u8(1), u64(entity), u32(maxDepth), u32(limit)]);
 
 const actionBytes = (kind, payload = new Uint8Array()) =>
-  concatenate([
-    u8(2),
-    u64(42n),
-    u64(3n),
-    u32(9),
-    u32(1),
-    u32(2),
-    u8(kind),
-    payload,
-  ]);
+  concatenate([u8(2), u64(42n), u64(3n), u32(9), u32(2), u8(kind), payload]);
 
 const snapshotBytes = () =>
   concatenate([
@@ -78,11 +69,10 @@ const snapshotBytes = () =>
     u64(3n),
     u64(12n),
     u32(2),
-    // Container root: id, no parent, lifetime, role, no name, no value,
+    // Container root: id, no parent, role, no name, no value,
     // revision, bounds, enabled, visible, available, no actions.
     u32(1),
     u32(0),
-    u32(1),
     u8(0),
     u8(0),
     u8(0),
@@ -97,7 +87,6 @@ const snapshotBytes = () =>
     u8(0),
     // Button: parent, role, name, revision, bounds, flags, one action.
     u32(2),
-    u32(1),
     u32(1),
     u8(4),
     u8(1),
@@ -116,7 +105,6 @@ const snapshotBytes = () =>
     // Observed focus.
     u8(1),
     u32(2),
-    u32(1),
   ]);
 
 const snapshotTree = {
@@ -126,7 +114,6 @@ const snapshotTree = {
   nodes: [
     {
       id: 1,
-      lifetime: 1,
       role: "container",
       value: { kind: "none" },
       revision: 0,
@@ -138,7 +125,6 @@ const snapshotTree = {
     },
     {
       id: 2,
-      lifetime: 1,
       parent: 1,
       role: "button",
       name: "Go",
@@ -151,7 +137,7 @@ const snapshotTree = {
       actions: ["press"],
     },
   ],
-  focused: { id: 2, lifetime: 1 },
+  focused: { id: 2 },
 };
 
 test("semantic wire branches use their manifest tags and layouts", () => {
@@ -204,7 +190,6 @@ test("semantic actions encode every kind and reject out-of-domain values", () =>
     entity: 42n,
     rootIncarnation: 3n,
     node: 9,
-    lifetime: 1,
     expectedRevision: 2,
   };
   assert.deepEqual(
@@ -300,7 +285,6 @@ test("semantic requests conform to the manifest and require correlation", () => 
           entity: 42n,
           rootIncarnation: 3n,
           node: 9,
-          lifetime: 1,
           expectedRevision: 2,
           action: { kind: "toggle" },
         },
@@ -348,7 +332,7 @@ test("semantic snapshots decode to bounded trees with focus", () => {
   const trailing = concatenate([snapshotResponse(), u8(0)]);
   assert.throws(() => codec.decodeResponse(trailing, 7n), /trailing bytes/);
   const badRole = snapshotBytes().slice();
-  badRole[1 + 8 + 8 + 8 + 4 + 4 + 4 + 4] = 9;
+  badRole[1 + 8 + 8 + 8 + 4 + 4 + 4] = 9;
   const bad = layout("response-gui-semantic-snapshot", {
     session: 7n,
     request_id: 3n,
@@ -440,7 +424,6 @@ test("semantic clients observe snapshots and dispatch actions end to end", async
       entity: 42n,
       rootIncarnation: 3n,
       node: 2,
-      lifetime: 1,
       expectedRevision: 0,
       action: { kind: "press" },
     });
@@ -451,7 +434,6 @@ test("semantic clients observe snapshots and dispatch actions end to end", async
       entity: 42n,
       rootIncarnation: 3n,
       node: 9,
-      lifetime: 1,
       expectedRevision: 0,
       action: { kind: "toggle" },
     });

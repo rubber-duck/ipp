@@ -12,8 +12,8 @@
  * edits, and removes a reconciler-created producer with removeComponent on
  * release. Adopted pre-existing empty producers are used but never removed.
  * Handles stay fenced by session, entity, root incarnation and node
- * lifetime; a replaced incarnation re-initializes instead of retargeting
- * old handles.
+ * identity, which is never reused within an incarnation; a replaced
+ * incarnation re-initializes instead of retargeting old handles.
  *
  * All transport happens here, in the commit phase. Description, validation
  * and diffing stay pure.
@@ -32,17 +32,17 @@ import type { ReactWorldClient } from "../contract.js";
 import type { GuiDeclarationStyle, GuiNodeRef } from "./components.js";
 import type { GuiDeclarationPatchStyle } from "./diff.js";
 import {
-  controlKindForContent,
+  controlKindForData,
   GuiEffectSubscriptions,
   isCommittedEffect,
-  nameForContent,
+  nameForData,
   type GuiCommittedEffect,
   type GuiObservationBatch,
   type GuiObservationSink,
   type GuiObservationSummary,
 } from "./callbacks.js";
 import {
-  equalGuiContent,
+  equalGuiNode,
   normalizeGuiStyle,
   type GuiDescribedNode,
   type GuiDescribedRoot,
@@ -120,7 +120,7 @@ export class GuiCommits {
   private readonly pendingCleanup = new Set<GuiRootState>();
   private localRoots = new Map<number, GuiDescribedRoot>();
   private highWater = new Map<string, number>();
-  /** Lifetime-fenced control records fed by committed client observations. */
+  /** Node-fenced control records fed by committed client observations. */
   private readonly subscriptions = new GuiEffectSubscriptions();
   private observationDetach: (() => void) | null = null;
 
@@ -129,24 +129,18 @@ export class GuiCommits {
     private readonly options: GuiCommitOptions,
   ) {}
 
-  private handleFor(
-    state: GuiRootState,
-    nodeId: number,
-    lifetime: number,
-  ): GuiNodeHandle {
+  private handleFor(state: GuiRootState, nodeId: number): GuiNodeHandle {
     if (typeof this.client.createGuiNodeHandle === "function")
       return this.client.createGuiNodeHandle(
         state.entity,
         state.incarnation,
         nodeId,
-        lifetime,
       );
     return Object.freeze({
       session: this.client.session,
       entity: state.entity,
       rootIncarnation: state.incarnation,
       nodeId,
-      nodeLifetime: lifetime,
     });
   }
 
@@ -203,9 +197,8 @@ export class GuiCommits {
     }
     const callbacks = retainedNodeCallbacks(node);
     this.subscriptions.subscribe(state.entity, state.incarnation, ack.nodeId, {
-      lifetime: ack.lifetime,
-      kind: controlKindForContent(node.content) ?? "container",
-      name: nameForContent(node.content),
+      kind: controlKindForData(node.data) ?? "container",
+      name: nameForData(node.data),
       onPress: callbacks.onPress,
       onToggle: callbacks.onToggle,
       onScalarCommit: callbacks.onScalarCommit,
@@ -514,7 +507,7 @@ export class GuiCommits {
         const outcome = await client.editGuiBatch([
           {
             action: "remove",
-            handle: this.handleFor(state, root[1].nodeId, root[1].lifetime),
+            handle: this.handleFor(state, root[1].nodeId),
           },
         ]);
         if (!outcome.ok) {
@@ -574,8 +567,8 @@ export class GuiCommits {
     if (!hasGui(client))
       throw new Error("GUI declarations require a GUI-capable client");
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const makeHandle = (nodeId: number, lifetime: number): GuiNodeHandle =>
-        this.handleFor(state, nodeId, lifetime);
+      const makeHandle = (nodeId: number): GuiNodeHandle =>
+        this.handleFor(state, nodeId);
       const plan = diffGuiTree(
         root.nodes,
         state.acked,
@@ -753,8 +746,8 @@ export class GuiCommits {
           parent: node.parent,
           parentId:
             node.parent === undefined ? undefined : state.ids.get(node.parent),
-          lifetime: 1,
-          content: node.content,
+          data: node.data,
+          values: node.values,
           style: node.style,
         });
         this.observeNode(state, root, node.identity);
@@ -812,10 +805,14 @@ export class GuiCommits {
           }
           const declaredEnabled = (patch as GuiDeclarationPatchStyle).enabled;
           if (declaredEnabled !== undefined) style.enabled = declaredEnabled;
+          if (patch.position !== undefined)
+            style.position = [...patch.position];
+          if (patch.scale !== undefined) style.scale = [...patch.scale];
         }
         state.acked.set(identity, {
           ...ack,
-          content: edit.patch.content ?? ack.content,
+          data: edit.patch.data ?? ack.data,
+          values: edit.patch.values ?? ack.values,
           style,
         });
         this.observeNode(state, root, identity);
@@ -895,21 +892,13 @@ export class GuiCommits {
       const top = root.nodes.find((node) => node.parent === undefined);
       const ack = top ? state.acked.get(top.identity) : undefined;
       if (top && ack)
-        bind(
-          root.identity,
-          root.nodeRef,
-          this.handleFor(state, ack.nodeId, ack.lifetime),
-        );
+        bind(root.identity, root.nodeRef, this.handleFor(state, ack.nodeId));
     }
     for (const node of root.nodes) {
       const ack = state.acked.get(node.identity);
       const target = node.nodeRef ?? null;
       if (ack && target)
-        bind(
-          node.identity,
-          target,
-          this.handleFor(state, ack.nodeId, ack.lifetime),
-        );
+        bind(node.identity, target, this.handleFor(state, ack.nodeId));
     }
     for (const [identity, target] of state.boundRefs)
       if (!next.has(identity)) {
@@ -977,8 +966,8 @@ export class GuiCommits {
           nodeId: id,
           parent: want.parent,
           parentId: node.parent,
-          lifetime: node.lifetime,
-          content: node.content,
+          data: node.data,
+          values: node.values,
           style: node.style,
         });
         this.observeNode(state, root, identity);
@@ -1003,10 +992,9 @@ export class GuiCommits {
         nodeId: node.id,
         parent: ack.parent,
         parentId: node.parent,
-        lifetime: node.lifetime,
-        content: equalGuiContent(node.content, ack.content)
-          ? ack.content
-          : node.content,
+        ...(equalGuiNode(node, ack)
+          ? { data: ack.data, values: ack.values }
+          : { data: node.data, values: node.values }),
         style: normalizeGuiStyle(node.style),
       });
       this.observeNode(state, root, identity);

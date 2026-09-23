@@ -54,7 +54,8 @@ fn insert_node(
     id: u32,
     parent: Option<u32>,
     index: u32,
-    content: ipp_core::GuiNodeContent,
+    data: ipp_core::GuiNodeData,
+    values: ipp_core::GuiNodeDataRow,
     style: ipp_core::GuiNodeStyle,
 ) -> Result<()> {
     host.world_mut(world).unwrap().enqueue_gui_command(
@@ -65,7 +66,8 @@ fn insert_node(
             id: ipp_core::GuiNodeId(id),
             parent: parent.map(ipp_core::GuiNodeId),
             index,
-            content,
+            data,
+            values,
             style,
         },
     )?;
@@ -188,7 +190,7 @@ fn main() -> Result<()> {
         AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
     };
     use ipp_core::{
-        Batch, Command, ComponentValue, EntityRef, GuiCommand, GuiContainerKind, GuiNodeContent,
+        Batch, Command, ComponentValue, EntityRef, GuiCommand, GuiContainerKind, GuiNodeData,
         GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiRoot, Surface, TEXTURE_TYPE,
     };
     use std::path::PathBuf;
@@ -286,7 +288,7 @@ fn main() -> Result<()> {
         .unwrap()
         .inspect_gui(panel, None, 1, 1)?
         .root_incarnation;
-    let container = GuiNodeContent::Container;
+    let container = GuiNodeData::Container;
     insert_node(
         &mut host,
         world,
@@ -296,6 +298,7 @@ fn main() -> Result<()> {
         None,
         0,
         container(GuiContainerKind::Stack),
+        ipp_core::GuiNodeDataRow::default(),
         GuiNodeStyle {
             width: Some(4.0),
             height: Some(2.0),
@@ -311,6 +314,7 @@ fn main() -> Result<()> {
         Some(1),
         0,
         container(GuiContainerKind::ScrollView),
+        ipp_core::GuiNodeDataRow::default(),
         GuiNodeStyle {
             width: Some(0.0),
             height: Some(0.0),
@@ -326,6 +330,7 @@ fn main() -> Result<()> {
         Some(2),
         0,
         container(GuiContainerKind::Column),
+        ipp_core::GuiNodeDataRow::default(),
         GuiNodeStyle::default(),
     )?;
     insert_node(
@@ -337,6 +342,7 @@ fn main() -> Result<()> {
         Some(3),
         0,
         container(GuiContainerKind::SizedBox),
+        ipp_core::GuiNodeDataRow::default(),
         colored(4.0, 1.0, [1.0, 0.0, 1.0, 1.0]),
     )?;
     step(&mut host, world)?;
@@ -356,7 +362,7 @@ fn main() -> Result<()> {
     host.world_mut(world).unwrap().enqueue_gui_command(
         SESSION,
         GuiCommand::UpdateNode {
-            handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+            handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
             patch: GuiNodePatch {
                 width: Some(Some(4.0)),
                 height: Some(Some(0.5)),
@@ -408,6 +414,7 @@ fn main() -> Result<()> {
         Some(1),
         1,
         container(GuiContainerKind::SizedBox),
+        ipp_core::GuiNodeDataRow::default(),
         colored(1.5, 1.0, [1.0, 0.0, 0.0, 1.0]),
     )?;
     insert_node(
@@ -419,6 +426,7 @@ fn main() -> Result<()> {
         Some(1),
         2,
         container(GuiContainerKind::SizedBox),
+        ipp_core::GuiNodeDataRow::default(),
         colored(1.5, 1.0, [0.0, 1.0, 0.0, 1.0]),
     )?;
     insert_node(
@@ -429,7 +437,8 @@ fn main() -> Result<()> {
         7,
         Some(1),
         3,
-        GuiNodeContent::Drawing,
+        GuiNodeData::Drawing,
+        ipp_core::GuiNodeDataRow::default(),
         GuiNodeStyle {
             width: Some(1.0),
             height: Some(1.0),
@@ -447,7 +456,8 @@ fn main() -> Result<()> {
         8,
         Some(1),
         4,
-        GuiNodeContent::Text("A".into()),
+        GuiNodeData::Text("A".into()),
+        ipp_core::GuiNodeDataRow::default(),
         GuiNodeStyle {
             font_size: 0.35,
             margin: Some([1.2, 0.0, 0.0, 2.8]),
@@ -464,9 +474,8 @@ fn main() -> Result<()> {
         9,
         Some(1),
         5,
-        GuiNodeContent::Image {
-            size: [0.4, 0.4],
-        },
+        GuiNodeData::Image,
+        ipp_core::GuiNodeDataRow::image([0.4, 0.4]),
         GuiNodeStyle {
             margin: Some([1.3, 0.0, 0.0, 3.3]),
             asset: Some(bitmap.clone()),
@@ -552,7 +561,7 @@ fn main() -> Result<()> {
     host.world_mut(world).unwrap().enqueue_gui_command(
         SESSION,
         GuiCommand::MoveNode {
-            handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(6), 1),
+            handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(6)),
             parent: Some(GuiNodeId(1)),
             index: 1,
         },

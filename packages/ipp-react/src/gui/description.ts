@@ -3,12 +3,18 @@
  * Everything here runs at render time and performs no transport. The commit
  * phase consumes these snapshots through the generated GUI client.
  */
-import type { GuiAssetSource, GuiNodeContent, GuiNodeStyle } from "@ipp/client";
+import type {
+  GuiAssetSource,
+  GuiNodeData,
+  GuiNodeStyle,
+  GuiNodeValues,
+} from "@ipp/client";
 import type {
   GuiActionEvent,
   GuiActionListener,
   GuiDeclarationStyle,
   GuiHostType,
+  GuiNodeDeclaration,
   GuiNodeRef,
 } from "./components.js";
 import type { GuiControlTheme } from "./theme.js";
@@ -20,8 +26,11 @@ export interface GuiDescribedNode {
   /** Parent instance identity, or undefined for the root node. */
   readonly parent: number | undefined;
   readonly type: GuiHostType;
-  readonly content: GuiNodeContent;
-  /** Complete style with lane defaults filled, including asset and enabled. */
+  /** Node kind and authored strings. */
+  readonly data: GuiNodeData;
+  /** Authored kind-specific scalars, seeded into the node's data row. */
+  readonly values: GuiNodeValues;
+  /** Complete style with property defaults filled, including asset and enabled. */
   readonly style: GuiDeclarationStyle;
   readonly nodeRef: GuiNodeRef | null;
   readonly onAction: GuiActionListener | undefined;
@@ -41,7 +50,7 @@ export interface GuiDescribedRoot {
   readonly signature: string;
 }
 
-/** Fill lane defaults the runtime applies, so sparse reads compare equal. */
+/** Fill property defaults the runtime applies, so sparse reads compare equal. */
 export function normalizeGuiStyle(
   style: GuiNodeStyle | GuiDeclarationStyle,
 ): GuiDeclarationStyle {
@@ -51,6 +60,8 @@ export function normalizeGuiStyle(
     opacity: style.opacity ?? 1,
     fontSize: style.fontSize ?? 0.1,
     enabled: (style as GuiDeclarationStyle).enabled ?? true,
+    position: style.position === undefined ? [0, 0] : [...style.position],
+    scale: style.scale === undefined ? [1, 1] : [...style.scale],
   };
 }
 
@@ -82,6 +93,8 @@ function styleSignature(input: GuiNodeStyle | GuiDeclarationStyle): unknown {
     style.fontSize ?? 0.1,
     assetSignature(style.asset),
     style.enabled ?? true,
+    [...(style.position ?? [0, 0])],
+    [...(style.scale ?? [1, 1])],
   ];
 }
 
@@ -92,25 +105,30 @@ export function guiRootSignature(nodes: readonly GuiDescribedNode[]): string {
       node.identity,
       node.parent ?? null,
       node.type,
-      guiContentSignature(node.content),
+      guiNodeSignature(node),
       styleSignature(node.style),
       node.theme ?? null,
     ]),
   );
 }
 
-/** Transport signature for node content. Runtime-owned control values are
- * insertion-only and therefore excluded from ordinary rerender equality. */
-export function guiContentSignature(content: GuiNodeContent): unknown {
-  switch (content.kind) {
+/** Transport signature for one node's data and authored scalars.
+ * Runtime-owned control values (checkbox state, slider value, text-input
+ * text) are insertion-only and therefore excluded from ordinary rerender
+ * equality. */
+export function guiNodeSignature(node: GuiNodeDeclaration): unknown {
+  const { data, values } = node;
+  switch (data.kind) {
     case "checkbox":
-      return [content.kind];
+      return [data.kind];
     case "slider":
-      return [content.kind, content.min, content.max, content.step];
+      return [data.kind, values.min, values.max, values.step];
     case "textInput":
-      return [content.kind, content.placeholder];
+      return [data.kind, data.placeholder];
+    case "image":
+      return [data.kind, [...(values.imageSize ?? [])]];
     default:
-      return content;
+      return data;
   }
 }
 
@@ -126,30 +144,37 @@ function equalTuples(
   );
 }
 
-export function equalGuiContent(a: GuiNodeContent, b: GuiNodeContent): boolean {
-  if (a.kind !== b.kind) return false;
-  switch (a.kind) {
+/** Whether two declarations differ only in runtime-owned control values. */
+export function equalGuiNode(
+  a: GuiNodeDeclaration,
+  b: GuiNodeDeclaration,
+): boolean {
+  if (a.data.kind !== b.data.kind) return false;
+  switch (a.data.kind) {
     case "container":
-      return b.kind === "container" && a.containerKind === b.containerKind;
+      return (
+        b.data.kind === "container" &&
+        a.data.containerKind === b.data.containerKind
+      );
     case "text":
-      return b.kind === "text" && a.text === b.text;
+      return b.data.kind === "text" && a.data.text === b.data.text;
     case "drawing":
+    case "checkbox":
       return true;
     case "image":
-      return b.kind === "image" && equalTuples(a.size, b.size);
+      return equalTuples(a.values.imageSize, b.values.imageSize);
     case "button":
-      return b.kind === "button" && a.label === b.label;
-    case "checkbox":
-      return b.kind === "checkbox";
+      return b.data.kind === "button" && a.data.label === b.data.label;
     case "slider":
       return (
-        b.kind === "slider" &&
-        Object.is(a.min, b.min) &&
-        Object.is(a.max, b.max) &&
-        Object.is(a.step, b.step)
+        Object.is(a.values.min, b.values.min) &&
+        Object.is(a.values.max, b.values.max) &&
+        Object.is(a.values.step, b.values.step)
       );
     case "textInput":
-      return b.kind === "textInput" && a.placeholder === b.placeholder;
+      return (
+        b.data.kind === "textInput" && a.data.placeholder === b.data.placeholder
+      );
   }
 }
 
@@ -176,7 +201,9 @@ export function equalGuiStyle(
     Object.is(a.opacity, b.opacity) &&
     Object.is(a.fontSize, b.fontSize) &&
     equalGuiAsset(a.asset, b.asset) &&
-    Object.is(a.enabled ?? true, b.enabled ?? true)
+    Object.is(a.enabled ?? true, b.enabled ?? true) &&
+    equalTuples(a.position, b.position) &&
+    equalTuples(a.scale, b.scale)
   );
 }
 

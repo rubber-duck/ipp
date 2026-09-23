@@ -1,9 +1,10 @@
 import {
-  guiProperty,
+  guiNodeStyleOffset,
   type AnimationClipSource,
   type AnimationTrack,
   type AnimationPlaybackEvent,
   type ClientAssetSource,
+  type ComponentDescriptor,
   type GuiNodeHandle,
 } from "@ipp/client";
 import { Animation, type AnimationHandle } from "@ipp/react";
@@ -41,15 +42,19 @@ export function waveformResourceSources(): readonly ClientAssetSource[] {
 export interface WaveformMotionAssets {
   readonly scan: ClientAssetSource;
   readonly wavePulse: ClientAssetSource;
-  readonly guiComponent: number;
+  readonly guiRoot: ComponentDescriptor;
 }
 
+/** Clips target node 1's position; bindings retarget the track per node. */
 function positionTrack(
-  component: number,
+  guiRoot: ComponentDescriptor,
   samples: readonly (readonly [number, number])[],
 ): AnimationTrack {
   return {
-    property: { component, name: guiProperty(1, "position") },
+    property: {
+      component: guiRoot.id,
+      offsets: [guiNodeStyleOffset(guiRoot, 1, "position")],
+    },
     keys: samples.map(([time, x], index) => ({
       time,
       value: { kind: "dynamic", value: { kind: "vec2", value: [x, 0] } },
@@ -61,13 +66,13 @@ function positionTrack(
 }
 
 export function waveformClips(
-  component: number,
+  guiRoot: ComponentDescriptor,
 ): readonly AnimationClipSource[] {
   return [
     {
       duration: 2.4,
       tracks: [
-        positionTrack(component, [
+        positionTrack(guiRoot, [
           [0, 0],
           [2.4, -WIDTH],
         ]),
@@ -76,7 +81,7 @@ export function waveformClips(
     {
       duration: 1.2,
       tracks: [
-        positionTrack(component, [
+        positionTrack(guiRoot, [
           [0, WIDTH],
           [1.2, -PACKET_WIDTH * CURVE_SCALE],
         ]),
@@ -98,8 +103,7 @@ export function useWaveformNode() {
       previous?.session === next?.session &&
       previous?.entity === next?.entity &&
       previous?.rootIncarnation === next?.rootIncarnation &&
-      previous?.nodeId === next?.nodeId &&
-      previous?.nodeLifetime === next?.nodeLifetime
+      previous?.nodeId === next?.nodeId
         ? previous
         : next,
     );
@@ -301,8 +305,10 @@ function WaveformAnimations({
           {
             track: 0,
             property: {
-              component: motions.guiComponent,
-              name: guiProperty(signal.nodeId, "position"),
+              component: motions.guiRoot.id,
+              offsets: [
+                guiNodeStyleOffset(motions.guiRoot, signal.nodeId, "position"),
+              ],
             },
           },
         ]}
@@ -317,8 +323,10 @@ function WaveformAnimations({
           {
             track: 0,
             property: {
-              component: motions.guiComponent,
-              name: guiProperty(pulse.nodeId, "position"),
+              component: motions.guiRoot.id,
+              offsets: [
+                guiNodeStyleOffset(motions.guiRoot, pulse.nodeId, "position"),
+              ],
             },
           },
         ]}

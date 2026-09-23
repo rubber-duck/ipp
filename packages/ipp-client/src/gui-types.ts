@@ -1,15 +1,17 @@
-import type { ClientAssetSource } from "./types.js";
+import type { ClientAssetSource, ComponentDescriptor } from "./types.js";
 
 /** Unique identifier of a node within a GuiRoot component. */
 export type GuiNodeId = number;
 
-/** Fenced handle validating session, entity, root incarnation, node identity and node lifetime. */
+/**
+ * Fenced handle validating session, entity, root incarnation and node identity.
+ * Node identities are never reused within a root incarnation.
+ */
 export interface GuiNodeHandle {
   readonly session: bigint;
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly nodeId: GuiNodeId;
-  readonly nodeLifetime: number;
 }
 
 /** Construct a fenced GuiNodeHandle with range checking. */
@@ -18,7 +20,6 @@ export function guiNodeHandle(
   entity: bigint,
   rootIncarnation: bigint,
   nodeId: GuiNodeId,
-  nodeLifetime: number,
 ): GuiNodeHandle {
   if (session < 0n) throw new RangeError("Session must be a non-negative u64");
   if (entity < 0n) throw new RangeError("Entity must be a non-negative u64");
@@ -26,18 +27,11 @@ export function guiNodeHandle(
     throw new RangeError("Root incarnation must be a non-negative u64");
   if (!Number.isInteger(nodeId) || nodeId <= 0 || nodeId > 0xffffffff)
     throw new RangeError("Node identity must be a nonzero u32");
-  if (
-    !Number.isInteger(nodeLifetime) ||
-    nodeLifetime < 0 ||
-    nodeLifetime > 0xffffffff
-  )
-    throw new RangeError("Node lifetime must be a u32");
   return Object.freeze({
     session,
     entity,
     rootIncarnation,
     nodeId,
-    nodeLifetime,
   });
 }
 
@@ -50,15 +44,34 @@ export type GuiContainerKind =
   | "sizedBox"
   | "scrollView";
 
-export type GuiNodeContent =
+/**
+ * Node kind with its authored strings. Kind-specific scalars travel as
+ * {@link GuiNodeValues} rows beside it.
+ */
+export type GuiNodeData =
   | { kind: "container"; containerKind: GuiContainerKind }
   | { kind: "text"; text: string }
   | { kind: "drawing" }
-  | { kind: "image"; size: readonly [number, number] }
+  | { kind: "image" }
   | { kind: "button"; label: string }
-  | { kind: "checkbox"; checked: boolean }
-  | { kind: "slider"; value: number; min: number; max: number; step: number }
+  | { kind: "checkbox" }
+  | { kind: "slider" }
   | { kind: "textInput"; text: string; placeholder: string };
+
+/**
+ * Kind-specific scalars of one node, the `GuiRoot.node_data` row: image size
+ * for images, the committed checkbox state, and slider value and range.
+ * Presence must match the node kind. The encoding follows the contract's row
+ * layout; keys are its property names in camelCase.
+ */
+export interface GuiNodeValues {
+  imageSize?: readonly [number, number];
+  checked?: boolean;
+  value?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+}
 
 export type GuiControlValue =
   | { kind: "none" }
@@ -68,6 +81,10 @@ export type GuiControlValue =
 
 export type GuiAssetSource = ClientAssetSource;
 
+/**
+ * Authored node style, the `GuiRoot.node_style` row. The encoding follows the
+ * contract's row layout; keys are its property names in camelCase.
+ */
 export interface GuiNodeStyle {
   enabled?: boolean;
   width?: number;
@@ -86,8 +103,13 @@ export interface GuiNodeStyle {
   opacity?: number;
   fontSize?: number;
   asset?: GuiAssetSource | null;
+  /** Visual translation; moves paint and hit regions without reflow. */
+  position?: readonly [number, number];
+  /** Visual scale; moves paint and hit regions without reflow. */
+  scale?: readonly [number, number];
 }
 
+/** Sparse style change; `null` clears an optional property. */
 export interface GuiNodePatchStyle {
   enabled?: boolean;
   width?: number | null;
@@ -106,40 +128,44 @@ export interface GuiNodePatchStyle {
   opacity?: number;
   fontSize?: number;
   asset?: GuiAssetSource | null;
+  position?: readonly [number, number];
+  scale?: readonly [number, number];
 }
 
 export interface GuiNode {
   id: GuiNodeId;
   parent?: GuiNodeId;
-  lifetime: number;
   children: readonly GuiNodeId[];
-  content: GuiNodeContent;
+  data: GuiNodeData;
 }
 
 /**
- * GuiRoot.nodes: structure plus committed control values. Style lives in named
- * node properties. A live root only accepts this through incremental edits.
+ * GuiRoot.nodes: structure plus control records. Style and kind-specific
+ * scalars live in the `node_style` and `node_data` rows. A live root only
+ * accepts this through incremental edits.
  */
 export interface GuiTree {
   nextId: number;
   rootNode?: GuiNodeId;
   nodes: readonly GuiNode[];
-  /** One committed value per control node; omitted means none. */
+  /** One record per control node; omitted means none. */
   controls?: GuiControls;
 }
 
 /**
- * Committed value of one control node and the revision that produced it. A
- * node whose content stopped being a control keeps its revision with "none".
+ * Control record of one node: the revision that produced its committed value
+ * and, for a text input, the committed text. Checkbox and slider values live
+ * in the node's `node_data` row. A node whose data stopped being a control
+ * keeps its revision.
  */
-export interface GuiControlState {
+export interface GuiControlRecord {
   id: GuiNodeId;
   revision: number;
-  value: GuiControlValue;
+  text?: string;
 }
 
-/** Committed control values of a tree, in node identity order. */
-export type GuiControls = readonly GuiControlState[];
+/** Control records of a tree, in node identity order. */
+export type GuiControls = readonly GuiControlRecord[];
 
 export type GuiEdit =
   | {
@@ -149,14 +175,21 @@ export type GuiEdit =
       id: GuiNodeId;
       parent?: GuiNodeId;
       index: number;
-      content: GuiNodeContent;
+      data: GuiNodeData;
+      /** Kind-specific scalars; presence must match the kind. */
+      values?: GuiNodeValues;
       style?: GuiNodeStyle;
     }
   | {
       action: "update";
       handle: GuiNodeHandle;
       patch: {
-        content?: GuiNodeContent;
+        data?: GuiNodeData;
+        /**
+         * Replacement authored scalars; omitted with a kind change, the new
+         * kind starts empty. Committed values survive compatible edits.
+         */
+        values?: GuiNodeValues;
         style?: GuiNodePatchStyle;
       };
     }
@@ -278,10 +311,11 @@ export type GuiInputCommand =
 export interface GuiInspectedNode {
   id: GuiNodeId;
   parent?: GuiNodeId;
-  lifetime: number;
   controlRevision: number;
   children: readonly GuiNodeId[];
-  content: GuiNodeContent;
+  data: GuiNodeData;
+  /** Kind-specific scalars, including committed checkbox and slider values. */
+  values: GuiNodeValues;
   controlValue: GuiControlValue;
   style: GuiNodeStyle;
 }
@@ -298,7 +332,6 @@ export interface GuiButtonPressedEffect {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
   readonly path?: readonly number[] | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
@@ -313,7 +346,6 @@ export interface GuiControlCommittedEffect {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   readonly value: GuiControlValue;
   readonly revision: number;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
@@ -334,7 +366,6 @@ export interface GuiObservationTarget {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
 }
 
 /** Why a routed intent could not apply cleanly. Mirrors the core reason. */
@@ -423,7 +454,6 @@ export interface GuiTextFocusState {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   readonly revision: number;
   readonly text: string;
   readonly selectionStart: number;
@@ -431,26 +461,58 @@ export interface GuiTextFocusState {
   readonly composition?: GuiTextCompositionState;
 }
 
-export type GuiProperty =
-  | "enabled"
-  | "width"
-  | "height"
-  | "min_width"
-  | "min_height"
-  | "max_width"
-  | "max_height"
-  | "padding"
-  | "margin"
-  | "flex"
-  | "align_x"
-  | "align_y"
-  | "color"
-  | "background_color"
-  | "opacity"
-  | "font_size"
-  | "asset"
-  | "position"
-  | "scale";
+/** A `GuiRoot.node_style` property, named as in {@link GuiNodeStyle}. */
+export type GuiNodeStyleProperty = keyof GuiNodeStyle;
+
+/** A `GuiRoot.node_data` property, named as in {@link GuiNodeValues}. */
+export type GuiNodeDataProperty = keyof GuiNodeValues;
+
+function guiRowOffset(
+  guiRoot: ComponentDescriptor,
+  field: "node_style" | "node_data",
+  node: GuiNodeId,
+  property: string,
+): number {
+  const layout = guiRoot.fields[field]?.rows;
+  if (!layout) throw new RangeError(`GuiRoot.${field} is not a rows field`);
+  const snake = property.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const index = layout.properties.findIndex(({ name }) => name === snake);
+  if (index < 0) throw new RangeError(`Unknown GuiRoot.${field} ${property}`);
+  const count = layout.properties.length;
+  if (
+    !Number.isInteger(node) ||
+    node <= 0 ||
+    node >= Math.floor(0x10000000 / count)
+  )
+    throw new RangeError("GUI node identity out of row range");
+  return layout.regionBase + node * count + index;
+}
+
+/**
+ * Field offset of one node style property, for animation targets, overlays
+ * and field writes. The layout comes from the connected contract's GuiRoot
+ * descriptor, so offsets follow the runtime the client talks to.
+ */
+export function guiNodeStyleOffset(
+  guiRoot: ComponentDescriptor,
+  node: GuiNodeId,
+  property: GuiNodeStyleProperty,
+): number {
+  return guiRowOffset(guiRoot, "node_style", node, property);
+}
+
+/**
+ * Field offset of one node data property. Only `imageSize` accepts writes
+ * outside GUI commands; committed control values and the slider range are
+ * command-owned.
+ */
+export function guiNodeDataOffset(
+  guiRoot: ComponentDescriptor,
+  node: GuiNodeId,
+  property: GuiNodeDataProperty,
+): number {
+  return guiRowOffset(guiRoot, "node_data", node, property);
+}
 
 export type GuiPartProperty =
   | "color"
@@ -476,13 +538,6 @@ export type GuiPartProperty =
   | "easing"
   | "track"
   | "time";
-
-/** Target name for ordinary property animation and StateOverlay commands on a node style. */
-export function guiProperty(id: GuiNodeId, property: GuiProperty): string {
-  if (!Number.isInteger(id) || id <= 0 || id > 0xffffffff)
-    throw new RangeError("GUI node identity must be a nonzero u32");
-  return `node_${id}_${property}`;
-}
 
 /** Target name for ordinary property animation and StateOverlay commands on a named node skin part. */
 export function guiPartProperty(
@@ -519,7 +574,6 @@ export type GuiSemanticActionKind =
 /** One machine-observer node: identity, role, value, bounds and actions. */
 export interface GuiSemanticNode {
   id: number;
-  lifetime: number;
   parent?: number;
   role: GuiSemanticRole;
   name?: string;
@@ -535,10 +589,9 @@ export interface GuiSemanticNode {
 /** Observed input focus within the snapshotted panel, if any. */
 export interface GuiSemanticFocus {
   id: number;
-  lifetime: number;
 }
 
-/** Bounded lifetime/revision-fenced semantic snapshot of one panel. */
+/** Bounded revision-fenced semantic snapshot of one panel. */
 export interface GuiSemanticTree {
   entity: bigint;
   rootIncarnation: bigint;
@@ -562,12 +615,11 @@ export type GuiSemanticAction =
   | { kind: "setText"; value: string }
   | { kind: "focus" };
 
-/** Semantic action request with lifetime and revision fencing. */
+/** Semantic action request with node and revision fencing. */
 export interface GuiSemanticActionRequest {
   entity: bigint;
   rootIncarnation: bigint;
   node: number;
-  lifetime: number;
   expectedRevision: number;
   action: GuiSemanticAction;
 }

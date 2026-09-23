@@ -1,8 +1,10 @@
 use super::*;
 use crate::components::rows::{Rows, row_region_base};
-use crate::components::schema::{ComponentLifecycle, FieldKind, FieldValue, SchemaComponent};
+use crate::components::schema::{
+    ComponentLifecycle, FieldKind, FieldValue, SchemaComponent, SchemaField,
+};
 use crate::services::asset_management::font::FONT_TYPE;
-use crate::world::systems::gui::{GuiContainerKind, GuiNodeId, GuiRoot};
+use crate::world::systems::gui::{GuiContainerKind, GuiNodeData, GuiNodeId, GuiRoot};
 
 const NAMES: [&str; 19] = [
     "enabled",
@@ -53,6 +55,8 @@ fn styled() -> GuiNodeStyle {
         opacity: 0.75,
         font_size: 0.05,
         asset: Some(font()),
+        position: [0.3, -0.2],
+        scale: [2.0, 0.5],
     }
 }
 
@@ -161,11 +165,9 @@ fn default_row_is_the_default_node_style() {
 #[test]
 fn style_and_row_conversions_round_trip() {
     let style = styled();
-    let mut row = GuiNodeStyleRow::from(&style);
-    assert_eq!(GuiNodeStyle::from(&row), style);
-
-    row.position = [0.3, -0.2];
-    row.scale = [2.0, 0.5];
+    let row = GuiNodeStyleRow::from(&style);
+    assert_eq!(row.position, [0.3, -0.2]);
+    assert_eq!(row.scale, [2.0, 0.5]);
     assert_eq!(GuiNodeStyle::from(&row), style);
 
     let mut table = Rows::<GuiNodeStyleRow>::new();
@@ -176,12 +178,12 @@ fn style_and_row_conversions_round_trip() {
 #[test]
 fn patch_preserves_omitted_and_clears_optional_members() {
     let mut row = GuiNodeStyleRow::from(&styled());
-    row.position = [1.0, 1.0];
     row.apply(&GuiNodePatch {
         width: Some(None),
         height: Some(Some(3.0)),
         color: Some([1.0, 0.0, 0.0, 1.0]),
         asset: Some(None),
+        position: Some([1.0, 1.0]),
         ..GuiNodePatch::default()
     });
 
@@ -306,34 +308,35 @@ fn rows_fields() -> Vec<u32> {
     rows
 }
 
-fn slider() -> GuiNodeContent {
-    GuiNodeContent::Slider {
-        value: 0.25,
-        min: 0.0,
-        max: 1.0,
-        step: 0.05,
-    }
+fn slider() -> GuiNodeDataRow {
+    GuiNodeDataRow::slider(0.25, 0.0, 1.0, 0.05)
 }
 
-fn contents() -> [GuiNodeContent; 8] {
+/// Every node kind with the data row its authored scalars produce.
+fn kinds() -> [(GuiNodeData, GuiNodeDataRow); 8] {
     [
-        GuiNodeContent::Container(GuiContainerKind::Column),
-        GuiNodeContent::Text("label".into()),
-        GuiNodeContent::Drawing,
-        GuiNodeContent::Image {
-            size: [0.2, 0.1],
-        },
-        GuiNodeContent::Button {
-            label: "go".into(),
-        },
-        GuiNodeContent::Checkbox {
-            checked: true,
-        },
-        slider(),
-        GuiNodeContent::TextInput {
-            text: "t".into(),
-            placeholder: "p".into(),
-        },
+        (
+            GuiNodeData::Container(GuiContainerKind::Column),
+            GuiNodeDataRow::default(),
+        ),
+        (GuiNodeData::Text("label".into()), GuiNodeDataRow::default()),
+        (GuiNodeData::Drawing, GuiNodeDataRow::default()),
+        (GuiNodeData::Image, GuiNodeDataRow::image([0.2, 0.1])),
+        (
+            GuiNodeData::Button {
+                label: "go".into(),
+            },
+            GuiNodeDataRow::default(),
+        ),
+        (GuiNodeData::Checkbox, GuiNodeDataRow::checkbox(true)),
+        (GuiNodeData::Slider, slider()),
+        (
+            GuiNodeData::TextInput {
+                text: "t".into(),
+                placeholder: "p".into(),
+            },
+            GuiNodeDataRow::default(),
+        ),
     ]
 }
 
@@ -368,10 +371,7 @@ fn data_layout_order_matches_property_index() {
         DynamicPropertyKind::Bool
     );
     assert_eq!(GuiNodeDataProperty::Step.kind(), DynamicPropertyKind::F32);
-    assert_eq!(
-        GuiNodeDataRow::default(),
-        GuiNodeDataRow::from_content(&GuiNodeContent::Drawing)
-    );
+    assert_eq!(GuiNodeDataRow::default(), EMPTY_NODE_DATA);
 }
 
 #[test]
@@ -439,60 +439,27 @@ fn numeric_animation_targets_only_numeric_style_and_image_size() {
 
 #[test]
 fn data_presence_follows_the_node_kind() {
-    let kinds = contents();
-    for (index, content) in kinds.iter().enumerate() {
-        let row = GuiNodeDataRow::from_content(content);
-        assert_eq!(row.validate_for(content), Ok(()), "{content:?}");
-        assert_eq!(row.to_content(content).as_ref(), Some(content));
-        for (other_index, other) in kinds.iter().enumerate() {
-            let same_presence = GuiNodeDataRow::from_content(other) == GuiNodeDataRow::default()
-                && row == GuiNodeDataRow::default();
-            if other_index != index && !same_presence {
-                assert!(!row.matches_kind(other), "{content:?} as {other:?}");
+    let kinds = kinds();
+    for (data, row) in &kinds {
+        assert_eq!(row.validate_for(data), Ok(()), "{data:?}");
+        for (other, other_row) in &kinds {
+            if other_row != row {
+                assert!(!row.matches_kind(other), "{data:?} as {other:?}");
                 assert_eq!(row.validate_for(other), Err(ErrorReason::InvalidField));
-                assert_eq!(row.to_content(other), None);
             }
+        }
+        for property in GuiNodeDataProperty::ALL {
+            assert_eq!(row.present(property), property.used_by(data));
         }
     }
 
     let partial = GuiNodeDataRow {
         max: None,
-        ..GuiNodeDataRow::from_content(&slider())
+        ..slider()
     };
     assert_eq!(
-        partial.validate_for(&slider()),
+        partial.validate_for(&GuiNodeData::Slider),
         Err(ErrorReason::InvalidField)
-    );
-}
-
-#[test]
-fn data_row_values_carry_committed_state_back_into_content() {
-    let committed = GuiNodeDataRow {
-        value: Some(0.75),
-        ..GuiNodeDataRow::from_content(&slider())
-    };
-    assert_eq!(
-        committed.to_content(&slider()),
-        Some(GuiNodeContent::Slider {
-            value: 0.75,
-            min: 0.0,
-            max: 1.0,
-            step: 0.05,
-        })
-    );
-
-    let checkbox = GuiNodeContent::Checkbox {
-        checked: true,
-    };
-    let unchecked = GuiNodeDataRow {
-        checked: Some(false),
-        ..GuiNodeDataRow::default()
-    };
-    assert_eq!(
-        unchecked.to_content(&checkbox),
-        Some(GuiNodeContent::Checkbox {
-            checked: false,
-        })
     );
 }
 
@@ -527,13 +494,13 @@ fn data_ranges_follow_today_s_content_and_control_rules() {
         Err(ErrorReason::InvalidField)
     );
 
-    let base = GuiNodeDataRow::from_content(&slider());
+    let base = slider();
     let out_of_range = GuiNodeDataRow {
         value: Some(1.5),
         ..base.clone()
     };
     assert_eq!(
-        out_of_range.validate_for(&slider()),
+        out_of_range.validate_for(&GuiNodeData::Slider),
         Err(ErrorReason::InvalidValue)
     );
     let inverted = GuiNodeDataRow {
@@ -543,7 +510,7 @@ fn data_ranges_follow_today_s_content_and_control_rules() {
         ..base
     };
     assert_eq!(
-        inverted.validate_for(&slider()),
+        inverted.validate_for(&GuiNodeData::Slider),
         Err(ErrorReason::InvalidValue)
     );
 }
@@ -552,23 +519,18 @@ fn data_ranges_follow_today_s_content_and_control_rules() {
 fn gui_root_validates_node_data_against_live_nodes() {
     let node_data = rows_fields()[1];
     let mut root = GuiRoot::default();
-    let id = root
-        .nodes_mut()
-        .insert_node(GuiNodeId(1), None, 0, slider())
-        .unwrap();
-    root.controls_mut()
-        .reconcile_content(id, &slider())
-        .unwrap();
+    let id = GuiNodeId(1);
+    root.insert_node(
+        id,
+        None,
+        0,
+        GuiNodeData::Slider,
+        slider(),
+        &GuiNodeStyle::default(),
+    )
+    .unwrap();
     assert_eq!(root.validate(), Ok(()));
-
-    let mut table = Rows::<GuiNodeDataRow>::new();
-    table
-        .insert(id.0, GuiNodeDataRow::from_content(&slider()))
-        .unwrap();
-    root.set_field(node_data, FieldValue::Rows(table.encode()))
-        .unwrap();
-    assert_eq!(root.node_data(), &table);
-    assert_eq!(root.validate(), Ok(()));
+    assert_eq!(root.data_row(id), Some(&slider()));
 
     let value = GuiRoot::node_data_offset(id, GuiNodeDataProperty::Value).unwrap();
     assert_eq!(
@@ -578,10 +540,162 @@ fn gui_root_validates_node_data_against_live_nodes() {
     root.set_field(value, FieldValue::Dynamic(DynamicValue::F32(4.0)))
         .unwrap();
     assert_eq!(root.validate(), Err(ErrorReason::InvalidValue));
+    assert_eq!(
+        root.validate_field(value),
+        Err(ErrorReason::InvalidValue),
+        "a written row property is checked against the row"
+    );
 
     let mut orphan = Rows::<GuiNodeDataRow>::new();
     orphan.insert(7, GuiNodeDataRow::default()).unwrap();
     root.set_field(node_data, FieldValue::Rows(orphan.encode()))
         .unwrap();
     assert_eq!(root.validate(), Err(ErrorReason::InvalidField));
+}
+
+#[test]
+fn tree_writes_insert_and_remove_node_rows() {
+    let mut value = crate::ComponentValue::GuiRoot(GuiRoot::default());
+    let mut staged = GuiRoot::default();
+    staged
+        .insert_node(
+            GuiNodeId(1),
+            None,
+            0,
+            GuiNodeData::Container(GuiContainerKind::Column),
+            GuiNodeDataRow::default(),
+            &GuiNodeStyle::default(),
+        )
+        .unwrap();
+    staged
+        .insert_node(
+            GuiNodeId(2),
+            Some(GuiNodeId(1)),
+            0,
+            GuiNodeData::Checkbox,
+            GuiNodeDataRow::checkbox(true),
+            &GuiNodeStyle::default(),
+        )
+        .unwrap();
+    let nodes = staged.nodes().to_value();
+    value.set_field(GuiRoot::nodes_field(), nodes).unwrap();
+    let crate::ComponentValue::GuiRoot(root) = &value else {
+        unreachable!()
+    };
+    assert_eq!(
+        root.style_row(GuiNodeId(2)),
+        Some(&GuiNodeStyleRow::default())
+    );
+    // The data row is conformed to the node's kind at once.
+    assert_eq!(
+        root.data_row(GuiNodeId(2)),
+        Some(&GuiNodeDataRow::checkbox(false))
+    );
+
+    // Row properties of the new node are now addressable.
+    let checked = GuiRoot::node_data_offset(GuiNodeId(2), GuiNodeDataProperty::Checked).unwrap();
+    value
+        .set_field(checked, FieldValue::Dynamic(DynamicValue::Bool(true)))
+        .unwrap();
+
+    staged.remove_node(GuiNodeId(2)).unwrap();
+    value
+        .set_field(GuiRoot::nodes_field(), staged.nodes().to_value())
+        .unwrap();
+    let crate::ComponentValue::GuiRoot(root) = &value else {
+        unreachable!()
+    };
+    assert_eq!(root.style_row(GuiNodeId(2)), None);
+    assert_eq!(
+        root.node_data().slot_state(2),
+        crate::components::rows::RowSlotState::Dead
+    );
+    assert!(
+        value.field(checked).is_err(),
+        "dead node slots reject reads"
+    );
+    assert!(
+        value
+            .set_field(checked, FieldValue::Dynamic(DynamicValue::Bool(false)))
+            .is_err(),
+        "dead node slots reject writes"
+    );
+}
+
+#[test]
+fn node_identities_stop_at_the_row_slot_bound() {
+    let mut root = GuiRoot::default();
+    root.nodes_mut().next_id = crate::MAX_GUI_NODE_ID - 1;
+    let last = GuiNodeId(crate::MAX_GUI_NODE_ID - 1);
+    root.insert_node(
+        last,
+        None,
+        0,
+        GuiNodeData::Drawing,
+        GuiNodeDataRow::default(),
+        &GuiNodeStyle::default(),
+    )
+    .unwrap();
+    assert!(GuiRoot::node_style_offset(last, GuiNodeStyleProperty::Margin).is_some());
+    assert_eq!(
+        root.insert_node(
+            GuiNodeId(crate::MAX_GUI_NODE_ID),
+            Some(last),
+            0,
+            GuiNodeData::Drawing,
+            GuiNodeDataRow::default(),
+            &GuiNodeStyle::default(),
+        ),
+        Err(ErrorReason::Capacity)
+    );
+}
+
+#[test]
+fn gui_root_keeps_commands_within_their_size_budget() {
+    // Commands carry whole component values; the rows tables must not grow
+    // every queued command beyond the batch budget's per-command estimate.
+    assert!(
+        std::mem::size_of::<crate::Command>() <= 248,
+        "Command is {} bytes; GuiRoot is {}",
+        std::mem::size_of::<crate::Command>(),
+        std::mem::size_of::<GuiRoot>()
+    );
+}
+
+#[test]
+fn patch_style_changes_round_trip_by_property() {
+    let patch = GuiNodePatch {
+        enabled: Some(false),
+        width: Some(None),
+        height: Some(Some(2.0)),
+        asset: Some(Some(font())),
+        position: Some([0.5, 0.25]),
+        ..GuiNodePatch::default()
+    };
+    let mut rebuilt = GuiNodePatch::default();
+    for property in GuiNodeStyleProperty::ALL {
+        rebuilt
+            .set_style_change(property, patch.style_change(property))
+            .unwrap();
+    }
+    assert_eq!(rebuilt, patch);
+    assert_eq!(
+        patch.style_change(GuiNodeStyleProperty::Position),
+        Some(Some(DynamicValue::Vec2([0.5, 0.25])))
+    );
+    assert_eq!(patch.style_change(GuiNodeStyleProperty::Width), Some(None));
+    assert_eq!(patch.style_change(GuiNodeStyleProperty::Margin), None);
+    assert!(
+        rebuilt
+            .set_style_change(GuiNodeStyleProperty::Opacity, Some(None))
+            .is_err()
+    );
+    assert!(
+        rebuilt
+            .set_style_change(
+                GuiNodeStyleProperty::Width,
+                Some(Some(DynamicValue::Vec2([1.0, 1.0])))
+            )
+            .is_err()
+    );
 }

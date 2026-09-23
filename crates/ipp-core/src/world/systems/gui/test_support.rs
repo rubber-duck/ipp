@@ -64,3 +64,41 @@ pub(super) fn font_source() -> AssetSource {
         variant: 0,
     }
 }
+
+/// Authored node for fixtures: kind and strings plus the kind-specific
+/// scalars an `InsertNode` seeds into the node's `node_data` row.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::world::systems) struct AuthoredNode {
+    pub(in crate::world::systems) data: super::GuiNodeData,
+    pub(in crate::world::systems) values: super::GuiNodeDataRow,
+}
+
+impl From<super::GuiNodeData> for AuthoredNode {
+    fn from(data: super::GuiNodeData) -> Self {
+        Self {
+            data,
+            values: super::GuiNodeDataRow::default(),
+        }
+    }
+}
+
+/// Slider node with its initial value and range.
+pub(in crate::world::systems) fn slider_node(
+    value: f32,
+    min: f32,
+    max: f32,
+    step: f32,
+) -> AuthoredNode {
+    AuthoredNode {
+        data: super::GuiNodeData::Slider,
+        values: super::GuiNodeDataRow::slider(value, min, max, step),
+    }
+}
+
+/// Checkbox node with its initial state.
+pub(in crate::world::systems) fn checkbox_node(checked: bool) -> AuthoredNode {
+    AuthoredNode {
+        data: super::GuiNodeData::Checkbox,
+        values: super::GuiNodeDataRow::checkbox(checked),
+    }
+}

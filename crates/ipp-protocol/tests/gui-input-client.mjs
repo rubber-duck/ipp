@@ -159,10 +159,9 @@ test("every gui input action encodes its exact wire payload", () => {
         entity: 42n,
         rootIncarnation: 3n,
         nodeId: 9,
-        nodeLifetime: 1,
       },
     }),
-    concatenate([u8(1), u8(8), u64(7n), u64(42n), u64(3n), u32(9), u32(1)]),
+    concatenate([u8(1), u8(8), u64(7n), u64(42n), u64(3n), u32(9)]),
   );
   assert.deepEqual(
     codec.encodeGuiInput({ kind: "blur" }),
@@ -282,26 +281,35 @@ function guiInputResponse(
 test("GUI inspection envelopes decode one legal maximum text value", () => {
   const legalText = "a".repeat(65_536);
   const payload = concatenate([
-    u8(1),
+    u8(2),
     u64(42n),
     u64(3n),
     u32(1),
+    // Node: id, no parent, revision, no children, text data.
     u32(1),
     u32(0),
-    u32(1),
     u32(0),
     u32(0),
     u8(2),
     text(legalText),
+    // Empty node_data row, no control value.
     u8(0),
-    u16(1 << 13),
+    u8(0),
+    // node_style row: enabled, color, opacity, font_size, position, scale.
+    u8(0b0000_0001),
+    u8(0b1011_0100),
+    u8(0b0000_0001),
+    u32(1),
     f32(1),
     f32(1),
     f32(1),
     f32(1),
     f32(1),
     f32(0.1),
-    u8(1),
+    f32(0),
+    f32(0),
+    f32(1),
+    f32(1),
   ]);
   assert.ok(payload.byteLength > 65_536);
   const response = layout("response-gui-inspect", {
@@ -313,7 +321,105 @@ test("GUI inspection envelopes decode one legal maximum text value", () => {
   }).bytes;
   const decoded = codec.decodeResponse(response, 7n);
   assert.equal(decoded.body.kind, "guiInspect");
-  assert.equal(decoded.body.response.nodes[0].content.text, legalText);
+  const [node] = decoded.body.response.nodes;
+  assert.equal(node.data.text, legalText);
+  assert.deepEqual(node.values, {});
+  assert.deepEqual(node.style, {
+    enabled: true,
+    color: [1, 1, 1, 1],
+    opacity: 1,
+    fontSize: Math.fround(0.1),
+    position: [0, 0],
+    scale: [1, 1],
+  });
+});
+
+test("GUI edits encode data, values and style in the contract row layouts", () => {
+  const handle = { session: 7n, entity: 42n, rootIncarnation: 3n, nodeId: 1 };
+  assert.deepEqual(
+    codec.encodeGuiEdits([
+      {
+        action: "insert",
+        entity: 42n,
+        rootIncarnation: 3n,
+        id: 1,
+        index: 0,
+        data: { kind: "slider" },
+        values: { value: 0.5, min: 0, max: 1, step: 0.25 },
+        style: { width: 2, position: [0.5, -0.25] },
+      },
+      {
+        action: "update",
+        handle,
+        patch: { style: { enabled: false, width: null, position: [1, 2] } },
+      },
+    ]),
+    concatenate([
+      u8(3),
+      u32(2),
+      // Insert: identity, slider data, then the node_data row (value, min,
+      // max, step) and the node_style row with its required defaults.
+      u8(1),
+      u64(42n),
+      u64(3n),
+      u32(1),
+      u8(0),
+      u32(0),
+      u8(7),
+      u8(0b0011_1100),
+      f32(0.5),
+      f32(0),
+      f32(1),
+      f32(0.25),
+      u8(0b0000_0011),
+      u8(0b1011_0100),
+      u8(0b0000_0001),
+      u32(1),
+      f32(2),
+      f32(1),
+      f32(1),
+      f32(1),
+      f32(1),
+      f32(1),
+      f32(0.1),
+      f32(0.5),
+      f32(-0.25),
+      f32(1),
+      f32(1),
+      // Update: handle, no data or values, changed and set masks over the
+      // style layout (enabled, width cleared, position), set values.
+      u8(2),
+      u64(7n),
+      u64(42n),
+      u64(3n),
+      u32(1),
+      u8(0),
+      u8(0),
+      u8(0b0000_0011),
+      u8(0b1000_0000),
+      u8(0),
+      u8(0b0000_0001),
+      u8(0b1000_0000),
+      u8(0),
+      u32(0),
+      f32(1),
+      f32(2),
+    ]),
+  );
+  assert.throws(
+    () =>
+      codec.encodeGuiEdits([
+        { action: "update", handle, patch: { style: { opacity: null } } },
+      ]),
+    /cannot be cleared/,
+  );
+  assert.throws(
+    () =>
+      codec.encodeGuiEdits([
+        { action: "update", handle, patch: { style: { lanes: 1 } } },
+      ]),
+    /unknown GUI lanes/,
+  );
 });
 
 test("gui input responses decode to their correlated acknowledgement", () => {

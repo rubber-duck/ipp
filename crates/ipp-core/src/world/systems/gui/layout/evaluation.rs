@@ -100,10 +100,8 @@
 //! renderer through the internal retained Surface preparation path, never
 //! through self-issued client commands.
 
-use super::super::tree::component::GuiNodeLanes;
-use super::super::{
-    GuiContainerKind, GuiControlValue, GuiNode, GuiNodeContent, GuiNodeId, GuiNodeStyle, GuiRoot,
-};
+use super::super::tree::GuiNodeStyleRow;
+use super::super::{GuiContainerKind, GuiNode, GuiNodeData, GuiNodeId, GuiNodeStyle, GuiRoot};
 use crate::EntityId;
 use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetKey, AssetSource};
@@ -408,8 +406,6 @@ pub trait GuiResourceResolver {
 pub struct GuiEvaluatedNode {
     /// Stable root-local node identity.
     pub node: GuiNodeId,
-    /// Node lifetime fencing primitive and handle reuse.
-    pub lifetime: u32,
     /// Depth below the root node; the root node itself is depth zero.
     pub depth: u32,
     /// Final logical rectangle `[x, y, width, height]`, including the node's
@@ -532,6 +528,10 @@ pub enum GuiEvaluatedContent {
     },
 }
 
+/// Default style of a node without a row.
+static DEFAULT_STYLE_ROW: std::sync::LazyLock<GuiNodeStyleRow> =
+    std::sync::LazyLock::new(GuiNodeStyleRow::default);
+
 /// Read-only evaluated geometry for one GUI root, shared by hit testing,
 /// semantics and rendering. Identified by root incarnation, layout revision
 /// and evaluation tick; consumers must drop it when the incarnation moves.
@@ -601,7 +601,6 @@ impl GuiEvaluatedView {
 
             return Some(GuiHit {
                 node: node.node,
-                lifetime: node.lifetime,
                 position: point,
             });
         }
@@ -676,7 +675,7 @@ impl GuiEvaluatedView {
     /// Ordered retained paint for the Surface preparation boundary, in
     /// painter order with per-primitive clips in Surface content metres.
     /// Primitives carry [`SurfacePrimitiveIdentity::Gui`] identity keyed by
-    /// root incarnation, node lifetime and stable named part, disjoint from
+    /// root incarnation, node and stable named part, disjoint from
     /// authored item identities.
     pub fn surface_primitives(&self) -> Vec<SurfaceRenderPrimitive> {
         let mut primitives = Vec::new();
@@ -717,7 +716,6 @@ impl GuiEvaluatedView {
                         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                             root_incarnation: self.root_incarnation,
                             node: node.node,
-                            lifetime: node.lifetime,
                             part: GuiPrimitivePart::Background,
                         }),
                         position: origin,
@@ -753,8 +751,6 @@ impl GuiEvaluatedView {
 pub struct GuiHit {
     /// Hit node identity.
     pub node: GuiNodeId,
-    /// Node lifetime fencing reuse after removal and recreation.
-    pub lifetime: u32,
     /// Final-logical hit position that selected this node.
     pub position: [f32; 2],
 }
@@ -853,7 +849,6 @@ fn node_content_primitive(
     let identity = SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
         root_incarnation,
         node: node.node,
-        lifetime: node.lifetime,
         part: match &node.content {
             GuiEvaluatedContent::Text {
                 ..
@@ -1112,15 +1107,26 @@ fn visual_scaled(root: &GuiRoot, id: GuiNodeId, units: f32) -> ([f32; 2], [f32; 
     ([offset[0] * units, offset[1] * units], scale)
 }
 
-/// Committed (effective) control value and its revision for one node.
-/// Authored content carries the initial value only: routed input and
-/// explicit resets commit through [`GuiControls`](super::GuiControls) without
-/// rewriting authored content, so measurement, paint and hit testing must
-/// observe the committed revision or they would show stale state. Returns
-/// None while no committed value exists and the authored initial applies.
-fn effective_control(root: &GuiRoot, id: GuiNodeId) -> Option<(GuiControlValue, u32)> {
-    root.control_state(id)
-        .map(|state| (state.value.clone(), state.revision))
+/// Revision of one node's committed control value; zero for nodes that were
+/// never controls.
+fn control_revision(root: &GuiRoot, id: GuiNodeId) -> u32 {
+    root.controls().get(id).map_or(0, |entry| entry.revision)
+}
+
+/// Kind-specific scalars of one node, read in place; a node without a row
+/// reads as empty.
+fn node_values(root: &GuiRoot, id: GuiNodeId) -> &super::super::tree::GuiNodeDataRow {
+    root.data_row(id)
+        .unwrap_or(&super::super::tree::node_rows::EMPTY_NODE_DATA)
+}
+
+/// Effective text of a text input: the committed text, or the authored text
+/// when no record exists.
+fn effective_text<'a>(root: &'a GuiRoot, id: GuiNodeId, authored: &'a str) -> &'a str {
+    root.controls()
+        .get(id)
+        .and_then(|entry| entry.text.as_deref())
+        .unwrap_or(authored)
 }
 
 /// Clamp a settled size into pre-sanitized min/max lanes. An inverted pair
@@ -1279,7 +1285,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         // this subtree into its final slot.
         let record = GuiEvaluatedNode {
             node: id,
-            lifetime: node.lifetime,
             depth,
             rect,
             clip: None,
@@ -1326,8 +1331,8 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         acc_total: [f32; 2],
         depth: u32,
     ) -> ContentOutcome {
-        match &node.content {
-            GuiNodeContent::Container(kind) => self.layout_container(
+        match &node.data {
+            GuiNodeData::Container(kind) => self.layout_container(
                 node,
                 style,
                 *kind,
@@ -1337,7 +1342,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 acc_total,
                 depth,
             ),
-            GuiNodeContent::Text(text) => {
+            GuiNodeData::Text(text) => {
                 let outcome = self.measure_leaf(
                     node.id,
                     text,
@@ -1347,7 +1352,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 );
                 ContentOutcome::leaf(outcome, self.units, constraints)
             }
-            GuiNodeContent::Drawing => {
+            GuiNodeData::Drawing => {
                 let resource = style
                     .asset
                     .as_ref()
@@ -1369,9 +1374,10 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     viewport: None,
                 }
             }
-            GuiNodeContent::Image {
-                size,
-            } => {
+            GuiNodeData::Image => {
+                let size = node_values(self.root, node.id)
+                    .image_size
+                    .unwrap_or([0.0, 0.0]);
                 let resource = style
                     .asset
                     .as_ref()
@@ -1397,7 +1403,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     viewport: None,
                 }
             }
-            GuiNodeContent::Button {
+            GuiNodeData::Button {
                 label,
             } => {
                 let outcome = self.measure_leaf(
@@ -1416,15 +1422,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     },
                 )
             }
-            GuiNodeContent::Checkbox {
-                checked,
-            } => {
+            GuiNodeData::Checkbox => {
                 let em = style.font_size * self.units;
                 let edge = 1.4 * em;
-                let (checked, revision) = match effective_control(self.root, node.id) {
-                    Some((GuiControlValue::Bool(committed), revision)) => (committed, revision),
-                    _ => (*checked, 0),
-                };
+                let checked = node_values(self.root, node.id).checked.unwrap_or(false);
+                let revision = control_revision(self.root, node.id);
                 ContentOutcome {
                     size: [
                         constraints.clamp_width(edge),
@@ -1439,18 +1441,17 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     viewport: None,
                 }
             }
-            GuiNodeContent::Slider {
-                value,
-                min,
-                max,
-                step,
-            } => {
+            GuiNodeData::Slider => {
                 let em = style.font_size * self.units;
                 let size = [8.0 * em, 1.4 * em];
-                let (value, revision) = match effective_control(self.root, node.id) {
-                    Some((GuiControlValue::Scalar(committed), revision)) => (committed, revision),
-                    _ => (*value, 0),
-                };
+                let values = node_values(self.root, node.id);
+                let value = values.value.unwrap_or(0.0);
+                let (min, max, step) = (
+                    values.min.unwrap_or(0.0),
+                    values.max.unwrap_or(0.0),
+                    values.step.unwrap_or(0.0),
+                );
+                let revision = control_revision(self.root, node.id);
                 ContentOutcome {
                     size: [
                         constraints.clamp_width(size[0]),
@@ -1458,9 +1459,9 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     ],
                     content: GuiEvaluatedContent::Slider {
                         value,
-                        min: *min,
-                        max: *max,
-                        step: *step,
+                        min,
+                        max,
+                        step,
                         revision,
                     },
                     available: true,
@@ -1468,18 +1469,16 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     viewport: None,
                 }
             }
-            GuiNodeContent::TextInput {
+            GuiNodeData::TextInput {
                 text,
                 placeholder,
             } => {
-                let (effective, revision) = match effective_control(self.root, node.id) {
-                    Some((GuiControlValue::Text(committed), revision)) => (committed, revision),
-                    _ => (text.clone(), 0),
-                };
+                let effective = effective_text(self.root, node.id, text);
+                let revision = control_revision(self.root, node.id);
                 let measured = if effective.is_empty() {
                     placeholder
                 } else {
-                    &effective
+                    effective
                 };
                 let outcome = self.measure_leaf(
                     node.id,
@@ -1631,7 +1630,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         diagnostic: GuiLayoutDiagnostic,
     ) {
         self.diagnostics.push(diagnostic);
-        let style = self.root.style(node.id).unwrap_or_default();
+        let style = self.root.style_row(node.id).unwrap_or(&DEFAULT_STYLE_ROW);
         let enabled = style.enabled;
         self.placements.push(DeferredPlacement {
             placeholder: true,
@@ -1639,7 +1638,6 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         });
         self.nodes.push(GuiEvaluatedNode {
             node: node.id,
-            lifetime: node.lifetime,
             depth,
             rect: [slot_final[0], slot_final[1], 0.0, 0.0],
             clip: None,
@@ -1873,7 +1871,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// Positive flex factor of one child, or None for fixed children.
     /// Non-finite or negative factors diagnose and behave as fixed.
     fn child_flex(&mut self, id: GuiNodeId) -> Option<f32> {
-        let flex = self.root.style(id).and_then(|style| style.flex)?;
+        let flex = self.root.style_row(id).and_then(|style| style.flex)?;
         if !flex.is_finite() || flex < 0.0 {
             self.diagnostics
                 .push(GuiLayoutDiagnostic::InvalidConstraints {
@@ -2072,7 +2070,10 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         // tree-order slot, and on the cross axis by its own align lane.
         let mut slot = 0.0;
         for placement in placed {
-            let child_style = self.root.style(placement.child).unwrap_or_default();
+            let child_style = self
+                .root
+                .style_row(placement.child)
+                .unwrap_or(&DEFAULT_STYLE_ROW);
             let factor = if horizontal {
                 align_factor(child_style.align_y, -1.0)
             } else {
@@ -2192,7 +2193,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         // Children were visited at their leading margins; alignment only
         // adds the offset of the margin box within the settled extent.
         for (child, index, child_size) in placed {
-            let child_style = self.root.style(child).unwrap_or_default();
+            let child_style = self.root.style_row(child).unwrap_or(&DEFAULT_STYLE_ROW);
             let fx = align_factor(child_style.align_x, -1.0);
             let fy = align_factor(child_style.align_y, -1.0);
             let local = [
@@ -2539,74 +2540,57 @@ fn align_factor(value: Option<f32>, default: f32) -> f32 {
 /// live in the state/paint fingerprint so frequent interaction refreshes the
 /// evaluated payload without reflow. Text-input content remains structural
 /// because its measured text can change intrinsic size.
-fn hash_node_structure(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) {
-    let Some(node) = root.nodes().node(id) else {
-        return;
-    };
+fn hash_node_structure(hasher: &mut Fingerprint, root: &GuiRoot, node: &GuiNode) {
     hasher.u32(node.id.0);
-    hasher.u32(node.lifetime);
     hasher.u32(node.parent.map(|parent| parent.0).unwrap_or(u32::MAX));
     hasher.u32(node.children.len() as u32);
     for child in &node.children {
         hasher.u32(child.0);
     }
 
-    match &node.content {
-        GuiNodeContent::Container(kind) => {
+    match &node.data {
+        GuiNodeData::Container(kind) => {
             hasher.u32(0);
             hasher.u32(*kind as u32);
         }
-        GuiNodeContent::Text(text) => {
+        GuiNodeData::Text(text) => {
             hasher.u32(1);
             hasher.string(text);
         }
-        GuiNodeContent::Drawing => hasher.u32(2),
-        GuiNodeContent::Image {
-            size,
-        } => {
+        GuiNodeData::Drawing => hasher.u32(2),
+        GuiNodeData::Image => {
             hasher.u32(3);
+            let size = node_values(root, node.id).image_size.unwrap_or([0.0, 0.0]);
             hasher.f32(size[0]);
             hasher.f32(size[1]);
         }
-        GuiNodeContent::Button {
+        GuiNodeData::Button {
             label,
         } => {
             hasher.u32(4);
             hasher.string(label);
         }
-        GuiNodeContent::Checkbox {
-            ..
-        } => {
-            hasher.u32(5);
-        }
-        GuiNodeContent::Slider {
-            ..
-        } => {
-            hasher.u32(6);
-        }
-        GuiNodeContent::TextInput {
+        GuiNodeData::Checkbox => hasher.u32(5),
+        GuiNodeData::Slider => hasher.u32(6),
+        GuiNodeData::TextInput {
             text,
             placeholder,
         } => {
             hasher.u32(7);
-            let effective = match effective_control(root, id) {
-                Some((GuiControlValue::Text(committed), _)) => committed,
-                _ => text.clone(),
-            };
-            hasher.string(&effective);
+            hasher.string(effective_text(root, node.id, text));
             hasher.string(placeholder);
         }
     }
 }
 
-/// Hash layout-affecting style lanes: explicit and min/max sizes, flex,
+/// Hash layout-affecting style properties: explicit and min/max sizes, flex,
 /// alignment, padding, margins, font size, asset identity and resource
 /// generations. Visual translation/scale live in the visual
-/// lane below, and colour and opacity stay paint-only, so neither visual
+/// hash below, and colour and opacity stay paint-only, so neither visual
 /// nor paint edits remeasure text or reflow layout.
 fn hash_node_layout(
     hasher: &mut Fingerprint,
-    style: &GuiNodeStyle,
+    style: &GuiNodeStyleRow,
     resolver: &dyn GuiResourceResolver,
 ) {
     hash_option_f32(hasher, style.width);
@@ -2637,21 +2621,21 @@ fn hash_node_layout(
     }
 }
 
-/// Hash visual-only lanes: translation and scale move paint and hit regions
-/// together without remeasuring text or reflowing layout.
-fn hash_node_visual(hasher: &mut Fingerprint, lanes: &GuiNodeLanes) {
-    hasher.f32(lanes.position[0]);
-    hasher.f32(lanes.position[1]);
-    hasher.f32(lanes.scale[0]);
-    hasher.f32(lanes.scale[1]);
+/// Hash visual-only properties: translation and scale move paint and hit
+/// regions together without remeasuring text or reflowing layout.
+fn hash_node_visual(hasher: &mut Fingerprint, style: &GuiNodeStyleRow) {
+    hasher.f32(style.position[0]);
+    hasher.f32(style.position[1]);
+    hasher.f32(style.scale[0]);
+    hasher.f32(style.scale[1]);
 }
 
-/// Hash paint-only lanes over the layout hash.
+/// Hash paint-only properties over the layout hash.
 fn hash_node_paint(
     hasher: &mut Fingerprint,
     root: &GuiRoot,
     id: GuiNodeId,
-    style: &GuiNodeStyle,
+    style: &GuiNodeStyleRow,
     resolver: &dyn GuiResourceResolver,
 ) {
     for lane in style.color {
@@ -2664,53 +2648,24 @@ fn hash_node_paint(
     hash_node_part_paint(hasher, root, id, resolver);
 }
 
-/// Hash non-geometric control payload and revisions for retained state refresh.
+/// Hash non-geometric control values and revisions for retained state refresh.
 fn hash_control_state(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) {
-    let Some(node) = root.nodes().node(id) else {
-        return;
-    };
-    match &node.content {
-        GuiNodeContent::Checkbox {
-            checked,
-        } => {
-            hasher.u32(1);
-            hasher.u32(u32::from(*checked));
-        }
-        GuiNodeContent::Slider {
-            value,
-            min,
-            max,
-            step,
-        } => {
-            hasher.u32(2);
-            hasher.f32(*value);
-            hasher.f32(*min);
-            hasher.f32(*max);
-            hasher.f32(*step);
-        }
-        GuiNodeContent::TextInput {
-            ..
-        } => hasher.u32(3),
-        _ => hasher.u32(0),
-    }
+    let values = node_values(root, id);
+    hash_option_f32(hasher, values.checked.map(f32::from));
+    hash_option_f32(hasher, values.value);
+    hash_option_f32(hasher, values.min);
+    hash_option_f32(hasher, values.max);
+    hash_option_f32(hasher, values.step);
     match root.controls().get(id) {
-        Some(state) => {
+        Some(entry) => {
             hasher.u32(1);
-            hasher.u32(state.revision);
-            match &state.value {
-                GuiControlValue::None => hasher.u32(0),
-                GuiControlValue::Bool(value) => {
+            hasher.u32(entry.revision);
+            match &entry.text {
+                Some(text) => {
                     hasher.u32(1);
-                    hasher.u32(u32::from(*value));
+                    hasher.string(text);
                 }
-                GuiControlValue::Scalar(value) => {
-                    hasher.u32(2);
-                    hasher.f32(*value);
-                }
-                GuiControlValue::Text(value) => {
-                    hasher.u32(3);
-                    hasher.string(value);
-                }
+                None => hasher.u32(0),
             }
         }
         None => hasher.u32(0),
@@ -2789,13 +2744,11 @@ fn fingerprints(
     structure.u32(root.nodes().next_node_id());
     structure.u32(root.nodes().root_node().map(|id| id.0).unwrap_or(u32::MAX));
     for node in root.nodes().as_slice() {
-        hash_node_structure(&mut structure, root, node.id);
-        let Some(lanes) = root.node_lanes(node.id) else {
-            continue;
-        };
-        hash_node_layout(&mut layout, &lanes.style, resolver);
-        hash_node_visual(&mut visual, &lanes);
-        hash_node_paint(&mut paint, root, node.id, &lanes.style, resolver);
+        hash_node_structure(&mut structure, root, node);
+        let style = root.style_row(node.id).unwrap_or(&DEFAULT_STYLE_ROW);
+        hash_node_layout(&mut layout, style, resolver);
+        hash_node_visual(&mut visual, style);
+        hash_node_paint(&mut paint, root, node.id, style, resolver);
     }
     let structure = structure.finish();
     layout.u64(structure);
@@ -3263,7 +3216,7 @@ impl RetainedGuiRoot {
 /// rectangles and clips are untouched.
 fn refresh_paint(root: &GuiRoot, view: &mut GuiEvaluatedView) {
     for node in &mut view.nodes {
-        if let Some(style) = root.style(node.node) {
+        if let Some(style) = root.style_row(node.node) {
             node.color = style.color;
             node.background = style.background_color;
             node.opacity = style.opacity;
@@ -3273,25 +3226,19 @@ fn refresh_paint(root: &GuiRoot, view: &mut GuiEvaluatedView) {
         let Some(live) = root.nodes().node(node.node) else {
             continue;
         };
-        match (&mut node.content, &live.content) {
+        let values = node_values(root, node.node);
+        let revision_now = control_revision(root, node.node);
+        match (&mut node.content, &live.data) {
             (
                 GuiEvaluatedContent::Checkbox {
                     checked,
                     revision,
                 },
-                GuiNodeContent::Checkbox {
-                    checked: authored,
-                },
-            ) => match effective_control(root, node.node) {
-                Some((GuiControlValue::Bool(value), current)) => {
-                    *checked = value;
-                    *revision = current;
-                }
-                _ => {
-                    *checked = *authored;
-                    *revision = 0;
-                }
-            },
+                GuiNodeData::Checkbox,
+            ) => {
+                *checked = values.checked.unwrap_or(false);
+                *revision = revision_now;
+            }
             (
                 GuiEvaluatedContent::Slider {
                     value,
@@ -3300,26 +3247,13 @@ fn refresh_paint(root: &GuiRoot, view: &mut GuiEvaluatedView) {
                     step,
                     revision,
                 },
-                GuiNodeContent::Slider {
-                    value: authored,
-                    min: current_min,
-                    max: current_max,
-                    step: current_step,
-                },
+                GuiNodeData::Slider,
             ) => {
-                *min = *current_min;
-                *max = *current_max;
-                *step = *current_step;
-                match effective_control(root, node.node) {
-                    Some((GuiControlValue::Scalar(current), current_revision)) => {
-                        *value = current;
-                        *revision = current_revision;
-                    }
-                    _ => {
-                        *value = *authored;
-                        *revision = 0;
-                    }
-                }
+                *value = values.value.unwrap_or(0.0);
+                *min = values.min.unwrap_or(0.0);
+                *max = values.max.unwrap_or(0.0);
+                *step = values.step.unwrap_or(0.0);
+                *revision = revision_now;
             }
             (
                 GuiEvaluatedContent::TextInput {
@@ -3327,20 +3261,17 @@ fn refresh_paint(root: &GuiRoot, view: &mut GuiEvaluatedView) {
                     revision,
                     ..
                 },
-                GuiNodeContent::TextInput {
+                GuiNodeData::TextInput {
                     text: authored,
                     ..
                 },
-            ) => match effective_control(root, node.node) {
-                Some((GuiControlValue::Text(current), current_revision)) => {
-                    *text = current;
-                    *revision = current_revision;
+            ) => {
+                let effective = effective_text(root, node.node, authored);
+                if text != effective {
+                    *text = effective.to_owned();
                 }
-                _ => {
-                    *text = authored.clone();
-                    *revision = 0;
-                }
-            },
+                *revision = revision_now;
+            }
             _ => {}
         }
     }

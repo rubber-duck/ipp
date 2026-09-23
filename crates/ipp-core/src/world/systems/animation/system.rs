@@ -676,6 +676,5 @@ fn skin_animation_owner_live(
         .world
         .components
         .gui_root(owner.entity.index() as usize)
-        .and_then(|root| root.nodes().node(owner.primitive.node))
-        .is_some_and(|node| node.lifetime == owner.primitive.lifetime)
+        .is_some_and(|root| root.nodes().node(owner.primitive.node).is_some())
 }

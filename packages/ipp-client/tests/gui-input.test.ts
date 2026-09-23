@@ -132,7 +132,6 @@ const removeEdit: GuiEdit = {
     entity: 1n,
     rootIncarnation: 1n,
     nodeId: 1,
-    nodeLifetime: 1,
   },
 };
 

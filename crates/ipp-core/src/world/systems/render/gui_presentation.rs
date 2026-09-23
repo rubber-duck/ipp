@@ -252,7 +252,6 @@ impl RenderSystem {
                         entity,
                         root_incarnation: id.root_incarnation,
                         node: id.node,
-                        lifetime: id.lifetime,
                     },
                     node.enabled,
                 );

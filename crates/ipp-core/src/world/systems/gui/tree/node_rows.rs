@@ -6,8 +6,9 @@
 //! [`GuiNodeStyleProperty`] and [`GuiNodeDataProperty`]; a row field offset
 //! addresses one property of one node.
 
-use super::nodes::{GuiNodeContent, GuiNodePatch, GuiNodeStyle};
+use super::nodes::{GuiNodeData, GuiNodePatch, GuiNodeStyle};
 use crate::components::rows::SchemaRow;
+use crate::components::schema::FieldError;
 use crate::services::asset_management::AssetSource;
 use crate::{DynamicPropertyKind, DynamicValue, ErrorReason};
 
@@ -64,7 +65,7 @@ impl Default for GuiNodeStyleRow {
 }
 
 impl From<&GuiNodeStyle> for GuiNodeStyleRow {
-    /// Complete row for a style with an identity visual transform.
+    /// The row holding a complete authored style.
     fn from(style: &GuiNodeStyle) -> Self {
         Self {
             enabled: style.enabled,
@@ -82,8 +83,8 @@ impl From<&GuiNodeStyle> for GuiNodeStyleRow {
             opacity: style.opacity,
             font_size: style.font_size,
             asset: style.asset.clone(),
-            position: [0.0, 0.0],
-            scale: [1.0, 1.0],
+            position: style.position,
+            scale: style.scale,
             padding: style.padding,
             margin: style.margin,
         }
@@ -91,7 +92,7 @@ impl From<&GuiNodeStyle> for GuiNodeStyleRow {
 }
 
 impl From<&GuiNodeStyleRow> for GuiNodeStyle {
-    /// Style members of a row; the visual transform stays on the row.
+    /// The authored style a row holds.
     fn from(row: &GuiNodeStyleRow) -> Self {
         Self {
             enabled: row.enabled,
@@ -111,13 +112,15 @@ impl From<&GuiNodeStyleRow> for GuiNodeStyle {
             opacity: row.opacity,
             font_size: row.font_size,
             asset: row.asset.clone(),
+            position: row.position,
+            scale: row.scale,
         }
     }
 }
 
 impl GuiNodeStyleRow {
     /// Apply a patch's style members, preserving omitted ones; an explicit
-    /// clear makes an optional property absent. Content is not row state.
+    /// clear makes an optional property absent. Node data is not style.
     pub fn apply(&mut self, patch: &GuiNodePatch) {
         fn set<T: Clone>(target: &mut T, value: &Option<T>) {
             if let Some(value) = value {
@@ -142,6 +145,8 @@ impl GuiNodeStyleRow {
         set(&mut self.asset, &patch.asset);
         set(&mut self.padding, &patch.padding);
         set(&mut self.margin, &patch.margin);
+        set(&mut self.position, &patch.position);
+        set(&mut self.scale, &patch.scale);
     }
 
     /// Check every present property against its declared range.
@@ -156,6 +161,105 @@ impl GuiNodeStyleRow {
         }
 
         Ok(())
+    }
+}
+
+/// One style change of a patch: `None` preserves the property, `Some(None)`
+/// clears an optional property and `Some(Some(value))` sets it.
+pub type GuiNodeStyleChange = Option<Option<DynamicValue>>;
+
+impl GuiNodePatch {
+    /// Style change for one row property, in the row's value representation.
+    pub fn style_change(&self, property: GuiNodeStyleProperty) -> GuiNodeStyleChange {
+        use crate::components::rows::RowPropertyValue;
+        use GuiNodeStyleProperty as P;
+
+        fn required<T: RowPropertyValue>(value: &Option<T>) -> GuiNodeStyleChange {
+            value.as_ref().map(|value| Some(value.to_dynamic()))
+        }
+        fn optional<T: RowPropertyValue>(value: &Option<Option<T>>) -> GuiNodeStyleChange {
+            value
+                .as_ref()
+                .map(|value| value.as_ref().map(RowPropertyValue::to_dynamic))
+        }
+
+        match property {
+            P::Enabled => required(&self.enabled),
+            P::Width => optional(&self.width),
+            P::Height => optional(&self.height),
+            P::MinWidth => optional(&self.min_width),
+            P::MinHeight => optional(&self.min_height),
+            P::MaxWidth => optional(&self.max_width),
+            P::MaxHeight => optional(&self.max_height),
+            P::Flex => optional(&self.flex),
+            P::AlignX => optional(&self.align_x),
+            P::AlignY => optional(&self.align_y),
+            P::Color => required(&self.color),
+            P::BackgroundColor => optional(&self.background_color),
+            P::Opacity => required(&self.opacity),
+            P::FontSize => required(&self.font_size),
+            P::Asset => optional(&self.asset),
+            P::Position => required(&self.position),
+            P::Scale => required(&self.scale),
+            P::Padding => optional(&self.padding),
+            P::Margin => optional(&self.margin),
+        }
+    }
+
+    /// Replace the style change for one row property. Clearing a required
+    /// property or a value of the wrong kind is rejected.
+    pub fn set_style_change(
+        &mut self,
+        property: GuiNodeStyleProperty,
+        change: GuiNodeStyleChange,
+    ) -> Result<(), FieldError> {
+        use crate::components::rows::RowPropertyValue;
+        use GuiNodeStyleProperty as P;
+
+        fn required<T: RowPropertyValue>(
+            target: &mut Option<T>,
+            change: GuiNodeStyleChange,
+        ) -> Result<(), FieldError> {
+            *target = match change {
+                None => None,
+                Some(None) => return Err(FieldError::WrongType),
+                Some(Some(value)) => Some(T::from_dynamic(value)?),
+            };
+            Ok(())
+        }
+        fn optional<T: RowPropertyValue>(
+            target: &mut Option<Option<T>>,
+            change: GuiNodeStyleChange,
+        ) -> Result<(), FieldError> {
+            *target = match change {
+                None => None,
+                Some(None) => Some(None),
+                Some(Some(value)) => Some(Some(T::from_dynamic(value)?)),
+            };
+            Ok(())
+        }
+
+        match property {
+            P::Enabled => required(&mut self.enabled, change),
+            P::Width => optional(&mut self.width, change),
+            P::Height => optional(&mut self.height, change),
+            P::MinWidth => optional(&mut self.min_width, change),
+            P::MinHeight => optional(&mut self.min_height, change),
+            P::MaxWidth => optional(&mut self.max_width, change),
+            P::MaxHeight => optional(&mut self.max_height, change),
+            P::Flex => optional(&mut self.flex, change),
+            P::AlignX => optional(&mut self.align_x, change),
+            P::AlignY => optional(&mut self.align_y, change),
+            P::Color => required(&mut self.color, change),
+            P::BackgroundColor => optional(&mut self.background_color, change),
+            P::Opacity => required(&mut self.opacity, change),
+            P::FontSize => required(&mut self.font_size, change),
+            P::Asset => optional(&mut self.asset, change),
+            P::Position => required(&mut self.position, change),
+            P::Scale => required(&mut self.scale, change),
+            P::Padding => optional(&mut self.padding, change),
+            P::Margin => optional(&mut self.margin, change),
+        }
     }
 }
 
@@ -322,86 +426,131 @@ pub struct GuiNodeDataRow {
     pub step: Option<f32>,
 }
 
+/// Data row with every property absent, as for nodes without scalars.
+pub(crate) const EMPTY_NODE_DATA: GuiNodeDataRow = GuiNodeDataRow {
+    image_size: None,
+    checked: None,
+    value: None,
+    min: None,
+    max: None,
+    step: None,
+};
+
 impl GuiNodeDataRow {
-    /// Scalar parts of authored content: the initial data of a new node.
-    pub fn from_content(content: &GuiNodeContent) -> Self {
-        match content {
-            GuiNodeContent::Image {
-                size,
-            } => Self {
-                image_size: Some(*size),
-                ..Self::default()
-            },
-            GuiNodeContent::Checkbox {
-                checked,
-            } => Self {
-                checked: Some(*checked),
-                ..Self::default()
-            },
-            GuiNodeContent::Slider {
-                value,
-                min,
-                max,
-                step,
-            } => Self {
-                value: Some(*value),
-                min: Some(*min),
-                max: Some(*max),
-                step: Some(*step),
-                ..Self::default()
-            },
-            _ => Self::default(),
+    /// Data of an Image node.
+    pub fn image(size: [f32; 2]) -> Self {
+        Self {
+            image_size: Some(size),
+            ..Self::default()
         }
     }
 
-    /// Content of `content`'s kind carrying this row's scalar values; None
-    /// when presence does not match the kind.
-    pub fn to_content(&self, content: &GuiNodeContent) -> Option<GuiNodeContent> {
-        if !self.matches_kind(content) {
-            return None;
+    /// Data of a Checkbox node.
+    pub fn checkbox(checked: bool) -> Self {
+        Self {
+            checked: Some(checked),
+            ..Self::default()
+        }
+    }
+
+    /// Data of a Slider node.
+    pub fn slider(value: f32, min: f32, max: f32, step: f32) -> Self {
+        Self {
+            value: Some(value),
+            min: Some(min),
+            max: Some(max),
+            step: Some(step),
+            ..Self::default()
+        }
+    }
+
+    /// Keep values of properties `data`'s kind uses, fill newly used ones with
+    /// placeholders (unchecked, a unit image, a zero slider) and clear the
+    /// rest. The result always passes [`Self::validate_for`] when the kept
+    /// values do.
+    pub fn conform(&mut self, data: &GuiNodeData) {
+        let used = |property: GuiNodeDataProperty| property.used_by(data);
+        fn keep<T: Copy>(value: &mut Option<T>, used: bool, placeholder: T) {
+            *value = match (used, *value) {
+                (true, Some(value)) => Some(value),
+                (true, None) => Some(placeholder),
+                (false, _) => None,
+            };
         }
 
-        Some(match content {
-            GuiNodeContent::Image {
-                ..
-            } => GuiNodeContent::Image {
-                size: self.image_size?,
-            },
-            GuiNodeContent::Checkbox {
-                ..
-            } => GuiNodeContent::Checkbox {
-                checked: self.checked?,
-            },
-            GuiNodeContent::Slider {
-                ..
-            } => GuiNodeContent::Slider {
-                value: self.value?,
-                min: self.min?,
-                max: self.max?,
-                step: self.step?,
-            },
-            other => other.clone(),
-        })
+        keep(
+            &mut self.image_size,
+            used(GuiNodeDataProperty::ImageSize),
+            [1.0, 1.0],
+        );
+        keep(&mut self.checked, used(GuiNodeDataProperty::Checked), false);
+        keep(&mut self.value, used(GuiNodeDataProperty::Value), 0.0);
+        keep(&mut self.min, used(GuiNodeDataProperty::Min), 0.0);
+        keep(&mut self.max, used(GuiNodeDataProperty::Max), 0.0);
+        keep(&mut self.step, used(GuiNodeDataProperty::Step), 0.0);
     }
 
-    /// Whether exactly the properties of `content`'s kind are present.
-    pub fn matches_kind(&self, content: &GuiNodeContent) -> bool {
-        let image = matches!(content, GuiNodeContent::Image { .. });
-        let checkbox = matches!(content, GuiNodeContent::Checkbox { .. });
-        let slider = matches!(content, GuiNodeContent::Slider { .. });
-        self.image_size.is_some() == image
-            && self.checked.is_some() == checkbox
-            && [self.value, self.min, self.max, self.step]
-                .iter()
-                .all(|property| property.is_some() == slider)
+    /// Row properties to write, in an order that keeps `min <= value <= max`
+    /// valid after every write when moving from `self` to `target`: widen the
+    /// range, set the value, then narrow the range. Unchanged properties are
+    /// skipped.
+    pub fn write_order(&self, target: &Self) -> impl Iterator<Item = GuiNodeDataProperty> {
+        use GuiNodeDataProperty as P;
+
+        let lower = |a: Option<f32>, b: Option<f32>| matches!((a, b), (Some(a), Some(b)) if b < a);
+        let widen_min = lower(self.min, target.min);
+        let widen_max = lower(target.max, self.max);
+        let order = [
+            (P::ImageSize, true),
+            (P::Checked, true),
+            (P::Min, widen_min),
+            (P::Max, widen_max),
+            (P::Value, true),
+            (P::Min, !widen_min),
+            (P::Max, !widen_max),
+            (P::Step, true),
+        ];
+        let changed = move |property: GuiNodeDataProperty| {
+            self.property(property.index()).ok().flatten()
+                != target.property(property.index()).ok().flatten()
+        };
+        order
+            .into_iter()
+            .filter(move |&(property, now)| now && changed(property))
+            .map(|(property, _)| property)
     }
 
-    /// Check presence for `content`'s kind, each property's range, and the
-    /// slider rules `min <= value <= max`.
-    pub fn validate_for(&self, content: &GuiNodeContent) -> Result<(), ErrorReason> {
-        if !self.matches_kind(content) {
+    /// Whether exactly the properties of `data`'s kind are present.
+    pub fn matches_kind(&self, data: &GuiNodeData) -> bool {
+        GuiNodeDataProperty::ALL
+            .into_iter()
+            .all(|property| self.present(property) == property.used_by(data))
+    }
+
+    /// Whether one property is present.
+    pub fn present(&self, property: GuiNodeDataProperty) -> bool {
+        match property {
+            GuiNodeDataProperty::ImageSize => self.image_size.is_some(),
+            GuiNodeDataProperty::Checked => self.checked.is_some(),
+            GuiNodeDataProperty::Value => self.value.is_some(),
+            GuiNodeDataProperty::Min => self.min.is_some(),
+            GuiNodeDataProperty::Max => self.max.is_some(),
+            GuiNodeDataProperty::Step => self.step.is_some(),
+        }
+    }
+
+    /// Check presence for `data`'s kind, each property's range, and the
+    /// slider rule `min <= value <= max`.
+    pub fn validate_for(&self, data: &GuiNodeData) -> Result<(), ErrorReason> {
+        if !self.matches_kind(data) {
             return Err(ErrorReason::InvalidField);
         }
+        self.validate_values()
+    }
+
+    /// Check each present property's range and, when the slider values are
+    /// all present, `min <= value <= max`; presence is not checked.
+    pub fn validate_values(&self) -> Result<(), ErrorReason> {
         for property in GuiNodeDataProperty::ALL {
             let value = self
                 .property(property as u32)
@@ -480,6 +629,17 @@ impl GuiNodeDataProperty {
     /// the slider range they are validated against.
     pub const fn command_owned(self) -> bool {
         !matches!(self, Self::ImageSize)
+    }
+
+    /// Whether nodes of `data`'s kind carry this property.
+    pub fn used_by(self, data: &GuiNodeData) -> bool {
+        match self {
+            Self::ImageSize => matches!(data, GuiNodeData::Image),
+            Self::Checked => matches!(data, GuiNodeData::Checkbox),
+            Self::Value | Self::Min | Self::Max | Self::Step => {
+                matches!(data, GuiNodeData::Slider)
+            }
+        }
     }
 }
 

@@ -1,5 +1,7 @@
 use super::*;
 #[cfg(feature = "gui")]
+use crate::GuiNodeDataRow;
+#[cfg(feature = "gui")]
 use crate::services::asset_management::drawing::DRAWING_TYPE;
 use crate::services::asset_management::{AssetSource, AssetUpload, AssetUploadIdentity};
 #[cfg(feature = "gui")]
@@ -10,7 +12,7 @@ use crate::systems::animation::{
 #[cfg(feature = "gui")]
 use crate::systems::gui::{
     GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCancelReason, GuiInputCommand,
-    GuiInputEffectKind, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
+    GuiInputEffectKind, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
     GuiPointerButton, GuiRoot, GuiUnhandledReason,
 };
 #[cfg(feature = "gui")]
@@ -453,7 +455,8 @@ fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId
                 id: GuiNodeId(1),
                 parent: None,
                 index: 0,
-                content: GuiNodeContent::Container(GuiContainerKind::Column),
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle {
                     width: Some(10.0),
                     height: Some(10.0),
@@ -466,9 +469,8 @@ fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId
                 id: GuiNodeId(2),
                 parent: Some(GuiNodeId(1)),
                 index: 0,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle {
                     width: Some(2.0),
                     height: Some(1.0),
@@ -535,7 +537,6 @@ fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityI
                         style.identity,
                         SurfacePrimitiveIdentity::Gui(id)
                             if id.node == GuiNodeId(2)
-                                && id.lifetime == 1
                                 && id.part == GuiPrimitivePart::Background
                     ) =>
                     {
@@ -811,7 +812,6 @@ fn background_skin_owner(
         primitive: crate::systems::surface::GuiPrimitiveId {
             root_incarnation,
             node: GuiNodeId(2),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         },
     }
@@ -843,7 +843,6 @@ fn skin_controller_description_has_exactly_three_consecutive_drivers() {
     let primitive = crate::systems::surface::GuiPrimitiveId {
         root_incarnation: 3,
         node: GuiNodeId(2),
-        lifetime: 5,
         part: GuiPrimitivePart::Background,
     };
     let motion = crate::systems::gui::GuiPartMotion {
@@ -1035,7 +1034,6 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
     let primitive = crate::systems::surface::GuiPrimitiveId {
         root_incarnation,
         node: GuiNodeId(2),
-        lifetime: 1,
         part: GuiPrimitivePart::Background,
     };
     let owner = GuiSkinAnimationOwner {
@@ -1709,7 +1707,7 @@ fn disabled_nodes_never_activate_and_paint_disabled() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         enabled: Some(false),
                         ..Default::default()
@@ -2027,7 +2025,8 @@ fn insert_drawing_tree(
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(10.0),
                 height: Some(10.0),
@@ -2040,7 +2039,8 @@ fn insert_drawing_tree(
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Drawing,
+            data: GuiNodeData::Drawing,
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(2.0),
                 height: Some(1.0),
@@ -2087,7 +2087,6 @@ fn panel_drawing(
                         style.identity,
                         SurfacePrimitiveIdentity::Gui(id)
                             if id.node == GuiNodeId(2)
-                                && id.lifetime == 1
                                 && id.part == GuiPrimitivePart::Icon
                     ) =>
                     {
@@ -2253,7 +2252,7 @@ fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::RemoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -2617,7 +2616,7 @@ fn set_node_enabled(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
         .enqueue_gui_command(
             SESSION,
             GuiCommand::UpdateNode {
-                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                 patch: GuiNodePatch {
                     enabled: Some(enabled),
                     ..Default::default()
@@ -2712,7 +2711,7 @@ fn step_with_unrelated_edit(
         .unwrap()
         .root_incarnation;
     let edit = GuiCommand::UpdateNode {
-        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1), 1),
+        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1)),
         patch: GuiNodePatch {
             opacity: Some(if frame.is_multiple_of(2) {
                 1.0
@@ -2799,9 +2798,8 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
                     id: GuiNodeId(3),
                     parent: Some(GuiNodeId(1)),
                     index: 1,
-                    content: GuiNodeContent::Checkbox {
-                        checked: false,
-                    },
+                    data: GuiNodeData::Checkbox,
+                    values: GuiNodeDataRow::checkbox(false),
                     style: GuiNodeStyle {
                         width: Some(2.0),
                         height: Some(1.0),

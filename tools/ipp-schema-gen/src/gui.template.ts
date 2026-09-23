@@ -1,9 +1,10 @@
 import type {
+  GuiAssetSource,
   GuiCancelObservation,
   GuiCommittedEffect,
   GuiConflictObservation,
   GuiContainerKind,
-  GuiControlState,
+  GuiControlRecord,
   GuiControlValue,
   GuiControls,
   GuiEdit,
@@ -16,10 +17,11 @@ import type {
   GuiInspectedNode,
   GuiKey,
   GuiNode,
-  GuiNodeContent,
+  GuiNodeData,
   GuiNodeHandle,
   GuiNodePatchStyle,
   GuiNodeStyle,
+  GuiNodeValues,
   GuiObservationTarget,
   GuiPointerButton,
   GuiSemanticActionKind,
@@ -32,6 +34,7 @@ import type {
   GuiTextFocusState,
   GuiUnhandledObservation,
 } from "./gui-types.js";
+import type { RowPropertyDescriptor } from "./types.js";
 export * from "./gui-types.js";
 
 function guiVector(
@@ -65,52 +68,54 @@ const CONTAINER_KINDS: readonly GuiContainerKind[] = [
   "scrollView",
 ];
 
-function writeGuiNodeContent(w: Writer, content: GuiNodeContent): void {
-  switch (content.kind) {
+function writeGuiNodeData(w: Writer, data: GuiNodeData): void {
+  switch (data.kind) {
     case "container": {
+      exactFields(data, ["kind", "containerKind"]);
       w.u8(1);
-      const index = CONTAINER_KINDS.indexOf(content.containerKind);
+      const index = CONTAINER_KINDS.indexOf(data.containerKind);
       if (index === -1) fail("Unknown GUI container kind");
       w.u8(index);
       break;
     }
     case "text":
+      exactFields(data, ["kind", "text"]);
       w.u8(2);
-      w.string(content.text);
+      w.string(data.text);
       break;
     case "drawing":
+      exactFields(data, ["kind"]);
       w.u8(3);
       break;
     case "image":
+      exactFields(data, ["kind"]);
       w.u8(4);
-      guiVector(w, content.size, 2);
       break;
     case "button":
+      exactFields(data, ["kind", "label"]);
       w.u8(5);
-      w.string(content.label);
+      w.string(data.label);
       break;
     case "checkbox":
+      exactFields(data, ["kind"]);
       w.u8(6);
-      w.boolean(content.checked);
       break;
     case "slider":
+      exactFields(data, ["kind"]);
       w.u8(7);
-      w.f32(content.value);
-      w.f32(content.min);
-      w.f32(content.max);
-      w.f32(content.step);
       break;
     case "textInput":
+      exactFields(data, ["kind", "text", "placeholder"]);
       w.u8(8);
-      w.string(content.text);
-      w.string(content.placeholder);
+      w.string(data.text);
+      w.string(data.placeholder);
       break;
     default:
-      fail("Unknown GUI node content kind");
+      fail("Unknown GUI node data kind");
   }
 }
 
-function readGuiNodeContent(r: Reader): GuiNodeContent {
+function readGuiNodeData(r: Reader): GuiNodeData {
   const kind = r.u8();
   switch (kind) {
     case 1: {
@@ -124,19 +129,13 @@ function readGuiNodeContent(r: Reader): GuiNodeContent {
     case 3:
       return { kind: "drawing" };
     case 4:
-      return { kind: "image", size: [r.f32(), r.f32()] };
+      return { kind: "image" };
     case 5:
       return { kind: "button", label: r.string() };
     case 6:
-      return { kind: "checkbox", checked: r.boolean() };
+      return { kind: "checkbox" };
     case 7:
-      return {
-        kind: "slider",
-        value: r.f32(),
-        min: r.f32(),
-        max: r.f32(),
-        step: r.f32(),
-      };
+      return { kind: "slider" };
     case 8:
       return {
         kind: "textInput",
@@ -144,7 +143,7 @@ function readGuiNodeContent(r: Reader): GuiNodeContent {
         placeholder: r.string(),
       };
     default:
-      return fail("Invalid GUI node content tag");
+      return fail("Invalid GUI node data tag");
   }
 }
 
@@ -186,120 +185,211 @@ function readGuiControlValue(r: Reader): GuiControlValue {
   }
 }
 
-function writeGuiNodeStyle(w: Writer, style: GuiNodeStyle): void {
-  let mask = 0;
-  if (style.width !== undefined) mask |= 1 << 0;
-  if (style.height !== undefined) mask |= 1 << 1;
-  if (style.minWidth !== undefined) mask |= 1 << 2;
-  if (style.minHeight !== undefined) mask |= 1 << 3;
-  if (style.maxWidth !== undefined) mask |= 1 << 4;
-  if (style.maxHeight !== undefined) mask |= 1 << 5;
-  if (style.padding !== undefined) mask |= 1 << 6;
-  if (style.margin !== undefined) mask |= 1 << 7;
-  if (style.flex !== undefined) mask |= 1 << 8;
-  if (style.alignX !== undefined) mask |= 1 << 9;
-  if (style.alignY !== undefined) mask |= 1 << 10;
-  if (style.backgroundColor !== undefined) mask |= 1 << 11;
-  if (style.asset != null) mask |= 1 << 12;
-  if (style.enabled !== undefined) mask |= 1 << 13;
-
-  w.u16(mask);
-  if (style.width !== undefined) w.f32(style.width);
-  if (style.height !== undefined) w.f32(style.height);
-  if (style.minWidth !== undefined) w.f32(style.minWidth);
-  if (style.minHeight !== undefined) w.f32(style.minHeight);
-  if (style.maxWidth !== undefined) w.f32(style.maxWidth);
-  if (style.maxHeight !== undefined) w.f32(style.maxHeight);
-  if (style.padding !== undefined) guiVector(w, style.padding, 4);
-  if (style.margin !== undefined) guiVector(w, style.margin, 4);
-  if (style.flex !== undefined) w.f32(style.flex);
-  if (style.alignX !== undefined) w.f32(style.alignX);
-  if (style.alignY !== undefined) w.f32(style.alignY);
-  guiVector(w, style.color ?? [1, 1, 1, 1], 4, true);
-  if (style.backgroundColor !== undefined)
-    guiVector(w, style.backgroundColor, 4, true);
-  w.f32(style.opacity ?? 1);
-  w.f32(style.fontSize ?? 0.1);
-  if (style.asset != null) {
-    w.u16(style.asset.kind);
-    w.u32(style.asset.variant ?? 0);
-    w.string(style.asset.source);
-  }
-  if (style.enabled !== undefined) w.boolean(style.enabled);
+/** The `GuiRoot.node_style` and `GuiRoot.node_data` row layouts of this contract. */
+function guiRowLayout(field: "node_style" | "node_data"): RowsLayoutDescriptor {
+  return (
+    components.GuiRoot.fields[field]?.rows ?? fail(`GuiRoot.${field} rows`)
+  );
 }
 
-function readGuiNodeStyle(r: Reader): GuiNodeStyle {
-  const mask = r.u16();
-  const width = (mask & (1 << 0)) !== 0 ? r.f32() : undefined;
-  const height = (mask & (1 << 1)) !== 0 ? r.f32() : undefined;
-  const minWidth = (mask & (1 << 2)) !== 0 ? r.f32() : undefined;
-  const minHeight = (mask & (1 << 3)) !== 0 ? r.f32() : undefined;
-  const maxWidth = (mask & (1 << 4)) !== 0 ? r.f32() : undefined;
-  const maxHeight = (mask & (1 << 5)) !== 0 ? r.f32() : undefined;
-  const padding =
-    (mask & (1 << 6)) !== 0
-      ? (readGuiVector(r, 4) as [number, number, number, number])
-      : undefined;
-  const margin =
-    (mask & (1 << 7)) !== 0
-      ? (readGuiVector(r, 4) as [number, number, number, number])
-      : undefined;
-  const flex = (mask & (1 << 8)) !== 0 ? r.f32() : undefined;
-  const alignX = (mask & (1 << 9)) !== 0 ? r.f32() : undefined;
-  const alignY = (mask & (1 << 10)) !== 0 ? r.f32() : undefined;
-  const color = readGuiVector(r, 4) as [number, number, number, number];
-  const backgroundColor =
-    (mask & (1 << 11)) !== 0
-      ? (readGuiVector(r, 4) as [number, number, number, number])
-      : undefined;
-  const opacity = r.f32();
-  const fontSize = r.f32();
-  let asset: import("./gui-types.js").GuiAssetSource | undefined;
-  if ((mask & (1 << 12)) !== 0) {
-    const kind = r.u16();
-    const variant = r.u32();
-    const source = r.string();
-    asset = { kind, variant, source };
-  }
-  const enabled = (mask & (1 << 13)) !== 0 ? r.boolean() : true;
-
-  return {
-    width,
-    height,
-    minWidth,
-    minHeight,
-    maxWidth,
-    maxHeight,
-    padding,
-    margin,
-    flex,
-    alignX,
-    alignY,
-    color,
-    backgroundColor,
-    opacity,
-    fontSize,
-    asset,
-    enabled,
-  };
+/** Client key of one row property: the layout name in camelCase. */
+function guiRowKey(name: string): string {
+  return name.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 }
 
-/** Encode a complete GUI tree and its committed control values for a new GuiRoot incarnation. */
+/** Values of required style properties a client may omit on insertion. */
+const GUI_STYLE_DEFAULTS: Readonly<Record<string, RowPropertyValue>> = {
+  enabled: true,
+  color: [1, 1, 1, 1],
+  opacity: 1,
+  fontSize: 0.1,
+  position: [0, 0],
+  scale: [1, 1],
+};
+
+const GUI_ROW_VECTOR_LENGTHS: Readonly<Record<string, number>> = {
+  vec2: 2,
+  vec3: 3,
+  vec4: 4,
+};
+
+function writeGuiRowValue(
+  w: Writer,
+  property: RowPropertyDescriptor,
+  value: unknown,
+): void {
+  const key = guiRowKey(property.name);
+  switch (property.kind) {
+    case "f32":
+      if (typeof value !== "number") fail(`GUI ${key} must be a number`);
+      w.f32(value);
+      break;
+    case "i32":
+    case "u32":
+      if (!Number.isInteger(value)) fail(`GUI ${key} must be an integer`);
+      w.u32((value as number) >>> 0);
+      break;
+    case "bool":
+      if (typeof value !== "boolean") fail(`GUI ${key} must be a boolean`);
+      w.u32(value ? 1 : 0);
+      break;
+    case "asset": {
+      const asset = value as GuiAssetSource;
+      if (typeof asset !== "object" || asset === null) fail(`GUI ${key} asset`);
+      w.u16(asset.kind);
+      w.u32(asset.variant ?? 0);
+      w.string(asset.source);
+      break;
+    }
+    default: {
+      const length = GUI_ROW_VECTOR_LENGTHS[property.kind];
+      if (length === undefined) fail(`GUI ${key} row kind`);
+      if (!Array.isArray(value)) fail(`GUI ${key} must be a vector`);
+      guiVector(w, value as readonly number[], length);
+    }
+  }
+}
+
+function readGuiRowValue(
+  r: Reader,
+  property: RowPropertyDescriptor,
+): RowPropertyValue {
+  switch (property.kind) {
+    case "f32":
+      return r.f32();
+    case "i32":
+      return r.u32() | 0;
+    case "u32":
+      return r.u32();
+    case "bool": {
+      const flag = r.u32();
+      if (flag > 1) fail("GUI row boolean");
+      return flag === 1;
+    }
+    case "asset": {
+      const kind = r.u16();
+      const variant = r.u32();
+      const source = r.string();
+      return { kind, variant, source };
+    }
+    default: {
+      const length = GUI_ROW_VECTOR_LENGTHS[property.kind];
+      if (length === undefined) fail("GUI row kind");
+      return readGuiVector(r, length);
+    }
+  }
+}
+
+function writeGuiMask(w: Writer, bits: readonly boolean[]): void {
+  for (let byte = 0; byte < Math.ceil(bits.length / 8); byte++) {
+    let mask = 0;
+    for (let bit = 0; bit < 8; bit++)
+      if (bits[byte * 8 + bit]) mask |= 1 << bit;
+    w.u8(mask);
+  }
+}
+
+/**
+ * Write one row in the table's per-row encoding: a presence mask, then the
+ * present values in layout order. `values` is keyed by camelCase layout names;
+ * `defaults` supplies omitted required properties.
+ */
+function writeGuiRow(
+  w: Writer,
+  layout: RowsLayoutDescriptor,
+  values: object,
+  defaults: Readonly<Record<string, RowPropertyValue>> = {},
+): void {
+  const record = values as Readonly<Record<string, unknown>>;
+  const known = new Set(layout.properties.map((p) => guiRowKey(p.name)));
+  for (const key of Object.keys(record))
+    if (!known.has(key) && record[key] !== undefined)
+      fail(`unknown GUI ${key}`);
+  const present = layout.properties.map((property) => {
+    const key = guiRowKey(property.name);
+    const value = record[key] ?? defaults[key];
+    if (value === undefined && !property.optional)
+      fail(`GUI ${key} is required`);
+    return value;
+  });
+  writeGuiMask(
+    w,
+    present.map((value) => value !== undefined),
+  );
+  layout.properties.forEach((property, index) => {
+    if (present[index] !== undefined)
+      writeGuiRowValue(w, property, present[index]);
+  });
+}
+
+/** Read one row, keyed by camelCase layout names; absent properties are omitted. */
+function readGuiRow(
+  r: Reader,
+  layout: RowsLayoutDescriptor,
+): Record<string, RowPropertyValue> {
+  const count = layout.properties.length;
+  const mask: number[] = [];
+  for (let byte = 0; byte < Math.ceil(count / 8); byte++) mask.push(r.u8());
+  if (count % 8 !== 0 && mask[mask.length - 1]! >> (count % 8) !== 0)
+    fail("GUI row presence mask");
+  const values: Record<string, RowPropertyValue> = {};
+  layout.properties.forEach((property, index) => {
+    if ((mask[index >> 3]! & (1 << (index & 7))) === 0) {
+      if (!property.optional) fail("GUI row omits a required property");
+      return;
+    }
+    values[guiRowKey(property.name)] = readGuiRowValue(r, property);
+  });
+  return values;
+}
+
+/**
+ * Write a style patch: a changed mask and a set mask over the style layout,
+ * then the set values in layout order. `null` clears an optional property.
+ */
+function writeGuiNodePatchStyle(w: Writer, style: GuiNodePatchStyle): void {
+  const layout = guiRowLayout("node_style");
+  const record = style as Readonly<Record<string, unknown>>;
+  const known = new Set(layout.properties.map((p) => guiRowKey(p.name)));
+  for (const key of Object.keys(record))
+    if (!known.has(key) && record[key] !== undefined)
+      fail(`unknown GUI ${key}`);
+  const changes = layout.properties.map((property) => {
+    const value = record[guiRowKey(property.name)];
+    if (value === null && !property.optional)
+      fail(`GUI ${guiRowKey(property.name)} cannot be cleared`);
+    return value;
+  });
+  writeGuiMask(
+    w,
+    changes.map((value) => value !== undefined),
+  );
+  writeGuiMask(
+    w,
+    changes.map((value) => value !== undefined && value !== null),
+  );
+  layout.properties.forEach((property, index) => {
+    const value = changes[index];
+    if (value !== undefined && value !== null)
+      writeGuiRowValue(w, property, value);
+  });
+}
+
+/** Encode a complete GUI tree and its control records for a new GuiRoot incarnation. */
 export function encodeGuiTree(tree: GuiTree): Uint8Array<ArrayBuffer> {
   const w = new Writer(65536);
-  w.u8(1);
+  w.u8(2);
   w.u32(tree.nextId);
   w.u32(tree.rootNode ?? 0);
   w.count(tree.nodes.length, 65536);
   for (const node of tree.nodes) {
     w.u32(node.id);
     w.u32(node.parent ?? 0);
-    w.u32(node.lifetime);
     w.count(node.children.length, 65536);
     for (const child of node.children) {
       w.u32(child);
     }
-    writeGuiNodeContent(w, node.content);
+    writeGuiNodeData(w, node.data);
   }
   writeGuiControls(w, tree.controls ?? []);
   return w.finish();
@@ -308,7 +398,7 @@ export function encodeGuiTree(tree: GuiTree): Uint8Array<ArrayBuffer> {
 /** Decode full GUI node tree from binary representation. */
 export function decodeGuiTree(bytes: Uint8Array): GuiTree {
   const r = new Reader(bytes);
-  if (r.u8() !== 1) fail("GUI tree version");
+  if (r.u8() !== 2) fail("GUI tree version");
   const nextId = r.u32();
   const rootIdVal = r.u32();
   const rootNode = rootIdVal === 0 ? undefined : rootIdVal;
@@ -318,7 +408,6 @@ export function decodeGuiTree(bytes: Uint8Array): GuiTree {
     const id = r.u32();
     const parentVal = r.u32();
     const parent = parentVal === 0 ? undefined : parentVal;
-    const lifetime = r.u32();
     const childrenCount = r.count(65536);
     const children: number[] = [];
     for (let c = 0; c < childrenCount; c++) {
@@ -327,9 +416,8 @@ export function decodeGuiTree(bytes: Uint8Array): GuiTree {
     nodes.push({
       id,
       parent,
-      lifetime,
       children,
-      content: readGuiNodeContent(r),
+      data: readGuiNodeData(r),
     });
   }
   const controls = readGuiControls(r);
@@ -340,23 +428,25 @@ export function decodeGuiTree(bytes: Uint8Array): GuiTree {
 function writeGuiControls(w: Writer, controls: GuiControls): void {
   w.count(controls.length, 65536);
   let previous = 0;
-  for (const state of controls) {
-    if (state.id <= previous) fail("GUI controls must be in identity order");
-    if (state.revision <= 0) fail("GUI control revision");
-    previous = state.id;
-    w.u32(state.id);
-    w.u32(state.revision);
-    writeGuiControlValue(w, state.value);
+  for (const record of controls) {
+    if (record.id <= previous) fail("GUI controls must be in identity order");
+    if (record.revision <= 0) fail("GUI control revision");
+    previous = record.id;
+    w.u32(record.id);
+    w.u32(record.revision);
+    w.boolean(record.text !== undefined);
+    if (record.text !== undefined) w.string(record.text);
   }
 }
 
 function readGuiControls(r: Reader): GuiControls {
   const count = r.count(65536);
-  const controls: GuiControlState[] = [];
+  const controls: GuiControlRecord[] = [];
   for (let i = 0; i < count; i++) {
     const id = r.u32();
     const revision = r.u32();
-    controls.push({ id, revision, value: readGuiControlValue(r) });
+    const text = r.boolean() ? r.string() : undefined;
+    controls.push({ id, revision, ...(text === undefined ? {} : { text }) });
   }
   return controls;
 }
@@ -370,63 +460,6 @@ function writeGuiNodeHandle(w: Writer, handle: GuiNodeHandle): void {
   w.u64(handle.entity);
   w.u64(handle.rootIncarnation);
   w.u32(handle.nodeId);
-  w.u32(handle.nodeLifetime);
-}
-
-function writeNullablePatchField<T>(
-  w: Writer,
-  val: T | null | undefined,
-  encodeVal: (v: T) => void,
-): void {
-  if (val === undefined) {
-    w.u8(0);
-  } else if (val === null) {
-    w.u8(1);
-  } else {
-    w.u8(2);
-    encodeVal(val);
-  }
-}
-
-function writeRequiredPatchField<T>(
-  w: Writer,
-  val: T | undefined,
-  encodeVal: (v: T) => void,
-): void {
-  if (val === undefined) {
-    w.u8(0);
-  } else {
-    w.u8(1);
-    encodeVal(val);
-  }
-}
-
-function writeGuiNodePatchStyle(w: Writer, style: GuiNodePatchStyle): void {
-  writeNullablePatchField(w, style.width, (v) => w.f32(v));
-  writeNullablePatchField(w, style.height, (v) => w.f32(v));
-  writeNullablePatchField(w, style.minWidth, (v) => w.f32(v));
-  writeNullablePatchField(w, style.minHeight, (v) => w.f32(v));
-  writeNullablePatchField(w, style.maxWidth, (v) => w.f32(v));
-  writeNullablePatchField(w, style.maxHeight, (v) => w.f32(v));
-  writeNullablePatchField(w, style.padding, (v) => guiVector(w, v, 4));
-  writeNullablePatchField(w, style.margin, (v) => guiVector(w, v, 4));
-  writeNullablePatchField(w, style.flex, (v) => w.f32(v));
-  writeNullablePatchField(w, style.alignX, (v) => w.f32(v));
-  writeNullablePatchField(w, style.alignY, (v) => w.f32(v));
-  writeRequiredPatchField(w, style.color, (v) => guiVector(w, v, 4, true));
-  writeNullablePatchField(w, style.backgroundColor, (v) =>
-    guiVector(w, v, 4, true),
-  );
-  writeRequiredPatchField(w, style.opacity, (v) => w.f32(v));
-  writeRequiredPatchField(w, style.fontSize, (v) => w.f32(v));
-  writeNullablePatchField(w, style.asset, (v) => {
-    if (v != null) {
-      w.u16(v.kind);
-      w.u32(v.variant ?? 0);
-      w.string(v.source);
-    }
-  });
-  writeNullablePatchField(w, style.enabled, (v) => w.boolean(v));
 }
 
 /** Encode incremental GUI edit command. */
@@ -450,7 +483,8 @@ function encodeGuiEditBody(edit: GuiEdit): Uint8Array<ArrayBuffer> {
         "id",
         "parent",
         "index",
-        "content",
+        "data",
+        "values",
         "style",
       ]);
       if (edit.entity === 0n || edit.id <= 0) fail("GUI edit identity");
@@ -461,17 +495,26 @@ function encodeGuiEditBody(edit: GuiEdit): Uint8Array<ArrayBuffer> {
       w.boolean(edit.parent !== undefined);
       if (edit.parent !== undefined) w.u32(edit.parent);
       w.u32(edit.index);
-      writeGuiNodeContent(w, edit.content);
-      writeGuiNodeStyle(w, edit.style ?? {});
+      writeGuiNodeData(w, edit.data);
+      writeGuiRow(w, guiRowLayout("node_data"), edit.values ?? {});
+      writeGuiRow(
+        w,
+        guiRowLayout("node_style"),
+        edit.style ?? {},
+        GUI_STYLE_DEFAULTS,
+      );
       break;
     case "update": {
       exactFields(edit, ["action", "handle", "patch"]);
       writeGuiNodeHandle(w, edit.handle);
       const p = edit.patch;
-      w.boolean(p.content !== undefined);
-      if (p.content !== undefined) writeGuiNodeContent(w, p.content);
-      w.boolean(p.style !== undefined);
-      if (p.style !== undefined) writeGuiNodePatchStyle(w, p.style);
+      exactFields(p, ["data", "values", "style"]);
+      w.boolean(p.data !== undefined);
+      if (p.data !== undefined) writeGuiNodeData(w, p.data);
+      w.boolean(p.values !== undefined);
+      if (p.values !== undefined)
+        writeGuiRow(w, guiRowLayout("node_data"), p.values);
+      writeGuiNodePatchStyle(w, p.style ?? {});
       break;
     }
     case "move":
@@ -541,7 +584,7 @@ export function encodeGuiEdits(
 ): Uint8Array<ArrayBuffer> {
   const bodies = edits.map(encodeGuiEditBody);
   const w = new Writer(MAX_DIRECT_GUI_BATCH_BYTES);
-  w.u8(2);
+  w.u8(3);
   w.count(bodies.length, 0xffffffff);
   for (const body of bodies) w.raw(body);
   return w.finish();
@@ -567,7 +610,7 @@ export function decodeGuiInspectResponse(
   bytes: Uint8Array,
 ): GuiInspectResponse {
   const r = new Reader(bytes);
-  if (r.u8() !== 1) fail("GUI inspect response version");
+  if (r.u8() !== 2) fail("GUI inspect response version");
   const rootEntity = r.u64();
   const rootIncarnation = r.u64();
   const count = r.count(65536);
@@ -576,23 +619,23 @@ export function decodeGuiInspectResponse(
     const id = r.u32();
     const parentVal = r.u32();
     const parent = parentVal === 0 ? undefined : parentVal;
-    const lifetime = r.u32();
     const controlRevision = r.u32();
     const childrenCount = r.count(65536);
     const children: number[] = [];
     for (let c = 0; c < childrenCount; c++) {
       children.push(r.u32());
     }
-    const content = readGuiNodeContent(r);
+    const data = readGuiNodeData(r);
+    const values = readGuiRow(r, guiRowLayout("node_data")) as GuiNodeValues;
     const controlValue = readGuiControlValue(r);
-    const style = readGuiNodeStyle(r);
+    const style = readGuiRow(r, guiRowLayout("node_style")) as GuiNodeStyle;
     nodes.push({
       id,
       parent,
-      lifetime,
       controlRevision,
       children,
-      content,
+      data,
+      values,
       controlValue,
       style,
     });
@@ -776,10 +819,9 @@ function readGuiNodeHandle(r: Reader): GuiNodeHandle {
   const entity = r.u64();
   const rootIncarnation = r.u64();
   const nodeId = r.u32();
-  const nodeLifetime = r.u32();
   if (entity === 0n) fail("GUI node handle entity");
   if (nodeId === 0) fail("GUI node handle id");
-  return { session, entity, rootIncarnation, nodeId, nodeLifetime };
+  return { session, entity, rootIncarnation, nodeId };
 }
 
 function readGuiPointerButton(r: Reader): GuiPointerButton {
@@ -920,7 +962,6 @@ function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
   const rootIncarnation = r.u64();
   const node = r.u32();
   if (node === 0) fail("GUI observation node");
-  const lifetime = r.u32();
   const path = readGuiObservationPath(r);
   if (kind === 0)
     return {
@@ -928,7 +969,6 @@ function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
       entity,
       rootIncarnation,
       node,
-      lifetime,
       path,
       sourceTick,
       effectTick,
@@ -943,7 +983,6 @@ function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
     entity,
     rootIncarnation,
     node,
-    lifetime,
     value,
     revision,
     path,
@@ -961,7 +1000,7 @@ function readGuiObservationTarget(r: Reader): GuiObservationTarget | undefined {
   const rootIncarnation = r.u64();
   const node = r.u32();
   if (node === 0) fail("GUI observation target node");
-  return { entity, rootIncarnation, node, lifetime: r.u32() };
+  return { entity, rootIncarnation, node };
 }
 
 function readGuiConflictObservation(r: Reader): GuiConflictObservation {
@@ -1081,7 +1120,6 @@ function readGuiObservations(bytes: Uint8Array): {
       const entity = r.u64();
       const rootIncarnation = r.u64();
       const node = r.u32();
-      const lifetime = r.u32();
       const revision = r.u32();
       const text = r.string();
       const selectionStart = r.u32();
@@ -1100,7 +1138,6 @@ function readGuiObservations(bytes: Uint8Array): {
         entity,
         rootIncarnation,
         node,
-        lifetime,
         revision,
         text,
         selectionStart,
@@ -1158,7 +1195,7 @@ export function encodeGuiSemanticSnapshotQuery(
   return w.finish();
 }
 
-/** Encode one lifetime/revision-fenced semantic action. */
+/** Encode one node- and revision-fenced semantic action. */
 export function encodeGuiSemanticAction(
   action: GuiSemanticActionRequest,
 ): Uint8Array<ArrayBuffer> {
@@ -1166,7 +1203,6 @@ export function encodeGuiSemanticAction(
     "entity",
     "rootIncarnation",
     "node",
-    "lifetime",
     "expectedRevision",
     "action",
   ]);
@@ -1177,7 +1213,6 @@ export function encodeGuiSemanticAction(
   w.u64(action.entity);
   w.u64(action.rootIncarnation);
   w.u32(action.node);
-  w.u32(action.lifetime);
   w.u32(action.expectedRevision);
   const command = action.action;
   exactFields(
@@ -1236,7 +1271,6 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
   const id = r.u32();
   if (id === 0) fail("GUI semantic node identity");
   const parentTag = r.u32();
-  const lifetime = r.u32();
   const role = GUI_SEMANTIC_ROLES[r.u8()];
   if (role === undefined) fail("GUI semantic role");
   const nameTag = r.u8();
@@ -1271,7 +1305,6 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
   }
   return {
     id,
-    lifetime,
     ...(parentTag === 0 ? {} : { parent: parentTag }),
     role,
     ...(name === undefined ? {} : { name }),
@@ -1301,7 +1334,7 @@ export function decodeGuiSemanticSnapshot(bytes: Uint8Array): GuiSemanticTree {
   if (focusTag === 1) {
     const id = r.u32();
     if (id === 0) fail("GUI semantic focus identity");
-    focused = { id, lifetime: r.u32() };
+    focused = { id };
   } else if (focusTag !== 0) fail("GUI semantic focus option");
   r.done();
   return {

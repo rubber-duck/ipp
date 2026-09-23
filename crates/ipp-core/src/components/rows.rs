@@ -606,17 +606,7 @@ impl<R: SchemaRow> Rows<R> {
 
         for (slot, row) in &self.rows {
             bytes.extend(slot.to_le_bytes());
-            let mask_start = bytes.len();
-            bytes.resize(mask_start + layout.mask_bytes(), 0);
-
-            for index in 0..layout.property_count() {
-                let Some(value) = row.property(index).expect("layout property") else {
-                    continue;
-                };
-
-                bytes[mask_start + index as usize / 8] |= 1 << (index % 8);
-                encode_row_value(&value, &mut bytes);
-            }
+            encode_row(row, &mut bytes);
         }
 
         bytes
@@ -643,26 +633,7 @@ impl<R: SchemaRow> Rows<R> {
                 return Err(FieldError::WrongType);
             }
 
-            let mask = take(&mut bytes, layout.mask_bytes())?;
-            if layout.properties.len() % 8 != 0
-                && mask[mask.len() - 1] >> (layout.properties.len() % 8) != 0
-            {
-                return Err(FieldError::WrongType);
-            }
-
-            let mut row = R::default();
-            for (index, property) in layout.properties.iter().enumerate() {
-                if mask[index / 8] & (1 << (index % 8)) == 0 {
-                    if !property.optional {
-                        return Err(FieldError::WrongType);
-                    }
-
-                    row.clear_property(index as u32)?;
-                } else {
-                    row.set_property(index as u32, decode_row_value(property.kind, &mut bytes)?)?;
-                }
-            }
-
+            let row = decode_row(&mut bytes)?;
             table.rows.push((slot, row));
         }
 
@@ -751,6 +722,52 @@ impl<R: SchemaRow> SchemaRowsField for Rows<R> {
     }
 }
 
+/// Append one row in the table's per-row encoding: a presence mask of
+/// [`RowsLayout::mask_bytes`] bytes, then the present values in layout order
+/// (see [`Rows::encode`]).
+pub fn encode_row<R: SchemaRow>(row: &R, bytes: &mut Vec<u8>) {
+    let layout = R::LAYOUT;
+    let mask_start = bytes.len();
+    bytes.resize(mask_start + layout.mask_bytes(), 0);
+
+    for index in 0..layout.property_count() {
+        let Some(value) = row.property(index).expect("layout property") else {
+            continue;
+        };
+
+        bytes[mask_start + index as usize / 8] |= 1 << (index % 8);
+        encode_row_value(&value, bytes);
+    }
+}
+
+/// Decode and validate one row written by [`encode_row`], consuming it from
+/// `bytes`. Required properties must be present; undeclared mask bits,
+/// non-finite values and invalid asset sources are rejected.
+pub fn decode_row<R: SchemaRow>(bytes: &mut &[u8]) -> Result<R, FieldError> {
+    let layout = R::LAYOUT;
+    let mask = take(bytes, layout.mask_bytes())?;
+    if layout.properties.len() % 8 != 0
+        && mask[mask.len() - 1] >> (layout.properties.len() % 8) != 0
+    {
+        return Err(FieldError::WrongType);
+    }
+
+    let mut row = R::default();
+    for (index, property) in layout.properties.iter().enumerate() {
+        if mask[index / 8] & (1 << (index % 8)) == 0 {
+            if !property.optional {
+                return Err(FieldError::WrongType);
+            }
+
+            row.clear_property(index as u32)?;
+        } else {
+            row.set_property(index as u32, decode_row_value(property.kind, bytes)?)?;
+        }
+    }
+
+    Ok(row)
+}
+
 fn take<'a>(bytes: &mut &'a [u8], length: usize) -> Result<&'a [u8], FieldError> {
     let (head, tail) = bytes
         .split_at_checked(length)
@@ -765,7 +782,8 @@ fn take_u32(bytes: &mut &[u8]) -> Result<u32, FieldError> {
     ))
 }
 
-fn encode_row_value(value: &DynamicValue, bytes: &mut Vec<u8>) {
+/// Append one untagged row property value in the table encoding.
+pub fn encode_row_value(value: &DynamicValue, bytes: &mut Vec<u8>) {
     match value {
         DynamicValue::I32(value) => bytes.extend(value.to_le_bytes()),
         DynamicValue::U32(value) => bytes.extend(value.to_le_bytes()),
@@ -784,7 +802,8 @@ fn encode_row_value(value: &DynamicValue, bytes: &mut Vec<u8>) {
     }
 }
 
-fn decode_row_value(
+/// Decode and validate one untagged row property value of `kind`.
+pub fn decode_row_value(
     kind: DynamicPropertyKind,
     bytes: &mut &[u8],
 ) -> Result<DynamicValue, FieldError> {

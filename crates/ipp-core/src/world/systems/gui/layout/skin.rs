@@ -116,7 +116,7 @@ impl GuiInteractionState {
     }
 }
 
-/// Input cursors fenced by entity, root incarnation, node and lifetime.
+/// Input cursors fenced by entity, root incarnation and node.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GuiSkinCursors {
     /// Full-fenced hovered targets.
@@ -893,15 +893,12 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
     if !view.available {
         return base;
     }
-    let mut by_node: BTreeMap<(GuiNodeId, u32), Vec<SurfaceRenderPrimitive>> = BTreeMap::new();
+    let mut by_node: BTreeMap<GuiNodeId, Vec<SurfaceRenderPrimitive>> = BTreeMap::new();
     let mut unexpected = Vec::new();
     for primitive in base {
         match primitive_gui_id(&primitive) {
             Some(id) if id.root_incarnation == view.root_incarnation => {
-                by_node
-                    .entry((id.node, id.lifetime))
-                    .or_default()
-                    .push(primitive);
+                by_node.entry(id.node).or_default().push(primitive);
             }
             _ => unexpected.push(primitive),
         }
@@ -918,13 +915,10 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
                 entity: view.entity,
                 root_incarnation: view.root_incarnation,
                 node: node.node,
-                lifetime: node.lifetime,
             },
             node.enabled,
         );
-        let mut node_primitives = by_node
-            .remove(&(node.node, node.lifetime))
-            .unwrap_or_default();
+        let mut node_primitives = by_node.remove(&node.node).unwrap_or_default();
         let synthesis = if eligible {
             synthetic_control_plan(view, root, node, &interaction)
         } else {
@@ -985,7 +979,6 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
             let id = GuiPrimitiveId {
                 root_incarnation: view.root_incarnation,
                 node: node.node,
-                lifetime: node.lifetime,
                 part: GuiPrimitivePart::FocusRing,
             };
             if let Some(focus) =
@@ -1028,7 +1021,6 @@ pub(crate) fn skinned_parts_for_view<'a>(
             entity: view.entity,
             root_incarnation: view.root_incarnation,
             node: node.node,
-            lifetime: node.lifetime,
         };
         let interaction = cursors.interaction_for(target, node.enabled);
         let synthesis = synthetic_control_plan(view, root, node, &interaction);
@@ -1043,7 +1035,6 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 id: GuiPrimitiveId {
                     root_incarnation: view.root_incarnation,
                     node: node.node,
-                    lifetime: node.lifetime,
                     part,
                 },
                 node,
@@ -1065,7 +1056,6 @@ pub(crate) fn skinned_parts_for_view<'a>(
                     id: GuiPrimitiveId {
                         root_incarnation: view.root_incarnation,
                         node: node.node,
-                        lifetime: node.lifetime,
                         part,
                     },
                     node,
@@ -1077,7 +1067,6 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 id: GuiPrimitiveId {
                     root_incarnation: view.root_incarnation,
                     node: node.node,
-                    lifetime: node.lifetime,
                     part: GuiPrimitivePart::FocusRing,
                 },
                 node,
@@ -1328,7 +1317,6 @@ fn synthetic_control_part(
                 identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                     root_incarnation: view.root_incarnation,
                     node: node.node,
-                    lifetime: node.lifetime,
                     part,
                 }),
                 position,
@@ -1518,7 +1506,6 @@ fn focus_ring_primitive(
             identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                 root_incarnation: view.root_incarnation,
                 node: node.node,
-                lifetime: node.lifetime,
                 part: GuiPrimitivePart::FocusRing,
             }),
             position,

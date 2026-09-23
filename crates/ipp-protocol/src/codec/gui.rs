@@ -2,12 +2,17 @@
 
 use super::{ProtocolError, Reader, Writer};
 use crate::MAX_MESSAGE_BYTES;
-use ipp_core::services::asset_management::{AssetSource, AssetTypeId};
+use ipp_core::components::rows::{SchemaRow, decode_row, decode_row_value, encode_row};
 use ipp_core::systems::gui::{
     GuiBlockerHit, GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand, GuiInspectQuery,
-    GuiInspectResponse, GuiKey, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodePatch,
-    GuiNodeStyle, GuiPointerButton,
+    GuiInspectResponse, GuiKey, GuiNodeData, GuiNodeDataRow, GuiNodeHandle, GuiNodeId,
+    GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiPointerButton,
 };
+
+/// GUI edit framing version; see the `gui-edit` wire convention.
+const GUI_EDIT_VERSION: u8 = 3;
+/// GUI inspection response framing version.
+const GUI_INSPECT_VERSION: u8 = 2;
 
 impl Reader<'_> {
     pub(super) fn gui_commands(&mut self) -> Result<Vec<GuiCommand>, ProtocolError> {
@@ -16,14 +21,14 @@ impl Reader<'_> {
             bytes: &bytes,
             at: 0,
         };
-        if r.u8()? != 2 {
+        if r.u8()? != GUI_EDIT_VERSION {
             return Err(ProtocolError::Malformed("GUI edit version"));
         }
         let count = r.u32()? as usize;
         // A remove command is the smallest command body: one action byte and
-        // one 32-byte node handle. Derive the admission bound from the framed
+        // one 28-byte node handle. Derive the admission bound from the framed
         // bytes so malformed counts cannot force disproportionate allocation.
-        const MIN_COMMAND_BYTES: usize = 33;
+        const MIN_COMMAND_BYTES: usize = 29;
         if count == 0 || count > bytes.len().saturating_sub(r.at) / MIN_COMMAND_BYTES {
             return Err(ProtocolError::Malformed("GUI edit count"));
         }
@@ -52,15 +57,17 @@ impl Reader<'_> {
                     None
                 };
                 let index = r.u32()?;
-                let content = r.gui_content()?;
-                let style = r.gui_style()?;
+                let data = r.gui_data()?;
+                let values = r.gui_row::<GuiNodeDataRow>()?;
+                let style = GuiNodeStyle::from(&r.gui_row::<GuiNodeStyleRow>()?);
                 GuiCommand::InsertNode {
                     entity,
                     root_incarnation,
                     id,
                     parent,
                     index,
-                    content,
+                    data,
+                    values,
                     style,
                 }
             }
@@ -249,170 +256,77 @@ impl Reader<'_> {
         let entity = ipp_core::EntityId::from_bits(self.u64()?);
         let root_incarnation = self.u64()?;
         let node_id = GuiNodeId(self.u32()?);
-        let node_lifetime = self.u32()?;
         Ok(GuiNodeHandle {
             session,
             entity,
             root_incarnation,
             node_id,
-            node_lifetime,
         })
     }
 
+    /// Patch body: optional data, optional data row, then the style changes
+    /// as a changed mask and a set mask over the style row layout followed by
+    /// the set values in layout order; changed-but-unset clears an optional
+    /// property.
     fn gui_node_patch(&mut self) -> Result<GuiNodePatch, ProtocolError> {
-        let has_content = self.boolean()?;
-        let content = if has_content {
-            Some(self.gui_content()?)
-        } else {
-            None
+        let mut patch = GuiNodePatch {
+            data: if self.boolean()? {
+                Some(self.gui_data()?)
+            } else {
+                None
+            },
+            values: if self.boolean()? {
+                Some(self.gui_row::<GuiNodeDataRow>()?)
+            } else {
+                None
+            },
+            ..GuiNodePatch::default()
         };
-        let has_style = self.boolean()?;
-        if !has_style {
-            return Ok(GuiNodePatch {
-                content,
-                enabled: None,
-                width: None,
-                height: None,
-                min_width: None,
-                min_height: None,
-                max_width: None,
-                max_height: None,
-                padding: None,
-                margin: None,
-                flex: None,
-                align_x: None,
-                align_y: None,
-                color: None,
-                background_color: None,
-                opacity: None,
-                font_size: None,
-                asset: None,
-            });
+        let layout = GuiNodeStyleRow::LAYOUT;
+        let changed = self.take(layout.mask_bytes())?.to_vec();
+        let set = self.take(layout.mask_bytes())?.to_vec();
+        let bit = |mask: &[u8], index: usize| mask[index / 8] & (1 << (index % 8)) != 0;
+        if let Some(last) = changed.last()
+            && layout.properties.len() % 8 != 0
+            && (last >> (layout.properties.len() % 8) != 0
+                || set[set.len() - 1] >> (layout.properties.len() % 8) != 0)
+        {
+            return Err(ProtocolError::Malformed("GUI patch mask"));
         }
-        let width = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch width")),
-        };
-        let height = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch height")),
-        };
-        let min_width = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch min_width")),
-        };
-        let min_height = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch min_height")),
-        };
-        let max_width = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch max_width")),
-        };
-        let max_height = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch max_height")),
-        };
-        let padding = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.gui_vector()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch padding")),
-        };
-        let margin = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.gui_vector()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch margin")),
-        };
-        let flex = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch flex")),
-        };
-        let align_x = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch align_x")),
-        };
-        let align_y = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.f32()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch align_y")),
-        };
-        let color = match self.u8()? {
-            0 => None,
-            1 => Some(self.gui_vector()?),
-            _ => return Err(ProtocolError::Malformed("GUI patch color")),
-        };
-        let background_color = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(self.gui_vector()?)),
-            _ => return Err(ProtocolError::Malformed("GUI patch background_color")),
-        };
-        let opacity = match self.u8()? {
-            0 => None,
-            1 => Some(self.f32()?),
-            _ => return Err(ProtocolError::Malformed("GUI patch opacity")),
-        };
-        let font_size = match self.u8()? {
-            0 => None,
-            1 => Some(self.f32()?),
-            _ => return Err(ProtocolError::Malformed("GUI patch font_size")),
-        };
-        let asset = match self.u8()? {
-            0 => None,
-            1 => Some(None),
-            2 => Some(Some(AssetSource {
-                kind: AssetTypeId(self.u16()?),
-                variant: self.u32()?,
-                uri: self.string()?,
-            })),
-            _ => return Err(ProtocolError::Malformed("GUI patch asset")),
-        };
-        // The boolean lane has no cleared state: tag 1 preserves like 0.
-        let enabled = match self.u8()? {
-            0 | 1 => None,
-            2 => Some(self.boolean()?),
-            _ => return Err(ProtocolError::Malformed("GUI patch enabled")),
-        };
+        for property in GuiNodeStyleProperty::ALL {
+            let index = property.index() as usize;
+            let change = match (bit(&changed, index), bit(&set, index)) {
+                (false, false) => continue,
+                (false, true) => return Err(ProtocolError::Malformed("GUI patch mask")),
+                (true, false) => Some(None),
+                (true, true) => Some(Some(self.gui_row_value(property.kind())?)),
+            };
+            patch
+                .set_style_change(property, change)
+                .map_err(|_| ProtocolError::Malformed("GUI patch value"))?;
+        }
+        Ok(patch)
+    }
 
-        Ok(GuiNodePatch {
-            content,
-            enabled,
-            width,
-            height,
-            min_width,
-            min_height,
-            max_width,
-            max_height,
-            padding,
-            margin,
-            flex,
-            align_x,
-            align_y,
-            color,
-            background_color,
-            opacity,
-            font_size,
-            asset,
-        })
+    /// One row in the table's per-row encoding, validated by its layout.
+    fn gui_row<R: SchemaRow>(&mut self) -> Result<R, ProtocolError> {
+        let mut rest = &self.bytes[self.at..];
+        let before = rest.len();
+        let row = decode_row::<R>(&mut rest).map_err(|_| ProtocolError::Malformed("GUI row"))?;
+        self.at += before - rest.len();
+        Ok(row)
+    }
+
+    fn gui_row_value(
+        &mut self,
+        kind: ipp_core::DynamicPropertyKind,
+    ) -> Result<ipp_core::DynamicValue, ProtocolError> {
+        let mut rest = &self.bytes[self.at..];
+        let before = rest.len();
+        let value =
+            decode_row_value(kind, &mut rest).map_err(|_| ProtocolError::Malformed("GUI value"))?;
+        self.at += before - rest.len();
+        Ok(value)
     }
 
     pub(super) fn gui_inspect_query(&mut self) -> Result<GuiInspectQuery, ProtocolError> {
@@ -444,14 +358,6 @@ impl Reader<'_> {
         })
     }
 
-    fn gui_vector<const N: usize>(&mut self) -> Result<[f32; N], ProtocolError> {
-        let mut values = [0.0; N];
-        for value in &mut values {
-            *value = self.f32()?;
-        }
-        Ok(values)
-    }
-
     fn gui_control_value(&mut self) -> Result<GuiControlValue, ProtocolError> {
         match self.u8()? {
             0 => Ok(GuiControlValue::None),
@@ -462,156 +368,31 @@ impl Reader<'_> {
         }
     }
 
-    fn gui_content(&mut self) -> Result<GuiNodeContent, ProtocolError> {
-        match self.u8()? {
-            1 => {
-                let kind_byte = self.u8()?;
-                let kind = match kind_byte {
-                    0 => GuiContainerKind::Row,
-                    1 => GuiContainerKind::Column,
-                    2 => GuiContainerKind::Stack,
-                    3 => GuiContainerKind::Padding,
-                    4 => GuiContainerKind::Align,
-                    5 => GuiContainerKind::SizedBox,
-                    6 => GuiContainerKind::ScrollView,
-                    _ => return Err(ProtocolError::Malformed("GUI container kind")),
-                };
-                Ok(GuiNodeContent::Container(kind))
-            }
-            2 => Ok(GuiNodeContent::Text(self.string()?)),
-            3 => Ok(GuiNodeContent::Drawing),
-            4 => Ok(GuiNodeContent::Image {
-                size: self.gui_vector()?,
+    fn gui_data(&mut self) -> Result<GuiNodeData, ProtocolError> {
+        Ok(match self.u8()? {
+            1 => GuiNodeData::Container(match self.u8()? {
+                0 => GuiContainerKind::Row,
+                1 => GuiContainerKind::Column,
+                2 => GuiContainerKind::Stack,
+                3 => GuiContainerKind::Padding,
+                4 => GuiContainerKind::Align,
+                5 => GuiContainerKind::SizedBox,
+                6 => GuiContainerKind::ScrollView,
+                _ => return Err(ProtocolError::Malformed("GUI container kind")),
             }),
-            5 => Ok(GuiNodeContent::Button {
+            2 => GuiNodeData::Text(self.string()?),
+            3 => GuiNodeData::Drawing,
+            4 => GuiNodeData::Image,
+            5 => GuiNodeData::Button {
                 label: self.string()?,
-            }),
-            6 => Ok(GuiNodeContent::Checkbox {
-                checked: self.boolean()?,
-            }),
-            7 => {
-                let value = self.f32()?;
-                let min = self.f32()?;
-                let max = self.f32()?;
-                let step = self.f32()?;
-                Ok(GuiNodeContent::Slider {
-                    value,
-                    min,
-                    max,
-                    step,
-                })
-            }
-            8 => {
-                let text = self.string()?;
-                let placeholder = self.string()?;
-                Ok(GuiNodeContent::TextInput {
-                    text,
-                    placeholder,
-                })
-            }
-            _ => Err(ProtocolError::Malformed("GUI content tag")),
-        }
-    }
-
-    fn gui_style(&mut self) -> Result<GuiNodeStyle, ProtocolError> {
-        let mask = self.u16()?;
-        let width = if mask & (1 << 0) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let height = if mask & (1 << 1) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let min_width = if mask & (1 << 2) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let min_height = if mask & (1 << 3) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let max_width = if mask & (1 << 4) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let max_height = if mask & (1 << 5) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let padding = if mask & (1 << 6) != 0 {
-            Some(self.gui_vector()?)
-        } else {
-            None
-        };
-        let margin = if mask & (1 << 7) != 0 {
-            Some(self.gui_vector()?)
-        } else {
-            None
-        };
-        let flex = if mask & (1 << 8) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let align_x = if mask & (1 << 9) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let align_y = if mask & (1 << 10) != 0 {
-            Some(self.f32()?)
-        } else {
-            None
-        };
-        let color = self.gui_vector()?;
-        let background_color = if mask & (1 << 11) != 0 {
-            Some(self.gui_vector()?)
-        } else {
-            None
-        };
-        let opacity = self.f32()?;
-        let font_size = self.f32()?;
-        let asset = if mask & (1 << 12) != 0 {
-            Some(AssetSource {
-                kind: AssetTypeId(self.u16()?),
-                variant: self.u32()?,
-                uri: self.string()?,
-            })
-        } else {
-            None
-        };
-        // The lane is a plain bool: absent bits default to interactive.
-        let enabled = if mask & (1 << 13) != 0 {
-            self.boolean()?
-        } else {
-            true
-        };
-
-        Ok(GuiNodeStyle {
-            enabled,
-            width,
-            height,
-            min_width,
-            min_height,
-            max_width,
-            max_height,
-            padding,
-            margin,
-            flex,
-            align_x,
-            align_y,
-            color,
-            background_color,
-            opacity,
-            font_size,
-            asset,
+            },
+            6 => GuiNodeData::Checkbox,
+            7 => GuiNodeData::Slider,
+            8 => GuiNodeData::TextInput {
+                text: self.string()?,
+                placeholder: self.string()?,
+            },
+            _ => return Err(ProtocolError::Malformed("GUI data tag")),
         })
     }
 }
@@ -621,23 +402,23 @@ impl Writer {
         &mut self,
         response: &GuiInspectResponse,
     ) -> Result<(), ProtocolError> {
-        let mut buf = vec![1u8];
+        let mut buf = vec![GUI_INSPECT_VERSION];
         buf.extend(response.root_entity.to_bits().to_le_bytes());
         buf.extend(response.root_incarnation.to_le_bytes());
         buf.extend((response.nodes.len() as u32).to_le_bytes());
         for node in &response.nodes {
             buf.extend(node.id.0.to_le_bytes());
             buf.extend(node.parent.map(|p| p.0).unwrap_or(0).to_le_bytes());
-            buf.extend(node.lifetime.to_le_bytes());
             buf.extend(node.control_revision.to_le_bytes());
             buf.extend((node.children.len() as u32).to_le_bytes());
             for child in &node.children {
                 buf.extend(child.0.to_le_bytes());
             }
 
-            encode_node_content_bytes(&mut buf, &node.content)?;
+            encode_node_data_bytes(&mut buf, &node.data)?;
+            encode_row(&node.values, &mut buf);
             encode_control_value_bytes(&mut buf, &node.control_value)?;
-            encode_node_style_bytes(&mut buf, &node.style)?;
+            encode_row(&GuiNodeStyleRow::from(&node.style), &mut buf);
         }
         self.count(buf.len(), MAX_MESSAGE_BYTES)?;
         self.raw(&buf)?;
@@ -654,55 +435,27 @@ fn encode_gui_text_bytes(buf: &mut Vec<u8>, text: &str) -> Result<(), ProtocolEr
     Ok(())
 }
 
-fn encode_node_content_bytes(
-    buf: &mut Vec<u8>,
-    content: &GuiNodeContent,
-) -> Result<(), ProtocolError> {
-    match content {
-        GuiNodeContent::Container(kind) => {
+fn encode_node_data_bytes(buf: &mut Vec<u8>, data: &GuiNodeData) -> Result<(), ProtocolError> {
+    match data {
+        GuiNodeData::Container(kind) => {
             buf.push(1);
             buf.push(*kind as u8);
         }
-        GuiNodeContent::Text(text) => {
+        GuiNodeData::Text(text) => {
             buf.push(2);
             encode_gui_text_bytes(buf, text)?;
         }
-        GuiNodeContent::Drawing => {
-            buf.push(3);
-        }
-        GuiNodeContent::Image {
-            size,
-        } => {
-            buf.push(4);
-            for v in size {
-                buf.extend(v.to_le_bytes());
-            }
-        }
-        GuiNodeContent::Button {
+        GuiNodeData::Drawing => buf.push(3),
+        GuiNodeData::Image => buf.push(4),
+        GuiNodeData::Button {
             label,
         } => {
             buf.push(5);
             encode_gui_text_bytes(buf, label)?;
         }
-        GuiNodeContent::Checkbox {
-            checked,
-        } => {
-            buf.push(6);
-            buf.push(u8::from(*checked));
-        }
-        GuiNodeContent::Slider {
-            value,
-            min,
-            max,
-            step,
-        } => {
-            buf.push(7);
-            buf.extend(value.to_le_bytes());
-            buf.extend(min.to_le_bytes());
-            buf.extend(max.to_le_bytes());
-            buf.extend(step.to_le_bytes());
-        }
-        GuiNodeContent::TextInput {
+        GuiNodeData::Checkbox => buf.push(6),
+        GuiNodeData::Slider => buf.push(7),
+        GuiNodeData::TextInput {
             text,
             placeholder,
         } => {
@@ -733,106 +486,5 @@ fn encode_control_value_bytes(
             encode_gui_text_bytes(buf, t)?;
         }
     }
-    Ok(())
-}
-
-fn encode_node_style_bytes(buf: &mut Vec<u8>, style: &GuiNodeStyle) -> Result<(), ProtocolError> {
-    let mut mask: u16 = 0;
-    if style.width.is_some() {
-        mask |= 1 << 0;
-    }
-    if style.height.is_some() {
-        mask |= 1 << 1;
-    }
-    if style.min_width.is_some() {
-        mask |= 1 << 2;
-    }
-    if style.min_height.is_some() {
-        mask |= 1 << 3;
-    }
-    if style.max_width.is_some() {
-        mask |= 1 << 4;
-    }
-    if style.max_height.is_some() {
-        mask |= 1 << 5;
-    }
-    if style.padding.is_some() {
-        mask |= 1 << 6;
-    }
-    if style.margin.is_some() {
-        mask |= 1 << 7;
-    }
-    if style.flex.is_some() {
-        mask |= 1 << 8;
-    }
-    if style.align_x.is_some() {
-        mask |= 1 << 9;
-    }
-    if style.align_y.is_some() {
-        mask |= 1 << 10;
-    }
-    if style.background_color.is_some() {
-        mask |= 1 << 11;
-    }
-    if style.asset.is_some() {
-        mask |= 1 << 12;
-    }
-    // `enabled` is a plain bool, always present on retained styles.
-    mask |= 1 << 13;
-
-    buf.extend(mask.to_le_bytes());
-    if let Some(v) = style.width {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.height {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.min_width {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.min_height {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.max_width {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.max_height {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.padding {
-        for f in v {
-            buf.extend(f.to_le_bytes());
-        }
-    }
-    if let Some(v) = style.margin {
-        for f in v {
-            buf.extend(f.to_le_bytes());
-        }
-    }
-    if let Some(v) = style.flex {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.align_x {
-        buf.extend(v.to_le_bytes());
-    }
-    if let Some(v) = style.align_y {
-        buf.extend(v.to_le_bytes());
-    }
-    for f in style.color {
-        buf.extend(f.to_le_bytes());
-    }
-    if let Some(v) = style.background_color {
-        for f in v {
-            buf.extend(f.to_le_bytes());
-        }
-    }
-    buf.extend(style.opacity.to_le_bytes());
-    buf.extend(style.font_size.to_le_bytes());
-    if let Some(asset) = &style.asset {
-        buf.extend(asset.kind.0.to_le_bytes());
-        buf.extend(asset.variant.to_le_bytes());
-        encode_gui_text_bytes(buf, &asset.uri)?;
-    }
-    buf.push(u8::from(style.enabled));
     Ok(())
 }

@@ -34,9 +34,9 @@ type FailureMode = "loss" | "reject";
 interface FakeStoredNode {
   id: number;
   parent: number | undefined;
-  content: GuiDescribedNode["content"];
+  data: GuiDescribedNode["data"];
+  values: GuiDescribedNode["values"];
   style: GuiNodeStyle;
-  lifetime: number;
 }
 
 function rejected(): Error {
@@ -117,9 +117,9 @@ class FakeGuiRuntime {
         this.nodes.set(edit.id, {
           id: edit.id,
           parent: edit.parent,
-          content: edit.content,
+          data: edit.data,
+          values: edit.values ?? {},
           style: { ...edit.style },
-          lifetime: 1,
         });
       }
       if (mode === "reject") throw rejected();
@@ -136,7 +136,8 @@ class FakeGuiRuntime {
       if (mode !== "reject") {
         const node = this.nodes.get(edit.handle.nodeId);
         if (!node) throw rejected();
-        if (edit.patch.content !== undefined) node.content = edit.patch.content;
+        if (edit.patch.data !== undefined) node.data = edit.patch.data;
+        if (edit.patch.values !== undefined) node.values = edit.patch.values;
         if (edit.patch.style?.opacity !== undefined)
           node.style = { ...node.style, opacity: edit.patch.style.opacity };
       }
@@ -202,11 +203,11 @@ class FakeGuiRuntime {
             children: [...this.nodes.values()]
               .filter((child) => child.parent === node.id)
               .map((child) => child.id),
-            content: node.content,
+            data: node.data,
+            values: node.values,
             style: { ...node.style },
             controlValue: { kind: "none" },
             controlRevision: 0,
-            lifetime: node.lifetime,
           }) as unknown as GuiInspectedNode,
       );
     return {
@@ -308,7 +309,8 @@ function containerNode(
     identity,
     parent: undefined,
     type: GUI_COLUMN_HOST_TYPE,
-    content: { kind: "container", containerKind: "column" },
+    data: { kind: "container", containerKind: "column" },
+    values: {},
     style,
     nodeRef,
     onAction: undefined,
@@ -328,7 +330,8 @@ function checkboxNode(
     identity,
     parent,
     type: GUI_CHECKBOX_HOST_TYPE,
-    content: { kind: "checkbox", checked },
+    data: { kind: "checkbox" },
+    values: { checked },
     style,
     nodeRef,
     onAction: undefined,
@@ -344,7 +347,12 @@ function describe(nodes: GuiDescribedNode[]): GuiDescribedRoot[] {
       nodeRef: null,
       nodes,
       signature: JSON.stringify(
-        nodes.map((node) => [node.identity, node.parent ?? null, node.content]),
+        nodes.map((node) => [
+          node.identity,
+          node.parent ?? null,
+          node.data,
+          node.values,
+        ]),
       ),
     },
   ];
@@ -499,9 +507,9 @@ test("refusing foreign work retains produced ids for later recovery", async () =
   runtime.injectForeign({
     id: 99,
     parent: undefined,
-    content: { kind: "container", containerKind: "column" },
+    data: { kind: "container", containerKind: "column" },
+    values: {},
     style: {},
-    lifetime: 1,
   });
   runtime.failNext("update", "loss");
   await assert.rejects(

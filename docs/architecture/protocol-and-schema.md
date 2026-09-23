@@ -49,7 +49,7 @@ Compiled components may also declare rows: out-of-line tables of compiled row st
 
 Native writes, protocol and overlays share validation/lifecycle rules. Real-time numeric evaluation uses prevalidated bindings and derived-result notification under the [runtime binding contract](runtime.md#stable-storage-and-direct-bindings). Retained values own storage; transient decoding views cannot escape. Schema processing stays outside evaluation hot paths.
 
-[GUI](gui.md#identity-and-authoritative-state) extends these contracts with root/node lifetime checks and revision-aware value operations. Ordered input admission, routed observations and committed control effects remain distinct. Its snapshot exclusions are scoped to GUI transient interaction state under the [GUI persistence boundary](gui.md#client-and-persistence-boundaries).
+[GUI](gui.md#identity-and-authoritative-state) extends these contracts with root incarnation and node identity checks and revision-aware value operations. Ordered input admission, routed observations and committed control effects remain distinct. Its snapshot exclusions are scoped to GUI transient interaction state under the [GUI persistence boundary](gui.md#client-and-persistence-boundaries).
 
 ## Build compatibility
 

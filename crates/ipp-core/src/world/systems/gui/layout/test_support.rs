@@ -7,10 +7,10 @@
 //! glyph 2 advancing 600, `a` to glyph 3 advancing 650, `e` to glyph 5
 //! advancing 550. Line height is 1.2 em everywhere.
 
-use super::super::super::test_support::font_source;
+use super::super::super::test_support::{AuthoredNode, font_source};
 use super::*;
-use crate::DynamicValue;
 use crate::EntityId;
+use crate::GuiNodePatch;
 use crate::services::asset_management::font::{FONT_TYPE, FontAsset};
 use crate::services::asset_management::{AssetKey, AssetSource};
 use crate::systems::surface::SurfaceRenderResource;
@@ -105,36 +105,34 @@ impl TreeBuilder {
     pub(super) fn add(
         &mut self,
         parent: Option<GuiNodeId>,
-        content: GuiNodeContent,
+        node: impl Into<AuthoredNode>,
         style: GuiNodeStyle,
     ) -> GuiNodeId {
+        let node = node.into();
         let id = GuiNodeId(self.root.nodes().next_node_id());
         let index = parent
             .and_then(|parent| self.root.nodes().node(parent))
             .map(|node| node.children.len())
             .unwrap_or(0);
-        self.root
-            .nodes_mut()
-            .insert_node(id, parent, index, content.clone())
-            .unwrap();
-        // Mirror the production insert path: a new control node commits its
+        // The production insert path: a new control node commits its
         // initial value at revision 1, so evaluation observes effective
         // values exactly like world-driven trees.
-        self.root.controls_mut().insert_initial(id, &content);
-        self.root.install_node_style(id, &style).unwrap();
+        self.root
+            .insert_node(id, parent, index, node.data, node.values, &style)
+            .unwrap();
         id
     }
 
     pub(super) fn set_visual(&mut self, id: GuiNodeId, position: [f32; 2], scale: [f32; 2]) {
-        let position_name = GuiRoot::property_name(id, "position").unwrap();
-        let scale_name = GuiRoot::property_name(id, "scale").unwrap();
         self.root
-            .properties
-            .set(&position_name, DynamicValue::Vec2(position))
-            .unwrap();
-        self.root
-            .properties
-            .set(&scale_name, DynamicValue::Vec2(scale))
+            .update_node(
+                id,
+                &GuiNodePatch {
+                    position: Some(position),
+                    scale: Some(scale),
+                    ..GuiNodePatch::default()
+                },
+            )
             .unwrap();
     }
 

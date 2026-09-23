@@ -40,8 +40,9 @@
 //! rectangle hand the gesture to scrolling.
 
 use super::super::system::{commit_control_value, resolve_control_effective};
+use super::super::tree::GuiNodeDataRow;
 use super::super::tree::nodes::{
-    GuiContainerKind, GuiControlValue, GuiNodeContent, GuiNodeHandle, GuiNodeId,
+    GuiContainerKind, GuiControlValue, GuiNodeData, GuiNodeHandle, GuiNodeId,
 };
 use super::super::{
     GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiHit, GuiLayoutSystem, GuiRoot,
@@ -237,8 +238,6 @@ pub struct GuiInputTarget {
     pub entity: EntityId,
     /// Root-local node identity.
     pub node: GuiNodeId,
-    /// Node lifetime fencing reuse after removal and recreation.
-    pub lifetime: u32,
     /// Root component incarnation the routing snapshot was built against.
     pub root_incarnation: u64,
 }
@@ -315,8 +314,6 @@ pub enum GuiInputEffectKind {
         root_incarnation: u64,
         /// Pressed node.
         node: GuiNodeId,
-        /// Node lifetime.
-        lifetime: u32,
         /// Runtime logical ancestor path, root-first including the target,
         /// pinned from the live tree at application for listener dispatch.
         path: Vec<GuiNodeId>,
@@ -329,8 +326,6 @@ pub enum GuiInputEffectKind {
         root_incarnation: u64,
         /// Control node.
         node: GuiNodeId,
-        /// Node lifetime.
-        lifetime: u32,
         /// Committed value.
         value: GuiControlValue,
         /// Revision that produced it.
@@ -483,18 +478,14 @@ enum ControlKind {
 }
 
 impl ControlKind {
-    fn of(content: &GuiNodeContent) -> Option<Self> {
-        match content {
-            GuiNodeContent::Button {
+    fn of(data: &GuiNodeData) -> Option<Self> {
+        match data {
+            GuiNodeData::Button {
                 ..
             } => Some(Self::Button),
-            GuiNodeContent::Checkbox {
-                ..
-            } => Some(Self::Checkbox),
-            GuiNodeContent::Slider {
-                ..
-            } => Some(Self::Slider),
-            GuiNodeContent::TextInput {
+            GuiNodeData::Checkbox => Some(Self::Checkbox),
+            GuiNodeData::Slider => Some(Self::Slider),
+            GuiNodeData::TextInput {
                 ..
             } => Some(Self::TextInput),
             _ => None,
@@ -655,11 +646,11 @@ fn validate_composition_shape(
 type ProjectedCandidate = (f64, EntityId, super::super::GuiHit, u64, [f32; 4], [f32; 2]);
 
 /// Scroll-aware hit: scrolled panel entity, root incarnation, resolved
-/// node, lifetime, retained rectangle and logical point.
-type ScrollResolved = (EntityId, u64, GuiNodeId, u32, [f32; 4], [f32; 2]);
+/// node, retained rectangle and logical point.
+type ScrollResolved = (EntityId, u64, GuiNodeId, [f32; 4], [f32; 2]);
 
 /// Best scroll candidate: world/entity distance first, then the resolved hit.
-type ScrollCandidate = (f64, EntityId, GuiNodeId, u32, u64, [f32; 4], [f32; 2]);
+type ScrollCandidate = (f64, EntityId, GuiNodeId, u64, [f32; 4], [f32; 2]);
 
 /// Current-tick camera ray for viewport-space pointer routing. The origin
 /// and unit direction live in World space; `near` and `far` bound the ray
@@ -852,7 +843,7 @@ impl SystemFactory for GuiInputSystemFactory {
 // ---------------------------------------------------------------------------
 
 /// One hit node rechecked against authoritative producer state: live root,
-/// matching incarnation and lifetime, and positive opacity. Snapshot
+/// matching incarnation and node, and positive opacity. Snapshot
 /// geometry stays immutable; only producer liveness is rechecked.
 struct RecheckedHit<'a> {
     /// Fenced routed target.
@@ -881,7 +872,7 @@ fn recheck_hit<'a>(
         return None;
     };
     let live = root.nodes().node(target.node)?;
-    let kind = ControlKind::of(&live.content);
+    let kind = ControlKind::of(&live.data);
     Some(RecheckedHit {
         target,
         rect,
@@ -1011,9 +1002,8 @@ impl GuiInputSystem {
         }
         let (_, root) = producer_root(sim, entity)?;
         self.scroll_hit_in_view(view, &root, entity, point)
-            .map(|(node, lifetime, _)| GuiHit {
+            .map(|(node, _)| GuiHit {
                 node,
-                lifetime,
                 position: point,
             })
     }
@@ -1098,7 +1088,6 @@ impl GuiInputSystem {
                             entity,
                             root_incarnation,
                             node: decided.node,
-                            lifetime: decided.lifetime,
                         },
                         rect,
                         position,
@@ -1123,7 +1112,6 @@ impl GuiInputSystem {
                 entity,
                 root_incarnation,
                 node: hit.node,
-                lifetime: hit.lifetime,
             },
             rect,
             position,
@@ -1391,7 +1379,6 @@ impl GuiInputSystem {
                     entity,
                     root_incarnation,
                     node: decided.node,
-                    lifetime: decided.lifetime,
                 },
                 rect,
                 logical,
@@ -1416,7 +1403,7 @@ impl GuiInputSystem {
             return None;
         };
         let live = root.nodes().node(target.node)?;
-        let kind = ControlKind::of(&live.content)?;
+        let kind = ControlKind::of(&live.data)?;
         Some((kind, root))
     }
 
@@ -1851,21 +1838,17 @@ impl GuiInputSystem {
                 let Some(live) = root.nodes().node(node.node) else {
                     continue;
                 };
-                if live.lifetime != node.lifetime {
-                    continue;
-                }
-                if ControlKind::of(&live.content).is_none() {
+                if ControlKind::of(&live.data).is_none() {
                     continue;
                 }
                 let opacity = root
-                    .style(node.node)
+                    .style_row(node.node)
                     .map(|style| style.opacity)
                     .unwrap_or(1.0);
                 if opacity > 0.0 {
                     order.push(GuiInputTarget {
                         entity,
                         node: node.node,
-                        lifetime: node.lifetime,
                         root_incarnation: incarnation,
                     });
                 }
@@ -1902,8 +1885,8 @@ impl GuiInputSystem {
                 break;
             };
             if matches!(
-                live.content,
-                GuiNodeContent::Container(GuiContainerKind::ScrollView)
+                live.data,
+                GuiNodeData::Container(GuiContainerKind::ScrollView)
             ) {
                 chain.push(id);
             }
@@ -1959,14 +1942,13 @@ impl GuiInputSystem {
                 break;
             };
             if matches!(
-                live.content,
-                GuiNodeContent::Container(GuiContainerKind::ScrollView)
+                live.data,
+                GuiNodeData::Container(GuiContainerKind::ScrollView)
             ) && let Some(record) = view.nodes.iter().find(|record| record.node == id)
                 && let Some(cursor) = self.scroll_offsets.get(&GuiInputTarget {
                     entity,
                     root_incarnation: view.root_incarnation,
                     node: id,
-                    lifetime: record.lifetime,
                 })
             {
                 shift[0] -= cursor.offset[0] * record.acc_scale[0];
@@ -2006,7 +1988,7 @@ impl GuiInputSystem {
         root: &GuiRoot,
         entity: EntityId,
         point: [f32; 2],
-    ) -> Option<(GuiNodeId, u32, [f32; 4])> {
+    ) -> Option<(GuiNodeId, [f32; 4])> {
         if !view.available {
             return None;
         }
@@ -2023,7 +2005,7 @@ impl GuiInputSystem {
             {
                 continue;
             }
-            return Some((record.node, record.lifetime, rect));
+            return Some((record.node, rect));
         }
         None
     }
@@ -2035,9 +2017,8 @@ impl GuiInputSystem {
         self.scroll_revision
     }
 
-    /// Nonzero final-logical ancestor shifts for one panel, keyed by
-    /// `(node, lifetime)` so paint fences node reuse after removal and
-    /// recreation. Viewport nodes carry only outer shifts: their own offset
+    /// Nonzero final-logical ancestor shifts for one panel, keyed by node;
+    /// identities are never reused within a root incarnation. Viewport nodes carry only outer shifts: their own offset
     /// never applies to themselves, while their descendants shift beneath
     /// the fixed viewport clip.
     pub(crate) fn scroll_shifts_logical(
@@ -2045,7 +2026,7 @@ impl GuiInputSystem {
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
         entity: EntityId,
-    ) -> BTreeMap<(GuiNodeId, u32), [f32; 2]> {
+    ) -> BTreeMap<GuiNodeId, [f32; 2]> {
         let mut shifts = BTreeMap::new();
         let (Some(view), Some((_, root))) = (layout.view(entity), producer_root(sim, entity))
         else {
@@ -2054,7 +2035,7 @@ impl GuiInputSystem {
         for record in &view.nodes {
             let shift = self.ancestor_shift(view, &root, entity, record.node);
             if shift != [0.0, 0.0] {
-                shifts.insert((record.node, record.lifetime), shift);
+                shifts.insert(record.node, shift);
             }
         }
         shifts
@@ -2113,22 +2094,24 @@ impl GuiInputSystem {
     }
 }
 
+/// Range and committed value of a live slider node.
+fn slider_row(root: &GuiRoot, node: GuiNodeId) -> Option<GuiNodeDataRow> {
+    match root.nodes().node(node)?.data {
+        GuiNodeData::Slider => root.data_row(node).cloned(),
+        _ => None,
+    }
+}
+
 /// Map a logical x coordinate to a slider value along a snapshot rectangle.
 /// Endpoints remain exact; within the rail an accepted off-step current value
 /// participates beside the step lattice so grabbing its thumb cannot jump.
 pub(crate) fn slider_value_at(
-    content: &GuiNodeContent,
+    values: &GuiNodeDataRow,
     rect: [f32; 4],
     x: f32,
     current: &GuiControlValue,
 ) -> Option<GuiControlValue> {
-    let GuiNodeContent::Slider {
-        min,
-        max,
-        step,
-        ..
-    } = content
-    else {
+    let (Some(min), Some(max), Some(step)) = (&values.min, &values.max, &values.step) else {
         return None;
     };
     let fraction = super::super::slider_rail(rect)?.fraction_at(x)?;
@@ -2179,17 +2162,11 @@ fn clip_contains_point(clip: crate::systems::surface::SurfaceClipRect, point: [f
 
 /// Nudge a slider value by key, honouring bounds and the step lane.
 fn slider_nudge(
-    content: &GuiNodeContent,
+    values: &GuiNodeDataRow,
     committed: &GuiControlValue,
     steps: f32,
 ) -> Option<GuiControlValue> {
-    let GuiNodeContent::Slider {
-        min,
-        max,
-        step,
-        ..
-    } = content
-    else {
+    let (Some(min), Some(max), Some(step)) = (&values.min, &values.max, &values.step) else {
         return None;
     };
     let GuiControlValue::Scalar(current) = committed else {
@@ -2361,11 +2338,7 @@ impl GuiInputSystem {
         let Some(view) = layout.view(entity) else {
             return Vec::new();
         };
-        let Some(evaluated) = view
-            .nodes
-            .iter()
-            .find(|node| node.node == target.node && node.lifetime == target.lifetime)
-        else {
+        let Some(evaluated) = view.nodes.iter().find(|node| node.node == target.node) else {
             return Vec::new();
         };
         if !evaluated.available || !evaluated.enabled || !evaluated.visible {
@@ -2568,10 +2541,7 @@ impl GuiInputSystem {
             return None;
         }
         let view = layout.view(entity)?;
-        let evaluated = view
-            .nodes
-            .iter()
-            .find(|node| node.node == target.node && node.lifetime == target.lifetime)?;
+        let evaluated = view.nodes.iter().find(|node| node.node == target.node)?;
         if !evaluated.available || !evaluated.enabled || !evaluated.visible {
             return None;
         }
@@ -2681,7 +2651,6 @@ impl GuiInputSystem {
                 identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                     root_incarnation: view.root_incarnation,
                     node: target.node,
-                    lifetime: target.lifetime,
                     part: crate::systems::surface::GuiPrimitivePart::Label,
                 }),
                 position,
@@ -2798,7 +2767,6 @@ impl GuiInputSystem {
                         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                             root_incarnation: view.root_incarnation,
                             node: overlay.target.node,
-                            lifetime: overlay.target.lifetime,
                             part: crate::systems::surface::GuiPrimitivePart::Label,
                         }),
                         position,
@@ -2953,11 +2921,7 @@ impl GuiInputSystem {
             }
             Some(ControlKind::Button) | Some(ControlKind::Checkbox) | None => {}
             Some(ControlKind::Slider) => {
-                let content = routed
-                    .root
-                    .nodes()
-                    .node(routed.target.node)
-                    .map(|node| node.content.clone());
+                let content = slider_row(&routed.root, routed.target.node);
                 let Some(content) = content else {
                     return;
                 };
@@ -3114,10 +3078,7 @@ impl GuiInputSystem {
                     Some(root) => root,
                     None => return,
                 };
-                let content = root
-                    .nodes()
-                    .node(capture.target.node)
-                    .map(|node| node.content.clone());
+                let content = slider_row(&root, capture.target.node);
                 let Some(content) = content else {
                     return;
                 };
@@ -3277,10 +3238,7 @@ impl GuiInputSystem {
                 self.set_hover(session, tick, pointer, Some(capture.target), position);
                 return;
             }
-            let content = root
-                .nodes()
-                .node(capture.target.node)
-                .map(|node| node.content.clone());
+            let content = slider_row(&root, capture.target.node);
             let Some(content) = content else {
                 return;
             };
@@ -3339,7 +3297,7 @@ impl GuiInputSystem {
     }
 
     /// Resolve one scroll point to its topmost scroll-aware hit: panel,
-    /// root incarnation, node, lifetime, scrolled rectangle and the logical
+    /// root incarnation, node, scrolled rectangle and the logical
     /// point. Mirrors the logical panel loop, but hit-tests with ancestor
     /// scroll shifts applied and accepts containers so wheel input over a
     /// ScrollView viewport or a non-control child still finds its ancestry.
@@ -3352,7 +3310,7 @@ impl GuiInputSystem {
         blockers: &[super::super::GuiBlockerHit],
         panel_distance: Option<f32>,
     ) -> Result<ScrollResolved, GuiUnhandledReason> {
-        let mut best: Option<(EntityId, GuiNodeId, u32, u64, [f32; 4])> = None;
+        let mut best: Option<(EntityId, GuiNodeId, u64, [f32; 4])> = None;
         let panels: Vec<EntityId> = match panel {
             Some(entity) => vec![entity],
             None => layout.evaluated_entities(),
@@ -3365,24 +3323,21 @@ impl GuiInputSystem {
                 Some(root) => root,
                 None => continue,
             };
-            let Some((node, lifetime, rect)) =
-                self.scroll_hit_in_view(view, &root, entity, position)
-            else {
+            let Some((node, rect)) = self.scroll_hit_in_view(view, &root, entity, position) else {
                 continue;
             };
-            let replace = best.is_none_or(|(current, _, _, _, _)| entity > current);
+            let replace = best.is_none_or(|(current, _, _, _)| entity > current);
             if replace {
-                best = Some((entity, node, lifetime, view.root_incarnation, rect));
+                best = Some((entity, node, view.root_incarnation, rect));
             }
         }
-        let Some((entity, node, lifetime, root_incarnation, rect)) = best else {
+        let Some((entity, node, root_incarnation, rect)) = best else {
             return Err(GuiUnhandledReason::NoPanelHit);
         };
         let decided = match panel_distance {
             Some(distance) => {
                 let hit = GuiHit {
                     node,
-                    lifetime,
                     position,
                 };
                 match super::super::resolve_panel_hit(Some(distance), Some(hit), blockers) {
@@ -3401,7 +3356,6 @@ impl GuiInputSystem {
             }
             None => GuiHit {
                 node,
-                lifetime,
                 position,
             },
         };
@@ -3412,19 +3366,11 @@ impl GuiInputSystem {
                 entity,
                 root_incarnation,
                 node: decided.node,
-                lifetime: decided.lifetime,
             },
             rect,
             position,
         ) {
-            Some(_) => Ok((
-                entity,
-                root_incarnation,
-                decided.node,
-                decided.lifetime,
-                rect,
-                position,
-            )),
+            Some(_) => Ok((entity, root_incarnation, decided.node, rect, position)),
             None => Err(GuiUnhandledReason::StaleTarget),
         }
     }
@@ -3462,31 +3408,21 @@ impl GuiInputSystem {
                 Some(root) => root,
                 None => continue,
             };
-            let Some((node, lifetime, rect)) =
-                self.scroll_hit_in_view(view, &root, entity, logical)
-            else {
+            let Some((node, rect)) = self.scroll_hit_in_view(view, &root, entity, logical) else {
                 continue;
             };
             let better = match best {
                 None => true,
-                Some((current_distance, current, _, _, _, _, _)) => {
+                Some((current_distance, current, _, _, _, _)) => {
                     distance < current_distance
                         || (distance == current_distance && entity < current)
                 }
             };
             if better {
-                best = Some((
-                    distance,
-                    entity,
-                    node,
-                    lifetime,
-                    view.root_incarnation,
-                    rect,
-                    logical,
-                ));
+                best = Some((distance, entity, node, view.root_incarnation, rect, logical));
             }
         }
-        let Some((distance, entity, node, lifetime, root_incarnation, rect, logical)) = best else {
+        let Some((distance, entity, node, root_incarnation, rect, logical)) = best else {
             return Err(GuiUnhandledReason::NoPanelHit);
         };
         let mut resolved = Vec::with_capacity(blockers.len());
@@ -3519,7 +3455,6 @@ impl GuiInputSystem {
         }
         let hit = GuiHit {
             node,
-            lifetime,
             position: logical,
         };
         match super::super::resolve_panel_hit(Some(distance as f32), Some(hit), &resolved) {
@@ -3531,19 +3466,11 @@ impl GuiInputSystem {
                         entity,
                         root_incarnation,
                         node: decided.node,
-                        lifetime: decided.lifetime,
                     },
                     rect,
                     logical,
                 ) {
-                    Some(_) => Ok((
-                        entity,
-                        root_incarnation,
-                        decided.node,
-                        decided.lifetime,
-                        rect,
-                        logical,
-                    )),
+                    Some(_) => Ok((entity, root_incarnation, decided.node, rect, logical)),
                     None => Err(GuiUnhandledReason::StaleTarget),
                 }
             }
@@ -3591,7 +3518,7 @@ impl GuiInputSystem {
             Some(ray) => self.scroll_hit_projected(layout, sim, panel, blockers, ray),
             None => self.scroll_hit_logical(layout, sim, panel, position, blockers, panel_distance),
         };
-        let (entity, root_incarnation, hit, lifetime, ..) = match resolved {
+        let (entity, root_incarnation, hit, ..) = match resolved {
             Ok(resolved) => resolved,
             Err(reason) => {
                 self.unhandled(session, tick, input, reason);
@@ -3601,7 +3528,6 @@ impl GuiInputSystem {
         let target = GuiInputTarget {
             entity,
             node: hit,
-            lifetime,
             root_incarnation,
         };
         if !Self::target_eligible(layout, sim, &target) {
@@ -3644,14 +3570,13 @@ impl GuiInputSystem {
             if remainder == [0.0, 0.0] {
                 break;
             }
-            let Some(record) = view.nodes.iter().find(|record| record.node == scroll) else {
+            if !view.nodes.iter().any(|record| record.node == scroll) {
                 continue;
-            };
+            }
             let target = GuiInputTarget {
                 entity,
                 root_incarnation,
                 node: scroll,
-                lifetime: record.lifetime,
             };
             let max = Self::scroll_max(view, scroll);
             let current = self
@@ -3714,7 +3639,7 @@ impl GuiInputSystem {
             let taps = root
                 .nodes()
                 .node(target.node)
-                .and_then(|live| ControlKind::of(&live.content))
+                .and_then(|live| ControlKind::of(&live.data))
                 .is_some_and(|kind| kind == ControlKind::Button || kind == ControlKind::Checkbox);
             if !taps {
                 continue;
@@ -3925,10 +3850,7 @@ impl GuiInputSystem {
                     self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
                     return;
                 }
-                let content = root
-                    .nodes()
-                    .node(focus.target.node)
-                    .map(|node| node.content.clone());
+                let content = slider_row(&root, focus.target.node);
                 let Some(content) = content else {
                     self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
                     return;
@@ -3980,13 +3902,10 @@ impl GuiInputSystem {
                     self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
                     return;
                 }
-                let content = root
-                    .nodes()
-                    .node(focus.target.node)
-                    .map(|node| node.content.clone());
-                let Some(GuiNodeContent::Slider {
-                    min,
-                    max,
+                let content = slider_row(&root, focus.target.node);
+                let Some(GuiNodeDataRow {
+                    min: Some(min),
+                    max: Some(max),
                     ..
                 }) = content
                 else {
@@ -4440,12 +4359,12 @@ impl GuiInputSystem {
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
             return Ok(());
         };
-        if node.lifetime != handle.node_lifetime || ControlKind::of(&node.content).is_none() {
+        if ControlKind::of(&node.data).is_none() {
             self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
             return Ok(());
         }
         let opacity = root
-            .style(handle.node_id)
+            .style_row(handle.node_id)
             .map(|style| style.opacity)
             .unwrap_or(1.0);
         if opacity <= 0.0 {
@@ -4458,7 +4377,6 @@ impl GuiInputSystem {
             &GuiInputTarget {
                 entity: handle.entity,
                 node: handle.node_id,
-                lifetime: handle.node_lifetime,
                 root_incarnation: incarnation,
             },
         ) {
@@ -4475,7 +4393,6 @@ impl GuiInputSystem {
             Some(GuiInputTarget {
                 entity: handle.entity,
                 node: handle.node_id,
-                lifetime: handle.node_lifetime,
                 root_incarnation: incarnation,
             }),
         );
@@ -4664,7 +4581,7 @@ impl GuiInputSystem {
             .nodes()
             .node(command.target.node)
             .ok_or(ErrorReason::InvalidValue)?;
-        let kind = ControlKind::of(&live.content).ok_or(ErrorReason::InvalidValue)?;
+        let kind = ControlKind::of(&live.data).ok_or(ErrorReason::InvalidValue)?;
         let found_revision = root
             .control_state(command.target.node)
             .map(|state| state.revision)
@@ -4691,13 +4608,12 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::SetScalar(value) if kind == ControlKind::Slider => {
                 let value = GuiControlValue::Scalar(*value);
-                let mut check = root.edit_scope(None)?;
+                let mut check = root.edit_scope(Some(command.target.node))?;
                 let handle = GuiNodeHandle::new(
                     session,
                     command.target.entity,
                     command.target.root_incarnation,
                     command.target.node,
-                    command.target.lifetime,
                 );
                 commit_control_value(
                     &mut check,
@@ -4714,13 +4630,12 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::SetText(value) if kind == ControlKind::TextInput => {
                 let value = GuiControlValue::Text(value.clone());
-                let mut check = root.edit_scope(None)?;
+                let mut check = root.edit_scope(Some(command.target.node))?;
                 let handle = GuiNodeHandle::new(
                     session,
                     command.target.entity,
                     command.target.root_incarnation,
                     command.target.node,
-                    command.target.lifetime,
                 );
                 commit_control_value(
                     &mut check,
@@ -5050,7 +4965,7 @@ impl GuiInputSystem {
                             if root
                                 .nodes()
                                 .node(target.node)
-                                .and_then(|node| ControlKind::of(&node.content))
+                                .and_then(|node| ControlKind::of(&node.data))
                                 .is_some() => {}
                         GuiTargetStatus::Eligible(_) => {
                             self.pending_conflicts.push(GuiInputConflict {
@@ -5136,8 +5051,8 @@ impl GuiInputSystem {
                 // unbounded input-owned sink without reflowing layout.
                 let scrollable = root.nodes().node(target.node).is_some_and(|live| {
                     matches!(
-                        live.content,
-                        GuiNodeContent::Container(GuiContainerKind::ScrollView)
+                        live.data,
+                        GuiNodeData::Container(GuiContainerKind::ScrollView)
                     )
                 });
                 let (offset, moved) = if scrollable {
@@ -5224,9 +5139,10 @@ impl GuiInputSystem {
                         return;
                     }
                 };
-                let still_button = root.nodes().node(target.node).is_some_and(|node| {
-                    ControlKind::of(&node.content) == Some(ControlKind::Button)
-                });
+                let still_button = root
+                    .nodes()
+                    .node(target.node)
+                    .is_some_and(|node| ControlKind::of(&node.data) == Some(ControlKind::Button));
                 if !still_button {
                     self.pending_conflicts.push(GuiInputConflict {
                         session: envelope.session,
@@ -5245,7 +5161,6 @@ impl GuiInputSystem {
                         entity: target.entity,
                         root_incarnation: target.root_incarnation,
                         node: target.node,
-                        lifetime: target.lifetime,
                         path: ancestor_path(&root, target.node),
                     },
                 });
@@ -5317,7 +5232,6 @@ impl GuiInputSystem {
                     target.entity,
                     target.root_incarnation,
                     target.node,
-                    target.lifetime,
                 );
                 // Staging writes the complete producer root, so commit on a
                 // copy; the World still holds the pre-commit producer that
@@ -5362,7 +5276,6 @@ impl GuiInputSystem {
                                 entity: target.entity,
                                 root_incarnation: target.root_incarnation,
                                 node: target.node,
-                                lifetime: target.lifetime,
                                 value: value.clone(),
                                 revision,
                                 path,

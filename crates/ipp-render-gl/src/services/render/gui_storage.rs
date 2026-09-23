@@ -522,7 +522,6 @@ mod tests {
         GuiPieceKey::Boxes(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(node),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }))
     }

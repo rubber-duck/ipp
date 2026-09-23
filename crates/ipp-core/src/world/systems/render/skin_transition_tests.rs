@@ -5,6 +5,8 @@
 //! second control's value through GUI input, like a dragged slider.
 
 use super::*;
+use crate::GuiNodeDataRow;
+use crate::world::systems::gui::test_support::checkbox_node;
 
 const FRAME: f64 = 1.0 / 60.0;
 
@@ -73,19 +75,18 @@ fn insert_skin_tree(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
         .inspect_gui(panel, None, 1, 1)
         .unwrap()
         .root_incarnation;
-    let checkbox = GuiNodeContent::Checkbox {
-        checked: false,
-    };
-    for (id, parent, index, content) in [
+    let checkbox = checkbox_node(false);
+    for (id, parent, index, node) in [
         (
             1,
             None,
             0,
-            GuiNodeContent::Container(GuiContainerKind::Column),
+            GuiNodeData::Container(GuiContainerKind::Column).into(),
         ),
         (2, Some(GuiNodeId(1)), 0, checkbox.clone()),
         (3, Some(GuiNodeId(1)), 1, checkbox),
     ] {
+        let node: crate::world::systems::gui::test_support::AuthoredNode = node;
         context
             .enqueue_gui_command(
                 SESSION,
@@ -95,7 +96,8 @@ fn insert_skin_tree(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
                     id: GuiNodeId(id),
                     parent,
                     index,
-                    content,
+                    data: node.data,
+                    values: node.values,
                     style: GuiNodeStyle {
                         width: Some(if id == 1 {
                             10.0
@@ -133,9 +135,8 @@ fn insert_committing_control(host: &mut HostRuntime, world: WorldId, panel: crat
                 id: GuiNodeId(3),
                 parent: Some(GuiNodeId(1)),
                 index: 1,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle {
                     width: Some(2.0),
                     height: Some(1.0),
@@ -385,7 +386,7 @@ fn removing_the_node_or_root_mid_transition_withdraws_before_the_slot_is_reused(
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::RemoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();

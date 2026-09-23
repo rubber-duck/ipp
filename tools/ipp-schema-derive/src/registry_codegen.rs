@@ -373,7 +373,11 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
 
         quote! {
             #(#attrs)*
-            Self::#name(v) => ::ipp_core::components::schema::SchemaComponent::set_field(v, offset, value),
+            Self::#name(v) => {
+                ::ipp_core::components::schema::SchemaComponent::set_field(v, offset, value)?;
+                ::ipp_core::components::schema::ComponentLifecycle::after_field_write(v, offset);
+                Ok(())
+            }
         }
     });
 

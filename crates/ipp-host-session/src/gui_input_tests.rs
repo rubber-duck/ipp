@@ -3,9 +3,10 @@
 //! rejecting it or overtaking it, while the world keeps evaluating.
 
 use super::*;
+use ipp_core::GuiNodeDataRow;
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, GuiCommand,
-    GuiContainerKind, GuiInputCommand, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodeStyle,
+    GuiContainerKind, GuiInputCommand, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodeStyle,
     GuiPointerButton,
 };
 use ipp_core::{GuiControlValue, Surface};
@@ -96,7 +97,8 @@ fn build_panel(host: &mut Host<Platform>) -> (EntityId, [f32; 2]) {
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: ipp_core::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(10.0),
                 height: Some(10.0),
@@ -109,9 +111,8 @@ fn build_panel(host: &mut Host<Platform>) -> (EntityId, [f32; 2]) {
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
             style: GuiNodeStyle::default(),
         },
     ] {
@@ -422,7 +423,7 @@ fn wire_gui_input_rejection_correlates_error_reply() {
         &mut host,
         11,
         RequestBody::GuiInput(Box::new(GuiInputCommand::Focus {
-            handle: GuiNodeHandle::new(INPUT_SESSION + 1, panel, incarnation, GuiNodeId(2), 1),
+            handle: GuiNodeHandle::new(INPUT_SESSION + 1, panel, incarnation, GuiNodeId(2)),
         })),
     );
     host.tick(0.01).unwrap();
@@ -460,7 +461,7 @@ fn input_handles_fence_against_foreign_sessions() {
             INPUT_SESSION,
             99,
             GuiInputCommand::Focus {
-                handle: GuiNodeHandle::new(INPUT_SESSION + 1, panel, incarnation, GuiNodeId(2), 1),
+                handle: GuiNodeHandle::new(INPUT_SESSION + 1, panel, incarnation, GuiNodeId(2)),
             },
         )
         .unwrap();

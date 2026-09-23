@@ -8,7 +8,7 @@
  * strict: production rejects what it rejects.
  *
  * Coverage: mount creates the producer without any GuiRoot overlay, updates
- * patch content without replaying values, unmount removes nodes and the
+ * patch node data without replaying values, unmount removes nodes and the
  * producer, remount adopts a fresh incarnation with stale handles fenced,
  * pre-existing producers are adopted empty or refused occupied, partial
  * failures surface and still clean up, and control/action listeners are
@@ -25,7 +25,8 @@ import type {
   GuiEdit,
   GuiInspectedNode,
   GuiInspectResponse,
-  GuiNodeContent,
+  GuiNodeData,
+  GuiNodeValues,
   GuiNodeHandle,
   GuiNodeStyle,
   StateOverlayAlias,
@@ -81,8 +82,8 @@ function rejected(reason: string): Error {
 interface MockGuiNode {
   id: number;
   parent: number | undefined;
-  lifetime: number;
-  content: GuiNodeContent;
+  data: GuiNodeData;
+  values: GuiNodeValues;
   style: GuiNodeStyle;
 }
 
@@ -371,8 +372,7 @@ class MockGuiClient {
     if (handle.rootIncarnation !== root.incarnation)
       throw rejected("InvalidHandle");
     const node = root.nodes.get(handle.nodeId);
-    if (!node || node.lifetime !== handle.nodeLifetime)
-      throw rejected("InvalidHandle");
+    if (!node) throw rejected("InvalidHandle");
     return { root, node };
   }
 
@@ -399,8 +399,8 @@ class MockGuiClient {
         root.nodes.set(edit.id, {
           id: edit.id,
           parent: edit.parent,
-          lifetime: 1,
-          content: edit.content,
+          data: edit.data,
+          values: edit.values ?? {},
           style: edit.style ?? {},
         });
         root.usedIds.add(edit.id);
@@ -413,7 +413,8 @@ class MockGuiClient {
       }
       case "update": {
         const { node } = this.fenced(edit.handle);
-        if (edit.patch.content !== undefined) node.content = edit.patch.content;
+        if (edit.patch.data !== undefined) node.data = edit.patch.data;
+        if (edit.patch.values !== undefined) node.values = edit.patch.values;
         if (edit.patch.style !== undefined) {
           const current = { ...node.style } as Record<string, unknown>;
           for (const [key, value] of Object.entries(edit.patch.style))
@@ -504,10 +505,10 @@ class MockGuiClient {
       nodes.push({
         id: node.id,
         ...(node.parent === undefined ? {} : { parent: node.parent }),
-        lifetime: node.lifetime,
         controlRevision: 0,
         children: root.order.get(node.id) ?? [],
-        content: node.content,
+        data: node.data,
+        values: node.values,
         controlValue: { kind: "none" },
         style: node.style,
       });
@@ -525,15 +526,8 @@ class MockGuiClient {
     entity: bigint,
     rootIncarnation: bigint,
     nodeId: number,
-    nodeLifetime: number,
   ): GuiNodeHandle {
-    return guiNodeHandle(
-      this.session,
-      entity,
-      rootIncarnation,
-      nodeId,
-      nodeLifetime,
-    );
+    return guiNodeHandle(this.session, entity, rootIncarnation, nodeId);
   }
 
   resourceCounts(): {
@@ -668,7 +662,7 @@ test("mount creates the producer root without any GuiRoot overlay", async () => 
       );
   const inspection = await mock.inspectGui({ entity: onlyEntity(mock) });
   assert.deepEqual(
-    inspection.nodes.map((node) => node.content),
+    inspection.nodes.map((node) => node.data),
     [
       { kind: "container", containerKind: "row" },
       { kind: "text", text: "hi" },
@@ -681,7 +675,7 @@ test("mount creates the producer root without any GuiRoot overlay", async () => 
   await root.unmount();
 });
 
-test("updates patch content without touching the producer", async () => {
+test("updates patch node data without touching the producer", async () => {
   const mock = mockClient();
   const root = createRoot(asClient(mock), {
     onError: () => {},
@@ -704,7 +698,7 @@ test("updates patch content without touching the producer", async () => {
     after.nodes.map((node) => node.id),
     [1, 2],
   );
-  assert.deepEqual(after.nodes[1]!.content, {
+  assert.deepEqual(after.nodes[1]!.data, {
     kind: "text",
     text: "hello",
   });
@@ -853,7 +847,7 @@ test("an occupied foreign root is refused without damage", async () => {
     rootIncarnation: empty.rootIncarnation,
     id: 1,
     index: 0,
-    content: { kind: "text", text: "foreign" },
+    data: { kind: "text", text: "foreign" },
   });
   const root = createRoot(asClient(mock), {
     onError: () => {},
@@ -864,7 +858,7 @@ test("an occupied foreign root is refused without damage", async () => {
   );
   const inspection = await mock.inspectGui({ entity: foreign });
   assert.equal(inspection.nodes.length, 1);
-  assert.deepEqual(inspection.nodes[0]!.content, {
+  assert.deepEqual(inspection.nodes[0]!.data, {
     kind: "text",
     text: "foreign",
   });
@@ -891,7 +885,7 @@ test("a rejected adoption cleanup retains exact handles and retries", async () =
     rootIncarnation: empty.rootIncarnation,
     id: 1,
     index: 0,
-    content: { kind: "text", text: "foreign" },
+    data: { kind: "text", text: "foreign" },
   });
 
   mock.failReleaseBatches = 1;
@@ -903,15 +897,13 @@ test("a rejected adoption cleanup retains exact handles and retries", async () =
     errors.some((error) => /SimulatedReleaseFailure/.test(error.message)),
   );
   assert.deepEqual(
-    (await mock.inspectGui({ entity: foreign })).nodes.map(
-      (node) => node.content,
-    ),
+    (await mock.inspectGui({ entity: foreign })).nodes.map((node) => node.data),
     [{ kind: "text", text: "foreign" }],
   );
 
   await mock.editGui({
     action: "remove",
-    handle: mock.createGuiNodeHandle(foreign, empty.rootIncarnation, 1, 1),
+    handle: mock.createGuiNodeHandle(foreign, empty.rootIncarnation, 1),
   });
   const removed = await mock.batch([
     {
@@ -930,8 +922,7 @@ test("a rejected adoption cleanup retains exact handles and retries", async () =
   );
   assert.ok(
     (await mock.inspectGui({ entity: foreign })).nodes.some(
-      (node) =>
-        node.content.kind === "text" && node.content.text === "recovered",
+      (node) => node.data.kind === "text" && node.data.text === "recovered",
     ),
   );
   const releaseBatches = mock.batches.filter((batch) =>
@@ -967,8 +958,7 @@ test("missing binding entity enrichment stays disposable and recoverable", async
   const inspection = await mock.inspectGui({ entity: onlyEntity(mock) });
   assert.ok(
     inspection.nodes.some(
-      (node) =>
-        node.content.kind === "text" && node.content.text === "recovered",
+      (node) => node.data.kind === "text" && node.data.text === "recovered",
     ),
   );
   await root.unmount();
@@ -992,7 +982,7 @@ test("producer creation failure surfaces and the next render recovers", async ()
   assert.equal(mock.producerCreates, 1);
   const inspection = await mock.inspectGui({ entity: onlyEntity(mock) });
   assert.deepEqual(
-    inspection.nodes.map((node) => node.content),
+    inspection.nodes.map((node) => node.data),
     [
       { kind: "container", containerKind: "row" },
       { kind: "text", text: "hi!" },
@@ -1136,7 +1126,8 @@ test("listeners are retained JS-only without transport", () => {
     identity: 1,
     parent: undefined,
     type: "ipp-gui-text",
-    content: { kind: "text", text: "x" },
+    data: { kind: "text", text: "x" },
+    values: {},
     style: {},
     nodeRef: null,
     onAction: undefined,

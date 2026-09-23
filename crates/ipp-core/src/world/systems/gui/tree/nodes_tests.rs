@@ -6,8 +6,7 @@ fn test_node(id: u32, parent: Option<u32>, children: Vec<u32>) -> GuiNode {
         id: GuiNodeId(id),
         parent: parent.map(GuiNodeId),
         children: children.into_iter().map(GuiNodeId).collect(),
-        content: GuiNodeContent::Container(GuiContainerKind::Column),
-        lifetime: 1,
+        data: GuiNodeData::Container(GuiContainerKind::Column),
     }
 }
 
@@ -144,12 +143,9 @@ fn move_node_rejects_moving_ancestor_under_descendant() {
 #[test]
 fn text_limit_accepts_boundary_and_rejects_authored_or_decoded_oversize() {
     let boundary = "a".repeat(MAX_GUI_TEXT_BYTES);
+    assert_eq!(validate_node_data(&GuiNodeData::Text(boundary)), Ok(()));
     assert_eq!(
-        validate_node_content(&GuiNodeContent::Text(boundary)),
-        Ok(())
-    );
-    assert_eq!(
-        validate_node_content(&GuiNodeContent::Button {
+        validate_node_data(&GuiNodeData::Button {
             label: "a".repeat(MAX_GUI_TEXT_BYTES + 1),
         }),
         Err(FieldError::WrongType)
@@ -158,5 +154,50 @@ fn text_limit_accepts_boundary_and_rejects_authored_or_decoded_oversize() {
     let mut encoded = vec![2];
     encoded.extend_from_slice(&((MAX_GUI_TEXT_BYTES + 1) as u32).to_le_bytes());
     let mut input = encoded.as_slice();
-    assert_eq!(decode_node_content(&mut input), Err(FieldError::WrongType));
+    assert_eq!(decode_node_data(&mut input), Err(FieldError::WrongType));
+}
+
+#[test]
+fn tree_codec_round_trips_kinds_and_control_records() {
+    let mut nodes = GuiNodes::default();
+    nodes
+        .insert_node(
+            GuiNodeId(1),
+            None,
+            0,
+            GuiNodeData::Container(GuiContainerKind::Row),
+        )
+        .unwrap();
+    for data in [
+        GuiNodeData::Image,
+        GuiNodeData::Checkbox,
+        GuiNodeData::Slider,
+        GuiNodeData::TextInput {
+            text: "seed".into(),
+            placeholder: "name".into(),
+        },
+    ] {
+        let id = GuiNodeId(nodes.next_node_id());
+        nodes
+            .insert_node(id, Some(GuiNodeId(1)), usize::MAX, data.clone())
+            .unwrap();
+        nodes.controls.insert_initial(id, &data);
+    }
+    let decoded = GuiNodes::decode(&nodes.encode()).unwrap();
+    assert_eq!(decoded, nodes);
+    assert_eq!(
+        decoded
+            .controls()
+            .get(GuiNodeId(5))
+            .and_then(|entry| entry.text.as_deref()),
+        Some("seed")
+    );
+    assert_eq!(
+        decoded
+            .controls()
+            .get(GuiNodeId(3))
+            .map(|entry| entry.text.clone()),
+        Some(None)
+    );
+    assert!(decoded.controls().get(GuiNodeId(2)).is_none());
 }

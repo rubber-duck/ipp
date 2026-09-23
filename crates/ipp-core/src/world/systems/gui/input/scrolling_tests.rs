@@ -2,8 +2,9 @@
 
 use super::test_support::*;
 use super::*;
+use crate::GuiNodeDataRow;
 use crate::{
-    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiNodeContent, GuiNodeId, GuiNodeStyle,
+    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiNodeData, GuiNodeId, GuiNodeStyle,
 };
 
 #[test]
@@ -110,7 +111,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 10.0),
         },
         GuiCommand::InsertNode {
@@ -119,7 +121,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::ScrollView),
+            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 6.0),
         },
         GuiCommand::InsertNode {
@@ -128,7 +131,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(3),
             parent: Some(GuiNodeId(2)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle::default(),
         },
         GuiCommand::InsertNode {
@@ -137,7 +141,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(4),
             parent: Some(GuiNodeId(3)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::ScrollView),
+            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 4.0),
         },
         GuiCommand::InsertNode {
@@ -146,7 +151,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(5),
             parent: Some(GuiNodeId(4)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle::default(),
         },
         GuiCommand::InsertNode {
@@ -155,7 +161,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(6),
             parent: Some(GuiNodeId(5)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 4.0),
         },
         GuiCommand::InsertNode {
@@ -164,7 +171,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(7),
             parent: Some(GuiNodeId(5)),
             index: 1,
-            content: GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 4.0),
         },
         GuiCommand::InsertNode {
@@ -173,7 +181,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(8),
             parent: Some(GuiNodeId(3)),
             index: 1,
-            content: GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 6.0),
         },
         // Node identities allocate sequentially: id 9 must come last.
@@ -183,9 +192,8 @@ fn insert_nested_scroll(fixture: &mut Fixture) {
             id: GuiNodeId(9),
             parent: Some(GuiNodeId(7)),
             index: 0,
-            content: GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
             // Explicit size: layout evaluation drops unsized controls.
             style: style(1.0, 1.0),
         },
@@ -431,7 +439,7 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
             GuiNodeId(1),
             None,
             0,
-            GuiNodeContent::Container(GuiContainerKind::Column),
+            GuiNodeData::Container(GuiContainerKind::Column),
         )
         .unwrap();
     root.nodes_mut()
@@ -439,7 +447,7 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
             GuiNodeId(2),
             Some(GuiNodeId(1)),
             0,
-            GuiNodeContent::Container(GuiContainerKind::ScrollView),
+            GuiNodeData::Container(GuiContainerKind::ScrollView),
         )
         .unwrap();
     root.nodes_mut()
@@ -447,18 +455,11 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
             GuiNodeId(3),
             Some(GuiNodeId(2)),
             0,
-            GuiNodeContent::Container(GuiContainerKind::Column),
+            GuiNodeData::Container(GuiContainerKind::Column),
         )
         .unwrap();
     root.nodes_mut()
-        .insert_node(
-            GuiNodeId(4),
-            Some(GuiNodeId(3)),
-            0,
-            GuiNodeContent::Checkbox {
-                checked: false,
-            },
-        )
+        .insert_node(GuiNodeId(4), Some(GuiNodeId(3)), 0, GuiNodeData::Checkbox)
         .unwrap();
     // Innermost-first ancestry, including a viewport resolving itself.
     assert_eq!(
@@ -477,7 +478,6 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
     // nodes hold still.
     let record = super::super::super::GuiEvaluatedNode {
         node: GuiNodeId(2),
-        lifetime: 1,
         depth: 1,
         rect: [0.0, 0.0, 10.0, 6.0],
         clip: None,
@@ -544,7 +544,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 10.0),
         },
         GuiCommand::InsertNode {
@@ -553,7 +554,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::ScrollView),
+            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
+            values: crate::GuiNodeDataRow::default(),
             style: background(10.0, 6.0, [1.0, 0.0, 0.0, 1.0]),
         },
         GuiCommand::InsertNode {
@@ -562,7 +564,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(3),
             parent: Some(GuiNodeId(2)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle::default(),
         },
         GuiCommand::InsertNode {
@@ -571,7 +574,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(4),
             parent: Some(GuiNodeId(3)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::ScrollView),
+            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
+            values: crate::GuiNodeDataRow::default(),
             style: background(10.0, 4.0, [0.0, 1.0, 0.0, 1.0]),
         },
         GuiCommand::InsertNode {
@@ -580,7 +584,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(5),
             parent: Some(GuiNodeId(4)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle::default(),
         },
         GuiCommand::InsertNode {
@@ -589,7 +594,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(6),
             parent: Some(GuiNodeId(5)),
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
             style: background(10.0, 4.0, [0.0, 0.0, 1.0, 1.0]),
         },
         GuiCommand::InsertNode {
@@ -598,7 +604,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(7),
             parent: Some(GuiNodeId(5)),
             index: 1,
-            content: GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
             style: style(10.0, 4.0),
         },
         GuiCommand::InsertNode {
@@ -607,7 +614,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(8),
             parent: Some(GuiNodeId(3)),
             index: 1,
-            content: GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
             style: background(10.0, 6.0, [1.0, 1.0, 1.0, 1.0]),
         },
         GuiCommand::InsertNode {
@@ -616,9 +624,8 @@ fn insert_nested_scroll_paint(fixture: &mut Fixture) {
             id: GuiNodeId(9),
             parent: Some(GuiNodeId(7)),
             index: 0,
-            content: GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
             style: style(1.0, 1.0),
         },
     ];

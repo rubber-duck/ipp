@@ -16,9 +16,10 @@
 import { createElement, type ReactNode } from "react";
 import type {
   GuiAssetSource,
-  GuiNodeContent,
+  GuiNodeData,
   GuiNodeHandle,
   GuiNodeStyle,
+  GuiNodeValues,
 } from "@ipp/client";
 import type { GuiControlTheme } from "./theme.js";
 
@@ -307,27 +308,36 @@ function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-/** Button content for one validated label. */
-export function buttonContent(label: string): GuiNodeContent {
+/**
+ * Node kind and authored strings with the kind-specific scalars an insertion
+ * seeds into the node's `node_data` row.
+ */
+export interface GuiNodeDeclaration {
+  readonly data: GuiNodeData;
+  readonly values: GuiNodeValues;
+}
+
+/** Button declaration for one validated label. */
+export function buttonNode(label: string): GuiNodeDeclaration {
   if (typeof label !== "string")
     throw new Error("GUI Button label must be a string");
-  return { kind: "button", label };
+  return { data: { kind: "button", label }, values: {} };
 }
 
-/** Checkbox content for one validated initial state. */
-export function checkboxContent(checked: boolean | undefined): GuiNodeContent {
+/** Checkbox declaration for one validated initial state. */
+export function checkboxNode(checked: boolean | undefined): GuiNodeDeclaration {
   if (checked !== undefined && typeof checked !== "boolean")
     throw new Error("GUI Checkbox checked must be a boolean or undefined");
-  return { kind: "checkbox", checked: checked ?? false };
+  return { data: { kind: "checkbox" }, values: { checked: checked ?? false } };
 }
 
-/** Slider content for one validated initial range. */
-export function sliderContent(options: {
+/** Slider declaration for one validated initial value and range. */
+export function sliderNode(options: {
   readonly value?: number | undefined;
   readonly min?: number | undefined;
   readonly max?: number | undefined;
   readonly step?: number | undefined;
-}): GuiNodeContent {
+}): GuiNodeDeclaration {
   const value = options.value ?? DEFAULT_SLIDER_VALUE;
   const min = options.min ?? DEFAULT_SLIDER_MIN;
   const max = options.max ?? DEFAULT_SLIDER_MAX;
@@ -343,14 +353,14 @@ export function sliderContent(options: {
       "GUI Slider step must be a finite number >= 0 or undefined",
     );
   if (min > max) throw new Error("GUI Slider min must not exceed max");
-  return { kind: "slider", value, min, max, step };
+  return { data: { kind: "slider" }, values: { value, min, max, step } };
 }
 
-/** Text-input content for one validated initial text and placeholder. */
-export function textInputContent(options: {
+/** Text-input declaration for one validated initial text and placeholder. */
+export function textInputNode(options: {
   readonly text?: string | undefined;
   readonly placeholder?: string | undefined;
-}): GuiNodeContent {
+}): GuiNodeDeclaration {
   if (options.text !== undefined && typeof options.text !== "string")
     throw new Error("GUI TextInput text must be a string or undefined");
   if (
@@ -359,13 +369,20 @@ export function textInputContent(options: {
   )
     throw new Error("GUI TextInput placeholder must be a string or undefined");
   return {
-    kind: "textInput",
-    text: options.text ?? "",
-    placeholder: options.placeholder ?? "",
+    data: {
+      kind: "textInput",
+      text: options.text ?? "",
+      placeholder: options.placeholder ?? "",
+    },
+    values: {},
   };
 }
 
-export function guiContentFor(
+function structural(data: GuiNodeData): GuiNodeDeclaration {
+  return { data, values: {} };
+}
+
+export function guiNodeFor(
   type: GuiHostType,
   props: GuiTextProps &
     GuiImageProps & {
@@ -378,39 +395,42 @@ export function guiContentFor(
       readonly text?: string | undefined;
       readonly placeholder?: string | undefined;
     },
-): GuiNodeContent {
+): GuiNodeDeclaration {
   switch (type) {
     case GUI_ROW_HOST_TYPE:
-      return { kind: "container", containerKind: "row" };
+      return structural({ kind: "container", containerKind: "row" });
     case GUI_COLUMN_HOST_TYPE:
-      return { kind: "container", containerKind: "column" };
+      return structural({ kind: "container", containerKind: "column" });
     case GUI_STACK_HOST_TYPE:
-      return { kind: "container", containerKind: "stack" };
+      return structural({ kind: "container", containerKind: "stack" });
     case GUI_PADDING_HOST_TYPE:
-      return { kind: "container", containerKind: "padding" };
+      return structural({ kind: "container", containerKind: "padding" });
     case GUI_ALIGN_HOST_TYPE:
-      return { kind: "container", containerKind: "align" };
+      return structural({ kind: "container", containerKind: "align" });
     case GUI_SIZED_BOX_HOST_TYPE:
-      return { kind: "container", containerKind: "sizedBox" };
+      return structural({ kind: "container", containerKind: "sizedBox" });
     case GUI_SCROLL_VIEW_HOST_TYPE:
-      return { kind: "container", containerKind: "scrollView" };
+      return structural({ kind: "container", containerKind: "scrollView" });
     case GUI_TEXT_HOST_TYPE:
-      return { kind: "text", text: props.text ?? "" };
+      return structural({ kind: "text", text: props.text ?? "" });
     case GUI_DRAWING_HOST_TYPE:
-      return { kind: "drawing" };
+      return structural({ kind: "drawing" });
     case GUI_IMAGE_HOST_TYPE: {
       const size = props.size ?? [1, 1];
-      return { kind: "image", size: [size[0]!, size[1]!] };
+      return {
+        data: { kind: "image" },
+        values: { imageSize: [size[0]!, size[1]!] },
+      };
     }
     case GUI_BUTTON_HOST_TYPE:
-      return buttonContent(props.label as string);
+      return buttonNode(props.label as string);
     case GUI_CHECKBOX_HOST_TYPE:
-      return checkboxContent(props.checked);
+      return checkboxNode(props.checked);
     case GUI_SLIDER_HOST_TYPE:
-      return sliderContent(props);
+      return sliderNode(props);
     case GUI_TEXT_INPUT_HOST_TYPE:
-      return textInputContent(props);
+      return textInputNode(props);
     case GUI_ROOT_HOST_TYPE:
-      throw new Error("GuiRoot has no node content");
+      throw new Error("GuiRoot has no node data");
   }
 }

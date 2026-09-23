@@ -7,14 +7,10 @@ use crate::{ComponentValue, EntityId};
 use std::borrow::Cow;
 
 /// Current status of one fully fenced input target.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "statuses are matched immediately; boxing would allocate per target check"
-)]
 pub(super) enum GuiTargetStatus<'a> {
     /// Producer identity and evaluated eligibility all match.
     Eligible(Cow<'a, GuiRoot>),
-    /// Entity, root incarnation, node, or node lifetime no longer matches.
+    /// Entity, root incarnation or node no longer matches.
     Removed,
     /// The target identity survives but is disabled, hidden, or unavailable.
     Ineligible,
@@ -82,13 +78,10 @@ pub(super) fn producer_validity(
     if incarnation != target.root_incarnation {
         return GuiTargetValidity::Removed;
     }
-    let Some(node) = root.nodes().node(target.node) else {
-        return GuiTargetValidity::Removed;
-    };
-    if node.lifetime != target.lifetime {
+    if root.nodes().node(target.node).is_none() {
         return GuiTargetValidity::Removed;
     }
-    let Some(style) = root.style(target.node) else {
+    let Some(style) = root.style_row(target.node) else {
         return GuiTargetValidity::Ineligible;
     };
     if !style.enabled || style.opacity <= 0.0 {
@@ -137,11 +130,7 @@ pub(super) fn evaluated_validity(
     if !view.available {
         return GuiTargetValidity::Ineligible;
     }
-    let Some(node) = view
-        .nodes
-        .iter()
-        .find(|node| node.node == target.node && node.lifetime == target.lifetime)
-    else {
+    let Some(node) = view.nodes.iter().find(|node| node.node == target.node) else {
         return GuiTargetValidity::Ineligible;
     };
     if !node.available || !node.visible || !node.enabled {
@@ -158,12 +147,13 @@ pub(super) fn current_target(
     node: super::super::GuiNodeId,
 ) -> Option<GuiInputTarget> {
     let view = layout.view(entity)?;
-    let record = view.nodes.iter().find(|record| record.node == node)?;
+    if !view.nodes.iter().any(|record| record.node == node) {
+        return None;
+    }
     let target = GuiInputTarget {
         entity,
         root_incarnation: view.root_incarnation,
         node,
-        lifetime: record.lifetime,
     };
     matches!(
         evaluated_status(sim, layout, &target),

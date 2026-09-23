@@ -56,7 +56,6 @@ pub fn action_command(
             entity: tree.entity,
             root_incarnation: tree.root_incarnation,
             node: id,
-            lifetime: node.lifetime,
         },
         expected_revision,
         action,

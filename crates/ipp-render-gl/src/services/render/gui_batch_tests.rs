@@ -236,7 +236,6 @@ impl RenderDevice for MockGuiDevice {
 
 fn sample_box_primitive(
     node: u32,
-    lifetime: u32,
     part: GuiPrimitivePart,
     position: [f32; 2],
     size: [f32; 2],
@@ -247,7 +246,6 @@ fn sample_box_primitive(
             identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                 root_incarnation: 1,
                 node: GuiNodeId(node),
-                lifetime,
                 part,
             }),
             position,
@@ -309,7 +307,6 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }),
         position: [1.0, 2.0],
@@ -366,7 +363,6 @@ fn linear_gradient_fill_sets_coordinates_and_material_type() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }),
         position: [0.0, 0.0],
@@ -408,7 +404,6 @@ fn radial_gradient_fill_sets_center_radius_and_material_type() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }),
         position: [0.0, 0.0],
@@ -450,7 +445,6 @@ fn glow_expands_quad_padding_and_packs_glow_parameters() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }),
         position: [2.0, 3.0],
@@ -502,7 +496,6 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }),
         position: [0.0, 0.0],
@@ -553,7 +546,6 @@ fn small_border_only_box_uses_single_quad() {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: GuiNodeId(1),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         }),
         position: [0.0, 0.0],
@@ -592,7 +584,6 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     let entity = ipp_core::EntityId::from_bits(1);
     let box1 = sample_box_primitive(
         1,
-        1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
@@ -600,7 +591,6 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     );
     let box2 = sample_box_primitive(
         2,
-        1,
         GuiPrimitivePart::Background,
         [1.5, 0.0],
         [1.0, 1.0],
@@ -664,7 +654,6 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
     let entity = ipp_core::EntityId::from_bits(1);
     let box1 = sample_box_primitive(
         1,
-        1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
@@ -672,7 +661,6 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
     );
     let box2 = sample_box_primitive(
         2,
-        1,
         GuiPrimitivePart::Background,
         [1.5, 0.0],
         [1.0, 1.0],
@@ -742,7 +730,6 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
 
     let mut panel = sample_box_primitive(
         1,
-        1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
@@ -798,7 +785,7 @@ fn boxes_of_every_part_class_share_one_batch() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let part_box = |node: u32, part: GuiPrimitivePart, x: f32| {
-        sample_box_primitive(node, 1, part, [x, 0.0], [0.4, 0.4], None)
+        sample_box_primitive(node, part, [x, 0.0], [0.4, 0.4], None)
     };
 
     // A row's background, slider track, fill, checkbox icon and focus ring paint in
@@ -845,15 +832,8 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
             .unwrap();
         stats
     };
-    let first = sample_box_primitive(1, 1, GuiPrimitivePart::Background, [0.0; 2], [1.0; 2], None);
-    let second = sample_box_primitive(
-        2,
-        1,
-        GuiPrimitivePart::Background,
-        [1.5, 0.0],
-        [1.0; 2],
-        None,
-    );
+    let first = sample_box_primitive(1, GuiPrimitivePart::Background, [0.0; 2], [1.0; 2], None);
+    let second = sample_box_primitive(2, GuiPrimitivePart::Background, [1.5, 0.0], [1.0; 2], None);
     let revision = |revision, reusable| SurfacePaint {
         revision,
         reusable,
@@ -886,14 +866,13 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
 }
 
 #[test]
-fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
+fn root_replacement_prevents_reusing_a_node_batch() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
 
     let entity = ipp_core::EntityId::from_bits(1);
     let box_gen1 = sample_box_primitive(
         1,
-        1, // lifetime 1
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
@@ -916,15 +895,22 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
         .unwrap();
     assert_eq!(stats1.gui_allocations, 1);
 
-    // Node is deleted and recreated: lifetime increments to 2
-    let box_gen2 = sample_box_primitive(
+    // The root is replaced: the same node identity under a new incarnation.
+    let mut box_gen2 = sample_box_primitive(
         1,
-        2, // lifetime 2
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
         None,
     );
+    if let SurfaceRenderPrimitive::Box {
+        style,
+        ..
+    } = &mut box_gen2
+        && let SurfacePrimitiveIdentity::Gui(id) = &mut style.identity
+    {
+        id.root_incarnation = 2;
+    }
 
     let mut stats2 = RenderStats::default();
     cache
@@ -939,10 +925,10 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
         )
         .unwrap();
 
-    // Lifetime difference creates a new batch rather than reusing or overwriting stale handles
+    // A new incarnation creates a new batch rather than reusing or overwriting stale handles
     assert_eq!(
         stats2.gui_allocations, 1,
-        "new lifetime requires new batch allocation"
+        "new root incarnation requires new batch allocation"
     );
 }
 
@@ -955,7 +941,6 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
     let entity2 = ipp_core::EntityId::from_bits(2);
     let box1 = sample_box_primitive(
         1,
-        1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
@@ -963,7 +948,6 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
     );
     let box2 = sample_box_primitive(
         2,
-        1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
@@ -1027,7 +1011,6 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     let shown = ipp_core::EntityId::from_bits(1);
     let culled = ipp_core::EntityId::from_bits(2);
     let panel = sample_box_primitive(
-        1,
         1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
@@ -1100,14 +1083,12 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
     let entity = ipp_core::EntityId::from_bits(1);
     let panel = sample_box_primitive(
         1,
-        1,
         GuiPrimitivePart::Background,
         [0.0, 0.0],
         [1.0, 1.0],
         None,
     );
     let moved = sample_box_primitive(
-        1,
         1,
         GuiPrimitivePart::Background,
         [0.5, 0.0],
@@ -1155,7 +1136,6 @@ fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<SurfaceRenderPrimitive> 
         .map(|node| {
             let mut primitive = sample_box_primitive(
                 node,
-                1,
                 GuiPrimitivePart::Background,
                 [node as f32 * 0.01, 0.0],
                 [0.005, 0.005],
@@ -1247,10 +1227,12 @@ fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
             .sum::<u32>()
     };
 
-    // Resizing the first box rewrites only its own batch.
+    // Resizing the first box rewrites only its own batch. Batch boundaries
+    // follow identity hashes; this run's first batch holds more than a batch
+    // minimum, so the boxes left behind stay one batch.
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
-    let mut boxes = box_run(1..=400);
+    let mut boxes = box_run(2..=401);
     let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     let written = device.borrow().writes.len();
     if let SurfaceRenderPrimitive::Box {
@@ -1398,7 +1380,6 @@ fn text_identity(node: u32) -> SurfacePrimitiveIdentity {
     SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
         root_incarnation: 1,
         node: GuiNodeId(node),
-        lifetime: 1,
         part: GuiPrimitivePart::Label,
     })
 }

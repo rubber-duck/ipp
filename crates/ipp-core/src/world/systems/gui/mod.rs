@@ -67,7 +67,7 @@ pub mod semantics;
 mod system;
 mod system_state;
 #[cfg(test)]
-mod test_support;
+pub(in crate::world::systems) mod test_support;
 pub mod tree;
 
 pub use input::{
@@ -98,8 +98,8 @@ pub use system::{
 pub(crate) use tree::component::validate_property_value as validate_gui_property_value;
 pub(crate) use tree::controls::slider_rail;
 pub use tree::{
-    GuiContainerKind, GuiControlState, GuiControlValue, GuiControls, GuiNode, GuiNodeContent,
-    GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
-    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow,
-    GuiNodes, GuiRoot, MAX_GUI_TEXT_BYTES,
+    GuiContainerKind, GuiControlEntry, GuiControlState, GuiControlValue, GuiControls, GuiNode,
+    GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
+    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleChange, GuiNodeStyleProperty,
+    GuiNodeStyleRow, GuiNodes, GuiRoot, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES,
 };

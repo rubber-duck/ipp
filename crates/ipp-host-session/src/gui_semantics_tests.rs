@@ -4,9 +4,10 @@
 //! unknown and unsupported refusals preserved as host errors.
 
 use super::*;
+use ipp_core::GuiNodeDataRow;
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, GuiCommand,
-    GuiContainerKind, GuiControlValue, GuiInputCommand, GuiNodeContent, GuiNodeHandle, GuiNodeId,
+    GuiContainerKind, GuiControlValue, GuiInputCommand, GuiNodeData, GuiNodeHandle, GuiNodeId,
     GuiNodeStyle, GuiSemanticAction, GuiSemanticActionRequest, GuiSemanticSnapshotQuery, Surface,
 };
 
@@ -102,7 +103,8 @@ fn build_panel(host: &mut Host<Platform>) -> EntityId {
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: ipp_core::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(10.0),
                 height: Some(10.0),
@@ -115,9 +117,8 @@ fn build_panel(host: &mut Host<Platform>) -> EntityId {
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
             style: GuiNodeStyle::default(),
         },
         GuiCommand::InsertNode {
@@ -126,9 +127,10 @@ fn build_panel(host: &mut Host<Platform>) -> EntityId {
             id: GuiNodeId(3),
             parent: Some(GuiNodeId(1)),
             index: 1,
-            content: GuiNodeContent::Button {
+            data: GuiNodeData::Button {
                 label: "a".into(),
             },
+            values: ipp_core::GuiNodeDataRow::default(),
             style: GuiNodeStyle::default(),
         },
     ] {
@@ -185,7 +187,6 @@ fn semantic_snapshot_serves_bounded_tree_with_focus() {
                         panel,
                         root_incarnation,
                         GuiNodeId(2),
-                        1,
                     ),
                 },
             )
@@ -224,7 +225,6 @@ fn semantic_snapshot_serves_bounded_tree_with_focus() {
         tree.focused,
         Some(ipp_core::GuiSemanticFocus {
             id: GuiNodeId(2),
-            lifetime: 1,
         })
     );
     // The same snapshot travels the wire codec as a correlated reply.
@@ -253,7 +253,6 @@ fn semantic_toggle_dispatches_through_control_policy() {
         entity: panel,
         root_incarnation,
         node: GuiNodeId(2),
-        lifetime: 1,
         expected_revision: 1,
         action: GuiSemanticAction::Toggle,
     };
@@ -297,7 +296,6 @@ fn semantic_action_is_one_capacity_slot_with_no_orphan_focus_or_fault() {
         entity: panel,
         root_incarnation,
         node: GuiNodeId(2),
-        lifetime: 1,
         expected_revision: 1,
         action: GuiSemanticAction::Toggle,
     };
@@ -384,10 +382,9 @@ fn semantic_action_targets_node_beyond_public_snapshot_page() {
                         panel,
                         root_incarnation,
                         GuiNodeId(1),
-                        1,
                     ),
                     patch: ipp_core::GuiNodePatch {
-                        content: Some(GuiNodeContent::Container(GuiContainerKind::Stack)),
+                        data: Some(GuiNodeData::Container(GuiContainerKind::Stack)),
                         ..Default::default()
                     },
                 },
@@ -406,9 +403,8 @@ fn semantic_action_targets_node_beyond_public_snapshot_page() {
                         id: GuiNodeId(id),
                         parent: Some(GuiNodeId(1)),
                         index: id - 2,
-                        content: GuiNodeContent::Checkbox {
-                            checked: false,
-                        },
+                        data: GuiNodeData::Checkbox,
+                        values: GuiNodeDataRow::checkbox(false),
                         style: GuiNodeStyle::default(),
                     },
                 )
@@ -443,7 +439,6 @@ fn semantic_action_targets_node_beyond_public_snapshot_page() {
             entity: panel,
             root_incarnation,
             node: target,
-            lifetime: 1,
             expected_revision: 1,
             action: GuiSemanticAction::Toggle,
         })),
@@ -482,7 +477,6 @@ fn semantic_unavailable_press_rejects_without_focus_or_orphan_outcome() {
             entity: panel,
             root_incarnation,
             node: GuiNodeId(3),
-            lifetime: 1,
             expected_revision: 0,
             action: GuiSemanticAction::Press,
         })),
@@ -529,7 +523,6 @@ fn semantic_refusals_preserve_unknown_stale_and_unsupported() {
             entity: panel,
             root_incarnation,
             node: GuiNodeId(999),
-            lifetime: 1,
             expected_revision: 1,
             action: GuiSemanticAction::Toggle,
         },
@@ -541,7 +534,6 @@ fn semantic_refusals_preserve_unknown_stale_and_unsupported() {
             entity: panel,
             root_incarnation: root_incarnation + 1,
             node: GuiNodeId(2),
-            lifetime: 1,
             expected_revision: 1,
             action: GuiSemanticAction::Toggle,
         },
@@ -553,7 +545,6 @@ fn semantic_refusals_preserve_unknown_stale_and_unsupported() {
             entity: panel,
             root_incarnation,
             node: GuiNodeId(2),
-            lifetime: 1,
             expected_revision: 999,
             action: GuiSemanticAction::Toggle,
         },
@@ -565,24 +556,11 @@ fn semantic_refusals_preserve_unknown_stale_and_unsupported() {
             entity: panel,
             root_incarnation,
             node: GuiNodeId(2),
-            lifetime: 1,
             expected_revision: 1,
             action: GuiSemanticAction::Press,
         },
     );
     assert!(unsupported.contains("unsupported"), "{unsupported}");
-    let lifetime = resolve(
-        &mut host,
-        &GuiSemanticActionRequest {
-            entity: panel,
-            root_incarnation,
-            node: GuiNodeId(2),
-            lifetime: 999,
-            expected_revision: 1,
-            action: GuiSemanticAction::Toggle,
-        },
-    );
-    assert!(lifetime.contains("unknown node"), "{lifetime}");
     // Refusals travel the wire as correlated host errors (tag 255).
     send(
         &mut host,
@@ -591,7 +569,6 @@ fn semantic_refusals_preserve_unknown_stale_and_unsupported() {
             entity: panel,
             root_incarnation,
             node: GuiNodeId(999),
-            lifetime: 1,
             expected_revision: 1,
             action: GuiSemanticAction::Toggle,
         })),

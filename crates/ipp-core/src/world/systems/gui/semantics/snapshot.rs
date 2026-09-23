@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use super::types::{
     GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole, GuiSemanticTree, actions_for_role,
-    name_for_content, role_for_content,
+    name_for_data, role_for_data,
 };
 use crate::{
     EntityId, GuiEvaluatedContent, GuiEvaluatedView, GuiInputEffectKind, GuiInspectResponse,
@@ -32,8 +32,8 @@ pub fn build_tree(
 
 /// Build a semantic snapshot with observed keyboard focus.
 ///
-/// The focus lands in the tree only when its node is present with a
-/// matching lifetime; stale focus never fabricates a target. Focus rides
+/// The focus lands in the tree only when its node is present; stale focus
+/// never fabricates a target. Focus rides
 /// the existing inspect plus input-focus reads through the normal client
 /// boundary (no new protocol tags); it is excluded from persistence.
 pub fn build_tree_with_focus(
@@ -51,13 +51,13 @@ pub fn build_tree_with_focus(
         view.nodes.iter().map(|node| (node.node, node)).collect();
     let mut nodes = Vec::with_capacity(inspect.nodes.len());
     for inspected in &inspect.nodes {
-        let role = role_for_content(&inspected.content);
-        // Degraded output (pending measurement, lifetime drift, absent
+        let role = role_for_data(&inspected.data);
+        // Degraded output (pending measurement, absent
         // evaluation) carries a placeholder content by design; only a live
         // evaluated node can contradict the inspected declaration.
         let live = evaluated
             .get(&inspected.id)
-            .is_some_and(|node| node.lifetime == inspected.lifetime && node.available);
+            .is_some_and(|node| node.available);
         if live
             && let Some(expected) = evaluated_role_hint(inspected.id, view)
             && expected != role
@@ -65,13 +65,7 @@ pub fn build_tree_with_focus(
             return Err("Semantic role mismatches evaluated content".into());
         }
         let (bounds, enabled, visible, available) = match evaluated.get(&inspected.id) {
-            Some(node) => {
-                if node.lifetime != inspected.lifetime {
-                    (node.rect, node.enabled, node.visible, false)
-                } else {
-                    (node.rect, node.enabled, node.visible, node.available)
-                }
-            }
+            Some(node) => (node.rect, node.enabled, node.visible, node.available),
             None => ([0.0, 0.0, 0.0, 0.0], true, false, false),
         };
         let actions = if enabled && visible && available {
@@ -81,10 +75,9 @@ pub fn build_tree_with_focus(
         };
         nodes.push(GuiSemanticNode {
             id: inspected.id,
-            lifetime: inspected.lifetime,
             parent: inspected.parent,
             role,
-            name: name_for_content(&inspected.content),
+            name: name_for_data(&inspected.data),
             value: inspected.control_value.clone(),
             revision: inspected.control_revision,
             bounds,
@@ -94,11 +87,7 @@ pub fn build_tree_with_focus(
             actions,
         });
     }
-    let focused = focus.filter(|focus| {
-        nodes
-            .iter()
-            .any(|node| node.id == focus.id && node.lifetime == focus.lifetime)
-    });
+    let focused = focus.filter(|focus| nodes.iter().any(|node| node.id == focus.id));
     Ok(GuiSemanticTree {
         entity: inspect.root_entity,
         root_incarnation: inspect.root_incarnation,
@@ -171,8 +160,7 @@ pub fn changed_nodes(old: &GuiSemanticTree, new: &GuiSemanticTree) -> Vec<GuiNod
 }
 
 fn semantic_node_changed(previous: &GuiSemanticNode, current: &GuiSemanticNode) -> bool {
-    previous.lifetime != current.lifetime
-        || previous.parent != current.parent
+    previous.parent != current.parent
         || previous.role != current.role
         || previous.name != current.name
         || previous.value != current.value
@@ -199,7 +187,7 @@ pub fn effect_refreshes_semantics(kind: &GuiInputEffectKind) -> bool {
 }
 
 impl crate::WorldContext<'_> {
-    /// Bounded lifetime/revision-fenced semantic snapshot for one panel.
+    /// Bounded revision-fenced semantic snapshot for one panel.
     ///
     /// Reads the authoritative inspect snapshot, the retained evaluated
     /// view and the observed input focus through the normal boundary;
@@ -257,7 +245,6 @@ impl crate::WorldContext<'_> {
             .filter(|focus| focus.target.entity == entity)
             .map(|focus| GuiSemanticFocus {
                 id: focus.target.node,
-                lifetime: focus.target.lifetime,
             });
         build_tree_with_focus(&inspect, view, focus)
     }

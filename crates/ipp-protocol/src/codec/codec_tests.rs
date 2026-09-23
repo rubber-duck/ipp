@@ -1312,7 +1312,6 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
         42u64.to_le_bytes().to_vec(),
         3u64.to_le_bytes().to_vec(),
         9u32.to_le_bytes().to_vec(),
-        1u32.to_le_bytes().to_vec(),
     ]
     .concat();
     assert_eq!(
@@ -1323,7 +1322,6 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
                 EntityId::from_bits(42),
                 3,
                 ipp_core::systems::gui::GuiNodeId(9),
-                1,
             ),
         }))
     );
@@ -1440,7 +1438,7 @@ fn gui_input_responses_require_correlated_identity() {
 #[cfg(feature = "gui")]
 #[test]
 fn gui_inspection_envelope_fits_one_legal_maximum_text_value() {
-    use ipp_core::{GuiControlValue, GuiInspectResponse, GuiInspectedNode, GuiNodeContent};
+    use ipp_core::{GuiControlValue, GuiInspectResponse, GuiInspectedNode, GuiNodeData};
 
     let response = |text: String| Response {
         session: 7,
@@ -1453,11 +1451,11 @@ fn gui_inspection_envelope_fits_one_legal_maximum_text_value() {
                 id: ipp_core::GuiNodeId(1),
                 parent: None,
                 children: Vec::new(),
-                content: GuiNodeContent::Text(text),
+                data: GuiNodeData::Text(text),
+                values: ipp_core::GuiNodeDataRow::default(),
                 style: ipp_core::GuiNodeStyle::default(),
                 control_value: GuiControlValue::None,
                 control_revision: 0,
-                lifetime: 1,
             }],
         }),
     };
@@ -1506,7 +1504,6 @@ fn gui_semantics_decode_bounded_queries_and_fenced_actions() {
             42u64.to_le_bytes().to_vec(),
             3u64.to_le_bytes().to_vec(),
             9u32.to_le_bytes().to_vec(),
-            1u32.to_le_bytes().to_vec(),
             2u32.to_le_bytes().to_vec(),
             vec![kind],
             payload.to_vec(),
@@ -1543,7 +1540,6 @@ fn gui_semantics_decode_bounded_queries_and_fenced_actions() {
                 entity: EntityId::from_bits(42),
                 root_incarnation: 3,
                 node: ipp_core::GuiNodeId(9),
-                lifetime: 1,
                 expected_revision: 2,
                 action: expected,
             }))
@@ -1566,7 +1562,6 @@ fn gui_semantics_decode_bounded_queries_and_fenced_actions() {
             entity: EntityId::from_bits(42),
             root_incarnation: 3,
             node: ipp_core::GuiNodeId(9),
-            lifetime: 1,
             expected_revision: 2,
             action: GuiSemanticAction::SetText(legal_text),
         }))
@@ -1648,7 +1643,6 @@ fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
         evaluation_tick: 12,
         nodes: vec![GuiSemanticNode {
             id: ipp_core::GuiNodeId(5),
-            lifetime: 1,
             parent: None,
             role: GuiSemanticRole::TextInput,
             name: Some("name".into()),
@@ -1665,7 +1659,6 @@ fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
         }],
         focused: Some(GuiSemanticFocus {
             id: ipp_core::GuiNodeId(5),
-            lifetime: 1,
         }),
     };
     let mut response = Response {
@@ -1677,7 +1670,7 @@ fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
     let bytes = encode_response(&response).unwrap();
     assert_eq!(bytes[24], RESPONSE_GUI_SEMANTIC_SNAPSHOT);
     assert!(bytes.len() < MAX_MESSAGE_BYTES);
-    let text_bytes = &bytes[85..85 + ipp_core::MAX_GUI_TEXT_BYTES];
+    let text_bytes = &bytes[81..81 + ipp_core::MAX_GUI_TEXT_BYTES];
     assert_eq!(
         text_bytes,
         "é".repeat(ipp_core::MAX_GUI_TEXT_BYTES / 2).as_bytes()
@@ -1716,7 +1709,6 @@ fn gui_observations_encode_committed_state_unsolicited() {
             entity: EntityId::from_bits(100),
             root_incarnation: 3,
             node: GuiNodeId(20),
-            lifetime: 1,
             path: vec![GuiNodeId(10), GuiNodeId(20)],
         },
     };
@@ -1727,7 +1719,6 @@ fn gui_observations_encode_committed_state_unsolicited() {
         target: Some(GuiInputTarget {
             entity: EntityId::from_bits(100),
             node: GuiNodeId(30),
-            lifetime: 1,
             root_incarnation: 3,
         }),
         reason: GuiInputConflictReason::RevisionMismatch {
@@ -1754,21 +1745,21 @@ fn gui_observations_encode_committed_state_unsolicited() {
         },
     };
     let bytes = encode_response(&response).unwrap();
-    assert_eq!(bytes.len(), 191);
+    assert_eq!(bytes.len(), 183);
     assert_eq!(bytes[24], RESPONSE_GUI_OBSERVATIONS);
-    assert_eq!(&bytes[25..29], &162u32.to_le_bytes());
+    assert_eq!(&bytes[25..29], &154u32.to_le_bytes());
     assert_eq!(bytes[29], 3);
     assert_eq!(&bytes[30..34], &1u32.to_le_bytes());
     assert_eq!(bytes[34], 0);
     assert_eq!(&bytes[35..43], &7u64.to_le_bytes());
     assert_eq!(&bytes[75..79], &20u32.to_le_bytes());
-    assert_eq!(&bytes[83..87], &2u32.to_le_bytes());
-    assert_eq!(&bytes[87..91], &10u32.to_le_bytes());
-    assert_eq!(&bytes[91..95], &20u32.to_le_bytes());
-    assert_eq!(bytes[148], 0);
-    assert_eq!(&bytes[149..153], &1u32.to_le_bytes());
-    assert_eq!(&bytes[153..157], &2u32.to_le_bytes());
-    assert_eq!(bytes[186], 3);
+    assert_eq!(&bytes[79..83], &2u32.to_le_bytes());
+    assert_eq!(&bytes[83..87], &10u32.to_le_bytes());
+    assert_eq!(&bytes[87..91], &20u32.to_le_bytes());
+    assert_eq!(bytes[140], 0);
+    assert_eq!(&bytes[141..145], &1u32.to_le_bytes());
+    assert_eq!(&bytes[145..149], &2u32.to_le_bytes());
+    assert_eq!(bytes[178], 3);
     response.request_id = 1;
     assert_eq!(
         encode_response(&response),
@@ -1794,7 +1785,6 @@ fn gui_observations_encode_committed_state_unsolicited() {
             entity: EntityId::from_bits(100),
             root_incarnation: 3,
             node: GuiNodeId(30),
-            lifetime: 1,
             value: GuiControlValue::Text("hello".into()),
             revision: 2,
             path: Vec::new(),
@@ -1812,12 +1802,12 @@ fn gui_observations_encode_committed_state_unsolicited() {
         },
     })
     .unwrap();
-    assert_eq!(bytes.len(), 113);
+    assert_eq!(bytes.len(), 109);
     assert_eq!(bytes[34], 1);
-    assert_eq!(&bytes[87..91], &2u32.to_le_bytes());
-    assert_eq!(bytes[91], 3);
-    assert_eq!(&bytes[92..96], &5u32.to_le_bytes());
-    assert_eq!(&bytes[96..101], b"hello");
+    assert_eq!(&bytes[83..87], &2u32.to_le_bytes());
+    assert_eq!(bytes[87], 3);
+    assert_eq!(&bytes[88..92], &5u32.to_le_bytes());
+    assert_eq!(&bytes[92..97], b"hello");
 
     let unhandled = Response {
         session: 7,
@@ -1853,7 +1843,6 @@ fn gui_observation_text_encodes_whole_or_rejects() {
             entity: EntityId::from_bits(100),
             root_incarnation: 3,
             node: GuiNodeId(30),
-            lifetime: 1,
             value: GuiControlValue::Text(text),
             revision: 2,
             path: Vec::new(),
@@ -1872,11 +1861,11 @@ fn gui_observation_text_encodes_whole_or_rejects() {
     })
     .unwrap();
     assert_eq!(
-        &bytes[92..96],
+        &bytes[88..92],
         &(ipp_core::MAX_GUI_TEXT_BYTES as u32).to_le_bytes()
     );
     assert_eq!(
-        &bytes[96..96 + ipp_core::MAX_GUI_TEXT_BYTES],
+        &bytes[92..92 + ipp_core::MAX_GUI_TEXT_BYTES],
         "a".repeat(ipp_core::MAX_GUI_TEXT_BYTES).as_bytes()
     );
     assert_eq!(
@@ -1926,7 +1915,6 @@ fn gui_observation_bodies_chunk_broadcast_and_filter_unhandled() {
             entity: EntityId::from_bits(100),
             root_incarnation: 3,
             node: GuiNodeId(node),
-            lifetime: 1,
             value: GuiControlValue::Bool(true),
             revision: 2,
             path: vec![GuiNodeId(10), GuiNodeId(node)],
@@ -2056,8 +2044,12 @@ fn gui_observation_bodies_chunk_broadcast_and_filter_unhandled() {
 
 #[cfg(feature = "gui")]
 #[test]
-fn gui_edit_and_patch_carry_enabled_lane() {
-    use ipp_core::{EntityId, GuiCommand};
+fn gui_edit_style_and_values_follow_the_row_layouts() {
+    use ipp_core::components::rows::encode_row;
+    use ipp_core::{
+        EntityId, GuiCommand, GuiNodeData, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
+        GuiNodeStyle, GuiNodeStyleRow,
+    };
     let frame = |payload: &[u8]| {
         let mut bytes = 7u64.to_le_bytes().to_vec();
         bytes.extend_from_slice(&9u64.to_le_bytes());
@@ -2068,103 +2060,88 @@ fn gui_edit_and_patch_carry_enabled_lane() {
         bytes
     };
     let batch = |command: Vec<u8>| {
-        let mut payload = vec![2];
+        let mut payload = vec![3];
         payload.extend_from_slice(&1u32.to_le_bytes());
         payload.extend_from_slice(&command);
         payload
     };
-    // Insert style: mask-carried lanes only, so every other lane is absent.
-    let style = |mask: u16, enabled: &[u8]| {
-        let mut payload = vec![1];
-        payload.extend_from_slice(&EntityId::from_bits(42).to_bits().to_le_bytes());
-        payload.extend_from_slice(&3u64.to_le_bytes());
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.push(0);
-        payload.extend_from_slice(&0u32.to_le_bytes());
-        payload.extend_from_slice(&[1, 5]);
-        payload.extend_from_slice(&mask.to_le_bytes());
-        for _ in 0..4 {
-            payload.extend_from_slice(&1.0f32.to_le_bytes());
-        }
-        payload.extend_from_slice(&1.0f32.to_le_bytes());
-        payload.extend_from_slice(&0.1f32.to_le_bytes());
-        payload.extend_from_slice(enabled);
-        payload
+    let decode = |command: Vec<u8>| match decode_request(&frame(&batch(command)), 7).map(|r| r.body)
+    {
+        Ok(RequestBody::GuiCommands {
+            batch_id: None,
+            mut commands,
+        }) => Ok(commands.remove(0)),
+        Ok(other) => panic!("expected gui command, got {other:?}"),
+        Err(error) => Err(error),
     };
-    match &decode_request(&frame(&batch(style(1 << 13, &[0]))), 7)
-        .unwrap()
-        .body
-    {
-        RequestBody::GuiCommands {
-            batch_id: None,
-            commands,
-        } => match &commands[0] {
-            GuiCommand::InsertNode {
-                style,
-                ..
-            } => assert!(!style.enabled),
-            other => panic!("expected insert, got {other:?}"),
-        },
-        other => panic!("expected gui command, got {other:?}"),
-    }
-    match &decode_request(&frame(&batch(style(0, &[]))), 7)
-        .unwrap()
-        .body
-    {
-        RequestBody::GuiCommands {
-            batch_id: None,
-            commands,
-        } => match &commands[0] {
-            GuiCommand::InsertNode {
-                style,
-                ..
-            } => assert!(style.enabled),
-            other => panic!("expected insert, got {other:?}"),
-        },
-        other => panic!("expected gui command, got {other:?}"),
-    }
 
-    // Update patch: every lane tag precedes the trailing enabled tag.
-    let patch = |enabled: &[u8]| {
+    // Insert: data tag, then the data and style rows in their row encodings.
+    let style = GuiNodeStyle {
+        enabled: false,
+        width: Some(2.0),
+        position: [0.5, -0.25],
+        ..GuiNodeStyle::default()
+    };
+    let mut insert = vec![1];
+    insert.extend_from_slice(&42u64.to_le_bytes());
+    insert.extend_from_slice(&3u64.to_le_bytes());
+    insert.extend_from_slice(&1u32.to_le_bytes());
+    insert.push(0);
+    insert.extend_from_slice(&0u32.to_le_bytes());
+    insert.push(7);
+    encode_row(&GuiNodeDataRow::slider(0.5, 0.0, 1.0, 0.25), &mut insert);
+    encode_row(&GuiNodeStyleRow::from(&style), &mut insert);
+    assert_eq!(
+        decode(insert),
+        Ok(GuiCommand::InsertNode {
+            entity: EntityId::from_bits(42),
+            root_incarnation: 3,
+            id: GuiNodeId(1),
+            parent: None,
+            index: 0,
+            data: GuiNodeData::Slider,
+            values: GuiNodeDataRow::slider(0.5, 0.0, 1.0, 0.25),
+            style,
+        })
+    );
+
+    // Update: no data, no values, then changed and set masks over the style
+    // layout (three bytes each) with the set values in layout order.
+    let patch = |changed: [u8; 3], set: [u8; 3], values: &[u8]| {
         let mut payload = vec![2];
         payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&EntityId::from_bits(42).to_bits().to_le_bytes());
+        payload.extend_from_slice(&42u64.to_le_bytes());
         payload.extend_from_slice(&3u64.to_le_bytes());
         payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.push(0);
-        payload.push(1);
-        payload.extend_from_slice(&[0; 16]);
-        payload.extend_from_slice(enabled);
+        payload.extend_from_slice(&[0, 0]);
+        payload.extend_from_slice(&changed);
+        payload.extend_from_slice(&set);
+        payload.extend_from_slice(values);
         payload
     };
-    match &decode_request(&frame(&batch(patch(&[2, 0]))), 7)
-        .unwrap()
-        .body
-    {
-        RequestBody::GuiCommands {
-            batch_id: None,
-            commands,
-        } => match &commands[0] {
-            GuiCommand::UpdateNode {
-                patch,
-                ..
-            } => assert_eq!(patch.enabled, Some(false)),
-            other => panic!("expected update, got {other:?}"),
-        },
-        other => panic!("expected gui command, got {other:?}"),
-    }
-    match &decode_request(&frame(&batch(patch(&[0]))), 7).unwrap().body {
-        RequestBody::GuiCommands {
-            batch_id: None,
-            commands,
-        } => match &commands[0] {
-            GuiCommand::UpdateNode {
-                patch,
-                ..
-            } => assert_eq!(patch.enabled, None),
-            other => panic!("expected update, got {other:?}"),
-        },
-        other => panic!("expected gui command, got {other:?}"),
-    }
+    // Bit 0 enabled (set false), bit 1 width (cleared), bit 15 position (set).
+    let mut values = 0u32.to_le_bytes().to_vec();
+    values.extend_from_slice(&1.0f32.to_le_bytes());
+    values.extend_from_slice(&2.0f32.to_le_bytes());
+    assert_eq!(
+        decode(patch(
+            [0b11, 0b1000_0000, 0],
+            [0b01, 0b1000_0000, 0],
+            &values
+        )),
+        Ok(GuiCommand::UpdateNode {
+            handle: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(1)),
+            patch: GuiNodePatch {
+                enabled: Some(false),
+                width: Some(None),
+                position: Some([1.0, 2.0]),
+                ..GuiNodePatch::default()
+            },
+        })
+    );
+    // Clearing a required property, setting an unchanged one and undeclared
+    // mask bits are malformed.
+    assert!(decode(patch([0, 0x10, 0], [0, 0, 0], &[])).is_err());
+    assert!(decode(patch([0, 0, 0], [1, 0, 0], &0u32.to_le_bytes())).is_err());
+    assert!(decode(patch([0, 0, 0x08], [0, 0, 0], &[])).is_err());
 }

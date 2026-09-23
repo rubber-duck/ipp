@@ -5,9 +5,11 @@ use super::test_support::*;
 use super::*;
 use crate::DynamicValue;
 use crate::EntityId;
+use crate::GuiNodePatch;
 use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetKey, AssetSource};
 use crate::systems::surface::SurfaceRenderResource;
+use crate::world::systems::gui::test_support::checkbox_node;
 use std::collections::BTreeSet;
 
 #[test]
@@ -17,14 +19,10 @@ fn unchanged_frames_do_no_remeasure_work() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    tree.add(
-        Some(root),
-        GuiNodeContent::Text("Ae".to_owned()),
-        text_style(),
-    );
+    tree.add(Some(root), GuiNodeData::Text("Ae".to_owned()), text_style());
     let root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -52,14 +50,10 @@ fn paint_only_edits_skip_remeasure() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let leaf = tree.add(
-        Some(root),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let mut root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -69,9 +63,15 @@ fn paint_only_edits_skip_remeasure() {
 
     // Recolour the leaf: paint revision advances, layout does not reflow
     // and text is never remeasured.
-    let mut recoloured = root_tree.style(leaf).unwrap();
-    recoloured.background_color = Some([1.0, 0.0, 0.0, 1.0]);
-    root_tree.install_node_style(leaf, &recoloured).unwrap();
+    root_tree
+        .update_node(
+            leaf,
+            &GuiNodePatch {
+                background_color: Some(Some([1.0, 0.0, 0.0, 1.0])),
+                ..GuiNodePatch::default()
+            },
+        )
+        .unwrap();
 
     let second = cache
         .evaluate(entity(), &request(&root_tree, 2), &resolver)
@@ -111,14 +111,10 @@ fn skin_part_edits_advance_paint_without_reflow_or_remeasure() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let leaf = tree.add(
-        Some(root),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let mut root_tree = tree.build();
     let part = GuiRoot::part_property_name(leaf, "background", "color").unwrap();
     root_tree
@@ -156,14 +152,10 @@ fn material_part_edits_advance_paint_without_reflow_or_remeasure() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let leaf = tree.add(
-        Some(root),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let mut root_tree = tree.build();
     let glow_intensity = GuiRoot::part_property_name(leaf, "background", "glow_intensity").unwrap();
     root_tree
@@ -214,12 +206,12 @@ fn insert_and_reorder_invalidate_dependents() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let first = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let mut root_tree = tree.build();
@@ -233,15 +225,15 @@ fn insert_and_reorder_invalidate_dependents() {
     // Insert a sibling: dependent output rebuilds.
     let id = GuiNodeId(root_tree.nodes().next_node_id());
     root_tree
-        .nodes_mut()
         .insert_node(
             id,
             Some(root),
             0,
-            GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            GuiNodeData::Container(GuiContainerKind::SizedBox),
+            crate::GuiNodeDataRow::default(),
+            &sized(1.0, 1.0),
         )
         .unwrap();
-    root_tree.install_node_style(id, &sized(1.0, 1.0)).unwrap();
     let view = cache
         .evaluate(entity(), &request(&root_tree, 2), &resolver)
         .clone();
@@ -258,14 +250,10 @@ fn incarnation_change_rebuilds_retained_text() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    tree.add(
-        Some(root),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -293,9 +281,7 @@ fn identical_valid_root_recovers_after_invalid_input() {
     let mut tree = TreeBuilder::new();
     let control = tree.add(
         None,
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
+        checkbox_node(false),
         GuiNodeStyle {
             width: Some(1.0),
             height: Some(1.0),
@@ -349,7 +335,7 @@ fn cache_drop_and_retain_cover_lifecycle() {
     let mut tree = TreeBuilder::new();
     tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let root_tree = tree.build();
@@ -376,18 +362,18 @@ fn visual_only_edits_rebuild_without_reflow_or_remeasure() {
         let mut tree = TreeBuilder::new();
         let root = tree.add(
             None,
-            GuiNodeContent::Container(GuiContainerKind::Column),
+            GuiNodeData::Container(GuiContainerKind::Column),
             text_style(),
         );
         let middle = tree.add(
             Some(root),
-            GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            GuiNodeData::Container(GuiContainerKind::SizedBox),
             sized(1.0, 1.0),
         );
         tree.set_visual(middle, offset, scale);
         let leaf = tree.add(
             Some(middle),
-            GuiNodeContent::Text("A".to_owned()),
+            GuiNodeData::Text("A".to_owned()),
             text_style(),
         );
         tree.set_visual(leaf, [0.0, 0.0], [1.0, 0.5]);
@@ -464,12 +450,12 @@ fn pending_font_recovers_without_unrelated_edits() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     let leaf = tree.add(
         Some(root),
-        GuiNodeContent::Text("AVa".to_owned()),
+        GuiNodeData::Text("AVa".to_owned()),
         text_style(),
     );
     let root_tree = tree.build();
@@ -560,22 +546,18 @@ fn translation_tree() -> (GuiRoot, [GuiNodeId; 5]) {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         sized(4.0, 2.0),
     );
     let row = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::Row),
+        GuiNodeData::Container(GuiContainerKind::Row),
         sized(4.0, 0.5),
     );
-    let text = tree.add(
-        Some(row),
-        GuiNodeContent::Text("Ae".to_owned()),
-        text_style(),
-    );
+    let text = tree.add(Some(row), GuiNodeData::Text("Ae".to_owned()), text_style());
     tree.add(
         Some(row),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             background_color: Some([0.2, 0.3, 0.4, 1.0]),
             ..sized(1.0, 0.25)
@@ -583,7 +565,7 @@ fn translation_tree() -> (GuiRoot, [GuiNodeId; 5]) {
     );
     let scroll = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         GuiNodeStyle {
             flex: Some(1.0),
             width: Some(4.0),
@@ -592,12 +574,12 @@ fn translation_tree() -> (GuiRoot, [GuiNodeId; 5]) {
     );
     let content = tree.add(
         Some(scroll),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     let item = tree.add(
         Some(content),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             background_color: Some([0.5, 0.5, 0.5, 1.0]),
             ..sized(4.0, 1.0)
@@ -615,12 +597,14 @@ fn translation_tree() -> (GuiRoot, [GuiNodeId; 5]) {
 }
 
 fn set_position(root: &mut GuiRoot, id: GuiNodeId, position: [f32; 2]) {
-    root.properties
-        .set(
-            &GuiRoot::property_name(id, "position").unwrap(),
-            DynamicValue::Vec2(position),
-        )
-        .unwrap();
+    root.update_node(
+        id,
+        &GuiNodePatch {
+            position: Some(position),
+            ..GuiNodePatch::default()
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -688,9 +672,15 @@ fn scale_edits_and_moved_scroll_viewports_fall_back_to_full_evaluation() {
 
     // Paint edits on a translation frame still refresh paint records.
     set_position(&mut root_tree, row, [0.2, 0.0]);
-    let mut recoloured = root_tree.style(row).unwrap();
-    recoloured.background_color = Some([1.0, 0.0, 0.0, 1.0]);
-    root_tree.install_node_style(row, &recoloured).unwrap();
+    root_tree
+        .update_node(
+            row,
+            &GuiNodePatch {
+                background_color: Some(Some([1.0, 0.0, 0.0, 1.0])),
+                ..GuiNodePatch::default()
+            },
+        )
+        .unwrap();
     let view = cache
         .evaluate(entity(), &request(&root_tree, 4), &resolver)
         .clone();

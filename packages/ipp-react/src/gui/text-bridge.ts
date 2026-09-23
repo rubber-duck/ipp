@@ -181,7 +181,6 @@ export interface TextBridgeTarget {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   readonly revision: number;
 }
 
@@ -235,7 +234,6 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
     left.entity === right.entity &&
     left.rootIncarnation === right.rootIncarnation &&
     left.node === right.node &&
-    left.lifetime === right.lifetime &&
     left.revision === right.revision &&
     left.text === right.text &&
     left.selectionStart === right.selectionStart &&
@@ -248,7 +246,7 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
       const head = `s${session.toString(10)}:l${localFence}`;
       const current = focus;
       if (current === null) return head;
-      return `${head}:c${current.contextGeneration}:f${current.focusGeneration}:n${current.entity}:${current.rootIncarnation}:${current.node}:${current.lifetime}:r${current.revision}`;
+      return `${head}:c${current.contextGeneration}:f${current.focusGeneration}:n${current.entity}:${current.rootIncarnation}:${current.node}:r${current.revision}`;
     },
     committed(): TextBridgeCommitted | null {
       const current = focus;

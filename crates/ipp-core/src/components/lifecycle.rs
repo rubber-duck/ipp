@@ -88,6 +88,10 @@ pub(crate) trait ComponentLifecycle: Clone {
         0
     }
 
+    /// Keep derived storage consistent after a field was replaced, before
+    /// field-local validation. Every field write through the registry runs it.
+    fn after_field_write(&mut self, _offset: u32) {}
+
     /// Validate field-local semantics after typed replacement.
     fn validate_field(&self, _offset: u32) -> Result<(), crate::ErrorReason> {
         Ok(())

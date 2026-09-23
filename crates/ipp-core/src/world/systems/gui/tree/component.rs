@@ -4,36 +4,13 @@ use super::node_rows::{
     GuiNodeStyleProperty, GuiNodeStyleRow, validate_node_data_property,
     validate_node_style_property,
 };
-use super::nodes::{GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes};
-use crate::components::rows::{RowAddress, Rows, row_address, row_region_relative};
+use super::nodes::{GuiControlValue, GuiNodeData, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes};
+use crate::components::rows::{RowAddress, Rows, SchemaRow, row_address, row_region_relative};
 use crate::components::schema::ComponentLifecycle;
 use crate::{DynamicProperties, DynamicValue, ErrorReason};
 use ipp_schema_derive::SchemaComponent;
 
 use crate::DynamicPropertyKind as Kind;
-
-/// Node style lanes and their exact storage types.
-const GUI_NODE_PROPERTIES: [(&str, Kind); 19] = [
-    ("enabled", Kind::Bool),
-    ("width", Kind::F32),
-    ("height", Kind::F32),
-    ("min_width", Kind::F32),
-    ("min_height", Kind::F32),
-    ("max_width", Kind::F32),
-    ("max_height", Kind::F32),
-    ("flex", Kind::F32),
-    ("align_x", Kind::F32),
-    ("align_y", Kind::F32),
-    ("color", Kind::Vec4),
-    ("background_color", Kind::Vec4),
-    ("opacity", Kind::F32),
-    ("font_size", Kind::F32),
-    ("asset", Kind::Asset),
-    ("position", Kind::Vec2),
-    ("scale", Kind::Vec2),
-    ("padding", Kind::Vec4),
-    ("margin", Kind::Vec4),
-];
 
 /// Named skin-part lanes and their exact storage types.
 /// Ordered by descending suffix length so longer composite suffixes match first.
@@ -65,15 +42,18 @@ pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 23] = [
 
 /// Root GUI component owning the content of its entity's Surface.
 ///
-/// The node tree, including committed control values, changes only through
-/// GuiCommand while a root incarnation is live; a new incarnation may supply
-/// it. Node style and scalar node data rows live in `node_style` and
-/// `node_data` at slot = node id; readers and writers still use the named
-/// properties and node content until they migrate to the rows.
+/// The node tree and control records change only through GuiCommand while a
+/// root incarnation is live; a new incarnation may supply them. Each node owns
+/// one `node_style` row and one `node_data` row at slot = node id. Writing
+/// the tree inserts default rows for new nodes and removes the rows of
+/// removed nodes, so row properties are addressed by offset only while their
+/// node lives. The committed checkbox and slider values and the slider range
+/// are `node_data` properties that only GuiCommand changes; style properties
+/// and `image_size` are ordinary numeric properties.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiRoot {
-    /// Authoritative root-local node tree and committed control values.
+    /// Authoritative root-local node tree and control records.
     nodes: GuiNodes,
     /// Node style rows at slot = node id; rows field 0.
     #[schema(rows)]
@@ -81,9 +61,10 @@ pub struct GuiRoot {
     /// Scalar kind-specific node data at slot = node id; rows field 1.
     #[schema(rows)]
     node_data: Rows<GuiNodeDataRow>,
-    /// Authoritative style, layout and named-part properties.
+    /// Named skin-part properties. Boxed: the set is rarely large and keeps
+    /// the root, and so every `Command`, within its size budget.
     #[schema(ignore)]
-    pub properties: DynamicProperties,
+    pub properties: Box<DynamicProperties>,
 }
 
 impl GuiRoot {
@@ -185,6 +166,31 @@ impl GuiRoot {
         std::mem::offset_of!(Self, nodes) as u32
     }
 
+    /// Real offset of the whole `node_style` table.
+    pub(in crate::world::systems::gui) const fn node_style_field() -> u32 {
+        std::mem::offset_of!(Self, node_style) as u32
+    }
+
+    /// Real offset of the whole `node_data` table.
+    pub(in crate::world::systems::gui) const fn node_data_field() -> u32 {
+        std::mem::offset_of!(Self, node_data) as u32
+    }
+
+    /// Whether only GUI commands may write `offset` on a live root: the tree,
+    /// both whole tables, committed control values and the slider range.
+    pub fn command_owned_field(offset: u32) -> bool {
+        offset == Self::nodes_field()
+            || offset == Self::node_style_field()
+            || offset == Self::node_data_field()
+            || matches!(
+                Self::node_property(offset),
+                Some(GuiNodePropertyRef {
+                    property: GuiNodeRowProperty::Data(property),
+                    ..
+                }) if property.command_owned()
+            )
+    }
+
     /// Read-only access to root-local nodes.
     pub fn nodes(&self) -> &GuiNodes {
         &self.nodes
@@ -194,13 +200,9 @@ impl GuiRoot {
         &mut self.nodes
     }
 
-    /// Committed control values.
+    /// Control revisions and committed text-input text.
     pub fn controls(&self) -> &GuiControls {
         &self.nodes.controls
-    }
-
-    pub(in crate::world::systems::gui) fn controls_mut(&mut self) -> &mut GuiControls {
-        &mut self.nodes.controls
     }
 
     /// Number of live nodes in this tree.
@@ -213,109 +215,70 @@ impl GuiRoot {
         self.nodes.next_node_id()
     }
 
-    /// Committed control state for one node; None for non-control nodes.
-    pub fn control_state(&self, id: GuiNodeId) -> Option<&GuiControlState> {
-        self.nodes.controls.get(id)
+    /// Committed control value and revision of one node; None for nodes that
+    /// were never controls.
+    pub fn control_state(&self, id: GuiNodeId) -> Option<GuiControlState> {
+        let entry = self.nodes.controls.get(id)?;
+        Some(GuiControlState {
+            value: self.control_value(id),
+            revision: entry.revision,
+        })
     }
 
-    /// Visual translation and axis-aligned scale for one node, read from
-    /// the `position` and `scale` lanes. Missing lanes default to identity;
-    /// layout rejects singular (zero) scales with a diagnostic instead of
-    /// flowing them into paint or hit testing. These lanes never reflow:
-    /// they move paint and hit regions together.
-    pub fn visual_transform(&self, id: GuiNodeId) -> ([f32; 2], [f32; 2]) {
-        let mut transform = ([0.0, 0.0], [1.0, 1.0]);
-        let prefix = node_property_prefix(id);
-        for (lane, descriptor) in self.properties.with_prefix(&prefix) {
-            match (lane, self.properties.get_descriptor(descriptor)) {
-                ("position", Some(DynamicValue::Vec2(value))) => transform.0 = value,
-                ("scale", Some(DynamicValue::Vec2(value))) => transform.1 = value,
-                _ => {}
-            }
-        }
-        transform
-    }
-
-    /// Copy authoritative effective style for one node.
-    pub fn style(&self, id: GuiNodeId) -> Option<GuiNodeStyle> {
-        self.node_lanes(id).map(|lanes| lanes.style)
-    }
-
-    /// Read a node's style and visual transform in one ordered pass over its
-    /// named lanes, without building a name per lane. Part lanes are left to
-    /// [`Self::part_lanes`].
-    pub(crate) fn node_lanes(&self, id: GuiNodeId) -> Option<GuiNodeLanes> {
-        self.nodes.node(id)?;
-        let mut lanes = GuiNodeLanes {
-            style: GuiNodeStyle::default(),
-            position: [0.0, 0.0],
-            scale: [1.0, 1.0],
+    /// Committed control value of one node; None for non-control nodes.
+    pub fn control_value(&self, id: GuiNodeId) -> GuiControlValue {
+        let Some(node) = self.nodes.node(id) else {
+            return GuiControlValue::None;
         };
-        let style = &mut lanes.style;
-        let prefix = node_property_prefix(id);
-
-        for (lane, descriptor) in self.properties.with_prefix(&prefix) {
-            if lane == "asset" {
-                if let Some(asset) = self.properties.descriptor_asset(descriptor) {
-                    style.asset = Some(asset.clone());
-                }
-                continue;
-            }
-            if lane.starts_with("part_") {
-                continue;
-            }
-
-            let Some(value) = self.properties.get_descriptor(descriptor) else {
-                continue;
-            };
-            match lane {
-                "enabled" => {
-                    if let DynamicValue::Bool(enabled) = value {
-                        style.enabled = enabled;
-                    }
-                }
-                "width" => style.width = f32_value(&value),
-                "height" => style.height = f32_value(&value),
-                "min_width" => style.min_width = f32_value(&value),
-                "min_height" => style.min_height = f32_value(&value),
-                "max_width" => style.max_width = f32_value(&value),
-                "max_height" => style.max_height = f32_value(&value),
-                "padding" => style.padding = vec4(&value),
-                "margin" => style.margin = vec4(&value),
-                "flex" => style.flex = f32_value(&value),
-                "align_x" => style.align_x = f32_value(&value),
-                "align_y" => style.align_y = f32_value(&value),
-                "color" => {
-                    if let Some(color) = vec4(&value) {
-                        style.color = color;
-                    }
-                }
-                "background_color" => style.background_color = vec4(&value),
-                "opacity" => {
-                    if let Some(opacity) = f32_value(&value) {
-                        style.opacity = opacity;
-                    }
-                }
-                "font_size" => {
-                    if let Some(font_size) = f32_value(&value) {
-                        style.font_size = font_size;
-                    }
-                }
-                "position" => {
-                    if let DynamicValue::Vec2(position) = value {
-                        lanes.position = position;
-                    }
-                }
-                "scale" => {
-                    if let DynamicValue::Vec2(scale) = value {
-                        lanes.scale = scale;
-                    }
-                }
-                _ => {}
-            }
+        let data = self.node_data.get(id.0);
+        match &node.data {
+            GuiNodeData::Checkbox => data
+                .and_then(|row| row.checked)
+                .map_or(GuiControlValue::None, GuiControlValue::Bool),
+            GuiNodeData::Slider => data
+                .and_then(|row| row.value)
+                .map_or(GuiControlValue::None, GuiControlValue::Scalar),
+            GuiNodeData::TextInput {
+                ..
+            } => self
+                .nodes
+                .controls
+                .get(id)
+                .and_then(|entry| entry.text.clone())
+                .map_or(GuiControlValue::None, GuiControlValue::Text),
+            _ => GuiControlValue::None,
         }
+    }
 
-        Some(lanes)
+    /// Style row of one node, read in place.
+    pub fn style_row(&self, id: GuiNodeId) -> Option<&GuiNodeStyleRow> {
+        self.node_style.get(id.0)
+    }
+
+    /// Kind-specific scalar row of one node, read in place.
+    pub fn data_row(&self, id: GuiNodeId) -> Option<&GuiNodeDataRow> {
+        self.node_data.get(id.0)
+    }
+
+    /// Visual translation and axis-aligned scale for one node. A missing row
+    /// reads as identity; layout rejects singular (zero) scales with a
+    /// diagnostic instead of flowing them into paint or hit testing. These
+    /// properties never reflow: they move paint and hit regions together.
+    pub fn visual_transform(&self, id: GuiNodeId) -> ([f32; 2], [f32; 2]) {
+        self.node_style
+            .get(id.0)
+            .map_or(([0.0, 0.0], [1.0, 1.0]), |row| (row.position, row.scale))
+    }
+
+    /// Copy the authoritative style of one live node.
+    pub fn style(&self, id: GuiNodeId) -> Option<GuiNodeStyle> {
+        self.nodes.node(id)?;
+        Some(
+            self.node_style
+                .get(id.0)
+                .map(GuiNodeStyle::from)
+                .unwrap_or_default(),
+        )
     }
 
     /// Every named-part lane of one node in name order, as the part-and-lane
@@ -328,8 +291,9 @@ impl GuiRoot {
     }
 
     /// Copy of this root for editing at most one node: the complete tree and
-    /// committed values, with only `node`'s own and part lanes. Validating
-    /// and diffing the copy covers exactly what one command can change.
+    /// control records with only `node`'s rows and part properties.
+    /// Validating and diffing the copy covers exactly what one command can
+    /// change.
     pub(in crate::world::systems::gui) fn edit_scope(
         &self,
         node: Option<GuiNodeId>,
@@ -338,7 +302,7 @@ impl GuiRoot {
             nodes: self.nodes.clone(),
             node_style: Rows::new(),
             node_data: Rows::new(),
-            properties: DynamicProperties::default(),
+            properties: Box::default(),
         };
         if let Some(id) = node {
             if let Some(row) = self.node_style.get(id.0) {
@@ -365,8 +329,8 @@ impl GuiRoot {
         Ok(scope)
     }
 
-    /// Full names and descriptors of every lane owned by `node`, including
-    /// its parts, in name order.
+    /// Full names and descriptors of every part property owned by `node`, in
+    /// name order.
     pub(in crate::world::systems::gui) fn node_properties<'a>(
         &'a self,
         prefix: &'a str,
@@ -374,104 +338,153 @@ impl GuiRoot {
         self.properties.named_with_prefix(prefix)
     }
 
-    /// Apply partial style changes to named properties, preserving omitted fields.
-    /// An explicit clear removes the property, invalidating its bindings.
-    pub(in crate::world::systems::gui) fn apply_patch(
+    /// Insert one node with its complete style and kind-specific data.
+    /// Control nodes start at revision 1 with the authored value committed.
+    /// Identities at or past [`MAX_GUI_NODE_ID`](super::nodes::MAX_GUI_NODE_ID)
+    /// fail with `Capacity`; a new root incarnation starts identities anew.
+    pub(in crate::world::systems::gui) fn insert_node(
+        &mut self,
+        id: GuiNodeId,
+        parent: Option<GuiNodeId>,
+        index: usize,
+        data: GuiNodeData,
+        values: GuiNodeDataRow,
+        style: &GuiNodeStyle,
+    ) -> Result<(), ErrorReason> {
+        if id.0 >= super::nodes::MAX_NODE_ID {
+            return Err(ErrorReason::Capacity);
+        }
+        let style = GuiNodeStyleRow::from(style);
+        style.validate()?;
+        values.validate_for(&data)?;
+        self.nodes
+            .insert_node(id, parent, index, data.clone())
+            .map_err(field_error)?;
+        self.nodes.controls.insert_initial(id, &data);
+        self.node_style.insert(id.0, style).map_err(field_error)?;
+        self.node_data.insert(id.0, values).map_err(field_error)
+    }
+
+    /// Apply a node patch. Style members replace row properties; a data or
+    /// values change keeps a compatible committed value, rejects a same-kind
+    /// edit that would invalidate it, and establishes the new kind's initial
+    /// state at the next revision when the kind changes to or from a control.
+    pub(in crate::world::systems::gui) fn update_node(
         &mut self,
         id: GuiNodeId,
         patch: &GuiNodePatch,
     ) -> Result<(), ErrorReason> {
-        let f32_lane = |value: Option<Option<f32>>| value.map(|value| value.map(DynamicValue::F32));
-        let vec4_lane =
-            |value: Option<Option<[f32; 4]>>| value.map(|value| value.map(DynamicValue::Vec4));
-        let lanes = [
-            (
-                "enabled",
-                patch.enabled.map(|value| Some(DynamicValue::Bool(value))),
-            ),
-            ("width", f32_lane(patch.width)),
-            ("height", f32_lane(patch.height)),
-            ("min_width", f32_lane(patch.min_width)),
-            ("min_height", f32_lane(patch.min_height)),
-            ("max_width", f32_lane(patch.max_width)),
-            ("max_height", f32_lane(patch.max_height)),
-            ("padding", vec4_lane(patch.padding)),
-            ("margin", vec4_lane(patch.margin)),
-            ("flex", f32_lane(patch.flex)),
-            ("align_x", f32_lane(patch.align_x)),
-            ("align_y", f32_lane(patch.align_y)),
-            (
-                "color",
-                patch.color.map(|value| Some(DynamicValue::Vec4(value))),
-            ),
-            ("background_color", vec4_lane(patch.background_color)),
-            (
-                "opacity",
-                patch.opacity.map(|value| Some(DynamicValue::F32(value))),
-            ),
-            (
-                "font_size",
-                patch.font_size.map(|value| Some(DynamicValue::F32(value))),
-            ),
-            (
-                "asset",
-                patch
-                    .asset
-                    .clone()
-                    .map(|value| value.map(DynamicValue::Asset)),
-            ),
-        ];
-        for (suffix, change) in lanes {
-            let Some(value) = change else {
-                continue;
-            };
-            let name = node_property_name(id, suffix);
-            match value {
-                Some(value) => {
-                    self.properties.set(&name, value).map_err(field_error)?;
-                }
+        let previous = self
+            .nodes
+            .node(id)
+            .ok_or(ErrorReason::InvalidValue)?
+            .data
+            .clone();
+        if patch.data.is_some() || patch.values.is_some() {
+            let data = patch.data.clone().unwrap_or_else(|| previous.clone());
+            let current = self.node_data.get(id.0).cloned().unwrap_or_default();
+            let same_kind = data.same_kind(&previous);
+            let mut values = match &patch.values {
+                Some(values) => values.clone(),
+                None if same_kind => current.clone(),
                 None => {
-                    self.properties.remove(&name);
+                    let mut placeholders = GuiNodeDataRow::default();
+                    placeholders.conform(&data);
+                    placeholders
                 }
+            };
+            if same_kind {
+                // Ordinary commits never replay authored values over newer
+                // committed ones.
+                values.checked = current.checked.or(values.checked);
+                values.value = current.value.or(values.value);
             }
+            values.validate_for(&data)?;
+
+            self.nodes
+                .replace_data(id, data.clone())
+                .map_err(field_error)?;
+            if !same_kind && (data.is_control() || previous.is_control()) {
+                self.nodes
+                    .controls
+                    .restart(id, &data)
+                    .map_err(field_error)?;
+            }
+            *self
+                .node_data
+                .get_mut(id.0)
+                .ok_or(ErrorReason::InvalidValue)? = values;
         }
+
+        let row = self
+            .node_style
+            .get_mut(id.0)
+            .ok_or(ErrorReason::InvalidValue)?;
+        row.apply(patch);
+        row.validate()
+    }
+
+    /// Remove a node and its subtree with their rows, control records and
+    /// part properties, returning the removed identities.
+    pub(in crate::world::systems::gui) fn remove_node(
+        &mut self,
+        id: GuiNodeId,
+    ) -> Result<Vec<GuiNodeId>, ErrorReason> {
+        let removed = self.nodes.remove_node(id).map_err(field_error)?;
+        for &id in &removed {
+            self.nodes.controls.remove(id);
+            self.node_style.remove(id.0);
+            self.node_data.remove(id.0);
+            self.remove_part_properties(id);
+        }
+        Ok(removed)
+    }
+
+    /// Commit a control value when the caller observed the current revision.
+    pub(in crate::world::systems::gui) fn set_control_value(
+        &mut self,
+        id: GuiNodeId,
+        expected_revision: u32,
+        value: &GuiControlValue,
+    ) -> Result<(), ErrorReason> {
+        let data = &self.nodes.node(id).ok_or(ErrorReason::InvalidValue)?.data;
+        let row = self.node_data.get(id.0).ok_or(ErrorReason::InvalidValue)?;
+        let mut next = row.clone();
+        let mut text = None;
+        match (data, value) {
+            (GuiNodeData::Checkbox, GuiControlValue::Bool(checked)) => {
+                next.checked = Some(*checked)
+            }
+            (GuiNodeData::Slider, GuiControlValue::Scalar(scalar)) => next.value = Some(*scalar),
+            (
+                GuiNodeData::TextInput {
+                    ..
+                },
+                GuiControlValue::Text(value),
+            ) if value.len() <= super::nodes::MAX_TEXT_BYTES => text = Some(value.clone()),
+            _ => return Err(ErrorReason::InvalidValue),
+        }
+        next.validate_for(data)
+            .map_err(|_| ErrorReason::InvalidValue)?;
+
+        let entry = self
+            .nodes
+            .controls
+            .advance(id, expected_revision)
+            .map_err(|_| ErrorReason::InvalidValue)?;
+        if text.is_some() {
+            entry.text = text;
+        }
+        *self
+            .node_data
+            .get_mut(id.0)
+            .ok_or(ErrorReason::InvalidValue)? = next;
         Ok(())
     }
 
-    /// Install a newly inserted node's complete style.
-    pub(in crate::world::systems::gui) fn install_node_style(
-        &mut self,
-        id: GuiNodeId,
-        style: &GuiNodeStyle,
-    ) -> Result<(), ErrorReason> {
-        self.apply_patch(
-            id,
-            &GuiNodePatch {
-                content: None,
-                enabled: Some(style.enabled),
-                width: Some(style.width),
-                height: Some(style.height),
-                min_width: Some(style.min_width),
-                min_height: Some(style.min_height),
-                max_width: Some(style.max_width),
-                max_height: Some(style.max_height),
-                padding: Some(style.padding),
-                margin: Some(style.margin),
-                flex: Some(style.flex),
-                align_x: Some(style.align_x),
-                align_y: Some(style.align_y),
-                color: Some(style.color),
-                background_color: Some(style.background_color),
-                opacity: Some(style.opacity),
-                font_size: Some(style.font_size),
-                asset: Some(style.asset.clone()),
-            },
-        )
-    }
-
-    /// Remove every property owned by a removed node or its named parts.
-    pub(in crate::world::systems::gui) fn remove_node_properties(&mut self, id: GuiNodeId) {
-        let prefix = format!("node_{}_", id.0);
+    /// Remove every part property owned by a removed node.
+    fn remove_part_properties(&mut self, id: GuiNodeId) {
+        let prefix = node_property_prefix(id);
         let owned: Vec<String> = self
             .properties
             .descriptors()
@@ -484,9 +497,23 @@ impl GuiRoot {
         }
     }
 
-    /// Produce a validated named-property address for a node style lane.
-    pub fn property_name(id: GuiNodeId, suffix: &str) -> Option<String> {
-        lane_kind(&GUI_NODE_PROPERTIES, suffix).map(|_| node_property_name(id, suffix))
+    /// Give every node its rows, drop the rows of nodes no longer in the tree
+    /// and conform each data row to its node's kind, after the tree field was
+    /// replaced. New rows start from the default style; data rows keep their
+    /// values for properties the kind still uses, gain placeholders for newly
+    /// used ones and drop the rest, so every tree write leaves a valid root
+    /// that the row writes following it complete. A slot that died earlier in
+    /// this incarnation stays without a row, which readers treat as defaults.
+    fn sync_rows(&mut self) {
+        let mut live: Vec<u32> = self.nodes.as_slice().iter().map(|node| node.id.0).collect();
+        live.sort_unstable();
+        sync_table(&mut self.node_style, &live);
+        sync_table(&mut self.node_data, &live);
+        for node in self.nodes.as_slice() {
+            if let Some(row) = self.node_data.get_mut(node.id.0) {
+                row.conform(&node.data);
+            }
+        }
     }
 
     /// Produce a validated named-property address for a named skin part lane.
@@ -503,7 +530,7 @@ impl GuiRoot {
         property_lane(name).is_some_and(|(id, _, _)| self.nodes.node(id).is_none())
     }
 
-    /// Every named property is a GUI lane with its declared type and range.
+    /// Every named property is a GUI part lane with its declared type and range.
     pub(in crate::world::systems::gui) fn validate_properties(&self) -> Result<(), ErrorReason> {
         for name in self.properties.descriptors().keys() {
             let value = self.properties.get(name).ok_or(ErrorReason::InvalidField)?;
@@ -512,15 +539,83 @@ impl GuiRoot {
         Ok(())
     }
 
-    /// Validate the node tree and committed values, which are all a control
-    /// commit changes; named lanes keep their validation from when they were
-    /// written.
+    /// Validate the node tree and control records, which are all a control
+    /// commit changes besides the committed value's row.
     pub(in crate::world::systems::gui) fn validate_tree(&self) -> Result<(), ErrorReason> {
         self.nodes.validate().map_err(field_error)
     }
 
+    /// Every live node has exactly its rows, and every row matches its node.
+    fn validate_rows(&self) -> Result<(), ErrorReason> {
+        if self.node_style.len() != self.nodes.len() || self.node_data.len() != self.nodes.len() {
+            return Err(ErrorReason::InvalidField);
+        }
+        for node in self.nodes.as_slice() {
+            self.node_style
+                .get(node.id.0)
+                .ok_or(ErrorReason::InvalidField)?
+                .validate()?;
+            self.node_data
+                .get(node.id.0)
+                .ok_or(ErrorReason::InvalidField)?
+                .validate_for(&node.data)?;
+        }
+        Ok(())
+    }
+
+    /// Check one written row property against its range, its node's kind and
+    /// the row-wide slider rule.
+    fn validate_row_property(&self, reference: GuiNodePropertyRef) -> Result<(), ErrorReason> {
+        let slot = reference.node.0;
+        match reference.property {
+            GuiNodeRowProperty::Style(property) => {
+                let row = self.node_style.get(slot).ok_or(ErrorReason::InvalidField)?;
+                match row
+                    .property(property.index())
+                    .map_err(|_| ErrorReason::InvalidField)?
+                {
+                    Some(value) => validate_node_style_property(property, &value),
+                    None => Ok(()),
+                }
+            }
+            GuiNodeRowProperty::Data(property) => {
+                let row = self.node_data.get(slot).ok_or(ErrorReason::InvalidField)?;
+                let node = self
+                    .nodes
+                    .node(reference.node)
+                    .ok_or(ErrorReason::InvalidField)?;
+                if row.present(property) != property.used_by(&node.data) {
+                    return Err(ErrorReason::InvalidField);
+                }
+                row.validate_values()
+            }
+        }
+    }
+
     pub(in crate::world) fn validate_complete(&self) -> Result<(), ErrorReason> {
         <Self as ComponentLifecycle>::validate(self)
+    }
+}
+
+/// Make a table's live slots equal `live` (sorted ascending), inserting
+/// default rows and removing rows of absent slots.
+fn sync_table<R: crate::components::rows::SchemaRow>(table: &mut Rows<R>, live: &[u32]) {
+    if table.len() == live.len() && table.iter().map(|(slot, _)| slot).eq(live.iter().copied()) {
+        return;
+    }
+    let stale: Vec<u32> = table
+        .iter()
+        .map(|(slot, _)| slot)
+        .filter(|slot| live.binary_search(slot).is_err())
+        .collect();
+    for slot in stale {
+        table.remove(slot);
+    }
+    for &slot in live {
+        if !table.is_live(slot) {
+            // A dead slot rejects the insert; the node then reads defaults.
+            let _ = table.insert(slot, R::default());
+        }
     }
 }
 
@@ -576,21 +671,15 @@ impl ComponentLifecycle for GuiRoot {
 
     fn validate(&self) -> Result<(), ErrorReason> {
         self.nodes.validate().map_err(field_error)?;
-        for (_, row) in self.node_style.iter() {
-            row.validate()?;
-        }
-        for (slot, row) in self.node_data.iter() {
-            let node = self
-                .nodes
-                .node(GuiNodeId(slot))
-                .ok_or(ErrorReason::InvalidField)?;
-            row.validate_for(&node.content)?;
-        }
+        self.validate_rows()?;
         self.validate_properties()
     }
 
-    /// Named lanes are checked wherever they are written: generic field writes
-    /// and StateOverlay declarations reach this boundary before live state changes.
+    /// Each write is checked where it lands: a row property against its range
+    /// and node, a named part lane against its declaration. The tree and both
+    /// whole tables are structurally validated by their decoders; only GUI
+    /// commands write them on a live root, and new incarnations are validated
+    /// completely before admission.
     fn validate_field(&self, offset: u32) -> Result<(), ErrorReason> {
         if offset == crate::components::dynamic_properties::DYNAMIC_METADATA {
             return self.validate_properties();
@@ -605,7 +694,17 @@ impl ComponentLifecycle for GuiRoot {
             let value = self.properties.get(name).ok_or(ErrorReason::InvalidField)?;
             return validate_property_value(name, &value);
         }
-        self.validate()
+        if let Some(reference) = Self::node_property(offset) {
+            return self.validate_row_property(reference);
+        }
+        Ok(())
+    }
+
+    /// Rows follow the tree: replacing it inserts and removes node rows.
+    fn after_field_write(&mut self, offset: u32) {
+        if offset == Self::nodes_field() {
+            self.sync_rows();
+        }
     }
 
     fn resource_demand(
@@ -619,11 +718,7 @@ impl ComponentLifecycle for GuiRoot {
     }
 }
 
-fn node_property_name(id: GuiNodeId, suffix: &str) -> String {
-    format!("node_{}_{}", id.0, suffix)
-}
-
-/// Common prefix of every lane owned by one node, including its parts.
+/// Common prefix of every part lane owned by one node.
 pub(in crate::world::systems::gui) fn node_property_prefix(id: GuiNodeId) -> String {
     format!("node_{}_", id.0)
 }
@@ -638,52 +733,27 @@ pub(crate) fn node_parts_prefix(id: GuiNodeId) -> String {
     format!("node_{}_part_", id.0)
 }
 
-/// A node's effective style and visual transform, read in one pass.
-pub(crate) struct GuiNodeLanes {
-    pub(crate) style: GuiNodeStyle,
-    pub(crate) position: [f32; 2],
-    pub(crate) scale: [f32; 2],
-}
-
 fn field_error(_: crate::components::schema::FieldError) -> ErrorReason {
     ErrorReason::InvalidValue
 }
 
-fn f32_value(value: &DynamicValue) -> Option<f32> {
-    match value {
-        DynamicValue::F32(v) => Some(*v),
-        _ => None,
-    }
-}
-
-fn vec4(value: &DynamicValue) -> Option<[f32; 4]> {
-    match value {
-        DynamicValue::Vec4(v) => Some(*v),
-        _ => None,
-    }
-}
-
-/// Parse `node_<id>_<lane>` or `node_<id>_part_<part>_<lane>` into its node, lane and type.
+/// Parse `node_<id>_part_<part>_<lane>` into its node, lane and type.
 fn property_lane(name: &str) -> Option<(GuiNodeId, &str, Kind)> {
     let (id, lane) = name.strip_prefix("node_")?.split_once('_')?;
     if id.starts_with('0') {
         return None;
     }
     let id = GuiNodeId(id.parse().ok()?);
-    match lane.strip_prefix("part_") {
-        Some(part_and_suffix) => {
-            for &(suffix, kind) in &GUI_PART_PROPERTIES {
-                if let Some(part) = part_and_suffix.strip_suffix(suffix)
-                    && let Some(part) = part.strip_suffix('_')
-                    && valid_part_name(part)
-                {
-                    return Some((id, suffix, kind));
-                }
-            }
-            None
+    let part_and_suffix = lane.strip_prefix("part_")?;
+    for &(suffix, kind) in &GUI_PART_PROPERTIES {
+        if let Some(part) = part_and_suffix.strip_suffix(suffix)
+            && let Some(part) = part.strip_suffix('_')
+            && valid_part_name(part)
+        {
+            return Some((id, suffix, kind));
         }
-        None => Some((id, lane, lane_kind(&GUI_NODE_PROPERTIES, lane)?)),
     }
+    None
 }
 
 fn lane_kind(lanes: &[(&str, Kind)], suffix: &str) -> Option<Kind> {
@@ -706,7 +776,7 @@ pub(in crate::world::systems::gui) fn skin_motion_base_track(value: f32) -> Opti
     Some(base)
 }
 
-/// Accept only GUI-addressed names with their exact type and value range.
+/// Accept only GUI part-addressed names with their exact type and value range.
 pub(crate) fn validate_property_value(name: &str, value: &DynamicValue) -> Result<(), ErrorReason> {
     let (_, lane, kind) = property_lane(name).ok_or(ErrorReason::InvalidField)?;
     if value.kind() != kind {
@@ -722,8 +792,6 @@ pub(crate) fn validate_property_value(name: &str, value: &DynamicValue) -> Resul
                     "duration" | "time" => *value >= 0.0,
                     "easing" => matches!(*value, 0.0 | 1.0),
                     "track" => skin_motion_base_track(*value).is_some(),
-                    "width" | "height" | "min_width" | "min_height" | "max_width"
-                    | "max_height" | "flex" => *value >= 0.0,
                     "border_width" | "gradient_radius" | "glow_intensity" | "glow_radius"
                     | "glow_falloff" => *value >= 0.0,
                     "fill_mode" => matches!(*value, 0.0 | 1.0 | 2.0),
@@ -740,11 +808,8 @@ pub(crate) fn validate_property_value(name: &str, value: &DynamicValue) -> Resul
         DynamicValue::Vec4(value) => {
             value.iter().all(|value| value.is_finite())
                 && match lane {
-                    "color" | "background_color" | "border_color" | "gradient_color0"
-                    | "gradient_color1" | "glow_color" => {
-                        value.iter().all(|value| (0.0..=1.0).contains(value))
-                    }
-                    "padding" => value.iter().all(|value| *value >= 0.0),
+                    "color" | "border_color" | "gradient_color0" | "gradient_color1"
+                    | "glow_color" => value.iter().all(|value| (0.0..=1.0).contains(value)),
                     _ => true,
                 }
         }

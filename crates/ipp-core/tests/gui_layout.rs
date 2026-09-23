@@ -11,8 +11,8 @@ mod support;
 use support::WorldTestDriver;
 
 use ipp_core::systems::gui::{
-    GuiCommand, GuiContainerKind, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodePatch,
-    GuiNodeStyle, GuiRoot,
+    GuiCommand, GuiContainerKind, GuiNodeData, GuiNodeDataRow, GuiNodeHandle, GuiNodeId,
+    GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty, GuiRoot,
 };
 use ipp_core::{
     Batch, Command, ComponentValue, DynamicValue, EntityId, EntityRef, ErrorReason,
@@ -93,9 +93,10 @@ fn insert(
     entity: EntityId,
     id: u32,
     parent: Option<u32>,
-    content: GuiNodeContent,
+    node: impl Into<Node>,
     style: GuiNodeStyle,
 ) -> GuiNodeHandle {
+    let Node(data, values) = node.into();
     let root_incarnation = incarnation(world, entity);
     edit(
         world,
@@ -105,12 +106,26 @@ fn insert(
             id: GuiNodeId(id),
             parent: parent.map(GuiNodeId),
             index: u32::MAX,
-            content,
+            data,
+            values,
             style,
         },
     )
     .unwrap();
-    GuiNodeHandle::new(SESSION, entity, root_incarnation, GuiNodeId(id), 1)
+    GuiNodeHandle::new(SESSION, entity, root_incarnation, GuiNodeId(id))
+}
+
+/// Node kind with its kind-specific scalars, as `InsertNode` authors them.
+struct Node(GuiNodeData, GuiNodeDataRow);
+
+impl From<GuiNodeData> for Node {
+    fn from(data: GuiNodeData) -> Self {
+        Self(data, GuiNodeDataRow::default())
+    }
+}
+
+fn checkbox_node(checked: bool) -> Node {
+    Node(GuiNodeData::Checkbox, GuiNodeDataRow::checkbox(checked))
 }
 
 fn backgrounded(w: f32, h: f32, color: [f32; 4]) -> GuiNodeStyle {
@@ -153,7 +168,7 @@ fn layout_evaluates_through_world_and_feeds_preparation() {
         entity,
         1,
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     insert(
@@ -161,7 +176,7 @@ fn layout_evaluates_through_world_and_feeds_preparation() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         backgrounded(1.0, 1.0, [1.0, 0.0, 0.0, 1.0]),
     );
     insert(
@@ -169,7 +184,7 @@ fn layout_evaluates_through_world_and_feeds_preparation() {
         entity,
         3,
         Some(1),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         backgrounded(2.0, 0.5, [0.0, 1.0, 0.0, 1.0]),
     );
 
@@ -223,13 +238,7 @@ fn layout_evaluates_through_world_and_feeds_preparation() {
 
     // A paint-only recolour advances paint without reflowing layout.
     let paint_before = view.paint_revision;
-    let handle = GuiNodeHandle::new(
-        SESSION,
-        entity,
-        incarnation(&world, entity),
-        GuiNodeId(2),
-        1,
-    );
+    let handle = GuiNodeHandle::new(SESSION, entity, incarnation(&world, entity), GuiNodeId(2));
     edit(
         &mut world,
         GuiCommand::UpdateNode {
@@ -266,7 +275,7 @@ fn visual_lanes_move_paint_and_hit_without_reflow() {
         entity,
         1,
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         GuiNodeStyle {
             width: Some(4.0),
             height: Some(2.0),
@@ -278,19 +287,22 @@ fn visual_lanes_move_paint_and_hit_without_reflow() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         backgrounded(1.0, 1.0, [1.0, 1.0, 1.0, 1.0]),
     );
 
-    // Visual translation arrives through the ordinary dynamic-property
-    // path, alongside authored style lanes.
+    // Visual translation arrives through an ordinary row property write,
+    // alongside authored style properties.
     submit(
         &mut world,
-        vec![Command::SetDynamicProperty {
+        vec![Command::SetField {
             entity: EntityRef::Handle(entity),
             component: ComponentValue::GUI_ROOT,
-            name: GuiRoot::property_name(GuiNodeId(2), "position").unwrap(),
-            value: DynamicValue::Vec2([2.0, 0.5]),
+            field: ipp_core::FieldWrite {
+                offset: GuiRoot::node_style_offset(GuiNodeId(2), GuiNodeStyleProperty::Position)
+                    .unwrap(),
+                value: ipp_core::FieldValue::Dynamic(DynamicValue::Vec2([2.0, 0.5])),
+            },
         }],
     )
     .unwrap();
@@ -399,7 +411,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         1,
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         sized(10.0, 10.0),
     );
     insert(
@@ -407,7 +419,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         background(10.0, 6.0, [1.0, 0.0, 0.0, 1.0]),
     );
     insert(
@@ -415,7 +427,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         3,
         Some(2),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     insert(
@@ -423,7 +435,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         4,
         Some(3),
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         background(10.0, 4.0, [0.0, 1.0, 0.0, 1.0]),
     );
     insert(
@@ -431,7 +443,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         5,
         Some(4),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     insert(
@@ -439,7 +451,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         6,
         Some(5),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         background(10.0, 4.0, [0.0, 0.0, 1.0, 1.0]),
     );
     insert(
@@ -447,7 +459,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         7,
         Some(5),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(10.0, 4.0),
     );
     insert(
@@ -455,7 +467,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         8,
         Some(3),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         background(10.0, 6.0, [1.0, 1.0, 1.0, 1.0]),
     );
     insert(
@@ -463,9 +475,7 @@ fn nested_scroll_moves_paint_without_reflow() {
         entity,
         9,
         Some(7),
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
+        checkbox_node(false),
         sized(1.0, 1.0),
     );
     world.update_for_test(0.0).unwrap();

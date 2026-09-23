@@ -189,7 +189,6 @@ fn authored_and_gui_identities_occupy_disjoint_domains() {
         let node = GuiPrimitiveId {
             root_incarnation: 7,
             node: crate::systems::gui::GuiNodeId(1),
-            lifetime: 0,
             part: GuiPrimitivePart::Background,
         };
         let gui = SurfacePrimitiveIdentity::Gui(node);
@@ -200,17 +199,7 @@ fn authored_and_gui_identities_occupy_disjoint_domains() {
             gui,
             SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                 root_incarnation: 7,
-                node: crate::systems::gui::GuiNodeId(1),
-                lifetime: 1,
-                part: GuiPrimitivePart::Background,
-            })
-        );
-        assert_ne!(
-            gui,
-            SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-                root_incarnation: 7,
                 node: crate::systems::gui::GuiNodeId(2),
-                lifetime: 0,
                 part: GuiPrimitivePart::Background,
             })
         );
@@ -232,12 +221,11 @@ fn authored_and_gui_identities_occupy_disjoint_domains() {
 }
 
 #[cfg(feature = "gui")]
-fn gui_style(node: u32, lifetime: u32, clip: Option<SurfaceClipRect>) -> SurfacePrimitiveStyle {
+fn gui_style(node: u32, clip: Option<SurfaceClipRect>) -> SurfacePrimitiveStyle {
     SurfacePrimitiveStyle {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: crate::systems::gui::GuiNodeId(node),
-            lifetime,
             part: GuiPrimitivePart::Background,
         }),
         position: [0.5, 0.5],
@@ -257,7 +245,7 @@ fn gui_box(
     clip: Option<SurfaceClipRect>,
 ) -> SurfaceRenderPrimitive {
     SurfaceRenderPrimitive::Box {
-        style: gui_style(3, 0, clip),
+        style: gui_style(3, clip),
         size,
         corner_radius,
         border_width,
@@ -336,7 +324,6 @@ fn box_style_accessor_exposes_shared_clip_and_identity() {
         SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: crate::systems::gui::GuiNodeId(3),
-            lifetime: 0,
             part: GuiPrimitivePart::Background,
         })
     );
@@ -422,7 +409,6 @@ fn scrolled_kinds() -> Vec<SurfaceRenderPrimitive> {
         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
             root_incarnation: 1,
             node: crate::systems::gui::GuiNodeId(5),
-            lifetime: 2,
             part: GuiPrimitivePart::Background,
         }),
         position: [1.0, 2.0],
@@ -467,8 +453,8 @@ fn scrolled_kinds() -> Vec<SurfaceRenderPrimitive> {
 #[test]
 fn scroll_translation_moves_every_kind_keeping_clips_and_payloads() {
     let base = scrolled_kinds();
-    let shifts: BTreeMap<(crate::systems::gui::GuiNodeId, u32), [f32; 2]> =
-        BTreeMap::from([((crate::systems::gui::GuiNodeId(5), 2), [0.5, -4.0])]);
+    let shifts: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
+        BTreeMap::from([(crate::systems::gui::GuiNodeId(5), [0.5, -4.0])]);
 
     let moved = super::translate_gui_primitives_for_scroll(base.clone(), &shifts);
     assert_eq!(moved.len(), base.len());
@@ -524,17 +510,17 @@ fn scroll_translation_moves_every_kind_keeping_clips_and_payloads() {
 
 #[cfg(feature = "gui")]
 #[test]
-fn scroll_translation_fences_lifetime_and_ignores_unshifted_paint() {
+fn scroll_translation_moves_shifted_nodes_and_ignores_unshifted_paint() {
     let mut base = scrolled_kinds();
     base.push(SurfaceRenderPrimitive::Drawing {
         style: style(None),
         drawing: resource(18),
     });
 
-    // Stale lifetimes, unknown nodes and empty maps pass through untouched,
+    // Unknown nodes and empty maps pass through untouched,
     // as does the authored primitive which GUI scrolling never moves.
-    let stale: BTreeMap<(crate::systems::gui::GuiNodeId, u32), [f32; 2]> =
-        BTreeMap::from([((crate::systems::gui::GuiNodeId(5), 7), [0.5, -4.0])]);
+    let stale: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
+        BTreeMap::from([(crate::systems::gui::GuiNodeId(7), [0.5, -4.0])]);
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &stale),
         base
@@ -544,14 +530,14 @@ fn scroll_translation_fences_lifetime_and_ignores_unshifted_paint() {
         base
     );
     // Zero and non-finite shifts never move paint.
-    let zero: BTreeMap<(crate::systems::gui::GuiNodeId, u32), [f32; 2]> =
-        BTreeMap::from([((crate::systems::gui::GuiNodeId(5), 2), [0.0, 0.0])]);
+    let zero: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
+        BTreeMap::from([(crate::systems::gui::GuiNodeId(5), [0.0, 0.0])]);
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &zero),
         base
     );
-    let wild: BTreeMap<(crate::systems::gui::GuiNodeId, u32), [f32; 2]> =
-        BTreeMap::from([((crate::systems::gui::GuiNodeId(5), 2), [f32::NAN, 0.0])]);
+    let wild: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
+        BTreeMap::from([(crate::systems::gui::GuiNodeId(5), [f32::NAN, 0.0])]);
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &wild),
         base

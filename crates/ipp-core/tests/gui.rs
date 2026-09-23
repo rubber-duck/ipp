@@ -10,8 +10,9 @@ use ipp_core::services::world_serialization::{
 };
 use ipp_core::systems::animation::*;
 use ipp_core::systems::gui::{
-    GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand, GuiKey, GuiNodeContent,
-    GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiRoot,
+    GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand, GuiKey, GuiNodeData,
+    GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty,
+    GuiRoot,
 };
 use ipp_core::{
     Batch, Command, ComponentValue, DynamicValue, EntityId, EntityRef, ErrorReason, FieldValue,
@@ -84,14 +85,28 @@ fn edit(world: &mut WorldContext<'_>, command: GuiCommand) -> Result<(), ErrorRe
     report.system_command_outcomes[0].result
 }
 
+/// Node kind with its kind-specific scalars, as `InsertNode` authors them.
+struct Node(GuiNodeData, GuiNodeDataRow);
+
+impl From<GuiNodeData> for Node {
+    fn from(data: GuiNodeData) -> Self {
+        Self(data, GuiNodeDataRow::default())
+    }
+}
+
+fn checkbox_node(checked: bool) -> Node {
+    Node(GuiNodeData::Checkbox, GuiNodeDataRow::checkbox(checked))
+}
+
 fn insert(
     world: &mut WorldContext<'_>,
     entity: EntityId,
     id: u32,
     parent: Option<u32>,
-    content: GuiNodeContent,
+    node: impl Into<Node>,
     style: GuiNodeStyle,
 ) -> Result<GuiNodeHandle, ErrorReason> {
+    let Node(data, values) = node.into();
     let root_incarnation = incarnation(world, entity);
     edit(
         world,
@@ -101,7 +116,8 @@ fn insert(
             id: GuiNodeId(id),
             parent: parent.map(GuiNodeId),
             index: u32::MAX,
-            content,
+            data,
+            values,
             style,
         },
     )?;
@@ -110,20 +126,25 @@ fn insert(
         entity,
         root_incarnation,
         GuiNodeId(id),
-        1,
     ))
 }
 
-fn column() -> GuiNodeContent {
-    GuiNodeContent::Container(GuiContainerKind::Column)
+fn column() -> GuiNodeData {
+    GuiNodeData::Container(GuiContainerKind::Column)
 }
 
-fn slider(value: f32, max: f32) -> GuiNodeContent {
-    GuiNodeContent::Slider {
-        value,
-        min: 0.0,
-        max,
-        step: 0.0,
+fn slider(value: f32, max: f32) -> Node {
+    Node(
+        GuiNodeData::Slider,
+        GuiNodeDataRow::slider(value, 0.0, max, 0.0),
+    )
+}
+
+/// Field write of one node style property.
+fn style_write(node: u32, property: GuiNodeStyleProperty, value: DynamicValue) -> FieldWrite {
+    FieldWrite {
+        offset: GuiRoot::node_style_offset(GuiNodeId(node), property).unwrap(),
+        value: FieldValue::Dynamic(value),
     }
 }
 
@@ -143,7 +164,8 @@ fn ordered_gui_command_group_stops_at_first_failure() {
         id: GuiNodeId(id),
         parent: None,
         index: 0,
-        content: column(),
+        data: column(),
+        values: GuiNodeDataRow::default(),
         style: GuiNodeStyle::default(),
     };
 
@@ -210,7 +232,7 @@ fn reordering_preserves_identity_and_handles_are_fenced() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::Button {
+        GuiNodeData::Button {
             label: "A".into(),
         },
         Default::default(),
@@ -362,11 +384,12 @@ fn control_values_are_revision_gated_and_survive_compatible_content_edits() {
         (GuiControlValue::Scalar(0.75), 2)
     );
 
-    // Replaying authored content keeps the newer committed value.
-    let update = |content| GuiCommand::UpdateNode {
+    // Replaying authored data keeps the newer committed value.
+    let update = |node: Node| GuiCommand::UpdateNode {
         handle,
         patch: GuiNodePatch {
-            content: Some(content),
+            data: Some(node.0),
+            values: Some(node.1),
             ..Default::default()
         },
     };
@@ -393,8 +416,8 @@ fn control_values_are_revision_gated_and_survive_compatible_content_edits() {
     assert_eq!(inspected.nodes[0].control_revision, 3);
 
     // Control -> non-control -> control keeps one monotonic revision per node
-    // lifetime, so a delayed write from the first control cannot apply later.
-    edit(&mut world, update(GuiNodeContent::Text("off".into()))).unwrap();
+    // identity, so a delayed write from the first control cannot apply later.
+    edit(&mut world, update(GuiNodeData::Text("off".into()).into())).unwrap();
     assert_eq!(control(&world, entity, 2), (GuiControlValue::None, 4));
     assert!(edit(&mut world, set(4, 0.4)).is_err());
     edit(&mut world, update(slider(0.1, 1.0))).unwrap();
@@ -428,7 +451,7 @@ fn gui_text_limit_is_shared_by_authorship_controls_and_composition() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: maximum.clone(),
             placeholder: String::new(),
         },
@@ -458,7 +481,7 @@ fn gui_text_limit_is_shared_by_authorship_controls_and_composition() {
             entity,
             3,
             Some(1),
-            GuiNodeContent::Text(oversized.clone()),
+            GuiNodeData::Text(oversized.clone()),
             Default::default(),
         )
         .is_err()
@@ -512,9 +535,7 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
             entity,
             2,
             Some(1),
-            GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            checkbox_node(false),
             Default::default(),
         )
         .unwrap();
@@ -523,9 +544,7 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
             entity,
             3,
             Some(1),
-            GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            checkbox_node(false),
             Default::default(),
         )
         .unwrap();
@@ -628,9 +647,7 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
         restored_entity,
         4,
         Some(1),
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
+        checkbox_node(false),
         Default::default(),
     )
     .unwrap();
@@ -649,9 +666,7 @@ fn structural_fields_of_a_live_root_change_only_through_gui_commands() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
+        checkbox_node(false),
         Default::default(),
     )
     .unwrap();
@@ -804,7 +819,7 @@ fn style_is_stored_once_and_patches_preserve_omitted_values() {
         entity,
         1,
         None,
-        GuiNodeContent::Text("A".into()),
+        GuiNodeData::Text("A".into()),
         GuiNodeStyle {
             width: Some(2.0),
             color: [0.5, 0.25, 1.0, 1.0],
@@ -814,14 +829,17 @@ fn style_is_stored_once_and_patches_preserve_omitted_values() {
     )
     .unwrap();
 
-    // An ordinary property write is not overwritten by a later content edit.
+    // An ordinary row property write is not overwritten by a later data edit.
     submit(
         &mut world,
-        vec![Command::SetDynamicProperty {
+        vec![Command::SetField {
             entity: EntityRef::Handle(entity),
             component: ComponentValue::GUI_ROOT,
-            name: GuiRoot::property_name(GuiNodeId(1), "color").unwrap(),
-            value: DynamicValue::Vec4([0.0, 1.0, 0.0, 1.0]),
+            field: style_write(
+                1,
+                GuiNodeStyleProperty::Color,
+                DynamicValue::Vec4([0.0, 1.0, 0.0, 1.0]),
+            ),
         }],
     )
     .unwrap();
@@ -830,7 +848,7 @@ fn style_is_stored_once_and_patches_preserve_omitted_values() {
         GuiCommand::UpdateNode {
             handle,
             patch: GuiNodePatch {
-                content: Some(GuiNodeContent::Text("B".into())),
+                data: Some(GuiNodeData::Text("B".into())),
                 opacity: Some(0.5),
                 ..Default::default()
             },
@@ -843,7 +861,7 @@ fn style_is_stored_once_and_patches_preserve_omitted_values() {
     assert_eq!(style.font_size, 0.2);
     assert_eq!(style.width, Some(2.0));
 
-    // Clearing a lane removes its property.
+    // Clearing an optional property makes it absent in the row.
     edit(
         &mut world,
         GuiCommand::UpdateNode {
@@ -855,18 +873,45 @@ fn style_is_stored_once_and_patches_preserve_omitted_values() {
         },
     )
     .unwrap();
-    let root = root(&world, entity);
-    assert_eq!(root.style(GuiNodeId(1)).unwrap().width, None);
-    assert!(
-        root.properties
-            .get(&GuiRoot::property_name(GuiNodeId(1), "width").unwrap())
-            .is_none()
+    let snapshot = root(&world, entity);
+    assert_eq!(snapshot.style(GuiNodeId(1)).unwrap().width, None);
+    assert_eq!(snapshot.style_row(GuiNodeId(1)).unwrap().width, None);
+    assert!(snapshot.properties.descriptors().is_empty());
+
+    // Row properties only accept their declared type and range, and optional
+    // properties alone may be cleared.
+    for field in [
+        style_write(1, GuiNodeStyleProperty::Width, DynamicValue::Vec4([1.0; 4])),
+        style_write(1, GuiNodeStyleProperty::Opacity, DynamicValue::F32(2.0)),
+        FieldWrite {
+            offset: GuiRoot::node_style_offset(GuiNodeId(1), GuiNodeStyleProperty::Opacity)
+                .unwrap(),
+            value: FieldValue::Unset,
+        },
+        style_write(2, GuiNodeStyleProperty::Opacity, DynamicValue::F32(0.5)),
+    ] {
+        assert!(
+            submit(
+                &mut world,
+                vec![Command::SetField {
+                    entity: EntityRef::Handle(entity),
+                    component: ComponentValue::GUI_ROOT,
+                    field: field.clone(),
+                }],
+            )
+            .is_err(),
+            "{field:?}"
+        );
+    }
+    assert_eq!(
+        root(&world, entity).style(GuiNodeId(1)).unwrap().opacity,
+        0.5
     );
 
-    // GUI property names only accept their declared type and range.
+    // Named properties hold only skin parts; node style names are rejected.
     for (name, value) in [
-        ("node_1_width", DynamicValue::Vec4([1.0; 4])),
-        ("node_1_opacity", DynamicValue::F32(2.0)),
+        ("node_1_width", DynamicValue::F32(1.0)),
+        ("node_1_opacity", DynamicValue::F32(0.5)),
         ("node_1_unknown", DynamicValue::F32(1.0)),
         ("unrelated", DynamicValue::F32(1.0)),
     ] {
@@ -897,7 +942,7 @@ fn removing_a_subtree_removes_node_and_part_properties() {
         entity,
         2,
         Some(1),
-        GuiNodeContent::Button {
+        GuiNodeData::Button {
             label: "Go".into(),
         },
         GuiNodeStyle {
@@ -911,7 +956,7 @@ fn removing_a_subtree_removes_node_and_part_properties() {
         entity,
         3,
         Some(2),
-        GuiNodeContent::Text("x".into()),
+        GuiNodeData::Text("x".into()),
         Default::default(),
     )
     .unwrap();
@@ -999,10 +1044,7 @@ fn opacity_clip(start: f32, end: f32) -> AnimationClip {
     AnimationClip::new(
         1.0,
         vec![AnimationTrack {
-            target: AnimationTrackTarget::DynamicProperty {
-                component: ComponentValue::GUI_ROOT,
-                name: "node_1_opacity".into(),
-            },
+            target: opacity_target(),
             keys: vec![
                 key(0.0, start, AnimationInterpolation::Linear),
                 key(1.0, end, AnimationInterpolation::Step),
@@ -1012,6 +1054,16 @@ fn opacity_clip(start: f32, end: f32) -> AnimationClip {
     .unwrap()
 }
 
+/// Node 1's opacity, addressed by its row offset.
+fn opacity_target() -> AnimationTrackTarget {
+    AnimationTrackTarget::AnimationProperty(AnimationProperty {
+        component: ComponentValue::GUI_ROOT,
+        offsets: vec![
+            GuiRoot::node_style_offset(GuiNodeId(1), GuiNodeStyleProperty::Opacity).unwrap(),
+        ],
+    })
+}
+
 fn opacity_driver(target: EntityId, asset: u64) -> AnimationControllerDescription {
     AnimationControllerDescription {
         drivers: vec![AnimationDriverDescription {
@@ -1019,10 +1071,7 @@ fn opacity_driver(target: EntityId, asset: u64) -> AnimationControllerDescriptio
             variant: 0,
             track: 0,
             target,
-            property: AnimationTrackTarget::DynamicProperty {
-                component: ComponentValue::GUI_ROOT,
-                name: "node_1_opacity".into(),
-            },
+            property: opacity_target(),
             weight: 1.0,
             additive: false,
             reference_time: 0.0,
@@ -1043,7 +1092,7 @@ fn gui_properties_are_sampled_and_transitioned_by_animation() {
         entity,
         1,
         None,
-        GuiNodeContent::Text("A".into()),
+        GuiNodeData::Text("A".into()),
         Default::default(),
     )
     .unwrap();
@@ -1103,14 +1152,9 @@ fn gui_properties_are_sampled_and_transitioned_by_animation() {
         opacity(&world)
     );
 
-    // Removing the animated node invalidates its bound property before the next sample.
-    let handle = GuiNodeHandle::new(
-        SESSION,
-        entity,
-        incarnation(&world, entity),
-        GuiNodeId(1),
-        1,
-    );
+    // Removing the animated node kills its row slot, which drops the binding
+    // before the next sample.
+    let handle = GuiNodeHandle::new(SESSION, entity, incarnation(&world, entity), GuiNodeId(1));
     edit(
         &mut world,
         GuiCommand::RemoveNode {
@@ -1119,7 +1163,9 @@ fn gui_properties_are_sampled_and_transitioned_by_animation() {
     )
     .unwrap();
     world.update_for_test(0.25).unwrap();
-    assert!(root(&world, entity).properties.descriptors().is_empty());
+    let removed = root(&world, entity);
+    assert!(removed.style_row(GuiNodeId(1)).is_none());
+    assert_eq!(removed.node_style().len(), 0);
 }
 
 #[test]
@@ -1155,7 +1201,7 @@ fn overlays_override_gui_properties_but_not_gui_structure_or_raw_items() {
         entity,
         1,
         None,
-        GuiNodeContent::Text("A".into()),
+        GuiNodeData::Text("A".into()),
         Default::default(),
     )
     .unwrap();
@@ -1213,18 +1259,27 @@ fn overlays_override_gui_properties_but_not_gui_structure_or_raw_items() {
     assert!(submit(&mut world, declare(ComponentValue::SURFACE, vec![items])).is_err());
     assert!(world.surface(entity).unwrap().items().is_empty());
 
-    // A GUI property override applies through the ordinary sparse overlay path.
-    let mut operations = declare(ComponentValue::GUI_ROOT, Vec::new());
-    operations.push(Command::UpdateDynamicComponentStateOverlay {
-        owner: StateOverlayRef::Alias(1),
-        overlay: StateOverlayRef::Alias(3),
-        properties: vec![(
-            GuiRoot::property_name(GuiNodeId(1), "opacity").unwrap(),
-            DynamicValue::F32(0.25),
-        )],
-        clear: Vec::new(),
-    });
-    submit(&mut world, operations).unwrap();
+    // Committed control values and the whole row tables are GUI-owned.
+    let checked = FieldWrite {
+        offset: GuiRoot::node_data_offset(GuiNodeId(1), ipp_core::GuiNodeDataProperty::Checked)
+            .unwrap(),
+        value: FieldValue::Dynamic(DynamicValue::Bool(true)),
+    };
+    assert!(submit(&mut world, declare(ComponentValue::GUI_ROOT, vec![checked])).is_err());
+
+    // A GUI style override applies through the ordinary sparse overlay path.
+    submit(
+        &mut world,
+        declare(
+            ComponentValue::GUI_ROOT,
+            vec![style_write(
+                1,
+                GuiNodeStyleProperty::Opacity,
+                DynamicValue::F32(0.25),
+            )],
+        ),
+    )
+    .unwrap();
     assert_eq!(
         root(&world, entity).style(GuiNodeId(1)).unwrap().opacity,
         0.25
@@ -1344,7 +1399,7 @@ fn raw_items_hidden_by_an_overlay_block_gui_ownership() {
 }
 
 #[test]
-fn gui_lanes_are_validated_on_field_and_overlay_writes() {
+fn gui_properties_are_validated_on_field_and_overlay_writes() {
     use ipp_core::StateOverlayRef;
 
     let (mut host, world_id) = host_world();
@@ -1376,21 +1431,21 @@ fn gui_lanes_are_validated_on_field_and_overlay_writes() {
         entity,
         1,
         None,
-        GuiNodeContent::Text("A".into()),
+        GuiNodeData::Text("A".into()),
         GuiNodeStyle {
             opacity: 0.75,
             ..Default::default()
         },
     )
     .unwrap();
-    let opacity_name = GuiRoot::property_name(GuiNodeId(1), "opacity").unwrap();
-    let key = root(&world, entity).properties.key(&opacity_name).unwrap();
+    let opacity_offset =
+        GuiRoot::node_style_offset(GuiNodeId(1), GuiNodeStyleProperty::Opacity).unwrap();
     let opacity =
         |world: &WorldContext<'_>| root(world, entity).style(GuiNodeId(1)).unwrap().opacity;
 
-    // A generic field write of an out-of-range lane value is rejected before it applies.
+    // A generic field write of an out-of-range property value is rejected before it applies.
     let write = |value: f32| FieldWrite {
-        offset: key,
+        offset: opacity_offset,
         value: FieldValue::Dynamic(DynamicValue::F32(value)),
     };
     assert!(
@@ -1437,7 +1492,7 @@ fn gui_lanes_are_validated_on_field_and_overlay_writes() {
         Some(DynamicValue::F32(4_294_967_040.0))
     );
 
-    // Overlay declarations and dynamic overlay updates follow the same lane rules.
+    // Overlay declarations and overlay updates follow the same property rules.
     assert!(
         overlay_batch(
             &mut world,
@@ -1448,10 +1503,10 @@ fn gui_lanes_are_validated_on_field_and_overlay_writes() {
     );
     assert_eq!(opacity(&world), 0.75);
     let mut operations = overlay_declaration("lanes", ComponentValue::GUI_ROOT, Vec::new());
-    operations.push(Command::UpdateDynamicComponentStateOverlay {
+    operations.push(Command::UpdateComponentStateOverlay {
         owner: StateOverlayRef::Alias(1),
         overlay: StateOverlayRef::Alias(3),
-        properties: vec![(opacity_name.clone(), DynamicValue::F32(-1.0))],
+        fields: vec![write(-1.0)],
         clear: Vec::new(),
     });
     assert!(overlay_batch(&mut world, operations).result.is_err());
@@ -1459,14 +1514,10 @@ fn gui_lanes_are_validated_on_field_and_overlay_writes() {
     assert!(world.gui_root(entity).is_some());
 
     // A valid override applies and release restores the authored value.
-    let mut operations = overlay_declaration("lanes", ComponentValue::GUI_ROOT, Vec::new());
-    operations.push(Command::UpdateDynamicComponentStateOverlay {
-        owner: StateOverlayRef::Alias(1),
-        overlay: StateOverlayRef::Alias(3),
-        properties: vec![(opacity_name, DynamicValue::F32(0.25))],
-        clear: Vec::new(),
-    });
-    let valid = overlay_batch(&mut world, operations);
+    let valid = overlay_batch(
+        &mut world,
+        overlay_declaration("lanes", ComponentValue::GUI_ROOT, vec![write(0.25)]),
+    );
     assert!(valid.result.is_ok());
     assert_eq!(opacity(&world), 0.25);
     submit(&mut world, vec![release_owner(&valid)]).unwrap();

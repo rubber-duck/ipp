@@ -26,13 +26,12 @@ function guiClient(): ReactWorldClient {
   } as unknown as ReactWorldClient;
 }
 
-function makeHandle(nodeId: number, lifetime: number): GuiNodeHandle {
+function makeHandle(nodeId: number): GuiNodeHandle {
   return {
     session: 1n,
     entity: 100n,
     rootIncarnation: 1n,
     nodeId,
-    nodeLifetime: lifetime,
   };
 }
 
@@ -114,8 +113,8 @@ test("asset swap resubmits through the style signature as one update", () => {
         nodeId: node.identity,
         parent: node.parent,
         parentId: node.parent,
-        lifetime: 1,
-        content: node.content,
+        data: node.data,
+        values: node.values,
         style: node.style,
       },
     ]),
@@ -139,7 +138,7 @@ test("asset swap resubmits through the style signature as one update", () => {
   assert.deepEqual(edit.patch.style?.asset, drawingB);
 });
 
-test("enabled lane disables through insert style and update patches", () => {
+test("enabled property disables through insert style and update patches", () => {
   const tree = new ReactWorldTree(guiClient());
   describePanel(tree, {}, { enabled: false });
   const description = tree.describe();
@@ -160,8 +159,8 @@ test("enabled lane disables through insert style and update patches", () => {
         nodeId: node.identity,
         parent: node.parent,
         parentId: node.parent,
-        lifetime: 1,
-        content: node.content,
+        data: node.data,
+        values: node.values,
         style: node.style,
       },
     ]),

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { equalGuiContent } from "../src/gui/description.js";
+import { equalGuiNode } from "../src/gui/description.js";
 import {
   Button,
   Checkbox,
@@ -16,16 +16,16 @@ import {
   GUI_TEXT_INPUT_HOST_TYPE,
   Slider,
   TextInput,
-  buttonContent,
-  checkboxContent,
+  buttonNode,
+  checkboxNode,
   controlDeclarationSignature,
   describeButton,
   describeCheckbox,
   describeSlider,
   describeTextInput,
   isGuiControlHostType,
-  sliderContent,
-  textInputContent,
+  sliderNode,
+  textInputNode,
 } from "../src/gui/controls.js";
 import {
   GUI_THEME_PARTS,
@@ -36,8 +36,8 @@ import {
 } from "../src/gui/theme.js";
 import {
   actionsForControlKind,
-  controlKindForContent,
-  nameForContent,
+  controlKindForData,
+  nameForData,
 } from "../src/gui/callbacks.js";
 
 test("control host types are distinct and guarded", () => {
@@ -56,78 +56,77 @@ test("control host types are distinct and guarded", () => {
   assert.equal(isGuiControlHostType(undefined), false);
 });
 
-test("control content builders emit the frozen .10 content contract", () => {
-  assert.deepEqual(buttonContent("Go"), { kind: "button", label: "Go" });
-  assert.deepEqual(checkboxContent(undefined), {
-    kind: "checkbox",
-    checked: false,
+test("control builders emit node data and kind-specific values", () => {
+  assert.deepEqual(buttonNode("Go"), {
+    data: { kind: "button", label: "Go" },
+    values: {},
   });
-  assert.deepEqual(checkboxContent(true), {
-    kind: "checkbox",
-    checked: true,
+  assert.deepEqual(checkboxNode(undefined), {
+    data: { kind: "checkbox" },
+    values: { checked: false },
   });
-  assert.deepEqual(sliderContent({}), {
-    kind: "slider",
-    value: 0,
-    min: 0,
-    max: 1,
-    step: 0,
+  assert.deepEqual(checkboxNode(true), {
+    data: { kind: "checkbox" },
+    values: { checked: true },
   });
-  assert.deepEqual(sliderContent({ value: 1.5, min: 0, max: 2, step: 0.5 }), {
-    kind: "slider",
-    value: 1.5,
-    min: 0,
-    max: 2,
-    step: 0.5,
+  assert.deepEqual(sliderNode({}), {
+    data: { kind: "slider" },
+    values: { value: 0, min: 0, max: 1, step: 0 },
   });
-  assert.deepEqual(textInputContent({}), {
-    kind: "textInput",
-    text: "",
-    placeholder: "",
+  assert.deepEqual(sliderNode({ value: 1.5, min: 0, max: 2, step: 0.5 }), {
+    data: { kind: "slider" },
+    values: { value: 1.5, min: 0, max: 2, step: 0.5 },
   });
-  assert.deepEqual(textInputContent({ text: "ada", placeholder: "name" }), {
-    kind: "textInput",
-    text: "ada",
-    placeholder: "name",
+  assert.deepEqual(textInputNode({}), {
+    data: { kind: "textInput", text: "", placeholder: "" },
+    values: {},
   });
-  assert.equal(equalGuiContent(buttonContent("Go"), buttonContent("Go")), true);
+  assert.deepEqual(textInputNode({ text: "ada", placeholder: "name" }), {
+    data: { kind: "textInput", text: "ada", placeholder: "name" },
+    values: {},
+  });
+  assert.equal(equalGuiNode(buttonNode("Go"), buttonNode("Go")), true);
+  assert.equal(equalGuiNode(buttonNode("Go"), buttonNode("Stop")), false);
+  assert.equal(equalGuiNode(buttonNode("Go"), checkboxNode(false)), false);
+  // Runtime-owned values never make declarations differ; ranges do.
+  assert.equal(equalGuiNode(checkboxNode(false), checkboxNode(true)), true);
   assert.equal(
-    equalGuiContent(buttonContent("Go"), buttonContent("Stop")),
-    false,
+    equalGuiNode(sliderNode({ value: 0.1 }), sliderNode({ value: 0.9 })),
+    true,
   );
   assert.equal(
-    equalGuiContent(buttonContent("Go"), checkboxContent(false)),
+    equalGuiNode(sliderNode({ max: 1 }), sliderNode({ max: 2 })),
     false,
   );
 });
 
 test("control validators reject invalid declarations loudly", () => {
   assert.throws(
-    () => buttonContent(7 as unknown as string),
+    () => buttonNode(7 as unknown as string),
     /GUI Button label must be a string/,
   );
   assert.throws(
-    () => checkboxContent("yes" as unknown as boolean),
+    () => checkboxNode("yes" as unknown as boolean),
     /GUI Checkbox checked must be a boolean/,
   );
   assert.throws(
-    () => sliderContent({ value: Number.NaN }),
+    () => sliderNode({ value: Number.NaN }),
     /GUI Slider value must be a finite number/,
   );
   assert.throws(
-    () => sliderContent({ min: 2, max: 1 }),
+    () => sliderNode({ min: 2, max: 1 }),
     /GUI Slider min must not exceed max/,
   );
   assert.throws(
-    () => sliderContent({ step: -1 }),
+    () => sliderNode({ step: -1 }),
     /GUI Slider step must be a finite number >= 0/,
   );
   assert.throws(
-    () => textInputContent({ text: 3 as unknown as string }),
+    () => textInputNode({ text: 3 as unknown as string }),
     /GUI TextInput text must be a string/,
   );
   assert.throws(
-    () => textInputContent({ placeholder: null as unknown as string }),
+    () => textInputNode({ placeholder: null as unknown as string }),
     /GUI TextInput placeholder must be a string/,
   );
   assert.throws(
@@ -156,19 +155,20 @@ test("control components are pure element factories without transport", () => {
   assert.equal(TextInput({}).type, GUI_TEXT_INPUT_HOST_TYPE);
 });
 
-test("control descriptions carry content and style only, never value writes", () => {
+test("control descriptions carry node data and style only, never value writes", () => {
   const decl = describeCheckbox({
     checked: true,
     color: [1, 0, 0, 1],
     onToggle: () => {},
   });
   assert.equal(decl.hostType, GUI_CHECKBOX_HOST_TYPE);
-  assert.deepEqual(decl.content, { kind: "checkbox", checked: true });
+  assert.deepEqual(decl.data, { kind: "checkbox" });
+  assert.deepEqual(decl.values, { checked: true });
   assert.deepEqual(decl.style.color, [1, 0, 0, 1]);
   assert.equal(decl.style.opacity, 1);
   assert.equal(decl.nodeRef, null);
   assert.deepEqual(Object.keys(decl).sort(), [
-    "content",
+    "data",
     "hostType",
     "nodeRef",
     "onAction",
@@ -178,26 +178,23 @@ test("control descriptions carry content and style only, never value writes", ()
     "onTextCommit",
     "onToggle",
     "style",
+    "values",
   ]);
   // A changed `checked` prop is explicit replacement structure, not a write:
-  // the declaration just names different content.
-  assert.deepEqual(describeCheckbox({}).content, {
-    kind: "checkbox",
-    checked: false,
-  });
-  assert.deepEqual(describeSlider({ value: 2 }).content, {
-    kind: "slider",
+  // the declaration just names different initial values.
+  assert.deepEqual(describeCheckbox({}).values, { checked: false });
+  assert.deepEqual(describeSlider({ value: 2 }).values, {
     value: 2,
     min: 0,
     max: 1,
     step: 0,
   });
-  assert.deepEqual(describeTextInput({ text: "v2" }).content, {
+  assert.deepEqual(describeTextInput({ text: "v2" }).data, {
     kind: "textInput",
     text: "v2",
     placeholder: "",
   });
-  assert.deepEqual(describeButton({ label: "Go" }).content, {
+  assert.deepEqual(describeButton({ label: "Go" }).data, {
     kind: "button",
     label: "Go",
   });
@@ -534,29 +531,29 @@ test("colour-only state lanes select a solid fill over an inherited gradient", (
   );
 });
 
-test("content kinds map to control roles, names and actions", () => {
-  assert.equal(controlKindForContent(buttonContent("Go")), "button");
-  assert.equal(controlKindForContent(checkboxContent(true)), "checkbox");
-  assert.equal(controlKindForContent(sliderContent({})), "slider");
-  assert.equal(controlKindForContent(textInputContent({})), "textInput");
+test("node kinds map to control roles, names and actions", () => {
+  assert.equal(controlKindForData(buttonNode("Go").data), "button");
+  assert.equal(controlKindForData(checkboxNode(true).data), "checkbox");
+  assert.equal(controlKindForData(sliderNode({}).data), "slider");
+  assert.equal(controlKindForData(textInputNode({}).data), "textInput");
   assert.equal(
-    controlKindForContent({ kind: "container", containerKind: "row" }),
+    controlKindForData({ kind: "container", containerKind: "row" }),
     null,
   );
-  assert.equal(controlKindForContent({ kind: "text", text: "hi" }), null);
-  assert.equal(controlKindForContent({ kind: "drawing" }), null);
-  assert.equal(controlKindForContent({ kind: "image", size: [1, 1] }), null);
+  assert.equal(controlKindForData({ kind: "text", text: "hi" }), null);
+  assert.equal(controlKindForData({ kind: "drawing" }), null);
+  assert.equal(controlKindForData({ kind: "image" }), null);
   assert.deepEqual(actionsForControlKind("button"), ["press"]);
   assert.deepEqual(actionsForControlKind("checkbox"), ["toggle", "focus"]);
   assert.deepEqual(actionsForControlKind("slider"), ["setScalar", "focus"]);
   assert.deepEqual(actionsForControlKind("textInput"), ["setText", "focus"]);
-  assert.equal(nameForContent(buttonContent("Go")), "Go");
+  assert.equal(nameForData(buttonNode("Go").data), "Go");
   assert.equal(
-    nameForContent(textInputContent({ placeholder: "name" })),
+    nameForData(textInputNode({ placeholder: "name" }).data),
     "name",
   );
-  assert.equal(nameForContent(textInputContent({})), undefined);
-  assert.equal(nameForContent(checkboxContent(true)), undefined);
+  assert.equal(nameForData(textInputNode({}).data), undefined);
+  assert.equal(nameForData(checkboxNode(true).data), undefined);
 });
 
 test("shape material declarations author the rendering contract and validate closed", () => {

@@ -138,7 +138,6 @@ const tree: GuiSemanticTree = {
   nodes: [
     {
       id: 2,
-      lifetime: 1,
       role: "button",
       value: { kind: "none" },
       revision: 0,
@@ -149,7 +148,7 @@ const tree: GuiSemanticTree = {
       actions: ["press"],
     },
   ],
-  focused: { id: 2, lifetime: 1 },
+  focused: { id: 2 },
 };
 
 test("semantic snapshots submit correlated queries and resolve trees", async () => {
@@ -186,7 +185,6 @@ test("semantic actions accept control and input admissions", async () => {
     entity: 42n,
     rootIncarnation: 3n,
     node: 2,
-    lifetime: 1,
     expectedRevision: 0,
     action: { kind: "press" },
   };

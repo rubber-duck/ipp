@@ -2,7 +2,7 @@
 
 use super::test_support::*;
 use super::*;
-use crate::{GuiCommand, GuiEvaluatedContent, GuiNodeContent, GuiNodeId};
+use crate::{GuiCommand, GuiEvaluatedContent, GuiNodeData, GuiNodeId};
 
 #[test]
 fn text_append_then_backspace_commits_chained_revisions() {
@@ -10,7 +10,7 @@ fn text_append_then_backspace_commits_chained_revisions() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a".into(),
             placeholder: "e".into(),
         },
@@ -103,7 +103,7 @@ fn typed_text_reflows_effective_measurement() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a".into(),
             placeholder: "e".into(),
         },
@@ -164,7 +164,7 @@ fn typed_text_reflows_effective_measurement() {
 fn focus_handle(fixture: &mut Fixture) -> GuiNodeHandle {
     let panel = fixture.panel;
     let root_incarnation = incarnation(fixture);
-    GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1)
+    GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2))
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn text_backspace_deletes_grapheme_not_scalar() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a\u{301}".into(),
             placeholder: "e".into(),
         },
@@ -228,7 +228,7 @@ fn text_insert_at_caret_and_replace_selection() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -242,7 +242,7 @@ fn text_insert_at_caret_and_replace_selection() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -317,7 +317,7 @@ fn text_caret_moves_never_reflow_or_remeasure() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -331,7 +331,7 @@ fn text_caret_moves_never_reflow_or_remeasure() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -453,7 +453,7 @@ fn composition_tracks_authored_reset_before_routing() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -468,7 +468,7 @@ fn composition_tracks_authored_reset_before_routing() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -486,7 +486,7 @@ fn composition_tracks_authored_reset_before_routing() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::SetControlValue {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     expected_revision: 1,
                     value: GuiControlValue::Text("a".into()),
                 },
@@ -538,7 +538,7 @@ fn text_caret_and_selection_geometry_use_retained_metrics() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -551,7 +551,7 @@ fn text_caret_and_selection_geometry_use_retained_metrics() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -638,7 +638,7 @@ fn backward_multibyte_focus_observation_preserves_anchor_and_caret() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a😀b".into(),
             placeholder: "e".into(),
         },
@@ -651,7 +651,7 @@ fn backward_multibyte_focus_observation_preserves_anchor_and_caret() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -682,7 +682,7 @@ fn pointer_drag_selection_publishes_each_caret_change() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: String::new(),
         },
@@ -758,7 +758,7 @@ fn composition_paints_provisional_text_without_committing() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a".into(),
             placeholder: "e".into(),
         },
@@ -780,7 +780,7 @@ fn composition_paints_provisional_text_without_committing() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -870,7 +870,7 @@ fn composition_paints_while_typed_prediction_pending() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a".into(),
             placeholder: "e".into(),
         },
@@ -885,7 +885,7 @@ fn composition_paints_while_typed_prediction_pending() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -966,7 +966,7 @@ fn text_delete_forward_and_home_end_chain() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -979,7 +979,7 @@ fn text_delete_forward_and_home_end_chain() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -1050,14 +1050,14 @@ fn delayed_selection_after_external_reset_conflicts_without_rebase() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
     );
     let panel = fixture.panel;
     let root_incarnation = incarnation(&mut fixture);
-    let handle = GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1);
+    let handle = GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2));
     // Focus and select [0, 1): the cursor pins revision 1.
     {
         let mut context = world(&mut fixture);
@@ -1151,7 +1151,7 @@ fn composition_commit_after_blur_writes_nothing() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -1214,7 +1214,7 @@ fn composition_commit_after_equal_length_reset_conflicts() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },
@@ -1288,7 +1288,7 @@ fn caret_and_selection_paint_observe_transient_without_committing() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: "e".into(),
         },

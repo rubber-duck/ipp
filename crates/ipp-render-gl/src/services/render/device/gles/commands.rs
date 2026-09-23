@@ -666,10 +666,11 @@ impl RenderDevice for GlesRenderDevice {
             self.surface_viewport = [width as f32, height as f32];
         }
         self.begin_linear_target(width, height)?;
+        self.set_viewport([0, 0, width as i32, height as i32]);
+        self.set_depth_mask(true);
         // SAFETY: The host keeps its framebuffer/context current. These calls
         // only set context state and copy scalar arguments; no CPU pointers.
         unsafe {
-            (self.gl.viewport)(0, 0, width as i32, height as i32);
             (self.gl.enable)(0x0B71); // DEPTH_TEST
             (self.gl.enable)(0x0B44); // CULL_FACE
             (self.gl.disable)(0x0BE2); // BLEND
@@ -681,7 +682,6 @@ impl RenderDevice for GlesRenderDevice {
             (self.gl.disable)(0x8C89); // RASTERIZER_DISCARD
             (self.gl.disable)(0x0B90); // STENCIL_TEST
             (self.gl.depth_func)(0x0201); // LESS
-            (self.gl.depth_mask)(1);
             (self.gl.color_mask)(1, 1, 1, 1);
             (self.gl.front_face)(0x0901); // CCW
             (self.gl.cull_face)(0x0405); // BACK
@@ -842,7 +842,10 @@ impl RenderDevice for GlesRenderDevice {
             }
         }
 
-        self.check_frame_end()
+        let checked = self.check_frame_end();
+        // The Host regains the context and may bind its own targets.
+        self.targets.forget();
+        checked
     }
 
     fn delete_mesh(&mut self, mesh: GlesRenderMesh) {

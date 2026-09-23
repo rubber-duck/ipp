@@ -20,6 +20,7 @@ mod submission;
 mod surface;
 #[cfg(feature = "surfaces")]
 mod surface_cache;
+mod targets;
 mod uniform_values;
 #[cfg(feature = "surfaces")]
 pub use surface_cache::GlesSurfaceCacheTarget;
@@ -60,13 +61,15 @@ pub struct GlesRenderDevice {
     #[cfg(feature = "particles")]
     instance_count: i32,
     linear_target: Option<linear_target::GlesLinearTarget>,
-    presentation_target: Option<(u32, u32, [i32; 4])>,
+    presentation_target: Option<targets::GlesTarget>,
     max_viewport: [i32; 2],
     max_texture_size: u32,
     error_checks: super::error_checks::RenderDeviceErrorChecks,
     /// `glGetGraphicsResetStatus` for contexts that report loss by reset
     /// notification; unchecked frame ends query it instead of the error state.
     reset_status: Option<unsafe extern "system" fn() -> u32>,
+    /// Framebuffer, viewport and depth-write state known to match the context.
+    targets: targets::GlesTargetState,
     #[cfg(feature = "surfaces")]
     surface_quad_vao: u32,
     #[cfg(feature = "surfaces")]
@@ -83,9 +86,9 @@ pub struct GlesRenderDevice {
     surface_cache_target: Option<surface_cache::GlesSurfaceCacheBinding>,
     _thread: PhantomData<Rc<()>>,
     #[cfg(feature = "shadows")]
-    shadow_target: Option<(u32, [i32; 4])>,
+    shadow_target: Option<targets::GlesTarget>,
     #[cfg(feature = "gui")]
-    glyph_atlas_target: Option<(u32, u32, [i32; 4], [f32; 2])>,
+    glyph_atlas_target: Option<(targets::GlesTarget, [f32; 2])>,
 }
 
 /// Native linked program with cached pass-specific uniform locations.

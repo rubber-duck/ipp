@@ -109,8 +109,8 @@ impl GlesRenderDevice {
             } else {
                 (self.gl.disable)(0x0BE2);
             }
-            (self.gl.depth_mask)(u8::from(!enabled));
         }
+        self.set_depth_mask(!enabled);
         self.check_draw()
     }
 }

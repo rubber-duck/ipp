@@ -727,6 +727,7 @@ impl GlesRenderDevice {
     #[cfg(feature = "gui")]
     pub(super) fn delete_glyph_atlas_page(&mut self, page: super::GlesGlyphAtlasPage) {
         self.submission.invalidate();
+        self.forget_framebuffer(page.framebuffer);
 
         // SAFETY: Context owns these handles and tolerates invalid handles.
         unsafe {
@@ -746,29 +747,16 @@ impl GlesRenderDevice {
     ) -> Result<(), RenderError> {
         self.submission.invalidate();
 
-        // Switching between pages keeps the host target saved by the first begin.
+        // Switching between pages keeps the target saved by the first begin: the
+        // host target, or a Surface cache target when population nests in a repaint.
         if self.glyph_atlas_target.is_none() {
-            // SAFETY: Saves the borrowed host framebuffer and viewport bindings before
-            // directing rendering into the atlas page framebuffer.
-            let (draw, read, viewport) = unsafe {
-                let mut draw = 0;
-                let mut read = 0;
-                let mut vp = [0i32; 4];
-                (self.gl.get_integer)(0x8CA6, &mut draw);
-                (self.gl.get_integer)(0x8CAA, &mut read);
-                (self.gl.get_integer)(0x0BA2, vp.as_mut_ptr());
-                (draw as u32, read as u32, vp)
-            };
-
-            self.glyph_atlas_target = Some((draw, read, viewport, self.surface_viewport));
+            self.glyph_atlas_target = Some((self.current_target(), self.surface_viewport));
         }
         self.surface_viewport = [page.width as f32, page.height as f32];
 
-        // SAFETY: Directs subsequent draw commands to the atlas page framebuffer and viewport.
-        unsafe {
-            (self.gl.bind_framebuffer)(0x8D40, page.framebuffer);
-            (self.gl.viewport)(0, 0, page.width as i32, page.height as i32);
-        }
+        // Directs subsequent draw commands to the atlas page framebuffer and viewport.
+        self.bind_framebuffers(page.framebuffer, page.framebuffer);
+        self.set_viewport([0, 0, page.width as i32, page.height as i32]);
 
         Ok(())
     }
@@ -777,15 +765,12 @@ impl GlesRenderDevice {
     pub(super) fn end_glyph_atlas_page(&mut self) -> Result<(), RenderError> {
         self.submission.invalidate();
 
-        if let Some((draw, read, viewport, surface_vp)) = self.glyph_atlas_target.take() {
-            self.surface_viewport = surface_vp;
+        if let Some((target, surface_viewport)) = self.glyph_atlas_target.take() {
+            self.surface_viewport = surface_viewport;
 
-            // SAFETY: Restores the saved host framebuffer bindings and viewport.
-            unsafe {
-                (self.gl.bind_framebuffer)(0x8CA9, draw);
-                (self.gl.bind_framebuffer)(0x8CA8, read);
-                (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
-            }
+            // Restores the saved framebuffer bindings and viewport.
+            self.bind_framebuffers(target.draw, target.read);
+            self.set_viewport(target.viewport);
         }
 
         self.check()

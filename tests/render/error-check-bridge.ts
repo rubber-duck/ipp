@@ -3,9 +3,10 @@
  * distribution's shipped `webgl.js` bridge. It mirrors the native GLES probe
  * (`crates/ipp-render-gl/examples/smoke/error_checks.rs`). An error is raised
  * mid-frame through the canvas's own context, as a failed driver call would.
- * Outside exhaustive mode later draws and an unpolled frame end do not report
- * it, a polled frame end does, and a Surface cache repaint's end rejects the
- * image. Exhaustive mode reports it at the next draw. Context loss fails even
+ * Outside exhaustive mode later draws, Surface cache composites and an
+ * unpolled frame end do not report it, a polled frame end does, and a Surface
+ * cache repaint's end, not its begin, rejects the image. Exhaustive mode
+ * reports it at the next draw. Context loss fails even
  * an unpolled frame end, so recovery never waits for a sampled check.
  */
 
@@ -81,11 +82,12 @@ export async function probeErrorCheckBridge(bridgeUrl: string) {
     if (!response.ok) throw new Error(`Missing shader ${name}`);
     return bytes(new TextEncoder().encode(await response.text()));
   };
-  const [bitmapVertex, bitmapFragment, presentVertex, present] =
+  const [bitmapVertex, bitmapFragment, cacheFragment, presentVertex, present] =
     await Promise.all(
       [
         "surface_bitmap.vert",
         "surface_bitmap.frag",
+        "surface_cache.frag",
         "present.vert",
         "present.frag",
       ].map(source),
@@ -145,13 +147,35 @@ export async function probeErrorCheckBridge(bridgeUrl: string) {
     ok("same frame", ...draw);
     report.sameFrameEnd = reports("same frame", "end_frame", 1);
 
-    // A repaint whose draws raised an error is never kept as an image.
+    // The end of a repaint checks the whole pass, so an image whose pass
+    // raised an error is never kept.
     const target = call("create_surface_cache_target", 32, 16);
     if (target === 0) throw new Error(`Cache target failed: ${message()}`);
-    ok("repaint", "begin_surface_cache_target", target);
     raise();
+    ok("repaint", "begin_surface_cache_target", target);
     ok("repaint", ...draw);
     report.repaintEnd = reports("repaint", "end_surface_cache_target");
+
+    // Composites are routine draws; the frame end reports their errors.
+    const compositor = call(
+      "create_program",
+      ...bitmapVertex!,
+      ...cacheFragment!,
+    );
+    if (compositor === 0) throw new Error(`Program failed: ${message()}`);
+    ok("repainted", "begin_surface_cache_target", target);
+    ok("repainted", "end_surface_cache_target");
+    begin("composite");
+    raise();
+    ok(
+      "composite",
+      "draw_surface_cache",
+      compositor,
+      target,
+      content,
+      floats([2, 1]),
+    );
+    report.compositeFrameEnd = reports("composite", "end_frame", 1);
     call("delete_surface_cache_target", target);
 
     // Exhaustive mode attributes the error to the next routine call.

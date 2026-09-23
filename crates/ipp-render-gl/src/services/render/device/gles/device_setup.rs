@@ -108,6 +108,7 @@ impl GlesRenderDevice {
                 frame_check_interval,
             ),
             reset_status,
+            targets: Default::default(),
             #[cfg(feature = "surfaces")]
             surface_quad_vao: 0,
             #[cfg(feature = "gui")]

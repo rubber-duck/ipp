@@ -1,13 +1,18 @@
 //! Component-owned ordered two-dimensional presentation content.
 
+mod cache_policy;
 mod component;
 mod items;
 pub(in crate::world) mod rendering;
 mod system;
 pub mod text;
 
-pub use component::Surface;
+pub use cache_policy::{
+    SURFACE_CACHE_BAND_HYSTERESIS, SURFACE_CACHE_MAX_BANDS, SURFACE_CACHE_MAX_DIRECT_DISTANCE,
+    SURFACE_CACHE_MAX_REFRESH_HZ, SURFACE_CACHE_MAX_TEXELS_PER_METRE, SurfaceCachePolicy,
+};
 pub(crate) use component::validate_property_value as validate_animation_property;
+pub use component::{Surface, SurfaceCache};
 pub use items::{
     PositionedGlyph, SurfaceItem, SurfaceItemContent, SurfaceItemId, SurfaceItemPatch,
     SurfaceItemStyle,

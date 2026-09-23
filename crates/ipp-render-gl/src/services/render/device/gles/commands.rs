@@ -14,6 +14,9 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "surfaces")]
     type SurfacePath = super::GlesSurfacePath;
 
+    #[cfg(feature = "surfaces")]
+    type SurfaceCacheTarget = super::GlesSurfaceCacheTarget;
+
     #[cfg(feature = "shadows")]
     type ShadowMap = lighting::GlesShadowMap;
 
@@ -175,6 +178,59 @@ impl RenderDevice for GlesRenderDevice {
         color: &[f32; 4],
     ) -> Result<(), RenderError> {
         self.draw_surface_bitmap(program, texture, mvp, placement, clip, color)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn surface_cache_limit(&self) -> u32 {
+        self.surface_cache_dimension_limit()
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn create_surface_cache_target(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<Self::SurfaceCacheTarget, RenderError> {
+        self.create_surface_cache_target(width, height)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn resize_surface_cache_target(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        self.resize_surface_cache_target(target, width, height)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn begin_surface_cache_target(
+        &mut self,
+        target: &Self::SurfaceCacheTarget,
+    ) -> Result<(), RenderError> {
+        self.begin_surface_cache_target(target)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
+        self.end_surface_cache_target()
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_cache(
+        &mut self,
+        program: &Self::Program,
+        target: &Self::SurfaceCacheTarget,
+        mvp: &[f32; 16],
+        size: &[f32; 2],
+    ) -> Result<(), RenderError> {
+        self.draw_surface_cache(program, target, mvp, size)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_cache_target(&mut self, target: Self::SurfaceCacheTarget) {
+        self.delete_surface_cache_target(target);
     }
 
     #[cfg(feature = "gui")]

@@ -10,6 +10,8 @@ pub(super) struct GlesSubmissionState {
     pub shadow_texture: Cell<Option<u32>>,
     program: Cell<Option<u32>>,
     vertex_array: Cell<Option<u32>>,
+    /// Applied blend mode: 1 opaque, 2 straight alpha, 3 additive and 4
+    /// premultiplied Surface cache composition.
     pub blend: Cell<Option<u8>>,
 }
 

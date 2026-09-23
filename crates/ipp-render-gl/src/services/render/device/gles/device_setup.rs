@@ -112,6 +112,8 @@ impl GlesRenderDevice {
             surface_instance_scratch: Vec::new(),
             #[cfg(feature = "surfaces")]
             surface_viewport: [1.0, 1.0],
+            #[cfg(feature = "surfaces")]
+            surface_cache_target: None,
             #[cfg(feature = "shadows")]
             shadow_target: None,
             _thread: PhantomData,

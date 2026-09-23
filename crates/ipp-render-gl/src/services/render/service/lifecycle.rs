@@ -23,6 +23,16 @@ impl<D: RenderDevice> RenderService<D> {
             surface_instance_program: None,
             #[cfg(feature = "surfaces")]
             surface_bitmap_program: None,
+            #[cfg(feature = "surfaces")]
+            surface_cache_program: None,
+            #[cfg(feature = "surfaces")]
+            surface_cache: Default::default(),
+            #[cfg(feature = "surfaces")]
+            surface_cache_inputs: Vec::new(),
+            #[cfg(feature = "surfaces")]
+            surface_missing: Vec::new(),
+            #[cfg(feature = "gui")]
+            surface_analytic_text: false,
             #[cfg(feature = "gui")]
             surface_box_program: None,
             #[cfg(feature = "gui")]
@@ -179,6 +189,9 @@ impl<D: RenderDevice> RenderService<D> {
         if let Some(program) = self.surface_bitmap_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
+        // Cache images are rebuilt from current evaluated inputs; the budget survives.
+        #[cfg(feature = "surfaces")]
+        self.clear_surface_caches();
         #[cfg(feature = "gui")]
         if let Some(program) = self.surface_box_program.take() {
             self.device.borrow_mut().delete_program(program);
@@ -263,9 +276,11 @@ impl<D: RenderDevice> RenderService<D> {
     /// Drop renderer-only history when a World is destroyed or detached from presentation.
     ///
     /// The World's glyph demand leaves the shared atlas; pages other Worlds still use
-    /// stay resident.
+    /// stay resident. Its Surface cache images are released.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
         self.light_selections.remove(&world);
+        #[cfg(feature = "surfaces")]
+        self.forget_surface_caches(world);
         #[cfg(feature = "gui")]
         {
             self.gui_batch_cache.remove(&world);
@@ -299,6 +314,12 @@ impl<D: RenderDevice> RenderService<D> {
 
 impl<D: RenderDevice> Drop for RenderService<D> {
     fn drop(&mut self) {
+        #[cfg(feature = "surfaces")]
+        {
+            let mut device = self.device.borrow_mut();
+            self.surface_cache
+                .clear(&mut super::surface_cache::DeviceCacheTargets(&mut *device));
+        }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
         #[cfg(feature = "shadows")]

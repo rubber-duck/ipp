@@ -12,6 +12,49 @@ export interface FrameCapture {
   backend: Record<string, unknown>;
 }
 
+/** How an opted-in Surface was presented by the last completed frame. */
+export type SurfaceCacheMode =
+  | "near"
+  | "interaction"
+  | "fallback"
+  | "unavailable"
+  | "culled"
+  | "reused"
+  | "repainted";
+
+/** Presentation modes in the order of their renderer export codes. */
+export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
+  "near",
+  "interaction",
+  "fallback",
+  "unavailable",
+  "culled",
+  "reused",
+  "repainted",
+];
+
+/**
+ * Read-only whole-Surface cache state of one opted-in Surface, reported by
+ * `FrameCapture.backend.surfaceCaches` in render builds with Surfaces.
+ */
+export interface SurfaceCacheRecord {
+  /** Generational entity identity within the captured World. */
+  entity: bigint;
+  mode: SurfaceCacheMode;
+  /** Selected distance band; 0 is direct. */
+  band: number;
+  /** Resident image size in texels; zero without an image. */
+  width: number;
+  height: number;
+  /** Repaints and unchanged-image reuses since the entry was created. */
+  repaints: number;
+  reuses: number;
+  /** World time of the last repaint, in milliseconds. */
+  paintedAtMs: number;
+  /** Resident image bytes. */
+  residentBytes: number;
+}
+
 /**
  * Bounds of the renderer's shared glyph atlas on one graphics context. Limits
  * survive context loss and apply at the renderer's next glyph demand publication.
@@ -31,6 +74,11 @@ export interface ClientPresentation {
   restoreContext(): void;
   /** Requires a GUI render build; others fail the presentation. */
   setGlyphAtlasLimits(limits: GlyphAtlasLimits): void;
+  /**
+   * Bound resident whole-Surface cache image bytes on this graphics context;
+   * zero disables caching. Requires a render build with Surfaces.
+   */
+  setSurfaceCacheBudget(bytes: number): void;
 }
 
 export interface Presentation {
@@ -43,6 +91,7 @@ export interface Presentation {
   loseContext(): void;
   restoreContext(): void;
   setGlyphAtlasLimits(limits: GlyphAtlasLimits): void;
+  setSurfaceCacheBudget(bytes: number): void;
 }
 
 export const MAX_CAPTURE_DIMENSION = 2_048;
@@ -74,6 +123,13 @@ export function validateGlyphAtlasLimits(limits: GlyphAtlasLimits): void {
       "Glyph atlas limits must be integers: maxPages in 1..=2^32-1 and idlePagePublications in 0..=2^32-1",
     );
   }
+}
+
+export function validateSurfaceCacheBudget(bytes: number): void {
+  if (!Number.isInteger(bytes) || bytes < 0 || bytes > 0xffff_ffff)
+    throw new RangeError(
+      "Surface cache budget must be an integer in 0..=2^32-1",
+    );
 }
 
 interface CaptureWaiter {
@@ -148,6 +204,11 @@ export class PortPresentation implements Presentation {
       maxPages: limits.maxPages,
       idlePagePublications: limits.idlePagePublications,
     });
+  }
+
+  setSurfaceCacheBudget(bytes: number): void {
+    validateSurfaceCacheBudget(bytes);
+    this.send({ type: "surface-cache-budget", bytes });
   }
 
   receive(data: Record<string, unknown>): boolean {

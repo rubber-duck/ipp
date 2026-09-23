@@ -25,7 +25,7 @@ pub use crate::systems::render::{
 };
 
 #[cfg(feature = "surfaces")]
-pub use crate::systems::surface::Surface;
+pub use crate::systems::surface::{Surface, SurfaceCache};
 
 #[cfg(feature = "gui")]
 pub use crate::systems::gui::GuiRoot;

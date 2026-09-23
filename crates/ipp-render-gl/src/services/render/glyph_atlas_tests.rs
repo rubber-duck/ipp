@@ -36,6 +36,7 @@ impl RenderDevice for MockAtlasDevice {
     type Mesh = u32;
     type Texture = u32;
     type SurfacePath = u32;
+    type SurfaceCacheTarget = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockBatch;

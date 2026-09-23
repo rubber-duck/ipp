@@ -191,6 +191,27 @@ unsafe extern "C" {
         color: *const f32,
     ) -> u32;
 
+    #[cfg(feature = "surfaces")]
+    fn surface_cache_limit() -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn create_surface_cache_target(width: u32, height: u32) -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn resize_surface_cache_target(target: u32, width: u32, height: u32) -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn begin_surface_cache_target(target: u32) -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn end_surface_cache_target() -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_cache(program: u32, target: u32, mvp: *const f32, size: *const f32) -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_cache_target(target: u32);
+
     #[cfg(feature = "gui")]
     fn create_gui_batch(vertex_ptr: *const f32, byte_length: u32, layout_ptr: *const u32) -> u32;
 
@@ -347,6 +368,9 @@ impl RenderDevice for WebGlRenderDevice {
 
     #[cfg(feature = "surfaces")]
     type SurfacePath = u32;
+
+    #[cfg(feature = "surfaces")]
+    type SurfaceCacheTarget = u32;
 
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
@@ -610,6 +634,76 @@ impl RenderDevice for WebGlRenderDevice {
                 color.as_ptr(),
             )
         })
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn surface_cache_limit(&self) -> u32 {
+        // SAFETY: A scalar capability query; no Rust memory crosses the boundary and
+        // the bridge cannot reenter Rust. A lost context reports zero.
+        unsafe { surface_cache_limit() }
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn create_surface_cache_target(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<Self::SurfaceCacheTarget, RenderError> {
+        // SAFETY: Only scalar dimensions cross the boundary; no Rust memory is borrowed.
+        // The bridge returns a never-reused handle, or zero on failure.
+        let id = unsafe { create_surface_cache_target(width, height) };
+        if id == 0 {
+            Err(self.error())
+        } else {
+            Ok(id)
+        }
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn resize_surface_cache_target(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderError> {
+        // SAFETY: Only scalars cross the boundary; the bridge validates the handle.
+        self.check(unsafe { resize_surface_cache_target(*target, width, height) })
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn begin_surface_cache_target(
+        &mut self,
+        target: &Self::SurfaceCacheTarget,
+    ) -> Result<(), RenderError> {
+        // SAFETY: Only the scalar handle crosses the boundary; the bridge validates it.
+        self.check(unsafe { begin_surface_cache_target(*target) })
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
+        // SAFETY: No arguments; the bridge restores its saved target and checks errors.
+        self.check(unsafe { end_surface_cache_target() })
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_cache(
+        &mut self,
+        program: &Self::Program,
+        target: &Self::SurfaceCacheTarget,
+        mvp: &[f32; 16],
+        size: &[f32; 2],
+    ) -> Result<(), RenderError> {
+        // SAFETY: Handles are bridge-validated and the borrowed fixed arrays are
+        // copied synchronously into uniforms; the bridge keeps no view and cannot
+        // reenter Rust, so neither borrow is aliased or invalidated.
+        self.check(unsafe { draw_surface_cache(program.id, *target, mvp.as_ptr(), size.as_ptr()) })
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_cache_target(&mut self, target: Self::SurfaceCacheTarget) {
+        // SAFETY: Only the scalar handle crosses the boundary; the bridge ignores
+        // unknown handles, tolerates context loss and cannot reenter Rust.
+        unsafe { delete_surface_cache_target(target) };
     }
 
     #[cfg(feature = "gui")]

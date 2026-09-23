@@ -114,6 +114,8 @@ def main(selected_profiles=None):
             expected.append("Surface")
         if "gui" in features:
             expected.append("GuiRoot")
+        if "surfaces" in features:
+            expected.append("SurfaceCache")
         if names != expected:
             raise ValueError(f"{configuration}: unexpected compiled registry {names}")
         reports[configuration] = report

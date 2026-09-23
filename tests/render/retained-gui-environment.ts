@@ -15,6 +15,7 @@ import {
   COMPARISON_TOLERANCE,
   compareBuildFrames,
   exerciseRetainedGui,
+  type RetainedGuiOptions,
   type RetainedGuiReport,
   type WorkloadFrame,
 } from "./retained-gui-scenario.js";
@@ -65,6 +66,7 @@ export async function runRetainedGui(
   signal: AbortSignal,
   iterations: number,
   output: string,
+  options: RetainedGuiOptions = {},
 ) {
   const workspace = process.cwd();
   const identity = runIdentity(workspace, iterations);
@@ -150,6 +152,7 @@ export async function runRetainedGui(
             },
             retained,
             iterations,
+            options,
           );
           reports.push({
             build: name,
@@ -219,6 +222,14 @@ export async function runRetainedGui(
           },
         },
         tolerance: COMPARISON_TOLERANCE,
+        // Seven per-frame cache counters of each build's warm frame, running
+        // totals after the last sample, and the warm frame's cache records.
+        surfaceCache: options.surfaceCache
+          ? reports.map(({ build, surfaceCache }) => ({
+              build,
+              ...surfaceCache,
+            }))
+          : null,
         comparisons: comparisons.map((comparison) => ({
           ...comparison,
           artifacts: ["expected", "actual", "diff"].map(

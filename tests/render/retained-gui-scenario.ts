@@ -67,13 +67,44 @@ const GUI_SHAPE = {
   cornerRadius: 0.12,
 } as const;
 
+/** Per-frame and context-wide whole-Surface cache counters of render builds with Surfaces. */
+export const SURFACE_CACHE_COUNTERS = [
+  "surfaceCacheRepaints",
+  "surfaceCacheReuses",
+  "surfaceCacheDirect",
+  "surfaceCacheFallbacks",
+  "surfaceCacheAllocations",
+  "surfaceCacheEntries",
+  "surfaceCacheResidentBytes",
+] as const;
+
+/**
+ * `--surface-cache` benchmark policy for the terminal panels: cached at every
+ * distance, at the 160 px/m density of the 640 x 480 terminal view, and with the
+ * highest refresh cap so every streamed update presents at its next frame.
+ * Unchanged frames reuse the image; refresh-cap behaviour is asserted by the
+ * surface-cache suite.
+ */
+export const BENCHMARK_SURFACE_CACHE_POLICY = {
+  direct_distance: 0,
+  texels_per_metre: 160,
+  max_refresh_hz: 240,
+} as const;
+
+export interface RetainedGuiOptions {
+  /** Opt the terminal workload panels into whole-Surface caching. */
+  surfaceCache?: typeof BENCHMARK_SURFACE_CACHE_POLICY;
+}
+
 /** Observable assertions are independent of the worker/process arrangement. */
 export async function exerciseRetainedGui(
   driver: RetainedGuiDriver,
   retained: boolean,
   iterations: number,
+  options: RetainedGuiOptions = {},
 ) {
   const { call } = driver;
+  const cache = options.surfaceCache ? { cache: options.surfaceCache } : {};
   const terminal = {
     rows: 12,
     columns: 36,
@@ -82,7 +113,10 @@ export async function exerciseRetainedGui(
     cursor: true,
     width: 640,
     height: 480,
+    ...cache,
   };
+  // Atlas pressure needs glyph bands at the 1280 x 960 screen density, so these
+  // steps present directly; a cached image rasterizes at its policy density.
   const atlas = {
     rows: 8,
     columns: 24,
@@ -442,8 +476,27 @@ export async function exerciseRetainedGui(
     assert.equal(number(empty, "guiResidentBytes"), 0);
     assert.equal(number(empty, "glyphResidentBytes"), 0);
   }
+  const surfaceCache = options.surfaceCache
+    ? {
+        policy: options.surfaceCache,
+        warm: Object.fromEntries(
+          SURFACE_CACHE_COUNTERS.map((key) => [key, warm.backend[key] ?? null]),
+        ),
+        totals: Object.fromEntries(
+          [
+            "totalSurfaceCacheRepaints",
+            "totalSurfaceCacheReuses",
+            "totalSurfaceCacheDirect",
+            "totalSurfaceCacheFallbacks",
+            "totalSurfaceCacheAllocations",
+          ].map((key) => [key, samples.at(-1)?.frame.backend[key] ?? null]),
+        ),
+        records: warm.backend.surfaceCaches ?? null,
+      }
+    : null;
   return {
     retained,
+    surfaceCache,
     counters: retained ? "reported" : "unavailable",
     viewports: [
       ...new Set(samples.map(({ frame }) => `${frame.width}x${frame.height}`)),

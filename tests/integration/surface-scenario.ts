@@ -8,12 +8,20 @@ import {
 import type { TerminalAssets } from "../../examples/surface-terminal/scene.js";
 import {
   aliasId,
+  componentFields,
   createEntity,
   insertComponent,
   successfulBatch,
 } from "./camera-fixtures.js";
 
 export type SurfaceTestClient = SurfaceWorldClient & AnimationWorldClient;
+
+/** Cache policy the lifecycle scenario leaves authored for snapshot checks. */
+export const SURFACE_CACHE_POLICY = {
+  direct_distance: 0.5,
+  texels_per_metre: 128,
+  max_refresh_hz: 2,
+} as const;
 
 function expect(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -37,6 +45,120 @@ export async function surfaceSnapshot(
     collection: client.decodeSurfaceItems(bytes),
     properties: component.properties ?? {},
   };
+}
+
+/** Authored SurfaceCache fields on one entity, or undefined when direct. */
+export async function surfaceCachePolicy(
+  client: SurfaceWorldClient,
+  entity: bigint,
+) {
+  const descriptor = client.components.SurfaceCache;
+  expect(descriptor, "Surface target omitted the SurfaceCache component");
+  const snapshot = (await client.inspect()).entities.find(
+    (item) => item.id === entity,
+  );
+  expect(snapshot, "Surface entity disappeared");
+  const component = snapshot.effective.find(
+    (item) => item.component === descriptor.id,
+  );
+  if (!component) return undefined;
+  const { direct_distance, texels_per_metre, max_refresh_hz } =
+    component.fields;
+  return { direct_distance, texels_per_metre, max_refresh_hz };
+}
+
+/**
+ * Opt-in cache policy authoring through the generated client: Surfaces start
+ * direct, invalid thresholds are rejected without changing the authored
+ * policy, removal resets to direct presentation and reinsertion restores the
+ * runtime defaults. Leaves `authored` in place for snapshot checks.
+ */
+export async function exerciseSurfaceCachePolicy(
+  client: SurfaceWorldClient,
+  entity: bigint,
+  authored: {
+    direct_distance: number;
+    texels_per_metre: number;
+    max_refresh_hz: number;
+  },
+) {
+  const descriptor = client.components.SurfaceCache;
+  expect(descriptor, "Surface target omitted the SurfaceCache component");
+  const ref = { kind: "handle", id: entity } as const;
+  const same = (actual: unknown, expected: unknown) =>
+    JSON.stringify(actual) === JSON.stringify(expected);
+  expect(
+    (await surfaceCachePolicy(client, entity)) === undefined,
+    "Surfaces must present directly until opted in",
+  );
+  const initial = {
+    direct_distance: 2,
+    texels_per_metre: 256,
+    max_refresh_hz: 10,
+  };
+  successfulBatch(
+    await client.batch([insertComponent(client, "SurfaceCache", ref, initial)]),
+  );
+  expect(
+    same(await surfaceCachePolicy(client, entity), initial),
+    "SurfaceCache insertion did not author every field",
+  );
+  for (const [field, value] of [
+    ["direct_distance", -1],
+    ["texels_per_metre", 0],
+    ["max_refresh_hz", 1e6],
+  ] as const) {
+    const outcome = await client.batch([
+      {
+        kind: "setField",
+        entity: ref,
+        component: descriptor.id,
+        field: componentFields(client, "SurfaceCache", { [field]: value })[0]!,
+      },
+    ]);
+    expect(
+      !outcome.ok && outcome.error.reason === "InvalidValue",
+      `SurfaceCache ${field}=${value} was not rejected as invalid`,
+    );
+    expect(
+      same(await surfaceCachePolicy(client, entity), initial),
+      `Rejected SurfaceCache ${field} changed the authored policy`,
+    );
+  }
+  successfulBatch(
+    await client.batch([
+      { kind: "removeComponent", entity: ref, component: descriptor.id },
+    ]),
+  );
+  expect(
+    (await surfaceCachePolicy(client, entity)) === undefined,
+    "Removing SurfaceCache did not reset to direct presentation",
+  );
+  successfulBatch(
+    await client.batch([insertComponent(client, "SurfaceCache", ref)]),
+  );
+  expect(
+    same(await surfaceCachePolicy(client, entity), {
+      direct_distance: 4,
+      texels_per_metre: 512,
+      max_refresh_hz: 30,
+    }),
+    "Reinserted SurfaceCache did not use the runtime defaults",
+  );
+  successfulBatch(
+    await client.batch(
+      componentFields(client, "SurfaceCache", authored).map((field) => ({
+        kind: "setField" as const,
+        entity: ref,
+        component: descriptor.id,
+        field,
+      })),
+    ),
+  );
+  expect(
+    same(await surfaceCachePolicy(client, entity), authored),
+    "SurfaceCache field edits were not authored",
+  );
 }
 
 export async function waitSurfaceAssets(
@@ -287,6 +409,7 @@ export async function exerciseSurfaceLifecycle(
     rejected = true;
   }
   expect(rejected, "Invalid item edit did not return a correlated error");
+  await exerciseSurfaceCachePolicy(client, entity, SURFACE_CACHE_POLICY);
   return {
     entity,
     nextId: after.collection.nextId,

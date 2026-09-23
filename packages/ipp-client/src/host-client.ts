@@ -337,6 +337,10 @@ export abstract class HostClientBase<T extends Client> {
             this.requireAttachment(attachment);
             presentation.setGlyphAtlasLimits(limits);
           },
+          setSurfaceCacheBudget: (bytes: number) => {
+            this.requireAttachment(attachment);
+            presentation.setSurfaceCacheBudget(bytes);
+          },
         } satisfies Presentation,
       });
     attachment.client = this.createWorldClient(

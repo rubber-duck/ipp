@@ -24,6 +24,8 @@ mod shader_asset;
 #[cfg(feature = "surfaces")]
 mod surface_assets;
 #[cfg(feature = "surfaces")]
+mod surface_cache;
+#[cfg(feature = "surfaces")]
 mod surface_path;
 mod template;
 
@@ -50,3 +52,7 @@ pub use device::GlesRenderDevice;
 
 pub use lighting::RenderLightingFrame;
 pub use service::{RenderError, RenderService, RenderStats};
+#[cfg(feature = "surfaces")]
+pub use surface_cache::{
+    DEFAULT_SURFACE_CACHE_BUDGET_BYTES, SurfaceCacheDiagnostic, SurfaceCachePresentation,
+};

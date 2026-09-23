@@ -2087,6 +2087,18 @@ impl GuiInputSystem {
         }
     }
 
+    /// Panel entities with live interaction priority: keyboard focus, pointer
+    /// hover, press or capture. Surface cache presentation reads this to force
+    /// direct rendering; removed or disabled roots leave with their cursors.
+    pub(crate) fn interaction_roots(&self) -> BTreeSet<EntityId> {
+        let mut roots = BTreeSet::new();
+        roots.extend(self.focus.map(|focus| focus.target.entity));
+        roots.extend(self.hovers.values().map(|cursor| cursor.target.entity));
+        roots.extend(self.press_owners.keys().map(|target| target.entity));
+        roots.extend(self.captures.values().map(|capture| capture.target.entity));
+        roots
+    }
+
     /// Snapshot hover, press and focus cursors for skin paint. Read-only:
     /// prepared paint observes live interaction here instead of
     /// reconstructing it from routed effects. Never mutates cursors,

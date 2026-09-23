@@ -48,3 +48,7 @@ required-features = ["gui"]
 [[example]]
 name = "egl_gui_layout"
 required-features = ["gui"]
+
+[[example]]
+name = "egl_surface_cache"
+required-features = ["gui"]

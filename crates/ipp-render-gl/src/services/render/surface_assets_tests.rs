@@ -11,6 +11,7 @@ impl RenderDevice for Device {
     type Mesh = ();
     type Texture = ();
     type SurfacePath = ();
+    type SurfaceCacheTarget = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = ();
     #[cfg(feature = "gui")]

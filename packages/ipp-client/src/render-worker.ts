@@ -1,5 +1,14 @@
-import { validateGlyphAtlasLimits, validateViewport } from "./presentation.js";
-import type { FrameCapture, GlyphAtlasLimits } from "./presentation.js";
+import {
+  SURFACE_CACHE_MODES,
+  validateGlyphAtlasLimits,
+  validateSurfaceCacheBudget,
+  validateViewport,
+} from "./presentation.js";
+import type {
+  FrameCapture,
+  GlyphAtlasLimits,
+  SurfaceCacheRecord,
+} from "./presentation.js";
 import { DiagnosticLogger, type LogLevel } from "./logging.js";
 
 /** Imported only by a worker initialized with an OffscreenCanvas. */
@@ -59,6 +68,66 @@ const ACCUMULATED_GUI_STATISTICS = {
   glyphPageRetirements: "totalGlyphPageRetirements",
 } as const;
 
+/**
+ * Whole-Surface cache counters exported together by render builds with Surfaces,
+ * independently of the GUI set. A partial set is a build error; an absent set
+ * reads as unavailable, never as zero work.
+ */
+const SURFACE_CACHE_STATISTICS = {
+  surfaceCacheRepaints: "ipp_render_surface_cache_repaints",
+  surfaceCacheReuses: "ipp_render_surface_cache_reuses",
+  surfaceCacheDirect: "ipp_render_surface_cache_direct",
+  surfaceCacheFallbacks: "ipp_render_surface_cache_fallbacks",
+  surfaceCacheAllocations: "ipp_render_surface_cache_allocations",
+  surfaceCacheEntries: "ipp_render_surface_cache_entries",
+  surfaceCacheResidentBytes: "ipp_render_surface_cache_resident_bytes",
+} as const;
+
+/** Record and budget exports belonging to the same complete Surface cache set. */
+const SURFACE_CACHE_RECORD_EXPORTS = [
+  "ipp_render_surface_cache_records_ptr",
+  "ipp_render_surface_cache_records_len",
+  "ipp_render_set_surface_cache_budget",
+] as const;
+
+/** Words per exported Surface cache record; see `ipp-wasm` `services/render.rs`. */
+const SURFACE_CACHE_RECORD_WORDS = 10;
+
+type SurfaceCacheStatistics = Record<
+  keyof typeof SURFACE_CACHE_STATISTICS,
+  () => number
+>;
+
+interface SurfaceCacheExports {
+  statistics: SurfaceCacheStatistics;
+  recordsPointer: () => number;
+  recordsLength: () => number;
+  setBudget: (bytes: number) => number;
+}
+
+/** Per-submission cache counters also accumulated across every rendered tick. */
+const ACCUMULATED_SURFACE_CACHE_STATISTICS = {
+  surfaceCacheRepaints: "totalSurfaceCacheRepaints",
+  surfaceCacheReuses: "totalSurfaceCacheReuses",
+  surfaceCacheDirect: "totalSurfaceCacheDirect",
+  surfaceCacheFallbacks: "totalSurfaceCacheFallbacks",
+  surfaceCacheAllocations: "totalSurfaceCacheAllocations",
+} as const;
+
+/** Exports of one capability set: all present, or none. A partial set is a build error. */
+function completeExportSet(
+  candidate: Record<string, unknown>,
+  names: readonly string[],
+  description: string,
+): boolean {
+  const missing = names.filter((name) => typeof candidate[name] !== "function");
+  if (missing.length !== 0 && missing.length !== names.length)
+    throw new Error(
+      `WASM runtime exports an incomplete ${description} set; missing ${missing.join(", ")}`,
+    );
+  return missing.length === 0;
+}
+
 interface CaptureRequest {
   id: number;
   session: bigint;
@@ -77,6 +146,11 @@ export class RenderWorkerService {
   /** Latest requested atlas bounds, applied again for a later World session. */
   private glyphAtlasLimits: GlyphAtlasLimits | undefined;
   private readonly retainedTotals: Record<string, number> = {};
+  /** Absent for builds without Surfaces: cache counters are unavailable, not zero. */
+  private surfaceCacheExports: SurfaceCacheExports | undefined;
+  private readonly surfaceCacheTotals: Record<string, number> = {};
+  /** Latest requested cache image budget, applied again for a later World session. */
+  private surfaceCacheBudget: number | undefined;
   private session = 0n;
   private generation = 0;
   private totalUploadedBytes = 0;
@@ -178,12 +252,53 @@ export class RenderWorkerService {
       typeof limits === "function"
         ? (limits as (maxPages: number, idlePagePublications: number) => number)
         : undefined;
+    this.surfaceCacheExports = completeExportSet(
+      candidate,
+      [
+        ...Object.values(SURFACE_CACHE_STATISTICS),
+        ...SURFACE_CACHE_RECORD_EXPORTS,
+      ],
+      "Surface cache statistics",
+    )
+      ? {
+          statistics: Object.fromEntries(
+            Object.entries(SURFACE_CACHE_STATISTICS).map(([key, name]) => [
+              key,
+              candidate[name] as () => number,
+            ]),
+          ) as SurfaceCacheStatistics,
+          recordsPointer:
+            candidate.ipp_render_surface_cache_records_ptr as () => number,
+          recordsLength:
+            candidate.ipp_render_surface_cache_records_len as () => number,
+          setBudget: candidate.ipp_render_set_surface_cache_budget as (
+            bytes: number,
+          ) => number,
+        }
+      : undefined;
     this.runtime = exports as RenderHostExports;
     this.session = session;
     this.observedRenderTick = 0n;
     this.device.setMemory(this.runtime.memory);
     this.applyGlyphAtlasLimits();
+    this.applySurfaceCacheBudget();
     if (!this.device.isContextLost()) this.attach();
+  }
+
+  /** The renderer keeps its budget through context loss; a later session receives it again. */
+  private applySurfaceCacheBudget(): void {
+    const bytes = this.surfaceCacheBudget;
+    if (bytes === undefined || !this.runtime) return;
+    if (!this.surfaceCacheExports)
+      throw new Error(
+        "WASM runtime has no Surface cache; select a render build with Surfaces",
+      );
+    if (this.surfaceCacheExports.setBudget(bytes >>> 0) !== 1)
+      throw new Error("Rust renderer rejected the Surface cache budget");
+    this.logger.log("debug", "renderer.surface_cache_budget", () => ({
+      session: this.session,
+      bytes,
+    }));
   }
 
   /** The renderer keeps limits through context loss; a later session receives them again. */
@@ -296,6 +411,15 @@ export class RenderWorkerService {
             this.retainedStatistics[
               key as keyof typeof ACCUMULATED_GUI_STATISTICS
             ]();
+      if (this.surfaceCacheExports)
+        for (const [key, total] of Object.entries(
+          ACCUMULATED_SURFACE_CACHE_STATISTICS,
+        ))
+          this.surfaceCacheTotals[total] =
+            (this.surfaceCacheTotals[total] ?? 0) +
+            this.surfaceCacheExports.statistics[
+              key as keyof typeof ACCUMULATED_SURFACE_CACHE_STATISTICS
+            ]();
       this.observedRenderTick = tick;
     }
     for (const [id, request] of this.captures) {
@@ -333,6 +457,9 @@ export class RenderWorkerService {
                 ),
               }
             : {}),
+          ...(this.surfaceCacheExports
+            ? this.surfaceCacheBackend(runtime, this.surfaceCacheExports)
+            : {}),
           invalidCamera: runtime.ipp_render_invalid_camera() !== 0,
           unshadowedLights: runtime.ipp_render_unshadowed_lights(),
           ingress: { ...this.ingress },
@@ -341,6 +468,53 @@ export class RenderWorkerService {
       this.captures.delete(id);
       this.post({ type: "capture-result", id, frame }, [pixels.buffer]);
     }
+  }
+
+  /** Cache counters, running totals and records of the last completed frame. */
+  private surfaceCacheBackend(
+    runtime: RenderHostExports,
+    exports: SurfaceCacheExports,
+  ): Record<string, unknown> {
+    const length = exports.recordsLength() >>> 0;
+    if (length % SURFACE_CACHE_RECORD_WORDS !== 0)
+      throw new Error("Surface cache records are not whole records");
+    // Copy immediately: the renderer refills this storage on its next frame.
+    const words =
+      length === 0
+        ? new Uint32Array(0)
+        : new Uint32Array(
+            runtime.memory.buffer,
+            exports.recordsPointer() >>> 0,
+            length,
+          ).slice();
+    const surfaceCaches: SurfaceCacheRecord[] = [];
+    for (let at = 0; at < words.length; at += SURFACE_CACHE_RECORD_WORDS) {
+      const mode = SURFACE_CACHE_MODES[words[at + 2]!];
+      if (!mode) throw new Error("Unknown Surface cache presentation code");
+      surfaceCaches.push({
+        entity: BigInt(words[at]!) | (BigInt(words[at + 1]!) << 32n),
+        mode,
+        band: words[at + 3]!,
+        width: words[at + 4]!,
+        height: words[at + 5]!,
+        repaints: words[at + 6]!,
+        reuses: words[at + 7]!,
+        paintedAtMs: words[at + 8]!,
+        residentBytes: words[at + 9]!,
+      });
+    }
+    return {
+      ...Object.fromEntries(
+        Object.entries(exports.statistics).map(([key, read]) => [key, read()]),
+      ),
+      ...Object.fromEntries(
+        Object.values(ACCUMULATED_SURFACE_CACHE_STATISTICS).map((total) => [
+          total,
+          this.surfaceCacheTotals[total] ?? 0,
+        ]),
+      ),
+      surfaceCaches,
+    };
   }
 
   receive(data: Record<string, unknown>): boolean {
@@ -403,6 +577,13 @@ export class RenderWorkerService {
       validateGlyphAtlasLimits(limits);
       this.glyphAtlasLimits = limits;
       this.applyGlyphAtlasLimits();
+      return true;
+    }
+    if (data.type === "surface-cache-budget") {
+      const bytes = data.bytes as number;
+      validateSurfaceCacheBudget(bytes);
+      this.surfaceCacheBudget = bytes;
+      this.applySurfaceCacheBudget();
       return true;
     }
     if (data.type === "context-loss") {

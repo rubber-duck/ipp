@@ -9,6 +9,8 @@ mod lifecycle;
 mod shadow;
 #[cfg(feature = "surfaces")]
 mod surface;
+#[cfg(feature = "surfaces")]
+mod surface_cache;
 
 use std::fmt;
 use std::{
@@ -122,6 +124,36 @@ pub struct RenderStats {
     /// Total resident bytes occupied by the shared glyph atlas page textures.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
+    /// Opted-in Surfaces repainted into their cache images during this submission,
+    /// before the main pass. Each repaint also counts its primitive draws.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_repaints: u32,
+    /// Opted-in Surfaces composited from an unchanged cache image, without repainting.
+    /// A composite is one draw call of two triangles.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_reuses: u32,
+    /// Opted-in visible Surfaces presented directly: inside their direct distance,
+    /// under GUI interaction, after a fallback or without cache support. Culled
+    /// Surfaces count in none of the cache counters.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_direct: u32,
+    /// Opted-in Surfaces presented directly because the byte budget, a zero budget,
+    /// or a recoverable allocation, repaint or composite failure and its retry
+    /// interval left no usable image. Also counted in `surface_cache_direct`.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_fallbacks: u32,
+    /// Cache images created or resized during this submission; each is repainted
+    /// before it is shown.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_allocations: u32,
+    /// Resident cache images across every World presented through this context,
+    /// after this submission's releases.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_entries: u32,
+    /// Resident bytes of cache images across every World presented through this
+    /// context, four per texel.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_resident_bytes: u32,
 }
 /// Host-owned rendering of evaluated World inputs through one graphics context.
 ///
@@ -161,6 +193,22 @@ pub struct RenderService<D: RenderDevice> {
     surface_instance_program: Option<D::Program>,
     #[cfg(feature = "surfaces")]
     surface_bitmap_program: Option<D::Program>,
+    #[cfg(feature = "surfaces")]
+    surface_cache_program: Option<D::Program>,
+    /// Whole-Surface cache images shared by every World on this context.
+    #[cfg(feature = "surfaces")]
+    surface_cache: super::surface_cache::SurfaceTextureCache<D::SurfaceCacheTarget>,
+    /// Reused per-frame cache planning inputs.
+    #[cfg(feature = "surfaces")]
+    surface_cache_inputs: Vec<super::surface_cache::SurfaceCacheInput>,
+    /// Resources whose primitives the last Surface submission skipped because
+    /// they were not resident; a cache repaint records them as incomplete.
+    #[cfg(feature = "surfaces")]
+    surface_missing: Vec<ipp_core::services::asset_management::AssetKey>,
+    /// The last Surface submission drew a text run analytically because its
+    /// atlas entries were not all resident.
+    #[cfg(feature = "gui")]
+    surface_analytic_text: bool,
     #[cfg(feature = "gui")]
     surface_box_program: Option<D::Program>,
     #[cfg(feature = "gui")]

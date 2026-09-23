@@ -100,6 +100,9 @@ pub use system::{RenderSystem, RenderSystemFactory};
 #[cfg(feature = "gui")]
 mod gui_presentation;
 
+#[cfg(feature = "surfaces")]
+mod surface_cache_inputs;
+
 pub(in crate::world) struct RenderReadAccess<'a> {
     world: &'a WorldSimulationState,
     assets: &'a AssetManagementService,

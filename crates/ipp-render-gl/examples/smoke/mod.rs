@@ -7,6 +7,9 @@ pub(crate) mod world;
 pub(crate) mod shapes;
 #[cfg(feature = "surfaces")]
 #[allow(dead_code)]
+pub(crate) mod surface_cache_target;
+#[cfg(feature = "surfaces")]
+#[allow(dead_code)]
 pub(crate) mod surfaces;
 pub(crate) mod textures;
 

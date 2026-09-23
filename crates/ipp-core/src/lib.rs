@@ -58,14 +58,15 @@ pub use systems::render::render_state::{RenderState, RenderStateChange, RenderSt
 
 #[cfg(feature = "surfaces")]
 pub use systems::surface::{
-    PositionedGlyph, SEGMENTATION_SCOPE, Surface, SurfaceClipRect, SurfaceCommand, SurfaceGlyph,
-    SurfaceItem, SurfaceItemContent, SurfaceItemId, SurfaceItemPatch, SurfaceItemStyle,
-    SurfacePrimitiveIdentity, SurfacePrimitiveStyle, SurfaceRenderItem, SurfaceRenderPrimitive,
-    SurfaceRenderResource, TextCacheKey, TextCaret, TextFont, TextGlyph, TextLayout, TextLine,
-    TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, TextRequestError, TextUnits,
-    UNICODE_VERSION, grapheme_boundaries, intersect_surface_clips, is_grapheme_boundary,
-    measure_text, primitive_effective_clip, surface_clip_is_empty, surface_content_clip,
-    surface_primitive_visible, utf8_to_utf16_offset, utf16_to_utf8_offset,
+    PositionedGlyph, SEGMENTATION_SCOPE, Surface, SurfaceCache, SurfaceCachePolicy,
+    SurfaceClipRect, SurfaceCommand, SurfaceGlyph, SurfaceItem, SurfaceItemContent, SurfaceItemId,
+    SurfaceItemPatch, SurfaceItemStyle, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
+    SurfaceRenderItem, SurfaceRenderPrimitive, SurfaceRenderResource, TextCacheKey, TextCaret,
+    TextFont, TextGlyph, TextLayout, TextLine, TextLinePolicy, TextMaxWidth, TextMeasureRequest,
+    TextOutcome, TextRequestError, TextUnits, UNICODE_VERSION, grapheme_boundaries,
+    intersect_surface_clips, is_grapheme_boundary, measure_text, primitive_effective_clip,
+    surface_clip_is_empty, surface_content_clip, surface_primitive_visible, utf8_to_utf16_offset,
+    utf16_to_utf8_offset,
 };
 
 #[cfg(feature = "gui")]

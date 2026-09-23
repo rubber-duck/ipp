@@ -2343,7 +2343,10 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         );
       };
       const observe = async (label: string): Promise<CacheObservation> => {
-        const entity = guiEntity(await g.inspect())?.id;
+        const entity = await g.call<bigint | undefined>(
+          "galleryEntityId",
+          "gui-demo",
+        );
         const { frame } = await g.capture(label);
         const backend = frame.backend;
         const records = backend.surfaceCaches as

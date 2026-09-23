@@ -597,3 +597,43 @@ fn skin_clip_completing_or_suspending_between_input_admission_and_step() {
     frames(&mut host, world, panel, 30);
     assert_settled(&mut host, world, panel, IDLE);
 }
+
+#[test]
+fn skin_transition_reconciles_and_repaints_on_every_animated_frame_only() {
+    let (mut host, world, panel) = ready_skin_panel("skin-every-frame");
+    host.world_mut(world).unwrap().step(FRAME).unwrap();
+    take_preparation_counts();
+    for _ in 0..4 {
+        host.world_mut(world).unwrap().step(FRAME).unwrap();
+    }
+    assert_eq!(take_preparation_counts(), (4, 0));
+
+    hover(&mut host, world, panel, true);
+    let mut painted = vec![panel_box_color(&mut host, world, panel)];
+    let mut reconciled = Vec::new();
+    for _ in 0..40 {
+        host.world_mut(world).unwrap().step(FRAME).unwrap();
+        painted.push(panel_box_color(&mut host, world, panel));
+        let (passes, reconciliations) = take_preparation_counts();
+        assert_eq!(passes, 1, "one preparation per frame");
+        reconciled.push(reconciliations);
+    }
+
+    // The 0.2 s crossfade repaints on every frame from its first sample to
+    // its destination, and each of those frames reconciled the skin.
+    let moving: Vec<usize> = (0..reconciled.len())
+        .filter(|&frame| painted[frame + 1] != painted[frame])
+        .collect();
+    let (first, last) = (moving[0], *moving.last().unwrap());
+    assert_eq!(moving, (first..=last).collect::<Vec<_>>());
+    assert!(moving.len() >= 8, "only {} animated frames", moving.len());
+    for (frame, count) in reconciled.iter().enumerate().take(last + 1).skip(first) {
+        assert!(*count >= 1, "frame {frame} kept stale skin input");
+    }
+
+    assert_settled(&mut host, world, panel, HOVERED);
+    assert!(
+        reconciled[last + 3..].iter().all(|&count| count == 0),
+        "settled frames still reconcile: {reconciled:?}"
+    );
+}

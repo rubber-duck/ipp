@@ -688,6 +688,102 @@ fn skinned_paint_resolves_hover_and_pressed_in_prepared_primitives() {
     );
 }
 
+/// Whether node 2 currently paints a focus ring.
+#[cfg(feature = "gui")]
+fn panel_has_focus_ring(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) -> bool {
+    host.world_mut(world)
+        .unwrap()
+        .with_system::<RenderSystem, _>(RenderSystem::ID, |system, _| {
+            system
+                .state
+                .surface_items
+                .iter()
+                .find(|item| item.entity == panel)
+                .unwrap()
+                .primitives
+                .iter()
+                .any(|primitive| {
+                    matches!(
+                        primitive.style().identity,
+                        SurfacePrimitiveIdentity::Gui(id)
+                            if id.node == GuiNodeId(2) && id.part == GuiPrimitivePart::FocusRing
+                    )
+                })
+        })
+        .unwrap()
+}
+
+/// Queue one input command and step the frame that routes it and the next.
+#[cfg(feature = "gui")]
+fn input_frames(
+    host: &mut HostRuntime,
+    world: WorldId,
+    command: GuiInputCommand,
+) -> (usize, usize) {
+    let mut context = host.world_mut(world).unwrap();
+    context.enqueue_gui_input_command(SESSION, command).unwrap();
+    context.step(0.0).unwrap();
+    context.step(0.0).unwrap();
+    take_preparation_counts()
+}
+
+#[cfg(feature = "gui")]
+fn idle_frames(host: &mut HostRuntime, world: WorldId, count: usize) -> (usize, usize) {
+    for _ in 0..count {
+        host.world_mut(world).unwrap().step(0.0).unwrap();
+    }
+    take_preparation_counts()
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn unchanged_frames_prepare_once_while_hover_press_and_focus_still_repaint() {
+    let mut root = skinned_root();
+    part_color(&mut root, 2, "focusRing", [0.9, 0.8, 0.1, 1.0]);
+    let (mut host, world, panel) = skin_panel_with_root(root);
+    idle_frames(&mut host, world, 3);
+
+    // No second preparation and no skin reconciliation while nothing moves.
+    assert_eq!(idle_frames(&mut host, world, 5), (5, 0));
+    assert_eq!(
+        panel_box_color(&mut host, world, panel),
+        [0.25, 0.25, 0.25, 1.0]
+    );
+
+    // Each interaction transition reconciles and repaints on its frames.
+    let at = node_centre(&mut host, world, panel, GuiNodeId(2));
+    let (passes, reconciliations) = input_frames(&mut host, world, pointer_move(1, at));
+    assert_eq!(passes, 2);
+    assert!(reconciliations >= 1);
+    assert_eq!(
+        panel_box_color(&mut host, world, panel),
+        [0.0, 1.0, 0.0, 1.0]
+    );
+    assert_eq!(idle_frames(&mut host, world, 3), (3, 0));
+
+    let (passes, reconciliations) = input_frames(&mut host, world, pointer_down(1, at));
+    assert_eq!(passes, 2);
+    assert!(reconciliations >= 1);
+    assert_eq!(
+        panel_box_color(&mut host, world, panel),
+        [1.0, 0.0, 0.0, 1.0]
+    );
+    assert!(panel_has_focus_ring(&mut host, world, panel));
+    assert_eq!(idle_frames(&mut host, world, 3), (3, 0));
+
+    let (_, reconciliations) = input_frames(&mut host, world, pointer_up(1, at));
+    assert!(reconciliations >= 1);
+    assert_eq!(
+        panel_box_color(&mut host, world, panel),
+        [0.0, 1.0, 0.0, 1.0]
+    );
+    assert!(panel_has_focus_ring(&mut host, world, panel));
+
+    let (_, reconciliations) = input_frames(&mut host, world, pointer_move(1, [9.0, 9.0]));
+    assert!(reconciliations >= 1);
+    assert_eq!(idle_frames(&mut host, world, 3), (3, 0));
+}
+
 #[cfg(feature = "gui")]
 fn assert_color_near(actual: [f32; 4], expected: [f32; 4]) {
     for (actual, expected) in actual.into_iter().zip(expected) {

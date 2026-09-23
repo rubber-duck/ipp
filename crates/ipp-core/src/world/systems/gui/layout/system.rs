@@ -83,6 +83,21 @@ impl GuiLayoutSystem {
         states
     }
 
+    /// Every evaluated root entity with the revisions consumers of its
+    /// evaluated records key on, in entity order: the content revision,
+    /// which follows paint except across in-place translations, and the
+    /// count of committed GuiRoot changes.
+    pub(crate) fn content_states(&self) -> Vec<(EntityId, u64, u64)> {
+        self.evaluated_entities()
+            .into_iter()
+            .filter_map(|entity| {
+                let revision = self.cache.content_revision(entity)?;
+                let commits = self.commits.get(&entity).copied().unwrap_or(0);
+                Some((entity, revision, commits))
+            })
+            .collect()
+    }
+
     /// Entities with retained layout output, in ascending order.
     pub fn evaluated_entities(&self) -> Vec<EntityId> {
         self.cache.entities()

@@ -26,13 +26,15 @@
 //!
 //! ## Pass structure
 //!
-//! One evaluation lays out the whole tree in a single pass: fixed children
-//! first, then flex distribution of leftover space, with no iterative
-//! cross-node solving. Invalid or unbounded flex constraints produce
-//! [`GuiLayoutDiagnostic`] records instead of solver iterations. Layout
-//! properties cause reflow; visual translation/scale move paint and hit
-//! regions together without remeasuring text; paint-only edits (colour,
-//! opacity) rebuild paint records only.
+//! One evaluation lays out the whole tree in a single pass. Row and Column
+//! measure fixed children first, then distribute leftover space among flex
+//! children, with no iterative cross-node solving. Every child then takes
+//! its main-axis slot and painter position in tree order, moving its
+//! measured subtree without remeasuring. Invalid or unbounded flex
+//! constraints produce [`GuiLayoutDiagnostic`] records instead of solver
+//! iterations. Layout properties cause reflow; visual translation/scale
+//! move paint and hit regions together without remeasuring text;
+//! paint-only edits (colour, opacity) rebuild paint records only.
 //!
 //! ## Margins
 //!
@@ -1026,8 +1028,9 @@ struct DeferredPlacement {
     placeholder: bool,
 }
 
-/// Single-pass constraint evaluator. Fixed children lay out first, then
-/// flex children share leftover space; diagnostics replace iteration.
+/// Single-pass constraint evaluator. Fixed children measure first, then
+/// flex children share leftover space, and both keep their tree-order
+/// slots; diagnostics replace iteration.
 struct Evaluator<'a, 'r> {
     root: &'a GuiRoot,
     resolver: &'r dyn GuiResourceResolver,
@@ -1891,9 +1894,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     }
 
     /// Row or Column layout. Fixed children measure first against remaining
-    /// space; flex children then share the leftover proportionally. Cross
-    /// children align by their own align lane within the largest child
-    /// cross extent, defaulting to the start.
+    /// space; flex children then share the leftover proportionally. Every
+    /// child then occupies its main-axis slot in tree order, so a flex
+    /// spacer between fixed children separates them. Cross children align
+    /// by their own align lane within the largest child cross extent,
+    /// defaulting to the start.
     #[allow(clippy::too_many_arguments)]
     fn layout_flex(
         &mut self,
@@ -1911,28 +1916,28 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             (constraints.max_h, constraints.max_w)
         };
 
-        // Classify children without measuring yet.
-        let mut fixed = Vec::new();
-        let mut flexed: Vec<(GuiNodeId, f32)> = Vec::new();
-        let mut flex_total = 0.0;
-        for &child in &node.children {
-            match self.child_flex(child) {
-                Some(flex) => {
-                    flexed.push((child, flex));
-                    flex_total += flex;
-                }
-                None => fixed.push(child),
-            }
-        }
+        // Classify children in tree order without measuring yet.
+        let children: Vec<(GuiNodeId, Option<f32>)> = node
+            .children
+            .iter()
+            .map(|&child| (child, self.child_flex(child)))
+            .collect();
+        let flex_total: f32 = children.iter().filter_map(|(_, flex)| *flex).sum();
 
+        let records_base = self.nodes.len();
         let mut cursor = 0.0;
         let mut cross = 0.0f32;
         let mut available = true;
-        let mut placed: Vec<FlexPlacement> = Vec::new();
+        let mut placed: Vec<Option<FlexPlacement>> = Vec::new();
+        placed.resize_with(children.len(), || None);
 
         // Fixed children first, bounded by remaining main-axis space so
         // wrapping text observes the space it will actually occupy.
-        for child in fixed {
+        for (position, &(child, _)) in children
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, flex))| flex.is_none())
+        {
             let margin = self.child_margin(child);
             let (margin_main_start, margin_main_end, margin_cross_start) = if horizontal {
                 (margin[3], margin[1], margin[0])
@@ -1954,6 +1959,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 [margin_cross_start, cursor + margin_main_start]
             };
+            let first_record = self.nodes.len();
             let (size, index) = self.visit_child(
                 child,
                 child_constraints,
@@ -1966,12 +1972,16 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 (size[1], size[0])
             };
-            placed.push(FlexPlacement {
+            let extent = margin_main_start + main + margin_main_end;
+            placed[position] = Some(FlexPlacement {
                 child,
                 index,
+                records: first_record..self.nodes.len(),
+                measured_at: cursor,
+                extent,
                 cross: cross_size,
             });
-            cursor += margin_main_start + main + margin_main_end;
+            cursor += extent;
             cross = cross.max(cross_size);
             available &= self.child_available(child);
         }
@@ -1984,7 +1994,10 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         } else {
             0.0
         };
-        for (child, flex) in flexed {
+        for (position, &(child, flex)) in children.iter().enumerate() {
+            let Some(flex) = flex else {
+                continue;
+            };
             let margin = self.child_margin(child);
             let (margin_main_start, margin_main_end, margin_cross_start) = if horizontal {
                 (margin[3], margin[1], margin[0])
@@ -2022,6 +2035,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 [margin_cross_start, cursor + margin_main_start]
             };
+            let first_record = self.nodes.len();
             let (size, index) = self.visit_child(
                 child,
                 child_constraints,
@@ -2034,18 +2048,28 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 (size[1], size[0])
             };
-            placed.push(FlexPlacement {
+            let extent = margin_main_start + main + margin_main_end;
+            placed[position] = Some(FlexPlacement {
                 child,
                 index,
+                records: first_record..self.nodes.len(),
+                measured_at: cursor,
+                extent,
                 cross: cross_size,
             });
-            cursor += margin_main_start + main + margin_main_end;
+            cursor += extent;
             cross = cross.max(cross_size);
             available &= self.child_available(child);
         }
 
-        // Cross-axis alignment per child, from each child's own align lane.
-        // The child's whole subtree moves with it.
+        // Measurement visited fixed children before flex ones; restore tree
+        // order for painter order and main-axis slots without remeasuring.
+        let mut placed: Vec<FlexPlacement> = placed.into_iter().flatten().collect();
+        self.order_child_records(records_base, &mut placed);
+
+        // Each child's whole subtree moves from its measured slot to its
+        // tree-order slot, and on the cross axis by its own align lane.
+        let mut slot = 0.0;
         for placement in placed {
             let child_style = self.root.style(placement.child).unwrap_or_default();
             let factor = if horizontal {
@@ -2053,13 +2077,15 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             } else {
                 align_factor(child_style.align_x, -1.0)
             };
-            let shift = factor * (cross - placement.cross).max(0.0);
+            let main_shift = slot - placement.measured_at;
+            let cross_shift = factor * (cross - placement.cross).max(0.0);
             let local = if horizontal {
-                [0.0, shift]
+                [main_shift, cross_shift]
             } else {
-                [shift, 0.0]
+                [cross_shift, main_shift]
             };
             self.align_subtree(placement.index, local, acc_total);
+            slot += placement.extent;
         }
 
         let (main_size, cross_size) = if horizontal {
@@ -2077,6 +2103,37 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             available,
             content_extents: None,
             viewport: None,
+        }
+    }
+
+    /// Rearrange the contiguous record ranges that sibling visits pushed
+    /// after `base` into the order of `placed`, moving each child's complete
+    /// subtree with its deferred placement and updating its record index.
+    fn order_child_records(&mut self, base: usize, placed: &mut [FlexPlacement]) {
+        if placed
+            .windows(2)
+            .all(|pair| pair[0].records.start <= pair[1].records.start)
+        {
+            return;
+        }
+
+        let mut nodes: Vec<_> = self.nodes.drain(base..).map(Some).collect();
+        let mut deferred: Vec<_> = self.placements.drain(base..).map(Some).collect();
+        for placement in placed {
+            let start = self.nodes.len();
+            let range = placement.records.start - base..placement.records.end - base;
+            self.nodes.extend(
+                nodes[range.clone()]
+                    .iter_mut()
+                    .map(|record| record.take().expect("record moves once")),
+            );
+            self.placements.extend(
+                deferred[range]
+                    .iter_mut()
+                    .map(|record| record.take().expect("placement moves once")),
+            );
+            placement.index = placement.index.map(|_| start);
+            placement.records = start..self.nodes.len();
         }
     }
 
@@ -2410,10 +2467,18 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     }
 }
 
-/// One Row or Column child awaiting cross-axis alignment.
+/// One measured Row or Column child awaiting its tree-order slot and
+/// cross-axis alignment.
 struct FlexPlacement {
     child: GuiNodeId,
+    /// Index of the child's own record, when it retained one.
     index: Option<usize>,
+    /// Records this child's visit pushed, parent first.
+    records: std::ops::Range<usize>,
+    /// Main-axis offset of the margin box while measuring.
+    measured_at: f32,
+    /// Main-axis margin-box extent.
+    extent: f32,
     cross: f32,
 }
 

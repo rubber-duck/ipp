@@ -145,6 +145,10 @@ export interface GuiStyleProps {
    * and left margins. Any finite value is accepted: negative margins move a
    * child outward or overlap siblings, and ancestor clips still apply. */
   readonly margin?: readonly [number, number, number, number] | undefined;
+  /** Positive share of the main-axis space a parent Row or Column has left
+   * after measuring its other children. Flexible and fixed children keep
+   * their tree order, so a flexible Padding between two controls works as
+   * a spacer. Other containers ignore it. */
   readonly flex?: number | undefined;
   /** Alignment from -1 (start) to 1 (end). A parent Stack aligns this node
    * on both axes and a Row or Column on its cross axis, moving the node's

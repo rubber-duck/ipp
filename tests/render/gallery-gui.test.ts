@@ -2003,6 +2003,13 @@ test("Gallery runs a real GUI demo and cleans it up", {
         const wide = spanFrame(wideState);
         assert.equal(wide.id, narrow.id);
         near(wide.bounds[0], narrow.bounds[0], "SPAN keeps its left edge");
+        // The flex spacer after the frame absorbs the resize, so the SPAN
+        // button and signal icon that follow it in tree order stay in place.
+        near(
+          semanticNode(wideState.semantic, "button", "SPAN").bounds[0],
+          semanticNode(detail.semantic, "button", "SPAN").bounds[0],
+          "SPAN button x",
+        );
         await g.capture("gui-detail-span-wide");
         const wideRegions = await regionStats("gui-detail-span-wide", {
           ...frameRects(wide.bounds),

@@ -687,8 +687,6 @@ export function ProjectorDashboard({
     () => shapeControlTheme(scene, palette),
     [scene.font, scene.motions, scene.skin, palette],
   );
-  // The spacer absorbs SPAN resizing, keeping the header controls in place.
-  const spanWidth = spanWidthFor(scene);
   return (
     <Stack width={SURFACE_WIDTH} height={SURFACE_HEIGHT}>
       <Shape
@@ -727,7 +725,9 @@ export function ProjectorDashboard({
             color={palette.primary}
           />
           <Span scene={scene} palette={palette} />
-          <Padding width={SPAN_WIDE - spanWidth + 0.65} height={0.57} />
+          {/* The flex spacer absorbs SPAN resizing, keeping the header
+              controls to its right in place. */}
+          <Padding flex={1} height={0.57} />
           <Button
             key="span"
             width={0.8}

@@ -126,7 +126,8 @@ pub struct GuiNodeStyle {
     pub padding: Option<[f32; 4]>,
     /// Outer margin [top, right, bottom, left].
     pub margin: Option<[f32; 4]>,
-    /// Flex grow/shrink factor in flex containers.
+    /// Share of the main-axis space a parent Row or Column leaves after its
+    /// fixed children; the node keeps its tree-order slot.
     pub flex: Option<f32>,
     /// Alignment X factor from -1.0 (start) to 1.0 (end). Stack and Column
     /// place this node by it; an Align node also places its content by it.

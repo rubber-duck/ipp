@@ -84,6 +84,142 @@ fn row_flex_shares_leftover_space() {
 }
 
 #[test]
+fn row_places_interleaved_flex_and_fixed_children_in_tree_order() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let mut tree = TreeBuilder::new();
+    let root = tree.add(
+        None,
+        GuiNodeContent::Container(GuiContainerKind::Row),
+        text_style(),
+    );
+    let first = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        sized(1.0, 1.0),
+    );
+    let spacer = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            flex: Some(1.0),
+            ..sized(0.0, 0.5)
+        },
+    );
+    // A negative leading margin overlaps the spacer, so painter and hit
+    // order show which sibling comes later.
+    let second = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeStyle {
+            margin: Some([0.0, 0.1, 0.0, -0.2]),
+            ..sized(0.5, 0.5)
+        },
+    );
+    let nested = tree.add(
+        Some(second),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        sized(0.25, 0.25),
+    );
+    let tail = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            flex: Some(3.0),
+            align_y: Some(1.0),
+            ..sized(0.0, 0.5)
+        },
+    );
+    let root_tree = tree.build();
+
+    let mut cache = GuiLayoutCache::default();
+    let view = cache.evaluate(entity(), &request(&root_tree, 1), &resolver);
+
+    // Fixed margin boxes measure 1.0 and 0.4 first; flex shares the 2.6
+    // leftover 1:3. Slots then follow tree order: first, spacer, second
+    // (pulled 0.2 left by its margin), tail aligned to the cross end.
+    assert_rect(node_by_id(view, first).rect, [0.0, 0.0, 1.0, 1.0]);
+    assert_rect(node_by_id(view, spacer).rect, [1.0, 0.0, 0.65, 0.5]);
+    assert_rect(node_by_id(view, second).rect, [1.45, 0.0, 0.5, 0.5]);
+    assert_rect(node_by_id(view, nested).rect, [1.45, 0.0, 0.25, 0.25]);
+    assert_rect(node_by_id(view, tail).rect, [2.05, 0.5, 1.95, 0.5]);
+    assert!(view.diagnostics.is_empty(), "{:?}", view.diagnostics);
+
+    // Painter order is tree order, so the later sibling wins the overlap
+    // and the nested child hits inside its moved parent.
+    let order: Vec<_> = view.nodes.iter().map(|node| node.node).collect();
+    assert_eq!(order, vec![root, first, spacer, second, nested, tail]);
+    assert_eq!(view_hit(view, [1.55, 0.4]), second);
+    assert_eq!(view_hit(view, [1.55, 0.1]), nested);
+    assert_eq!(view_hit(view, [1.2, 0.25]), spacer);
+    assert_eq!(view_hit(view, [3.0, 0.75]), tail);
+}
+
+#[test]
+fn column_flex_scroll_view_keeps_its_slot_clip_and_hits_between_fixed_children() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let mut tree = TreeBuilder::new();
+    let root = tree.add(
+        None,
+        GuiNodeContent::Container(GuiContainerKind::Column),
+        text_style(),
+    );
+    let header = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        sized(4.0, 0.5),
+    );
+    let scroll = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeStyle {
+            flex: Some(1.0),
+            width: Some(4.0),
+            ..Default::default()
+        },
+    );
+    let content = tree.add(
+        Some(scroll),
+        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeStyle::default(),
+    );
+    let rows: Vec<_> = (0..2)
+        .map(|_| {
+            tree.add(
+                Some(content),
+                GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                sized(4.0, 1.0),
+            )
+        })
+        .collect();
+    let footer = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        sized(4.0, 0.25),
+    );
+    let root_tree = tree.build();
+
+    let mut cache = GuiLayoutCache::default();
+    let view = cache.evaluate(entity(), &request(&root_tree, 1), &resolver);
+
+    // The flex viewport takes the 1.25 left after both fixed children and
+    // sits between them; its content and clip move with it.
+    assert_rect(node_by_id(view, header).rect, [0.0, 0.0, 4.0, 0.5]);
+    assert_rect(node_by_id(view, scroll).rect, [0.0, 0.5, 4.0, 1.25]);
+    assert_rect(node_by_id(view, rows[0]).rect, [0.0, 0.5, 4.0, 1.0]);
+    assert_rect(node_by_id(view, rows[1]).rect, [0.0, 1.5, 4.0, 1.0]);
+    assert_rect(node_by_id(view, footer).rect, [0.0, 1.75, 4.0, 0.25]);
+    assert_eq!(node_by_id(view, rows[1]).clip, Some([0.0, 0.5, 4.0, 1.75]));
+    assert_eq!(node_by_id(view, scroll).content_extents, Some([4.0, 2.0]));
+
+    // Clipped scroll content below the viewport never covers the footer.
+    assert_eq!(view_hit(view, [2.0, 1.9]), footer);
+    assert_eq!(view_hit(view, [2.0, 1.6]), rows[1]);
+    assert_eq!(view_hit(view, [2.0, 0.25]), header);
+}
+
+#[test]
 fn unbounded_flex_diagnoses_instead_of_solving() {
     let font = test_font();
     let resolver = TestResolver::with_font(&font);

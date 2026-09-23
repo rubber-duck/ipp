@@ -1,3 +1,4 @@
+mod error_checks;
 #[cfg(feature = "gui")]
 mod retained_vertices;
 mod uniform_cache;
@@ -186,8 +187,15 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "gui")]
     type GlyphAtlasPage;
 
-    /// Enable exhaustive routine draw/uniform error polling for diagnostics.
-    /// Allocation, compilation, uploads and pass boundaries always validate.
+    /// Enable exhaustive error polling for diagnostics: every draw, uniform,
+    /// stream and retained-batch replacement and every frame boundary checks,
+    /// attributing an error to the failing call.
+    ///
+    /// Otherwise allocations, compilation, resource uploads and kept passes
+    /// check when they finish, and the frame end checks on a sampled subset of
+    /// frames and after retained-storage replacement, so other errors may be
+    /// reported at a later frame end. Context loss is still reported within the
+    /// frame in which the device observes it.
     fn set_exhaustive_draw_checks(&mut self, _enabled: bool) {}
 
     /// Bind per-frame lights and per-draw model/material uniforms.
@@ -453,7 +461,8 @@ pub trait RenderDevice: 'static {
     /// Replace complete batch contents through GPU storage replacement.
     ///
     /// Queued draws keep the previous storage, though allocation may still stall.
-    /// On failure the contents are unknown and callers release the batch.
+    /// On failure the contents are unknown and callers release the batch. GL
+    /// errors surface here only in exhaustive mode, otherwise at this frame's end.
     #[cfg(feature = "gui")]
     fn update_gui_batch(
         &mut self,
@@ -493,7 +502,8 @@ pub trait RenderDevice: 'static {
     /// Replace complete batch contents through GPU storage replacement.
     ///
     /// Queued draws keep the previous storage, though allocation may still stall.
-    /// On failure the contents are unknown and callers release the batch.
+    /// On failure the contents are unknown and callers release the batch. GL
+    /// errors surface here only in exhaustive mode, otherwise at this frame's end.
     #[cfg(feature = "gui")]
     fn update_glyph_batch(
         &mut self,
@@ -638,7 +648,9 @@ pub trait RenderDevice: 'static {
         texture: Option<&Self::Texture>,
     ) -> Result<(), RenderError>;
 
-    /// Check submission errors. GPU completion/capture belongs to the host.
+    /// Present the frame, then check submission errors on sampled frames (see
+    /// [`Self::set_exhaustive_draw_checks`]) and report context loss on every
+    /// frame. GPU completion/capture belongs to the host.
     fn end_frame(&mut self) -> Result<(), RenderError>;
 
     /// Release the mesh, or discard its invalid handles after context loss.

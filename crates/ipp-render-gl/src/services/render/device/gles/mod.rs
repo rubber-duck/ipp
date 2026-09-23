@@ -62,7 +62,10 @@ pub struct GlesRenderDevice {
     presentation_target: Option<(u32, u32, [i32; 4])>,
     max_viewport: [i32; 2],
     max_texture_size: u32,
-    exhaustive_draw_checks: bool,
+    error_checks: super::error_checks::RenderDeviceErrorChecks,
+    /// `glGetGraphicsResetStatus` for contexts that report loss by reset
+    /// notification; unchecked frame ends query it instead of the error state.
+    reset_status: Option<unsafe extern "system" fn() -> u32>,
     #[cfg(feature = "surfaces")]
     surface_quad_vao: u32,
     #[cfg(feature = "surfaces")]

@@ -106,9 +106,10 @@ impl GlesRenderDevice {
         Ok(())
     }
 
-    pub(super) fn present_linear_target(&mut self) -> Result<(), RenderError> {
+    /// Resolve the frame into the saved host target. The frame end checks errors.
+    pub(super) fn present_linear_target(&mut self) {
         let Some((previous, previous_read, viewport)) = self.presentation_target.take() else {
-            return Ok(());
+            return;
         };
         let target = self.linear_target.as_ref().expect("active linear target");
         // SAFETY: Target and program remain live; fullscreen geometry uses gl_VertexID
@@ -131,7 +132,6 @@ impl GlesRenderDevice {
             (self.gl.viewport)(viewport[0], viewport[1], viewport[2], viewport[3]);
             (self.gl.depth_mask)(1);
         }
-        self.check()
     }
 
     fn release_linear_target(&mut self) {

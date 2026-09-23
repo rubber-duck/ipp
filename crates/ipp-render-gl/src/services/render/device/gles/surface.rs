@@ -419,8 +419,9 @@ impl GlesRenderDevice {
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
 
-        // Counts describe the store only after GL accepted the replacement.
-        self.check()?;
+        // Outside exhaustive mode this frame's end checks the replacement.
+        self.check_draw()?;
+        self.error_checks.note_retained_upload();
         batch.vertex_count = vertex_count;
         batch.bytes = bytes;
         Ok(())
@@ -595,8 +596,9 @@ impl GlesRenderDevice {
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
 
-        // Counts describe the store only after GL accepted the replacement.
-        self.check()?;
+        // Outside exhaustive mode this frame's end checks the replacement.
+        self.check_draw()?;
+        self.error_checks.note_retained_upload();
         batch.vertex_count = vertex_count;
         batch.bytes = bytes;
         Ok(())

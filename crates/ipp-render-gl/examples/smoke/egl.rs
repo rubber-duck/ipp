@@ -273,6 +273,16 @@ impl Context {
         format!("{operation} failed: EGL error 0x{code:04x}").into()
     }
 
+    /// Record GL_INVALID_ENUM in the current context, as a failed call would.
+    #[cfg(feature = "surfaces")]
+    pub fn raise_gl_error(&self) -> Result<()> {
+        let enable = entry!(self.gl(c"glEnable"), unsafe extern "system" fn(u32));
+        // SAFETY: The context is current on this thread. Enabling an unknown
+        // capability only records INVALID_ENUM and changes no other state.
+        unsafe { enable(0xFFFF) };
+        Ok(())
+    }
+
     pub fn device(&self) -> Result<GlesRenderDevice> {
         // SAFETY: This runner keeps Context alive/current on this thread until
         // after RenderService drops. It loads actual matching GLES symbols, and no

@@ -445,6 +445,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     if (gl.isContextLost()) throw new Error("WebGL context lost");
   }
 
+  /**
+   * Draws, uniforms, streams, retained-batch replacement and the frame start
+   * poll `getError`, a synchronous round trip, only in exhaustive mode. The
+   * Rust device decides which frame ends poll; every import checks loss.
+   */
   let exhaustiveDrawChecks = false;
   function checkDraw(): void {
     if (exhaustiveDrawChecks) check();
@@ -574,7 +579,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
         gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        check();
+        // Outside exhaustive mode the device checks this frame's end instead.
+        checkDraw();
         batch.count = byteLength / batch.stride;
         batch.bytes = byteLength;
       }
@@ -688,7 +694,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     if (gl.drawingBufferWidth !== width || gl.drawingBufferHeight !== height) {
       throw new Error("WebGL drawing buffer allocation did not match viewport");
     }
-    check();
+    checkDraw();
   }
 
   function lost(event: Event): void {
@@ -1115,7 +1121,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         }
         gl.uniform1i(parameterLocation(program, "u_alpha_mode"), alphaMode);
         gl.uniform1f(parameterLocation(program, "u_alpha_cutoff"), alphaCutoff);
-        check();
+        checkDraw();
         return 1;
       });
     },
@@ -1142,7 +1148,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           ),
           unit,
         );
-        check();
+        checkDraw();
         return 1;
       });
     },
@@ -2316,7 +2322,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
         gl.clearDepth(1);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        check();
+        checkDraw();
         return 1;
       });
     },
@@ -2356,7 +2362,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   count * 20,
                 );
               }
-              check();
+              checkDraw();
               return 1;
             }),
           set_additive: (enabled: number) =>
@@ -2371,7 +2377,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         }
       : {}),
     draw: drawMesh,
-    end_frame(): number {
+    /**
+     * Present, then poll the error state only when `poll` is set. Loss during
+     * the frame always fails, so recovery never waits for a sampled check.
+     */
+    end_frame(poll: number): number {
       return status(() => {
         presentLinearTarget();
         bindVertexArray(null);
@@ -2387,7 +2397,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           gl.bindTexture(gl.TEXTURE_2D, null);
           gl.bindSampler(0, null);
         }
-        check();
+        if (poll) check();
+        else live();
         return 1;
       });
     },

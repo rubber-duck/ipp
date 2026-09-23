@@ -316,6 +316,7 @@ class PlanningTests(unittest.TestCase):
             "packages/ipp-client/src/render-worker.ts",
             "crates/ipp-wasm/src/services/render.rs",
             "tools/build/verify-browser.mjs",
+            "tests/render/error-check-bridge.ts",
             "tests/render/surface-cache-bridge.ts",
             "tests/render/surface-cache-scenario.ts",
             "tests/render/surface-cache-environment.ts",

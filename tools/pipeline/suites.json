@@ -781,6 +781,7 @@
       "tools/build/verify-browser.mjs",
       "tests/render/retained-gui-images.ts",
       "tests/render/retained-gui-scenario.ts",
+      "tests/render/error-check-bridge.ts",
       "tests/render/surface-cache-bridge.ts",
       "tests/render/surface-cache-environment.ts",
       "tests/render/surface-cache-scenario.ts",

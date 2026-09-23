@@ -70,7 +70,7 @@ impl GlesRenderDevice {
             (self.gl.uniform_int)(program.alpha_mode, alpha_mode as i32);
             (self.gl.uniform_float)(program.alpha_cutoff, alpha_cutoff);
         }
-        self.check()
+        self.check_draw()
     }
 
     fn custom_texture_location(

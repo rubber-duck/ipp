@@ -13,10 +13,10 @@ impl GlesRenderDevice {
     /// including destruction. The host must drop the renderer before destroying
     /// that context and must not concurrently mutate its GL state.
     pub unsafe fn from_loader(
-        loader: impl FnMut(&CStr) -> *const c_void,
+        mut loader: impl FnMut(&CStr) -> *const c_void,
     ) -> Result<Self, RenderError> {
         // SAFETY: The caller guarantees entry point signatures and lifetimes.
-        let gl = unsafe { Functions::load(loader)? };
+        let gl = unsafe { Functions::load(&mut loader)? };
         // SAFETY: The caller provides a current context. GL owns a terminated
         // version string valid while this context remains alive; we only read it.
         let version = unsafe { (gl.get_string)(0x1F02) };
@@ -82,6 +82,11 @@ impl GlesRenderDevice {
             (gl.get_integer)(0x8872, &mut fragment_units);
         }
 
+        let (frame_check_interval, reset_status) =
+            // SAFETY: The caller's loader contract covers optional entry points,
+            // and the constructor's context is current.
+            unsafe { context_loss_reporting(&gl, &version, &mut loader) };
+
         let device = Self {
             gl,
             parameter_buffer: 0,
@@ -99,7 +104,10 @@ impl GlesRenderDevice {
             presentation_target: None,
             max_viewport,
             max_texture_size,
-            exhaustive_draw_checks: false,
+            error_checks: super::super::error_checks::RenderDeviceErrorChecks::sampled(
+                frame_check_interval,
+            ),
+            reset_status,
             #[cfg(feature = "surfaces")]
             surface_quad_vao: 0,
             #[cfg(feature = "gui")]
@@ -155,10 +163,24 @@ impl GlesRenderDevice {
     }
 
     pub(super) fn check_draw(&self) -> Result<(), RenderError> {
-        if self.exhaustive_draw_checks {
+        if self.error_checks.exhaustive() {
             self.check()
         } else {
             Ok(())
+        }
+    }
+
+    /// End-of-frame check on sampled frames; unchecked frames still report
+    /// context loss when the context delivers reset notifications.
+    pub(super) fn check_frame_end(&mut self) -> Result<(), RenderError> {
+        if self.error_checks.frame_end_checks() {
+            return self.check();
+        }
+        match self.reset_status {
+            // SAFETY: Loaded for a GLES 3.2 context reporting resets; the query
+            // takes no arguments and only reads the context's reset status.
+            Some(status) if unsafe { status() } != 0 => Err(RenderError::ContextLost),
+            _ => Ok(()),
         }
     }
 
@@ -233,5 +255,65 @@ impl GlesRenderDevice {
             let count = (written.max(0) as usize).min(bytes.len());
             String::from_utf8_lossy(&bytes[..count]).into_owned()
         }
+    }
+}
+
+/// How often frame ends poll the error state, and the reset query that reports
+/// loss on unchecked frames.
+///
+/// GLES 3.2 contexts state whether they report resets. A context without reset
+/// notification never reports loss, so frame ends are sampled. One that loses
+/// its context on reset is sampled too, with `glGetGraphicsResetStatus` on the
+/// other frames. Older contexts, or a strategy that cannot be read, check every
+/// frame end so loss is always reported within its frame.
+///
+/// # Safety
+/// The context is current and `loader` meets the [`GlesRenderDevice::from_loader`]
+/// contract for the entry points it returns.
+unsafe fn context_loss_reporting(
+    gl: &Functions,
+    version: &str,
+    loader: &mut impl FnMut(&CStr) -> *const c_void,
+) -> (u32, Option<unsafe extern "system" fn() -> u32>) {
+    const RESET_NOTIFICATION_STRATEGY: u32 = 0x8256;
+    const NO_RESET_NOTIFICATION: i32 = 0x8261;
+    const LOSE_CONTEXT_ON_RESET: i32 = 0x8252;
+    const EVERY_FRAME: (u32, Option<unsafe extern "system" fn() -> u32>) = (1, None);
+
+    let minor = version
+        .strip_prefix("OpenGL ES 3.")
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .unwrap_or(0);
+    if minor < 2 {
+        return EVERY_FRAME;
+    }
+
+    let mut strategy = 0;
+    // SAFETY: A core GLES 3.2 query writing one integer into this exclusive
+    // local; an unexpected error is read back and cleared immediately.
+    let error = unsafe {
+        (gl.get_integer)(RESET_NOTIFICATION_STRATEGY, &mut strategy);
+        (gl.get_error)()
+    };
+    match (error, strategy) {
+        (0, NO_RESET_NOTIFICATION) => (super::super::error_checks::FRAME_CHECK_INTERVAL, None),
+        (0, LOSE_CONTEXT_ON_RESET) => {
+            let address = loader(c"glGetGraphicsResetStatus");
+            if address.is_null() {
+                return EVERY_FRAME;
+            }
+            // SAFETY: GLES 3.2 core defines this entry point with no arguments
+            // and an enum result; the loader contract keeps it callable while
+            // the device lives.
+            let status = unsafe {
+                std::mem::transmute::<*const c_void, unsafe extern "system" fn() -> u32>(address)
+            };
+            (
+                super::super::error_checks::FRAME_CHECK_INTERVAL,
+                Some(status),
+            )
+        }
+        _ => EVERY_FRAME,
     }
 }

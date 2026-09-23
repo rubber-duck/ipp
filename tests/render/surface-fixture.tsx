@@ -27,6 +27,7 @@ import {
   surfaceProperty,
 } from "@ipp/client";
 import { compareGlyph } from "./surface-glyph-oracle.js";
+import { probeErrorCheckBridge } from "./error-check-bridge.js";
 import { probeSurfaceCacheBridge } from "./surface-cache-bridge.js";
 import type {
   FrameCapture,
@@ -1094,10 +1095,11 @@ export function surfaceCacheBudget(bytes: number) {
   client.presentation!.setSurfaceCacheBudget(bytes);
 }
 
-/** Run the device-level cache target oracle against a build's shipped WebGL bridge. */
-export function bridgeProbe(build: string, gui: boolean) {
-  return probeSurfaceCacheBridge(
-    `/target/browser-build/${build}/webgl.js`,
-    gui,
-  );
+/** Run the device-level cache target and error-check oracles against a build's shipped WebGL bridge. */
+export async function bridgeProbe(build: string, gui: boolean) {
+  const bridge = `/target/browser-build/${build}/webgl.js`;
+  return {
+    ...(await probeSurfaceCacheBridge(bridge, gui)),
+    errorChecks: await probeErrorCheckBridge(bridge),
+  };
 }

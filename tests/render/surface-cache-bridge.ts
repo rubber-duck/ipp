@@ -265,7 +265,7 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
       ok("set_surface_double_sided", 1);
       ok("draw_surface_cache", program, target, floats(mvp), size);
       ok("set_surface_double_sided", 0);
-      ok("end_frame");
+      ok("end_frame", 1);
       captures.push(device.capture());
     }
     // Half-opaque red over blue composes to the linear midpoint, sRGB 188;
@@ -421,7 +421,7 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
       floats([2, 1]),
     );
     ok("set_surface_double_sided", 0);
-    ok("end_frame");
+    ok("end_frame", 1);
     const pixels = device.capture();
     // Texel column c is centred on pixel 82 + 5c; row 8 on pixel row 122.
     const columns = [23, 24, 25].map((column) =>

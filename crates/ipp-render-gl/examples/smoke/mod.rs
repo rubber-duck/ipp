@@ -4,6 +4,9 @@ pub(crate) mod deferred_removal;
 pub(crate) mod egl;
 pub(crate) mod world;
 
+#[cfg(feature = "surfaces")]
+#[allow(dead_code)]
+pub(crate) mod error_checks;
 pub(crate) mod shapes;
 #[cfg(feature = "surfaces")]
 #[allow(dead_code)]

@@ -2,7 +2,7 @@ use super::*;
 
 impl RenderDevice for GlesRenderDevice {
     fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
-        self.exhaustive_draw_checks = enabled;
+        self.error_checks.set_exhaustive(enabled);
     }
 
     type Program = GlesRenderProgram;
@@ -359,7 +359,7 @@ impl RenderDevice for GlesRenderDevice {
             }
             (self.gl.buffer_sub_data)(ARRAY_BUFFER, 0, bytes as isize, instances.as_ptr().cast());
         }
-        self.check()
+        self.check_draw()
     }
 
     #[cfg(feature = "particles")]
@@ -689,7 +689,7 @@ impl RenderDevice for GlesRenderDevice {
             (self.gl.clear)(0x00004000 | 0x00000100);
         }
 
-        self.check()
+        self.check_draw()
     }
 
     #[cfg(feature = "skeletal-animation")]
@@ -823,7 +823,7 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn end_frame(&mut self) -> Result<(), RenderError> {
-        self.present_linear_target()?;
+        self.present_linear_target();
         // SAFETY: The context remains current; unbinding retains no Rust data.
         unsafe {
             self.bind_vertex_array(0);
@@ -841,7 +841,7 @@ impl RenderDevice for GlesRenderDevice {
             }
         }
 
-        self.check()
+        self.check_frame_end()
     }
 
     fn delete_mesh(&mut self, mesh: GlesRenderMesh) {

@@ -9,10 +9,16 @@
 //! offset. The whole table is exposed once, at the field's real struct offset,
 //! as [`FieldValue::Rows`] in the table encoding documented on [`Rows::encode`].
 //!
-//! Slots are never reused within a component incarnation: every slot below
-//! [`Rows::next_slot`] that holds no live row is dead, and every slot at or above
-//! it is unallocated. Bindings hold `(component binding, slot, property)`, never a
-//! pointer into the table.
+//! Each slot is unallocated, live or dead. Callers may insert at any
+//! unallocated slot, in any order; [`Rows::remove`] makes a slot dead, and a dead
+//! slot is never reused within a component incarnation. Bindings hold
+//! `(component binding, slot, property)`, never a pointer into the table.
+//!
+//! Dead slots are tracked in memory only; the table encoding carries
+//! [`Rows::next_slot`] and the live rows. A decoded table therefore has no dead
+//! slots. That is sound because decoding a table (restore or a whole-table write)
+//! starts a new component incarnation: no binding survives it, so previously dead
+//! slots may be allocated again without any binding observing the reuse.
 
 use super::dynamic_properties::{DynamicPropertyKind, DynamicValue};
 use super::schema::{ContractSink, FieldError, FieldKind, FieldValue, SchemaField, write_string};
@@ -327,23 +333,28 @@ impl<T: RowPropertyValue> RowPropertyField for Option<T> {
 /// Per-slot state inside one rows field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowSlotState {
-    /// At or above [`Rows::next_slot`]; may receive [`Rows::insert`].
+    /// Never held a row in this incarnation; may receive [`Rows::insert`].
     Unallocated,
     /// Holds a row.
     Live,
-    /// Below [`Rows::next_slot`] without a row; never reused in this incarnation.
+    /// Held a row that was removed; never reused in this incarnation.
     Dead,
 }
 
 /// A compiled table of `R` rows keyed by never-reused slot identities.
 ///
-/// Live rows are stored in ascending slot order. Allocation only appends above
-/// every existing slot, so lookups are a direct index while slots stay dense and
-/// a binary search after removals. Iteration visits live rows in slot order.
-#[derive(Clone, Debug, PartialEq)]
+/// Live rows are stored in ascending slot order, so lookups are a direct index
+/// while slots stay dense from zero and a binary search otherwise. Iteration
+/// visits live rows in slot order.
+///
+/// Equality compares [`Self::next_slot`] and the live rows only, exactly what the
+/// table encoding carries; the in-memory dead-slot record is not part of the value.
+#[derive(Clone, Debug)]
 pub struct Rows<R> {
     rows: Vec<(u32, R)>,
     next_slot: u32,
+    /// Removed slots in ascending order; never encoded.
+    dead: Vec<u32>,
 }
 
 impl<R> Default for Rows<R> {
@@ -351,7 +362,14 @@ impl<R> Default for Rows<R> {
         Self {
             rows: Vec::new(),
             next_slot: 0,
+            dead: Vec::new(),
         }
+    }
+}
+
+impl<R: PartialEq> PartialEq for Rows<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.next_slot == other.next_slot && self.rows == other.rows
     }
 }
 
@@ -364,7 +382,7 @@ impl<R: SchemaRow> Rows<R> {
         Self::default()
     }
 
-    /// The lowest unallocated slot; every lower slot is live or dead.
+    /// One past the highest slot allocated so far; [`Self::push`] allocates it.
     pub fn next_slot(&self) -> u32 {
         self.next_slot
     }
@@ -393,12 +411,12 @@ impl<R: SchemaRow> Rows<R> {
 
     /// Classify a slot.
     pub fn slot_state(&self, slot: u32) -> RowSlotState {
-        if slot >= self.next_slot {
-            RowSlotState::Unallocated
-        } else if self.position(slot).is_some() {
+        if self.position(slot).is_some() {
             RowSlotState::Live
-        } else {
+        } else if self.dead.binary_search(&slot).is_ok() {
             RowSlotState::Dead
+        } else {
+            RowSlotState::Unallocated
         }
     }
 
@@ -424,21 +442,33 @@ impl<R: SchemaRow> Rows<R> {
         Ok(slot)
     }
 
-    /// Place a row at an unallocated slot. Unallocated slots skipped below it
-    /// become dead. Live, dead and unaddressable slots reject the row.
+    /// Place a row at any unallocated slot below [`Self::MAX_SLOTS`], in any
+    /// order; slots at or above [`Self::next_slot`] advance it past `slot`. Live,
+    /// dead and unaddressable slots reject the row.
     pub fn insert(&mut self, slot: u32, row: R) -> Result<(), FieldError> {
-        if slot < self.next_slot || slot >= Self::MAX_SLOTS {
+        if slot >= Self::MAX_SLOTS || self.dead.binary_search(&slot).is_ok() {
             return Err(FieldError::UnknownField);
         }
 
-        self.rows.push((slot, row));
-        self.next_slot = slot + 1;
+        if slot >= self.next_slot {
+            self.rows.push((slot, row));
+            self.next_slot = slot + 1;
+            return Ok(());
+        }
+
+        let Err(index) = self.rows.binary_search_by_key(&slot, |(slot, _)| *slot) else {
+            return Err(FieldError::UnknownField);
+        };
+        self.rows.insert(index, (slot, row));
         Ok(())
     }
 
-    /// Mark a live slot dead and return its row. Dead slots are never reused.
+    /// Mark a live slot dead and return its row. Dead slots are never reused
+    /// within this incarnation.
     pub fn remove(&mut self, slot: u32) -> Option<R> {
         let index = self.position(slot)?;
+        let dead = self.dead.binary_search(&slot).unwrap_err();
+        self.dead.insert(dead, slot);
         Some(self.rows.remove(index).1)
     }
 
@@ -523,9 +553,10 @@ impl<R: SchemaRow> Rows<R> {
         }
     }
 
-    /// Heap bytes retained by the table and its rows.
+    /// Heap bytes retained by the table, its dead-slot record and its rows.
     pub fn retained_bytes(&self) -> usize {
         self.rows.capacity() * std::mem::size_of::<(u32, R)>()
+            + self.dead.capacity() * std::mem::size_of::<u32>()
             + self
                 .rows
                 .iter()
@@ -600,9 +631,11 @@ impl<R: SchemaRow> Rows<R> {
             return Err(FieldError::WrongType);
         }
 
+        // A decoded table starts a new incarnation without dead slots.
         let mut table = Self {
             rows: Vec::with_capacity(count),
             next_slot: 0,
+            dead: Vec::new(),
         };
         for _ in 0..count {
             let slot = take_u32(&mut bytes)?;

@@ -112,23 +112,35 @@ fn slots_are_never_reused_and_dead_or_unallocated_slots_reject_access() {
     assert_eq!(rows.insert(4, item(4.0)), Ok(()));
     assert_eq!(rows.next_slot(), 5);
 
-    // Skipped slots below next_slot are dead; allocated slots never return.
-    assert_eq!(rows.slot_state(2), RowSlotState::Dead);
-    assert_eq!(rows.insert(2, item(2.0)), Err(FieldError::UnknownField));
-    assert_eq!(rows.insert(4, item(2.0)), Err(FieldError::UnknownField));
+    // Never-used slots below next_slot stay unallocated and accept rows in any
+    // order without moving next_slot; live slots reject.
+    assert_eq!(rows.slot_state(2), RowSlotState::Unallocated);
+    assert_eq!(rows.insert(2, item(2.0)), Ok(()));
+    assert_eq!(rows.next_slot(), 5);
+    assert_eq!(rows.slot_state(2), RowSlotState::Live);
+    assert_eq!(rows.insert(2, item(9.0)), Err(FieldError::UnknownField));
+    assert_eq!(rows.insert(4, item(9.0)), Err(FieldError::UnknownField));
+
+    // Removed slots are dead and never reused within the incarnation.
     assert_eq!(rows.remove(0).map(|row| row.weight), Some(1.0));
     assert_eq!(rows.remove(0), None);
-    assert_eq!(rows.slot_state(0), RowSlotState::Dead);
-    assert_eq!(rows.insert(0, item(0.0)), Err(FieldError::UnknownField));
+    assert_eq!(rows.remove(2).map(|row| row.weight), Some(2.0));
+    for dead in [0, 2] {
+        assert_eq!(rows.slot_state(dead), RowSlotState::Dead);
+        assert_eq!(rows.insert(dead, item(0.0)), Err(FieldError::UnknownField));
+    }
     assert_eq!(rows.push(item(5.0)), Ok(5));
+    assert_eq!(rows.insert(3, item(3.0)), Ok(()));
     assert_eq!(
         rows.iter()
             .map(|(slot, row)| (slot, row.weight))
             .collect::<Vec<_>>(),
-        [(4, 4.0), (5, 5.0)]
+        [(3, 3.0), (4, 4.0), (5, 5.0)]
     );
+    assert_eq!(rows.get(3).map(|row| row.weight), Some(3.0));
+    rows.remove(3);
 
-    for slot in [0, 2, 6] {
+    for slot in [0, 2, 3, 6] {
         assert_eq!(rows.property(slot, WEIGHT), Err(FieldError::UnknownField));
         assert_eq!(
             rows.set_property(slot, WEIGHT, DynamicValue::F32(1.0)),
@@ -144,6 +156,43 @@ fn slots_are_never_reused_and_dead_or_unallocated_slots_reject_access() {
     assert_eq!(rows.insert(last, item(0.0)), Err(FieldError::UnknownField));
     assert_eq!(rows.insert(last - 1, item(0.0)), Ok(()));
     assert_eq!(rows.push(item(0.0)), Err(FieldError::UnknownField));
+}
+
+#[test]
+fn decoding_starts_an_incarnation_without_dead_slots() {
+    let mut rows = Rows::<RowsFixtureTag>::new();
+    for value in 0..3 {
+        rows.push(RowsFixtureTag {
+            value,
+        })
+        .unwrap();
+    }
+    rows.remove(1);
+    assert_eq!(rows.slot_state(1), RowSlotState::Dead);
+
+    // Equality covers next_slot and live rows, not the in-memory dead record.
+    let mut decoded = Rows::<RowsFixtureTag>::decode(&rows.encode()).unwrap();
+    assert_eq!(decoded, rows);
+    assert_eq!(decoded.next_slot(), 3);
+    assert_eq!(decoded.slot_state(1), RowSlotState::Unallocated);
+    assert_eq!(
+        decoded.insert(
+            1,
+            RowsFixtureTag {
+                value: 7
+            }
+        ),
+        Ok(())
+    );
+    assert_eq!(decoded.next_slot(), 3);
+    assert_eq!(
+        decoded
+            .iter()
+            .map(|(slot, row)| (slot, row.value))
+            .collect::<Vec<_>>(),
+        [(0, 0), (1, 7), (2, 2)]
+    );
+    assert_ne!(decoded, rows);
 }
 
 #[test]
@@ -297,7 +346,8 @@ fn each_rows_field_appears_once_at_its_real_offset_and_round_trips() {
     }
     assert_eq!(restored, fixture);
     assert_eq!(restored.items.next_slot(), 2);
-    assert_eq!(restored.items.slot_state(0), RowSlotState::Dead);
+    assert_eq!(fixture.items.slot_state(0), RowSlotState::Dead);
+    assert_eq!(restored.items.slot_state(0), RowSlotState::Unallocated);
 
     let mut sources = Vec::new();
     restored.visit_row_assets(&mut |asset| sources.push(asset.uri.clone()));

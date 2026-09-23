@@ -636,13 +636,12 @@ impl GlesRenderDevice {
         self.bind_vertex_array(batch.vao);
         // SAFETY: The bound VAO encapsulates this storage's attribute pointers and the
         // drawn range lies within it, checked above. A glyph range binds its live
-        // atlas texture, which stays on unit 0 until rebound; box-only ranges never
-        // sample unit 0.
+        // atlas texture. Box-only ranges never sample unit 0 but still bind the
+        // default texture there, because a leftover integer curve texture would not
+        // match the float `u_atlas` sampler.
         unsafe {
-            if let Some(texture) = atlas_texture {
-                (self.gl.active_texture)(0x84C0);
-                (self.gl.bind_texture)(0x0DE1, *texture);
-            }
+            (self.gl.active_texture)(0x84C0);
+            (self.gl.bind_texture)(0x0DE1, atlas_texture.copied().unwrap_or(0));
             (self.gl.draw_arrays)(TRIANGLES, first as i32, count as i32);
         }
         self.check_draw()

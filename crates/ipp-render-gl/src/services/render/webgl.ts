@@ -2140,12 +2140,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 0,
               );
               programInt(program, parameterLocation(program, "u_atlas"), 0);
-              // A glyph range binds its atlas, which unit 0 keeps until the next draw
-              // that samples it; box-only ranges never sample unit 0.
-              if (atlas) {
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, atlas);
-              }
+              // A glyph range binds its atlas. Box-only ranges never sample unit 0 but
+              // still clear it: WebGL rejects the draw when a leftover integer curve
+              // texture there mismatches the float u_atlas sampler.
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, atlas ?? null);
               bindVertexArray(batch.vao);
               gl.drawArrays(gl.TRIANGLES, first, count);
               checkDraw();

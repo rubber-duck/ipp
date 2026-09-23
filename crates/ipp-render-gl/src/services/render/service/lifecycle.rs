@@ -47,9 +47,11 @@ impl<D: RenderDevice> RenderService<D> {
             glyph_frame: Default::default(),
             #[cfg(feature = "gui")]
             glyph_population: Default::default(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
             surface_paint: BTreeMap::new(),
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "surfaces")]
+            analytic_glyphs: BTreeMap::new(),
+            #[cfg(feature = "surfaces")]
             submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
@@ -196,6 +198,10 @@ impl<D: RenderDevice> RenderService<D> {
         // Cache images are rebuilt from current evaluated inputs; the budget survives.
         #[cfg(feature = "surfaces")]
         self.clear_surface_caches();
+        #[cfg(feature = "surfaces")]
+        for cache in self.analytic_glyphs.values_mut() {
+            cache.clear();
+        }
         #[cfg(feature = "gui")]
         if let Some(program) = self.surface_box_program.take() {
             self.device.borrow_mut().delete_program(program);
@@ -285,10 +291,14 @@ impl<D: RenderDevice> RenderService<D> {
         self.light_selections.remove(&world);
         #[cfg(feature = "surfaces")]
         self.forget_surface_caches(world);
+        #[cfg(feature = "surfaces")]
+        {
+            self.surface_paint.remove(&world);
+            self.analytic_glyphs.remove(&world);
+        }
         #[cfg(feature = "gui")]
         {
             self.gui_batch_cache.remove(&world);
-            self.surface_paint.remove(&world);
             if let Some(mut cache) = self.glyph_batch_cache.remove(&world) {
                 cache.release_demand(&mut self.glyph_atlas);
             }
@@ -338,6 +348,8 @@ impl<D: RenderDevice> Drop for RenderService<D> {
         }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
+        #[cfg(feature = "surfaces")]
+        self.analytic_glyphs.clear();
         #[cfg(feature = "shadows")]
         self.clear_shadows();
     }

@@ -78,7 +78,7 @@ gl_functions! {
     tex_image: c"glTexImage2D"(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void) -> ();
     tex_sub_image: c"glTexSubImage2D"(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void) -> ();
     uniform_float: c"glUniform1f"(i32, f32) -> ();
-    #[cfg(any(feature = "mesh-poses", feature = "particles", feature = "surfaces"))]
+    #[cfg(any(feature = "mesh-poses", feature = "particles"))]
     disable_attrib: c"glDisableVertexAttribArray"(u32) -> ();
     uniform_int: c"glUniform1i"(i32, i32) -> ();
     uniform_vec4: c"glUniform4fv"(i32, i32, *const f32) -> ();

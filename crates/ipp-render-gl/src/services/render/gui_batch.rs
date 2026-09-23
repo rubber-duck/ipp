@@ -16,12 +16,13 @@
 //! storage.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use super::surface_paint::SurfacePaint;
+pub use super::retained_surfaces::RetainedSurfaceSubmission;
+use super::retained_surfaces::SurfacePaint;
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::surface::{
     GuiShapeFill, GuiShapeGlow, SurfaceClipRect, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
@@ -64,25 +65,6 @@ const _: () = assert!(std::mem::size_of::<GuiBoxVertex>() == 136);
 /// `surface_box.vert` declares the same value and extends exterior vertices only by
 /// the part of its projected antialias footprint this margin does not already cover.
 pub const GUI_BOX_ANTIALIAS_PAD: f32 = 0.002;
-
-/// Surface participation in one completed frame, deciding which retained work is stale.
-///
-/// Destroyed Surfaces release everything. A submitted Surface drew every primitive it
-/// still owns, so its unused work is stale. Live Surfaces skipped by culling keep their
-/// retained work for the frame they become visible again.
-pub struct RetainedSurfaceSubmission<'a> {
-    /// Every live Surface entity in the World.
-    pub live: &'a BTreeSet<ipp_core::EntityId>,
-    /// Surfaces whose primitives this frame submitted.
-    pub submitted: &'a BTreeSet<ipp_core::EntityId>,
-}
-
-impl RetainedSurfaceSubmission<'_> {
-    /// Whether work retained for `entity` is stale, given whether this frame used it.
-    pub fn is_stale(&self, entity: ipp_core::EntityId, used: bool) -> bool {
-        !self.live.contains(&entity) || (!used && self.submitted.contains(&entity))
-    }
-}
 
 /// Stable key identifying one retained GPU batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::super::surface_paint::SurfacePaint;
+use super::super::retained_surfaces::SurfacePaint;
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
     GlyphPopulationBudget, GlyphVertex, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME,
@@ -38,6 +38,7 @@ impl RenderDevice for MockAtlasDevice {
     type Texture = u32;
     type SurfacePath = u32;
     type SurfaceCacheTarget = ();
+    type SurfaceInstances = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockBatch;

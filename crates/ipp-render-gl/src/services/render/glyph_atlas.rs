@@ -27,7 +27,7 @@ use ipp_core::systems::surface::{
     SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
 };
 
-use super::surface_paint::SurfacePaint;
+use super::retained_surfaces::SurfacePaint;
 use crate::{RenderDevice, RenderError, RenderStats};
 
 /// Page width and height in texels for each atlas page texture.

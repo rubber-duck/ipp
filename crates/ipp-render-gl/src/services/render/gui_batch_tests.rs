@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use std::collections::BTreeSet;
 
-use super::super::surface_paint::SurfacePaint;
+use super::super::retained_surfaces::SurfacePaint;
 use super::{
     GuiBatchRenderCache, GuiBoxVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission, VOLATILE_FRAMES,
     generate_box_vertices,
@@ -39,6 +39,7 @@ impl RenderDevice for MockGuiDevice {
     type Texture = u32;
     type SurfacePath = u32;
     type SurfaceCacheTarget = ();
+    type SurfaceInstances = ();
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockGuiBatch;

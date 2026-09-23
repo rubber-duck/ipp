@@ -171,11 +171,20 @@ unsafe extern "C" {
     fn delete_surface_path(path: u32);
 
     #[cfg(feature = "surfaces")]
-    fn draw_surface_path_instances(
+    fn create_surface_instances(path: u32, instances: *const f32, count: usize) -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn update_surface_instances(stream: u32, path: u32, instances: *const f32, count: usize)
+    -> u32;
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_instances(stream: u32);
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_instances(
         program: u32,
         path: u32,
-        instances: *const f32,
-        count: usize,
+        stream: u32,
         mvp: *const f32,
         clip: *const f32,
         fill_rule: u32,
@@ -333,6 +342,25 @@ impl WebGlRenderDevice {
     }
 }
 
+#[cfg(feature = "surfaces")]
+impl WebGlRenderDevice {
+    /// Pack `instances` into the reused scratch stream after checking that every
+    /// descriptor survives the bridge's float encoding.
+    fn pack_surface_instances(
+        &mut self,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        if !super::surface_instances_exact(instances) {
+            return Err(RenderError::RenderDevice(
+                "surface instance atlas exceeds exact descriptor limits".into(),
+            ));
+        }
+
+        super::pack_surface_instances(instances, &mut self.surface_instance_scratch);
+        Ok(())
+    }
+}
+
 /// Context-local atlas target and its distinct sampleable texture handle.
 #[cfg(feature = "gui")]
 pub struct WebGlGlyphAtlasPage {
@@ -371,6 +399,9 @@ impl RenderDevice for WebGlRenderDevice {
 
     #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget = u32;
+
+    #[cfg(feature = "surfaces")]
+    type SurfaceInstances = u32;
 
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
@@ -583,29 +614,67 @@ impl RenderDevice for WebGlRenderDevice {
     }
 
     #[cfg(feature = "surfaces")]
-    fn draw_surface_path_instances(
+    fn create_surface_instances(
+        &mut self,
+        path: &u32,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<u32, RenderError> {
+        self.pack_surface_instances(instances)?;
+        // SAFETY: The bridge validates the stream against the path handle and copies
+        // the complete packed stream synchronously, retaining no aliases into WASM memory.
+        let stream = unsafe {
+            create_surface_instances(
+                *path,
+                self.surface_instance_scratch.as_ptr().cast(),
+                self.surface_instance_scratch.len(),
+            )
+        };
+        self.check(stream)?;
+        Ok(stream)
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn update_surface_instances(
+        &mut self,
+        stream: &mut u32,
+        path: &u32,
+        instances: &[super::SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        self.pack_surface_instances(instances)?;
+        // SAFETY: As for creation; the bridge replaces the stream's complete store.
+        self.check(unsafe {
+            update_surface_instances(
+                *stream,
+                *path,
+                self.surface_instance_scratch.as_ptr().cast(),
+                self.surface_instance_scratch.len(),
+            )
+        })
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_instances(&mut self, stream: u32) {
+        // SAFETY: Consumes the context-owned handle once; stale context handles are harmless.
+        unsafe { delete_surface_instances(stream) };
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_instances(
         &mut self,
         program: &Self::Program,
         path: &u32,
-        instances: &[super::SurfacePathInstance],
+        stream: &u32,
         mvp: &[f32; 16],
         clip: &[f32; 4],
         fill_rule: u32,
     ) -> Result<(), RenderError> {
-        if !super::surface_instances_exact(instances) {
-            return Err(RenderError::RenderDevice(
-                "surface instance atlas exceeds exact descriptor limits".into(),
-            ));
-        }
-        super::pack_surface_instances(instances, &mut self.surface_instance_scratch);
-        // SAFETY: The bridge synchronously copies the complete packed stream and
-        // fixed uniforms and retains no aliases into WASM memory.
+        // SAFETY: The bridge validates handles and synchronously copies the fixed
+        // live uniform arrays without retaining aliases into WASM memory.
         self.check(unsafe {
-            draw_surface_path_instances(
+            draw_surface_instances(
                 program.id,
                 *path,
-                self.surface_instance_scratch.as_ptr().cast(),
-                self.surface_instance_scratch.len(),
+                *stream,
                 mvp.as_ptr(),
                 clip.as_ptr(),
                 fill_rule,

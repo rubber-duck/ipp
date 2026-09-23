@@ -43,6 +43,12 @@ pub struct DeviceState {
     pub fail_shadow_draw: Cell<bool>,
     #[cfg(feature = "surfaces")]
     pub analytic_glyph_draws: Cell<u32>,
+    /// Analytic instance streams created or replaced.
+    #[cfg(feature = "surfaces")]
+    pub analytic_glyph_uploads: Cell<u32>,
+    /// Analytic instance streams currently allocated.
+    #[cfg(feature = "surfaces")]
+    pub live_analytic_streams: Cell<i32>,
     #[cfg(feature = "gui")]
     pub glyph_batch_uploads: Cell<u32>,
     #[cfg(feature = "gui")]
@@ -104,6 +110,8 @@ impl RenderDevice for TestDevice {
     type SurfacePath = ();
     #[cfg(feature = "surfaces")]
     type SurfaceCacheTarget = ();
+    #[cfg(feature = "surfaces")]
+    type SurfaceInstances = ();
     type Program = ();
     type Mesh = ();
     type Texture = ();
@@ -289,11 +297,46 @@ impl RenderDevice for TestDevice {
     }
 
     #[cfg(feature = "surfaces")]
-    fn draw_surface_path_instances(
+    fn create_surface_instances(
+        &mut self,
+        _: &(),
+        _: &[ipp_render_gl::SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        self.0
+            .analytic_glyph_uploads
+            .set(self.0.analytic_glyph_uploads.get() + 1);
+        self.0
+            .live_analytic_streams
+            .set(self.0.live_analytic_streams.get() + 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn update_surface_instances(
+        &mut self,
+        _: &mut (),
+        _: &(),
+        _: &[ipp_render_gl::SurfacePathInstance],
+    ) -> Result<(), RenderError> {
+        self.0
+            .analytic_glyph_uploads
+            .set(self.0.analytic_glyph_uploads.get() + 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_instances(&mut self, _: ()) {
+        self.0
+            .live_analytic_streams
+            .set(self.0.live_analytic_streams.get() - 1);
+    }
+
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_instances(
         &mut self,
         _: &(),
         _: &(),
-        _: &[ipp_render_gl::SurfacePathInstance],
+        _: &(),
         _: &[f32; 16],
         _: &[f32; 4],
         _: u32,
@@ -835,7 +878,7 @@ pub fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
 }
 
 /// An IPPF font of `count` identical triangle glyphs whose bounds span `extent` units.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub fn glyph_font(count: u32, units_per_em: u32, extent: f32) -> Vec<u8> {
     let mut bytes = b"IPPF".to_vec();
     bytes.extend(1_u32.to_le_bytes());

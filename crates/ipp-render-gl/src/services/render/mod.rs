@@ -3,6 +3,8 @@
 //! Hosts own contexts, surfaces and scheduling; native context libraries and
 //! shims stay in hosts.
 
+#[cfg(feature = "surfaces")]
+mod analytic_glyphs;
 mod assets;
 mod custom_material;
 mod custom_shader;
@@ -33,8 +35,8 @@ mod template;
 pub mod glyph_atlas;
 #[cfg(feature = "gui")]
 pub mod gui_batch;
-#[cfg(feature = "gui")]
-pub mod surface_paint;
+#[cfg(feature = "surfaces")]
+pub mod retained_surfaces;
 
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathDescriptor;

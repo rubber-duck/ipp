@@ -449,26 +449,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
     let text_clip = [1.0, 0.8, 2.0, 1.6];
+    // One retained stream: created for the first frame, replaced in place when the
+    // text scrolls.
+    let mut stream = device.create_surface_instances(&square, &glyphs(0.0))?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_surface_path_instances(
-        &instance_program,
-        &square,
-        &glyphs(0.0),
-        &MVP,
-        &text_clip,
-        0,
-    )?;
+    device.draw_surface_instances(&instance_program, &square, &stream, &MVP, &text_clip, 0)?;
     let text_before = capture(&mut device, "clip-text")?;
+    device.update_surface_instances(&mut stream, &square, &glyphs(1.0))?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_surface_path_instances(
-        &instance_program,
-        &square,
-        &glyphs(1.0),
-        &MVP,
-        &text_clip,
-        0,
-    )?;
+    device.draw_surface_instances(&instance_program, &square, &stream, &MVP, &text_clip, 0)?;
     let text_after = capture(&mut device, "clip-text-scrolled")?;
+    device.delete_surface_instances(stream);
     check(
         &text_before,
         80,

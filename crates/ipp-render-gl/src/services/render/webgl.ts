@@ -152,8 +152,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     }
   >();
   let surfaceQuadVao: WebGLVertexArrayObject | null = null;
-  let surfaceInstanceBuffer: WebGLBuffer | null = null;
-  let surfaceInstanceCapacity = 0;
+  /** Retained analytic instance streams, each with its own instanced vertex array. */
+  const surfaceInstanceStreams = IPP_SURFACES
+    ? new Map<
+        number,
+        { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; count: number }
+      >()
+    : undefined;
   const guiBatches = IPP_GUI
     ? new Map<number, WebGlRetainedBatch>()
     : undefined;
@@ -580,6 +585,38 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       }
     : undefined;
 
+  /**
+   * View a packed analytic instance stream of `count` sixteen-float instances after
+   * validating each descriptor against the path's curve and band ranges.
+   */
+  const surfaceInstanceValues = IPP_SURFACES
+    ? (
+        pathHandle: number,
+        instancePointer: number,
+        count: number,
+      ): Float32Array<ArrayBuffer> => {
+        const path = surfacePaths.get(pathHandle >>> 0);
+        count >>>= 0;
+        if (!path) throw new Error("Stale surface path handle");
+        if (count === 0) throw new Error("Empty surface instance stream");
+        const values = floats(instancePointer >>> 0, count * 16);
+        for (let index = 0; index < count; index += 1) {
+          const base = index * 16;
+          const curveStart = values[base + 12]!;
+          const curveCount = values[base + 13]!;
+          const bandOffset = values[base + 14]!;
+          if (
+            curveCount <= 0 ||
+            curveStart + curveCount > path.count ||
+            bandOffset < 0 ||
+            bandOffset + 32 > path.bandCount
+          )
+            throw new Error("Invalid surface instance range");
+        }
+        return values;
+      }
+    : undefined;
+
   function wholeFloats(
     pointer: number,
     count: number,
@@ -704,8 +741,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     if (IPP_SURFACES) {
       surfacePaths.clear();
       surfaceQuadVao = null;
-      surfaceInstanceBuffer = null;
-      surfaceInstanceCapacity = 0;
+      surfaceInstanceStreams!.clear();
       surfaceCacheTargets!.clear();
       surfaceCacheTarget = undefined;
     }
@@ -735,8 +771,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     if (IPP_SURFACES) {
       surfacePaths.clear();
       surfaceQuadVao = null;
-      surfaceInstanceBuffer = null;
-      surfaceInstanceCapacity = 0;
+      surfaceInstanceStreams!.clear();
       surfaceCacheTargets!.clear();
       surfaceCacheTarget = undefined;
     }
@@ -1423,11 +1458,85 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.deleteVertexArray(path.vao);
             }
           },
-          draw_surface_path_instances(
-            programHandle: number,
+          create_surface_instances(
             pathHandle: number,
             instancePointer: number,
             count: number,
+          ): number {
+            return status(() => {
+              const values = surfaceInstanceValues!(
+                pathHandle,
+                instancePointer,
+                count,
+              );
+              const vao = gl.createVertexArray();
+              const vbo = gl.createBuffer();
+              if (!vao || !vbo) {
+                if (vao) gl.deleteVertexArray(vao);
+                if (vbo) gl.deleteBuffer(vbo);
+                throw new Error("Surface instance allocation failed");
+              }
+              bindVertexArray(vao);
+              gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+              gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
+              for (let slot = 0; slot < 4; slot += 1) {
+                gl.enableVertexAttribArray(slot);
+                gl.vertexAttribPointer(slot, 4, gl.FLOAT, false, 64, slot * 16);
+                gl.vertexAttribDivisor(slot, 1);
+              }
+              bindVertexArray(null);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              try {
+                check();
+              } catch (error) {
+                gl.deleteVertexArray(vao);
+                gl.deleteBuffer(vbo);
+                throw error;
+              }
+              const handle = id();
+              surfaceInstanceStreams!.set(handle, {
+                vao,
+                vbo,
+                count: count >>> 0,
+              });
+              return handle;
+            });
+          },
+          update_surface_instances(
+            streamHandle: number,
+            pathHandle: number,
+            instancePointer: number,
+            count: number,
+          ): number {
+            return status(() => {
+              const stream = surfaceInstanceStreams!.get(streamHandle >>> 0);
+              if (!stream) throw new Error("Stale surface instance handle");
+              const values = surfaceInstanceValues!(
+                pathHandle,
+                instancePointer,
+                count,
+              );
+              // Replace the complete store; queued draws keep the previous one.
+              gl.bindBuffer(gl.ARRAY_BUFFER, stream.vbo);
+              gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
+              gl.bindBuffer(gl.ARRAY_BUFFER, null);
+              check();
+              stream.count = count >>> 0;
+              return 1;
+            });
+          },
+          delete_surface_instances(streamHandle: number): void {
+            const stream = surfaceInstanceStreams!.get(streamHandle >>> 0);
+            surfaceInstanceStreams!.delete(streamHandle >>> 0);
+            if (stream && !disposed && !gl.isContextLost()) {
+              gl.deleteVertexArray(stream.vao);
+              gl.deleteBuffer(stream.vbo);
+            }
+          },
+          draw_surface_instances(
+            programHandle: number,
+            pathHandle: number,
+            streamHandle: number,
             mvpPointer: number,
             clipPointer: number,
             fillRule: number,
@@ -1435,24 +1544,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             return status(() => {
               const program = programs.get(programHandle >>> 0);
               const path = surfacePaths.get(pathHandle >>> 0);
-              count >>>= 0;
-              if (!program || !path)
-                throw new Error("Stale surface program or path handle");
-              if (count === 0) return 1;
-              const values = floats(instancePointer >>> 0, count * 16);
-              for (let index = 0; index < count; index += 1) {
-                const base = index * 16;
-                const curveStart = values[base + 12]!;
-                const curveCount = values[base + 13]!;
-                const bandOffset = values[base + 14]!;
-                if (
-                  curveCount <= 0 ||
-                  curveStart + curveCount > path.count ||
-                  bandOffset < 0 ||
-                  bandOffset + 32 > path.bandCount
-                )
-                  throw new Error("Invalid surface instance range");
-              }
+              const stream = surfaceInstanceStreams!.get(streamHandle >>> 0);
+              if (!program || !path || !stream)
+                throw new Error("Stale surface instance handle");
+              if (stream.count === 0) return 1;
               if (blendMode !== 2) {
                 gl.enable(gl.BLEND);
                 gl.blendEquation(gl.FUNC_ADD);
@@ -1464,29 +1559,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 );
                 gl.depthMask(false);
                 blendMode = 2;
-              }
-              surfaceInstanceBuffer ??= gl.createBuffer();
-              if (!surfaceInstanceBuffer)
-                throw new Error("Surface instance allocation failed");
-              bindVertexArray(path.vao);
-              gl.bindBuffer(gl.ARRAY_BUFFER, surfaceInstanceBuffer);
-              const byteCount = values.byteLength;
-              if (byteCount > surfaceInstanceCapacity) {
-                surfaceInstanceCapacity = Math.max(
-                  byteCount,
-                  surfaceInstanceCapacity * 2,
-                );
-                gl.bufferData(
-                  gl.ARRAY_BUFFER,
-                  surfaceInstanceCapacity,
-                  gl.STREAM_DRAW,
-                );
-              }
-              gl.bufferSubData(gl.ARRAY_BUFFER, 0, values);
-              for (let slot = 0; slot < 4; slot += 1) {
-                gl.enableVertexAttribArray(slot);
-                gl.vertexAttribPointer(slot, 4, gl.FLOAT, false, 64, slot * 16);
-                gl.vertexAttribDivisor(slot, 1);
               }
               useProgram(program.object);
               matrixUniform(program.mvp, mvpPointer >>> 0, 16);
@@ -1521,11 +1593,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.bindTexture(gl.TEXTURE_2D, path.texture);
               gl.activeTexture(gl.TEXTURE1);
               gl.bindTexture(gl.TEXTURE_2D, path.bandTexture);
-              gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
-              for (let slot = 0; slot < 4; slot += 1) {
-                gl.vertexAttribDivisor(slot, 0);
-                gl.disableVertexAttribArray(slot);
-              }
+              bindVertexArray(stream.vao);
+              gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, stream.count);
               bindVertexArray(null);
               gl.bindTexture(gl.TEXTURE_2D, null);
               gl.activeTexture(gl.TEXTURE0);
@@ -2848,9 +2917,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           }
         }
         surfacePaths.clear();
-        gl.deleteBuffer(surfaceInstanceBuffer);
-        surfaceInstanceBuffer = null;
-        surfaceInstanceCapacity = 0;
+        if (IPP_SURFACES) {
+          for (const stream of surfaceInstanceStreams!.values()) {
+            gl.deleteVertexArray(stream.vao);
+            gl.deleteBuffer(stream.vbo);
+          }
+          surfaceInstanceStreams!.clear();
+        }
         gl.deleteVertexArray(surfaceQuadVao);
         surfaceQuadVao = null;
         for (const program of programs.values())

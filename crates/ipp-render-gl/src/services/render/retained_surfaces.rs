@@ -1,4 +1,15 @@
-//! Whether a Surface's prepared paint is unchanged since its last drawn frame.
+//! Frame-to-frame state shared by retained Surface work: which retained work a
+//! completed frame made stale, and whether a Surface's prepared paint is unchanged
+//! since its last drawn frame.
+//!
+//! # Stale work
+//!
+//! Destroyed Surfaces release everything. A submitted Surface drew every primitive it
+//! still owns, so its unused work is stale. Live Surfaces skipped by culling, or
+//! composited from an unchanged cache image, keep their retained work for the frame
+//! they draw again.
+//!
+//! # Unchanged paint
 //!
 //! Core publishes a World-monotonic paint revision beside each Surface item that
 //! changes whenever its primitives or clip size paint differently; zero means the
@@ -14,6 +25,21 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ipp_core::systems::surface::SurfacePrimitiveIdentity;
 use ipp_core::{EntityId, SurfaceRenderItem};
+
+/// Surface participation in one completed frame, deciding which retained work is stale.
+pub struct RetainedSurfaceSubmission<'a> {
+    /// Every live Surface entity in the World.
+    pub live: &'a BTreeSet<EntityId>,
+    /// Surfaces whose primitives this frame submitted.
+    pub submitted: &'a BTreeSet<EntityId>,
+}
+
+impl RetainedSurfaceSubmission<'_> {
+    /// Whether work retained for `entity` is stale, given whether this frame used it.
+    pub fn is_stale(&self, entity: EntityId, used: bool) -> bool {
+        !self.live.contains(&entity) || (!used && self.submitted.contains(&entity))
+    }
+}
 
 /// Paint identity of one Surface for the current frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,5 +121,5 @@ impl SurfacePaintTracker {
 }
 
 #[cfg(test)]
-#[path = "surface_paint_tests.rs"]
+#[path = "retained_surfaces_tests.rs"]
 mod tests;

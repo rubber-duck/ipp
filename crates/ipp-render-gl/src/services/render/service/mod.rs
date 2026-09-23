@@ -68,7 +68,8 @@ pub struct RenderStats {
     pub triangles: u32,
     /// Vertex/index/pixel uploads accounted by this submission, including pending
     /// shared service work once. Later worlds do not recount the same allocation.
-    /// Analytic Surface glyph instance streams count on every draw that uploads them.
+    /// Analytic Surface glyph runs count when their retained instance stream is
+    /// created or replaced; unchanged runs upload nothing.
     pub uploaded_bytes: u32,
     /// Instances skipped because their mesh could not acquire GPU residency.
     /// CPU geometry remains usable; resource reload permits another upload.
@@ -128,6 +129,10 @@ pub struct RenderStats {
     /// byte per texel of single-channel coverage.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
+    /// Resident bytes of retained analytic Surface glyph instance streams across every
+    /// World presented through this context, sixteen `f32` lanes per instance.
+    #[cfg(feature = "surfaces")]
+    pub analytic_glyph_resident_bytes: u32,
     /// Opted-in Surfaces repainted into their cache images during this submission,
     /// before the main pass. Each repaint also counts its primitive draws.
     #[cfg(feature = "surfaces")]
@@ -230,11 +235,14 @@ pub struct RenderService<D: RenderDevice> {
     #[cfg(feature = "gui")]
     glyph_population: super::glyph_atlas::GlyphPopulationBudget,
     /// Surfaces the current frame submitted; `None` until submission reaches them.
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "surfaces")]
     submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,
     /// Each World's last drawn Surface paint revisions and identity orders.
-    #[cfg(feature = "gui")]
-    surface_paint: BTreeMap<ipp_core::WorldId, super::surface_paint::SurfacePaintTracker>,
+    #[cfg(feature = "surfaces")]
+    surface_paint: BTreeMap<ipp_core::WorldId, super::retained_surfaces::SurfacePaintTracker>,
+    /// Each World's retained analytic glyph instance streams.
+    #[cfg(feature = "surfaces")]
+    analytic_glyphs: BTreeMap<ipp_core::WorldId, super::analytic_glyphs::AnalyticGlyphCache<D>>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

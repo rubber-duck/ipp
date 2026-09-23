@@ -80,6 +80,17 @@ pub struct DeviceState {
     pub fail_cache_begin: RefCell<Option<RenderError>>,
     #[cfg(feature = "surfaces")]
     pub fail_cache_end: RefCell<Option<RenderError>>,
+    #[cfg(feature = "surfaces")]
+    pub fail_cache_composite: RefCell<Option<RenderError>>,
+    /// Curve-path draws, excluding analytic glyph instances.
+    #[cfg(feature = "surfaces")]
+    pub surface_path_draws: Cell<u32>,
+    #[cfg(feature = "gui")]
+    pub glyph_batch_draws: Cell<u32>,
+    /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
+    /// `P` draws paths, `G` analytic glyphs, `T` atlas text, `F` begins the frame.
+    #[cfg(feature = "surfaces")]
+    pub surface_events: RefCell<String>,
 }
 
 pub struct TestDevice(pub Rc<DeviceState>);
@@ -255,6 +266,15 @@ impl RenderDevice for TestDevice {
             self.0.surface_double_sided.get(),
             "Surface draw must run with back-face culling suspended"
         );
+        self.0
+            .surface_path_draws
+            .set(self.0.surface_path_draws.get() + 1);
+        #[cfg(feature = "gui")]
+        if !self.0.atlas_target_bound.get() {
+            self.0.surface_events.borrow_mut().push('P');
+        }
+        #[cfg(not(feature = "gui"))]
+        self.0.surface_events.borrow_mut().push('P');
         if self.0.fail_surface_draw.get() {
             Err(RenderError::RenderDevice(
                 "injected Surface draw failure".into(),
@@ -282,6 +302,7 @@ impl RenderDevice for TestDevice {
         self.0
             .analytic_glyph_draws
             .set(self.0.analytic_glyph_draws.get() + 1);
+        self.0.surface_events.borrow_mut().push('G');
         Ok(())
     }
 
@@ -324,14 +345,25 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    /// Cache targets never nest; atlas population may nest inside one.
+    /// Cache targets never nest or start inside atlas population; atlas
+    /// population may nest inside one.
     #[cfg(feature = "surfaces")]
     fn begin_surface_cache_target(&mut self, _: &()) -> Result<(), RenderError> {
         assert!(
             !self.0.cache_target_bound.get(),
             "Surface cache targets never nest"
         );
+        #[cfg(feature = "gui")]
+        assert!(
+            !self.0.atlas_target_bound.get(),
+            "Surface cache targets never begin inside atlas population"
+        );
+        assert!(
+            self.0.surface_double_sided.get(),
+            "repaints run with back-face culling suspended"
+        );
         self.0.cache_begins.set(self.0.cache_begins.get() + 1);
+        self.0.surface_events.borrow_mut().push('B');
         if let Some(error) = self.0.fail_cache_begin.borrow().clone() {
             return Err(error);
         }
@@ -343,6 +375,7 @@ impl RenderDevice for TestDevice {
     #[cfg(feature = "surfaces")]
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         self.0.cache_target_bound.set(false);
+        self.0.surface_events.borrow_mut().push('E');
         match self.0.fail_cache_end.borrow().clone() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -373,7 +406,11 @@ impl RenderDevice for TestDevice {
         self.0
             .cache_composites
             .set(self.0.cache_composites.get() + 1);
-        Ok(())
+        self.0.surface_events.borrow_mut().push('C');
+        match self.0.fail_cache_composite.borrow().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     #[cfg(feature = "surfaces")]
@@ -422,6 +459,10 @@ impl RenderDevice for TestDevice {
             !self.0.atlas_target_bound.get(),
             "the main pass never draws into an atlas page"
         );
+        self.0
+            .glyph_batch_draws
+            .set(self.0.glyph_batch_draws.get() + 1);
+        self.0.surface_events.borrow_mut().push('T');
         Ok(())
     }
 
@@ -463,6 +504,14 @@ impl RenderDevice for TestDevice {
         _height: u32,
         _clear: &[f32; 4],
     ) -> Result<(), RenderError> {
+        #[cfg(feature = "surfaces")]
+        {
+            assert!(
+                !self.0.cache_target_bound.get(),
+                "the frame begins outside cache repaints"
+            );
+            self.0.surface_events.borrow_mut().push('F');
+        }
         Ok(())
     }
 
@@ -592,6 +641,16 @@ pub fn update(
     world.step(0.0)
 }
 
+/// Complete one World update after `dt` seconds of Host time.
+pub fn advance(
+    world: &mut WorldContext<'_>,
+    dt: f64,
+) -> Result<ipp_core::WorldUpdateReport, ipp_core::ErrorReason> {
+    world.prepare_update(dt)?;
+    world.poll_all_assets();
+    world.step(dt)
+}
+
 pub fn render_frame<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     world: &mut WorldContext<'_>,
@@ -615,7 +674,7 @@ pub fn render_frame<D: RenderDevice>(
 }
 
 /// One text Surface in front of the default camera, with its font resolved.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub fn text_surface_scene(
     host: &mut ipp_core::HostRuntime,
 ) -> (
@@ -628,7 +687,7 @@ pub fn text_surface_scene(
 }
 
 /// A glyph run of `glyph_ids`, one centimetre apart, in the given font.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub fn text_run_scene(
     host: &mut ipp_core::HostRuntime,
     font: Vec<u8>,
@@ -691,7 +750,7 @@ pub fn text_run_scene(
 }
 
 /// Complete font requests until the text Surface prepares its glyph run.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldId, font: &[u8]) {
     for _ in 0..16 {
         host.progress_assets();
@@ -712,7 +771,7 @@ pub fn resolve_text(host: &mut ipp_core::HostRuntime, world_id: ipp_core::WorldI
     panic!("text Surface font did not resolve");
 }
 
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
     world
         .enqueue(Batch {
@@ -752,7 +811,7 @@ pub fn glyph_font(count: u32, units_per_em: u32, extent: f32) -> Vec<u8> {
 }
 
 /// Host recovery after context loss: release context state, then restore resources.
-#[cfg(feature = "gui")]
+#[cfg(feature = "surfaces")]
 pub fn recover_context(
     renderer: &mut RenderService<TestDevice>,
     host: &mut ipp_core::HostRuntime,

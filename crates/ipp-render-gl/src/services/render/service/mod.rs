@@ -124,24 +124,30 @@ pub struct RenderStats {
     /// Total resident bytes occupied by the shared glyph atlas page textures.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
-    /// Opted-in Surfaces repainted into their cache images during this submission.
+    /// Opted-in Surfaces repainted into their cache images during this submission,
+    /// before the main pass. Each repaint also counts its primitive draws.
     #[cfg(feature = "surfaces")]
     pub surface_cache_repaints: u32,
     /// Opted-in Surfaces composited from an unchanged cache image, without repainting.
+    /// A composite is one draw call of two triangles.
     #[cfg(feature = "surfaces")]
     pub surface_cache_reuses: u32,
     /// Opted-in visible Surfaces presented directly: inside their direct distance,
-    /// under GUI interaction, after a fallback or without cache support.
+    /// under GUI interaction, after a fallback or without cache support. Culled
+    /// Surfaces count in none of the cache counters.
     #[cfg(feature = "surfaces")]
     pub surface_cache_direct: u32,
-    /// Opted-in Surfaces presented directly because the byte budget or a
-    /// recoverable allocation failure left no usable image.
+    /// Opted-in Surfaces presented directly because the byte budget, a zero budget,
+    /// or a recoverable allocation, repaint or composite failure and its retry
+    /// interval left no usable image. Also counted in `surface_cache_direct`.
     #[cfg(feature = "surfaces")]
     pub surface_cache_fallbacks: u32,
-    /// Cache images allocated or resized during this submission.
+    /// Cache images created or resized during this submission; each is repainted
+    /// before it is shown.
     #[cfg(feature = "surfaces")]
     pub surface_cache_allocations: u32,
-    /// Resident cache images across every World presented through this context.
+    /// Resident cache images across every World presented through this context,
+    /// after this submission's releases.
     #[cfg(feature = "surfaces")]
     pub surface_cache_entries: u32,
     /// Resident bytes of cache images across every World presented through this
@@ -191,7 +197,10 @@ pub struct RenderService<D: RenderDevice> {
     surface_cache_program: Option<D::Program>,
     /// Whole-Surface cache images shared by every World on this context.
     #[cfg(feature = "surfaces")]
-    surface_cache: super::surface_cache::SurfaceTextureCache,
+    surface_cache: super::surface_cache::SurfaceTextureCache<D::SurfaceCacheTarget>,
+    /// Reused per-frame cache planning inputs.
+    #[cfg(feature = "surfaces")]
+    surface_cache_inputs: Vec<super::surface_cache::SurfaceCacheInput>,
     #[cfg(feature = "gui")]
     surface_box_program: Option<D::Program>,
     #[cfg(feature = "gui")]

@@ -341,9 +341,25 @@ const reports = [];
       rendering && gui,
       `retained GUI export ${name} differs from selected capability`,
     );
-  // The cache imports and the surface_cache.frag marker join these checks once
-  // RenderService composites cached Surfaces (ipp-s1ge.2.3); until then the
-  // linker drops the unreferenced imports and shader.
+  for (const name of [
+    "surface_cache_limit",
+    "create_surface_cache_target",
+    "resize_surface_cache_target",
+    "begin_surface_cache_target",
+    "end_surface_cache_target",
+    "draw_surface_cache",
+    "delete_surface_cache_target",
+  ])
+    assert.equal(
+      glImports.some((entry) => entry.name === name),
+      rendering && surfaces,
+      `Surface cache import ${name} differs from selected capability`,
+    );
+  assert.equal(
+    runtimeBytes.includes(Buffer.from("u_surface_cache")),
+    rendering && surfaces,
+    "Surface cache shader differs from selected capability",
+  );
   for (const name of [
     "ipp_render_surface_cache_repaints",
     "ipp_render_surface_cache_reuses",

@@ -16,6 +16,39 @@ impl<D: RenderDevice> RenderService<D> {
         width: u32,
         height: u32,
     ) -> Result<RenderStats, RenderError> {
+        self.render_frame(
+            world,
+            width,
+            height,
+            #[cfg(feature = "surfaces")]
+            None,
+        )
+    }
+
+    /// Render like [`Self::render`], presenting `surfaces` in place of the World's
+    /// prepared Surface inputs.
+    ///
+    /// Harness entry for renderer tests that need prepared fields core does not
+    /// yet populate. Items must describe live Surface entities of this World.
+    #[doc(hidden)]
+    #[cfg(feature = "surfaces")]
+    pub fn render_with_surface_items(
+        &mut self,
+        world: &mut WorldContext<'_>,
+        width: u32,
+        height: u32,
+        surfaces: &[ipp_core::SurfaceRenderItem],
+    ) -> Result<RenderStats, RenderError> {
+        self.render_frame(world, width, height, Some(surfaces))
+    }
+
+    fn render_frame(
+        &mut self,
+        world: &mut WorldContext<'_>,
+        width: u32,
+        height: u32,
+        #[cfg(feature = "surfaces")] surfaces: Option<&[ipp_core::SurfaceRenderItem]>,
+    ) -> Result<RenderStats, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(209, "gl.render");
 
@@ -31,7 +64,7 @@ impl<D: RenderDevice> RenderService<D> {
             (!ipp_core::render_buffer_reuse_enabled()).then(|| world.render_items().to_vec());
         let items = snapshot.as_deref().unwrap_or_else(|| world.render_items());
         #[cfg(feature = "surfaces")]
-        let surface_items = world.surface_render_items();
+        let surface_items = surfaces.unwrap_or_else(|| world.surface_render_items());
         self.debug.retain(world.debug_render_items());
 
         // One preparation serves glyph demand and drawing: `None` without a selected
@@ -41,21 +74,73 @@ impl<D: RenderDevice> RenderService<D> {
                 .prepare_camera(width, height)
                 .map(|camera| camera.view_projection)
         });
+
+        // Surface cache presentation is planned before glyph demand, which follows it.
+        #[cfg(feature = "surfaces")]
+        let planned = match camera {
+            Some(Ok(view_projection)) => {
+                self.plan_surface_caches(world, surface_items, view_projection)
+            }
+            _ => Ok(()),
+        };
+        #[cfg(not(feature = "surfaces"))]
+        let planned: Result<(), RenderError> = Ok(());
+
         #[cfg(feature = "gui")]
         {
             self.glyph_frame.clear();
             // Without a usable camera no Surface is submitted, so the previous demand stays.
-            if let Some(Ok(view_projection)) = camera {
+            if planned.is_ok()
+                && let Some(Ok(view_projection)) = camera
+            {
                 self.prepare_glyph_demand(world, surface_items, view_projection, (width, height));
             }
         }
 
-        self.device
-            .borrow_mut()
-            .begin_frame(width, height, &BACKGROUND)?;
+        // Frames that repaint cache images populate atlas misses outside the
+        // repaints and repaint before `begin_frame`, so the main pass stays whole.
+        #[cfg(feature = "surfaces")]
+        let early = self.surface_repaints_planned(world.id());
+        #[cfg(feature = "surfaces")]
+        let prepass = planned.and_then(|()| {
+            if !early {
+                return Ok(RenderStats::default());
+            }
+
+            #[cfg(feature = "gui")]
+            self.populate_glyph_misses(world)?;
+            let mut instances = std::mem::take(&mut self.frame_scratch.surface_instances);
+            let repainted = self.repaint_surface_caches(world, surface_items, &mut instances);
+            self.frame_scratch.surface_instances = instances;
+            repainted
+        });
+        #[cfg(not(feature = "surfaces"))]
+        let prepass = planned.map(|()| RenderStats::default());
+
+        let begun = prepass.and_then(|stats| {
+            self.device
+                .borrow_mut()
+                .begin_frame(width, height, &BACKGROUND)
+                .map(|()| stats)
+        });
+        let prepass = match begun {
+            Ok(stats) => stats,
+            Err(error) => {
+                #[cfg(feature = "gui")]
+                self.finish_retained_surfaces(world.id(), surface_items, None);
+                #[cfg(feature = "surfaces")]
+                self.finish_surface_caches(world, None);
+                return Err(error);
+            }
+        };
+
         // Populate atlas misses before the main pass, binding each page once.
         #[cfg(feature = "gui")]
-        let populated = self.populate_glyph_misses(world);
+        let populated = if early {
+            Ok(())
+        } else {
+            self.populate_glyph_misses(world)
+        };
         #[cfg(not(feature = "gui"))]
         let populated = Ok(());
         // Always release draw bindings, including when upload/draw fails.
@@ -67,13 +152,14 @@ impl<D: RenderDevice> RenderService<D> {
                 #[cfg(feature = "surfaces")]
                 surface_items,
                 camera,
+                prepass,
             )
         });
         let finish = self.device.borrow_mut().end_frame();
         #[cfg(feature = "gui")]
         self.finish_retained_surfaces(world.id(), surface_items, result.as_mut().ok());
         #[cfg(feature = "surfaces")]
-        self.finish_surface_caches(result.as_mut().ok());
+        self.finish_surface_caches(world, result.as_mut().ok());
 
         let stats = result?;
         finish?;
@@ -103,6 +189,7 @@ impl<D: RenderDevice> RenderService<D> {
         items: &[ipp_core::RenderItem],
         #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
+        prepass: RenderStats,
     ) -> Result<RenderStats, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
@@ -118,6 +205,7 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "surfaces")]
             surfaces,
             camera,
+            prepass,
             &mut scratch,
         );
         // Return capacity even after device errors; no borrowed data is retained.
@@ -132,6 +220,7 @@ impl<D: RenderDevice> RenderService<D> {
         items: &[ipp_core::RenderItem],
         #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
+        prepass: RenderStats,
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderStats, RenderError> {
         // `render` publishes retained GUI residency after every completed frame.
@@ -175,7 +264,8 @@ impl<D: RenderDevice> RenderService<D> {
             .world_matrix(world.active_camera().unwrap())
             .map_err(|_| RenderError::InvalidTransform)?;
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
-        let mut stats = RenderStats::default();
+        // Cache repaints ran before `begin_frame`; their draws count here.
+        let mut stats = prepass;
         let customs = self.prepare_custom_materials(world, items)?;
         #[cfg(feature = "shadows")]
         let shadow_capacity = ((self.device.borrow().shadow_map_limit()
@@ -245,6 +335,10 @@ impl<D: RenderDevice> RenderService<D> {
                         if !world.geometry_visible(item.entity, &frustum) {
                             continue;
                         }
+                        // Cached Surfaces composite their image at this painter-order slot.
+                        if self.composite_surface_cache(world, item, view_projection, &mut stats)? {
+                            continue;
+                        }
                         #[cfg(feature = "gui")]
                         if let Some(submitted) = &mut self.submitted_surfaces {
                             submitted.insert(item.entity);
@@ -252,7 +346,7 @@ impl<D: RenderDevice> RenderService<D> {
                         self.draw_surface(
                             world,
                             item,
-                            view_projection,
+                            camera::multiply(view_projection, item.model),
                             &mut stats,
                             &mut scratch.surface_instances,
                         )?;

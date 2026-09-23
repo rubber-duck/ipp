@@ -14,6 +14,7 @@ import {
   FragmentShader,
   ShaderAsset,
   Surface,
+  SurfaceCache,
   Transform,
   VertexShader,
 } from "@ipp/react";
@@ -59,6 +60,28 @@ const STAGING_X = 1_000;
 
 export type GuiDemoSkin = "aurora" | "ember" | "neon";
 
+/**
+ * Presentation of the GUI Surface. `automatic` opts into distance-based
+ * whole-Surface caching, `cached` caches at every distance for comparisons
+ * at the authored camera, and `direct` removes the opt-in.
+ */
+export type GuiSurfaceCacheMode = "automatic" | "cached" | "direct";
+
+/**
+ * Whole-Surface cache policy for the GUI panel. The authored camera sits
+ * about 16.7 m from the panel centre, so it presents directly; dollying out
+ * past 22 m (the 20 m boundary plus hysteresis) caches the panel. 80 texels
+ * per content metre (about 593x385 texels, 0.87 MiB) roughly matches the on-screen
+ * density of a 720-pixel-high canvas at that boundary, and each further
+ * distance doubling halves density and refresh. 30 Hz keeps the scanning
+ * trace smooth at a distance while bounding repaints.
+ */
+const GUI_SURFACE_CACHE = {
+  direct_distance: 20,
+  texels_per_metre: 80,
+  max_refresh_hz: 30,
+} as const;
+
 const INITIAL_EVENTS = [
   "06 // DEEP ARRAY LINK STABLE",
   "05 // ROUTE N7 ACQUIRED",
@@ -89,6 +112,7 @@ export interface GuiSceneState {
   readonly skin: GuiDemoSkin;
   readonly autoscan: boolean;
   readonly wide: boolean;
+  readonly surfaceCache: GuiSurfaceCacheMode;
   readonly gain: number;
   readonly callsign: string;
   readonly pulseSequence: number;
@@ -102,6 +126,7 @@ export interface GuiSceneState {
   readonly uplink: () => void;
   readonly toggleSpan: () => void;
   readonly selectSkin: (skin: GuiDemoSkin) => void;
+  readonly selectSurfaceCache: (mode: GuiSurfaceCacheMode) => void;
   readonly toggleVectorOnly: () => void;
   readonly setAutoscan: (value: boolean) => void;
   readonly setGain: (value: number) => void;
@@ -418,6 +443,8 @@ export function useGuiScene(
   const [skin, setSkin] = useState<GuiDemoSkin>("aurora");
   const [autoscan, setAutoscanState] = useState(INITIAL_AUTOSCAN);
   const [wide, setWide] = useState(false);
+  const [surfaceCache, setSurfaceCache] =
+    useState<GuiSurfaceCacheMode>("automatic");
   const [gain, setGainState] = useState(INITIAL_GAIN);
   const [callsign, setCallsignState] = useState(INITIAL_CALLSIGN);
   const [lastCommand, setLastCommand] = useState("Awaiting command");
@@ -461,6 +488,7 @@ export function useGuiScene(
     setSkin("aurora");
     setAutoscanState(INITIAL_AUTOSCAN);
     setWide(false);
+    setSurfaceCache("automatic");
     setGainState(INITIAL_GAIN);
     setCallsignState(INITIAL_CALLSIGN);
     setLastCommand("Awaiting command");
@@ -689,6 +717,7 @@ export function useGuiScene(
     skin,
     autoscan,
     wide,
+    surfaceCache,
     gain,
     callsign,
     pulseSequence,
@@ -703,6 +732,7 @@ export function useGuiScene(
     toggleSpan,
     toggleVectorOnly,
     selectSkin,
+    selectSurfaceCache: setSurfaceCache,
     setAutoscan,
     setGain,
     setCallsign,
@@ -776,6 +806,16 @@ function ProjectorPanel({
     <Entity id="gui-demo">
       <Transform bound={false} {...panelTransform} x={panelX + stagingX} />
       <Surface bound={false} width={SURFACE_WIDTH} height={SURFACE_HEIGHT} />
+      {scene.surfaceCache !== "direct" && (
+        <SurfaceCache
+          {...GUI_SURFACE_CACHE}
+          direct_distance={
+            scene.surfaceCache === "cached"
+              ? 0
+              : GUI_SURFACE_CACHE.direct_distance
+          }
+        />
+      )}
       <GuiRoot>
         <ProjectorDashboard
           scene={scene}

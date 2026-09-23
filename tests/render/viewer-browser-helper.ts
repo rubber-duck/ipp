@@ -371,17 +371,25 @@ let galleryGuiTransformOwner: StateOverlayRef | undefined;
 /**
  * Temporarily override the panel's Transform fields with a StateOverlay
  * attached above the application's own. Later attachments win, and
- * releasing the owner reveals the authored placement again.
+ * releasing the owner reveals the authored placement again. `replace`
+ * releases an attached override in the same batch, so no frame presents the
+ * authored placement between the two overrides.
  */
 export async function overrideGalleryGuiTransform(
   fields: Readonly<Record<string, number>>,
+  replace = false,
 ): Promise<void> {
-  if (galleryGuiTransformOwner)
+  const previous = galleryGuiTransformOwner;
+  if (previous && !replace)
     throw new Error("A GUI placement override is already attached");
   const { handle, client } = await galleryGuiContext();
   const component = client.components.Transform!;
   const owner = { kind: "alias", alias: 1 } as const;
+  galleryGuiTransformOwner = undefined;
   const result = await client.batch([
+    ...(previous
+      ? [{ kind: "releaseStateOverlayOwner" as const, owner: previous }]
+      : []),
     { kind: "createStateOverlayOwner", alias: 1 },
     {
       kind: "attachEntityOverlayBinding",
@@ -426,10 +434,16 @@ export async function releaseGalleryGuiTransform(): Promise<void> {
 
 /**
  * Face the panel squarely toward the current camera, filling `fill` of the
- * limiting view axis, so thin skin features span several pixels. Placement
- * changes only projection: layout, paint and semantics are unchanged.
+ * limiting view axis, so thin skin features span several pixels. A given
+ * `distance` places the panel centre that many metres along the view axis
+ * instead. Placement changes only projection: layout, paint and semantics
+ * are unchanged.
  */
-export async function faceGalleryGuiToCamera(fill = 0.92): Promise<void> {
+export async function faceGalleryGuiToCamera(
+  fill = 0.92,
+  distance?: number,
+  replace = false,
+): Promise<void> {
   const { handle, client, inspection, entity, surface } =
     await galleryGuiContext();
   const camera = inspection.entities.find(
@@ -451,20 +465,21 @@ export async function faceGalleryGuiToCamera(fill = 0.92): Promise<void> {
   const tanX = (tanY * handle.viewport.width) / handle.viewport.height;
   const width = Number(surface.fields.width) * Number(panel.sx);
   const height = Number(surface.fields.height) * Number(panel.sy);
-  const distance = Math.max(
-    width / (2 * tanX * fill),
-    height / (2 * tanY * fill),
-  );
+  const along =
+    distance ?? Math.max(width / (2 * tanX * fill), height / (2 * tanY * fill));
   // The panel's +Z front faces the camera when it shares the camera rotation.
-  await overrideGalleryGuiTransform({
-    x: Number(view.x) + forward[0]! * distance,
-    y: Number(view.y) + forward[1]! * distance,
-    z: Number(view.z) + forward[2]! * distance,
-    qx: rotation[0]!,
-    qy: rotation[1]!,
-    qz: rotation[2]!,
-    qw: rotation[3]!,
-  });
+  await overrideGalleryGuiTransform(
+    {
+      x: Number(view.x) + forward[0]! * along,
+      y: Number(view.y) + forward[1]! * along,
+      z: Number(view.z) + forward[2]! * along,
+      qx: rotation[0]!,
+      qy: rotation[1]!,
+      qz: rotation[2]!,
+      qw: rotation[3]!,
+    },
+    replace,
+  );
 }
 
 /** Drive an acknowledged controller through the production animation protocol. */
@@ -1135,6 +1150,36 @@ export function compareViewerCaptureRegion(
     changedFraction: changedPixels / totalPixels,
     meanAbsoluteChannelDifference: absoluteDifference / (totalPixels * 3),
   };
+}
+
+/**
+ * RGBA pixels of a normalized region of a stored capture, row zero at the
+ * top, base64-encoded so node-side comparisons receive the exact bytes.
+ */
+export function viewerCaptureRegionPixels(
+  label: string,
+  bounds: readonly [number, number, number, number],
+) {
+  const frame = requireCapture(label);
+  const [u0, v0, u1, v1] = bounds;
+  const left = Math.max(0, Math.floor(frame.width * u0));
+  const top = Math.max(0, Math.floor(frame.height * v0));
+  const right = Math.min(frame.width, Math.ceil(frame.width * u1));
+  const bottom = Math.min(frame.height, Math.ceil(frame.height * v1));
+  if (!(left < right && top < bottom)) throw new Error("empty image region");
+  const source = new Uint8Array(frame.pixels);
+  const width = right - left;
+  const height = bottom - top;
+  let binary = "";
+  for (let y = top; y < bottom; y += 1) {
+    const row = source.subarray(
+      (y * frame.width + left) * 4,
+      (y * frame.width + right) * 4,
+    );
+    for (let index = 0; index < row.length; index += 0x8000)
+      binary += String.fromCharCode(...row.subarray(index, index + 0x8000));
+  }
+  return { left, top, width, height, pixels: btoa(binary) };
 }
 
 /** Measure a known unlit marker color in a completed rendered frame. */

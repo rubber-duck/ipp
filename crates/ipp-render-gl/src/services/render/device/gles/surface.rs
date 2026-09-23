@@ -660,7 +660,8 @@ impl GlesRenderDevice {
         let mut framebuffer = 0;
 
         // SAFETY: Context owns new texture and framebuffer handles. Texture is initialized
-        // to RGBA8 with linear filtering and edge clamping, and cleared to zero alpha.
+        // to single-channel R8 coverage with linear filtering and edge clamping, and
+        // cleared to zero coverage.
         let complete = unsafe {
             (self.gl.gen_textures)(1, &mut texture);
             (self.gl.gen_framebuffers)(1, &mut framebuffer);
@@ -672,11 +673,11 @@ impl GlesRenderDevice {
             (self.gl.tex_image)(
                 0x0DE1,
                 0,
-                0x8058, // RGBA8
+                0x8229, // R8
                 width as i32,
                 height as i32,
                 0,
-                0x1908, // RGBA
+                0x1903, // RED
                 0x1401, // UNSIGNED_BYTE
                 ptr::null(),
             );

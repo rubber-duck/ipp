@@ -469,7 +469,7 @@ fn page_budget_rejects_demanded_pages_and_reclaims_idle_ones() {
     assert_eq!(atlas.page_count(), max_pages as u32);
     assert_eq!(
         atlas.resident_bytes(),
-        max_pages * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * 4)
+        max_pages * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize)
     );
     assert!(
         atlas

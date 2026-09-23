@@ -121,7 +121,8 @@ pub struct RenderStats {
     /// Number of resident glyph atlas pages shared by every World on this context.
     #[cfg(feature = "gui")]
     pub glyph_pages: u32,
-    /// Total resident bytes occupied by the shared glyph atlas page textures.
+    /// Total resident bytes occupied by the shared glyph atlas page textures: one
+    /// byte per texel of single-channel coverage.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
     /// Opted-in Surfaces repainted into their cache images during this submission,

@@ -524,7 +524,8 @@ pub trait RenderDevice: 'static {
         ))
     }
 
-    /// Allocate an atlas page texture with linear filtering and render target.
+    /// Allocate a single-channel R8 coverage page texture, cleared to zero, with
+    /// linear filtering and a render target.
     #[cfg(feature = "gui")]
     fn create_glyph_atlas_page(
         &mut self,

@@ -32,6 +32,9 @@ use crate::{RenderDevice, RenderError, RenderStats};
 /// Page width and height in texels for each atlas page texture.
 pub const ATLAS_PAGE_SIZE: u32 = 512;
 
+/// Bytes per atlas texel: pages store single-channel R8 coverage.
+pub const ATLAS_BYTES_PER_TEXEL: usize = 1;
+
 /// Maximum number of new glyph coverage entries populated per frame.
 pub const MAX_POPULATES_PER_FRAME: usize = 32;
 
@@ -494,9 +497,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             .count() as u32
     }
 
-    /// Total resident bytes occupied by atlas page textures (RGBA8).
+    /// Total resident bytes occupied by atlas page textures (R8 coverage).
     pub fn resident_bytes(&self) -> usize {
-        self.page_count() as usize * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * 4)
+        self.page_count() as usize
+            * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * ATLAS_BYTES_PER_TEXEL)
     }
 
     /// Pages retired since the last call, by idle expiry, pressure or lost demand.

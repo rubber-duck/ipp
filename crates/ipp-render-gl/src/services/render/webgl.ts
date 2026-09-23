@@ -2043,14 +2043,15 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               }
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, texture);
+              // Single-channel coverage; the text shader samples red.
               gl.texImage2D(
                 gl.TEXTURE_2D,
                 0,
-                gl.RGBA,
+                gl.R8,
                 width,
                 height,
                 0,
-                gl.RGBA,
+                gl.RED,
                 gl.UNSIGNED_BYTE,
                 null,
               );

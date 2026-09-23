@@ -10,8 +10,11 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
-// Duplicate writes replace one entry. The generated component field count bounds
-// retained storage without coupling state_overlays to whichever component is largest today.
+// Duplicate writes replace one entry, so retained storage is bounded by the
+// distinct offsets the prototype can address. A rows table is one exposed field
+// but addresses one offset per live row property; each row write is checked
+// against the prototype, so row entries are bounded by its live row properties
+// and only the exposed fields and dynamic properties need an explicit cap.
 fn write_fields(
     component: u16,
     prototype: &crate::ComponentValue,
@@ -19,12 +22,26 @@ fn write_fields(
     fields: &[FieldWrite],
     clear: &[u32],
 ) -> Result<StateOverlayFields, ErrorReason> {
-    let field_count = prototype.fields().len();
+    use crate::components::dynamic_properties::is_dynamic_field;
+    use crate::components::rows::row_region;
+
+    let field_limit = crate::ComponentValue::field_count(component)
+        .map_err(|_| ErrorReason::UnknownComponent)?
+        + prototype
+            .dynamic_properties()
+            .map_or(0, |properties| properties.descriptors().len());
     values.retain(|field| {
-        !crate::components::dynamic_properties::is_dynamic_field(field.offset)
-            || prototype
+        if is_dynamic_field(field.offset) {
+            prototype
                 .dynamic_properties()
                 .is_some_and(|p| p.get_key(field.offset).is_some())
+        } else if row_region(field.offset).is_some() {
+            // Removed rows drop their entries; a cleared optional property
+            // keeps its declaration, which may set it again.
+            prototype.field(field.offset).is_ok()
+        } else {
+            true
+        }
     });
     for &offset in clear {
         if !crate::ComponentValue::has_field(component, offset) {
@@ -38,7 +55,13 @@ fn write_fields(
         if let Some(value) = values.iter_mut().find(|value| value.offset == field.offset) {
             *value = field.clone();
         } else {
-            if values.len() >= field_count {
+            if row_region(field.offset).is_none()
+                && values
+                    .iter()
+                    .filter(|value| row_region(value.offset).is_none())
+                    .count()
+                    >= field_limit
+            {
                 return Err(ErrorReason::Capacity);
             }
             values.push(field.clone());
@@ -739,8 +762,10 @@ impl super::StateOverlayMutationAccess<'_> {
                     if let StateOverlayEntry::Component(overlay) = &mut resource {
                         // Static fields follow Auto replacement. Dynamic identities belong
                         // to one incarnation and must never address a new local slot.
+                        // Row slots are likewise identities of one incarnation.
                         overlay.fields.retain(|field| {
                             !crate::components::dynamic_properties::is_dynamic_field(field.offset)
+                                && crate::components::rows::row_region(field.offset).is_none()
                         });
                         overlay.incarnation = current.unwrap_or(0);
                     }
@@ -791,6 +816,16 @@ impl super::StateOverlayMutationAccess<'_> {
                             .staged_value()
                             .and_then(|v| v.dynamic_properties())
                             .is_some_and(|p| p.descriptor(field.offset).is_some())
+                    {
+                        continue;
+                    }
+                    // A removed row's slot is dead for the rest of the
+                    // incarnation; its declared values no longer apply.
+                    if crate::components::rows::row_region(field.offset).is_some()
+                        && !layer
+                            .inputs
+                            .staged_value()
+                            .is_some_and(|value| value.field(field.offset).is_ok())
                     {
                         continue;
                     }

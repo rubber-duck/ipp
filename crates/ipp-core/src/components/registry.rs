@@ -109,6 +109,9 @@ pub fn write(
 }
 
 /// [`write`], also reporting whether the component's value equality changed.
+///
+/// [`crate::FieldValue::Unset`] clears an optional row property; a rejected
+/// write restores the previous value, including its absence.
 pub(crate) fn write_field(
     component: &mut ComponentValue,
     field: &crate::FieldWrite,

@@ -389,6 +389,13 @@ impl GuiRoot {
         Ok(())
     }
 
+    /// Validate the node tree and committed values, which are all a control
+    /// commit changes; named lanes keep their validation from when they were
+    /// written.
+    pub(in crate::world::systems::gui) fn validate_tree(&self) -> Result<(), ErrorReason> {
+        self.nodes.validate().map_err(field_error)
+    }
+
     pub(in crate::world) fn validate_complete(&self) -> Result<(), ErrorReason> {
         <Self as ComponentLifecycle>::validate(self)
     }

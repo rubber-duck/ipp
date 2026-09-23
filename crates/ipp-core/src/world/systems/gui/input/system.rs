@@ -64,6 +64,7 @@ use crate::systems::{
 use crate::world::WorldSimulationState;
 use crate::world::access::commit_components;
 use crate::{ComponentValue, EntityId, ErrorReason};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Stable identity of the per-world GUI input routing pass.
@@ -853,7 +854,7 @@ impl SystemFactory for GuiInputSystemFactory {
 /// One hit node rechecked against authoritative producer state: live root,
 /// matching incarnation and lifetime, and positive opacity. Snapshot
 /// geometry stays immutable; only producer liveness is rechecked.
-struct RecheckedHit {
+struct RecheckedHit<'a> {
     /// Fenced routed target.
     target: GuiInputTarget,
     /// Final-logical rectangle from the routing snapshot.
@@ -866,16 +867,16 @@ struct RecheckedHit {
     /// Authoritative control behaviour, or None for non-control nodes.
     kind: Option<ControlKind>,
     /// Producer root the recheck observed.
-    root: GuiRoot,
+    root: Cow<'a, GuiRoot>,
 }
 
-fn recheck_hit(
-    sim: &WorldSimulationState,
+fn recheck_hit<'a>(
+    sim: &'a WorldSimulationState,
     layout: &GuiLayoutSystem,
     target: GuiInputTarget,
     rect: [f32; 4],
     point: [f32; 2],
-) -> Option<RecheckedHit> {
+) -> Option<RecheckedHit<'a>> {
     let GuiTargetStatus::Eligible(root) = evaluated_status(sim, layout, &target) else {
         return None;
     };
@@ -971,16 +972,16 @@ impl GuiInputSystem {
     /// blockers; without one, the point routes as GUI-logical with the
     /// overlay panel nearest and the greatest entity on top.
     #[allow(clippy::too_many_arguments)]
-    fn route_point(
+    fn route_point<'s>(
         &self,
         layout: &GuiLayoutSystem,
-        sim: &WorldSimulationState,
+        sim: &'s WorldSimulationState,
         panel: Option<EntityId>,
         position: [f32; 2],
         blockers: &[super::super::GuiBlockerHit],
         panel_distance: Option<f32>,
         projection: Option<ProjectedRay>,
-    ) -> Result<RecheckedHit, GuiUnhandledReason> {
+    ) -> Result<RecheckedHit<'s>, GuiUnhandledReason> {
         if let Some(ray) = projection {
             return self.route_point_projected(layout, sim, panel, blockers, ray);
         }
@@ -1037,15 +1038,15 @@ impl GuiInputSystem {
     /// Hit-test one GUI-logical point across the selected panels and fence
     /// the topmost hit (greatest entity) against producer state and caller
     /// scene blockers. Native and headless routing without a camera.
-    fn route_point_logical(
+    fn route_point_logical<'s>(
         &self,
         layout: &GuiLayoutSystem,
-        sim: &WorldSimulationState,
+        sim: &'s WorldSimulationState,
         panel: Option<EntityId>,
         position: [f32; 2],
         blockers: &[super::super::GuiBlockerHit],
         panel_distance: Option<f32>,
-    ) -> Result<RecheckedHit, GuiUnhandledReason> {
+    ) -> Result<RecheckedHit<'s>, GuiUnhandledReason> {
         let mut best: Option<(EntityId, super::super::GuiHit, u64, [f32; 4])> = None;
         let panels: Vec<EntityId> = match panel {
             Some(entity) => vec![entity],
@@ -1080,7 +1081,7 @@ impl GuiInputSystem {
         // missing or non-finite distance is an observable miss.
         // A live non-control node is observable but not focusable; a dead
         // one is stale.
-        let fence = |hit: Option<RecheckedHit>| match hit {
+        let fence = |hit: Option<RecheckedHit<'s>>| match hit {
             Some(routed) if routed.kind.is_some() => Ok(routed),
             Some(_) => Err(GuiUnhandledReason::NotFocusable),
             None => Err(GuiUnhandledReason::StaleTarget),
@@ -1296,14 +1297,14 @@ impl GuiInputSystem {
     /// scene geometry. Caller distances are stale by construction and never
     /// reused here; marked entities without evaluated picking geometry
     /// cannot block.
-    fn route_point_projected(
+    fn route_point_projected<'s>(
         &self,
         layout: &GuiLayoutSystem,
-        sim: &WorldSimulationState,
+        sim: &'s WorldSimulationState,
         panel: Option<EntityId>,
         blockers: &[super::super::GuiBlockerHit],
         ray: ProjectedRay,
-    ) -> Result<RecheckedHit, GuiUnhandledReason> {
+    ) -> Result<RecheckedHit<'s>, GuiUnhandledReason> {
         let geometry_ray = GeometryRay {
             origin: ray.origin,
             direction: ray.direction,
@@ -1377,7 +1378,7 @@ impl GuiInputSystem {
         }
         // A live non-control node is observable but not focusable; a dead
         // one is stale.
-        let fence = |hit: Option<RecheckedHit>| match hit {
+        let fence = |hit: Option<RecheckedHit<'s>>| match hit {
             Some(routed) if routed.kind.is_some() => Ok(routed),
             Some(_) => Err(GuiUnhandledReason::NotFocusable),
             None => Err(GuiUnhandledReason::StaleTarget),
@@ -1406,11 +1407,11 @@ impl GuiInputSystem {
 
     /// Revalidate a captured target without re-deciding it: captures stay
     /// on their panel under this system's own scope.
-    fn revalidate_capture(
+    fn revalidate_capture<'a>(
         &self,
-        sim: &WorldSimulationState,
+        sim: &'a WorldSimulationState,
         target: &GuiInputTarget,
-    ) -> Option<(ControlKind, GuiRoot)> {
+    ) -> Option<(ControlKind, Cow<'a, GuiRoot>)> {
         let GuiTargetStatus::Eligible(root) = producer_status(sim, target) else {
             return None;
         };
@@ -4547,9 +4548,8 @@ fn stage_producer_root(
     access: &mut SystemRuntimeAccess<'_>,
     entity: EntityId,
     root: GuiRoot,
-    previous: GuiRoot,
 ) -> Result<(), ErrorReason> {
-    root.validate_complete()?;
+    root.validate_tree()?;
     let sim = &mut *access.world;
     let incarnation = sim
         .state
@@ -4558,16 +4558,40 @@ fn stage_producer_root(
         .and_then(|record| record.input(ComponentValue::GUI_ROOT))
         .map(|input| input.incarnation)
         .ok_or(ErrorReason::MissingComponent)?;
-    let next_producer = ComponentValue::GuiRoot(root);
-    let previous_effective = sim
+    let key = (entity, ComponentValue::GUI_ROOT);
+    let layer = sim
         .state
-        .input_value(&sim.components, entity, ComponentValue::GUI_ROOT)
+        .entities
+        .get(&entity)
+        .and_then(|record| record.layers.get(&ComponentValue::GUI_ROOT))
         .ok_or(ErrorReason::MissingComponent)?;
-    let (effective, hidden) = resolve_control_effective(
-        &ComponentValue::GuiRoot(previous),
-        &previous_effective,
-        next_producer.clone(),
-    )?;
+    // Without overlays, hidden originals or staged values, the producer and
+    // effective roots are both live storage: no contribution survives to
+    // re-apply and the new producer is the new effective value.
+    let unlayered = layer.inputs.overlay_handles.is_empty()
+        && layer.inputs.hidden_fields.is_empty()
+        && layer.inputs.base_value().is_none()
+        && layer.inputs.resolved_value.is_none()
+        && !sim.state.prepared.contains_key(&key)
+        && !sim.state.dirty.contains(&key)
+        && sim.state.evaluated_target != Some(key);
+    let next_producer = ComponentValue::GuiRoot(root);
+    let (effective, hidden) = if unlayered {
+        (next_producer.clone(), Vec::new())
+    } else {
+        let previous = super::super::system::producer_root(&sim.state, &sim.components, entity)
+            .ok_or(ErrorReason::MissingComponent)?
+            .into_owned();
+        let previous_effective = sim
+            .state
+            .input_value(&sim.components, entity, ComponentValue::GUI_ROOT)
+            .ok_or(ErrorReason::MissingComponent)?;
+        resolve_control_effective(
+            &ComponentValue::GuiRoot(previous),
+            &previous_effective,
+            next_producer.clone(),
+        )?
+    };
     if let Some(layer) = sim
         .state
         .entities
@@ -4577,16 +4601,12 @@ fn stage_producer_root(
         layer.inputs.hidden_fields = hidden;
         layer.inputs.resolved_value = Some(Box::new(effective.clone()));
         match layer.inputs.base_value_mut() {
-            Some(base) => *base = next_producer.clone(),
-            None => layer.inputs.base_value = Some(Box::new(next_producer.clone())),
+            Some(base) => *base = next_producer,
+            None => layer.inputs.base_value = Some(Box::new(next_producer)),
         }
     }
-    sim.state
-        .changed
-        .insert((entity, ComponentValue::GUI_ROOT), Some(incarnation));
-    sim.state
-        .prepared
-        .insert((entity, ComponentValue::GUI_ROOT), effective);
+    sim.state.changed.insert(key, Some(incarnation));
+    sim.state.prepared.insert(key, effective);
     commit_components(
         sim,
         &mut access.instances,
@@ -4667,7 +4687,7 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::SetScalar(value) if kind == ControlKind::Slider => {
                 let value = GuiControlValue::Scalar(*value);
-                let mut check = root.clone();
+                let mut check = root.edit_scope(None)?;
                 let handle = GuiNodeHandle::new(
                     session,
                     command.target.entity,
@@ -4690,7 +4710,7 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::SetText(value) if kind == ControlKind::TextInput => {
                 let value = GuiControlValue::Text(value.clone());
-                let mut check = root.clone();
+                let mut check = root.edit_scope(None)?;
                 let handle = GuiNodeHandle::new(
                     session,
                     command.target.entity,
@@ -4869,7 +4889,7 @@ impl GuiInputSystem {
         tick: u64,
     ) {
         let targets = self.retained_targets();
-        let mut roots: BTreeMap<EntityId, Option<(u64, GuiRoot)>> = BTreeMap::new();
+        let mut roots: BTreeMap<EntityId, Option<(u64, Cow<'_, GuiRoot>)>> = BTreeMap::new();
         let mut invalid = Vec::new();
         for target in targets {
             let root = roots
@@ -5239,7 +5259,7 @@ impl GuiInputSystem {
                     .map_or(GuiTargetStatus::Ineligible, |layout| {
                         evaluated_status(access.world, layout, &target)
                     });
-                let mut root = match status {
+                let root = match status {
                     GuiTargetStatus::Eligible(root) => root,
                     GuiTargetStatus::Removed => {
                         self.cancel_envelope(
@@ -5260,10 +5280,6 @@ impl GuiInputSystem {
                         return;
                     }
                 };
-                // Snapshot the pre-commit producer root: control commits change
-                // only the tree field, so the refreshed overlay evaluation is
-                // derived from exactly this base.
-                let previous = root.clone();
                 let committed_revision =
                     root.control_state(target.node).map(|state| state.revision);
                 let Some(found) = committed_revision else {
@@ -5299,6 +5315,10 @@ impl GuiInputSystem {
                     target.node,
                     target.lifetime,
                 );
+                // Staging writes the complete producer root, so commit on a
+                // copy; the World still holds the pre-commit producer that
+                // overlay refresh derives from.
+                let mut root = root.into_owned();
                 let commit = commit_control_value(
                     &mut root,
                     target.root_incarnation,
@@ -5321,23 +5341,13 @@ impl GuiInputSystem {
                 // Pin the committed ancestry before the staged root moves
                 // into storage: value commits never reparent nodes.
                 let path = ancestor_path(&root, target.node);
-                match stage_producer_root(access, target.entity, root, previous) {
+                match stage_producer_root(access, target.entity, root) {
                     Ok(()) => {
                         self.release_prediction(&target, remaining);
                         // Read back the committed revision from storage.
-                        let revision = access
-                            .world
-                            .state
-                            .producer_value(
-                                &access.world.components,
-                                target.entity,
-                                ComponentValue::GUI_ROOT,
-                            )
-                            .and_then(|value| match value {
-                                ComponentValue::GuiRoot(root) => {
-                                    root.control_state(target.node).map(|state| state.revision)
-                                }
-                                _ => None,
+                        let revision = producer_root(access.world, target.entity)
+                            .and_then(|(_, root)| {
+                                root.control_state(target.node).map(|state| state.revision)
                             })
                             .unwrap_or(expected_revision.saturating_add(1));
                         self.pending_effects.push(GuiInputEffect {

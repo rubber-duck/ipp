@@ -473,7 +473,7 @@ impl System for GuiSystem {
 /// Borrow the producer GuiRoot that authored edits start from: the retained
 /// base beneath overlays, or live storage with any hidden overlay originals
 /// restored (copying only in that case).
-fn producer_root<'a>(
+pub(in crate::world::systems::gui) fn producer_root<'a>(
     state: &'a crate::world::WorldEntityState,
     components: &'a crate::components::registry::ComponentStorage,
     entity: EntityId,
@@ -744,8 +744,8 @@ pub(in crate::world) fn validate_overlay_declaration(
 /// Revision-gated control commit shared by authored [`GuiCommand`] writes
 /// and routed input envelopes. Validates the fenced handle, commits through
 /// the authoritative [`GuiControls`](super::GuiControls) gate and revalidates
-/// the root; staging the result into component storage stays with the caller
-/// so each path keeps its own ownership handshake.
+/// the tree it changed; staging the result into component storage stays with
+/// the caller so each path keeps its own ownership handshake.
 pub(super) fn commit_control_value(
     root: &mut GuiRoot,
     root_incarnation: u64,
@@ -764,7 +764,7 @@ pub(super) fn commit_control_value(
     root.controls_mut()
         .set(handle.node_id, &content, expected_revision, value.clone())
         .map_err(|_| ErrorReason::InvalidValue)?;
-    root.validate_complete()
+    root.validate_tree()
 }
 
 /// Re-apply still-active sparse overlay contributions across a producer

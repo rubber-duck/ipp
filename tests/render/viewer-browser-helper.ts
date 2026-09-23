@@ -375,10 +375,79 @@ export async function galleryGuiRegionStats(
   label: string,
   rects: Readonly<Record<string, readonly [number, number, number, number]>>,
 ): Promise<Record<string, GalleryGuiRegionStats>> {
+  const frame = requireCapture(label);
+  const quads = await projectGalleryGuiRects(frame, rects);
+  return Object.fromEntries(
+    Object.entries(quads).map(([name, quad]) => [
+      name,
+      quadStats(frame, quad, name),
+    ]),
+  );
+}
+
+/**
+ * Logical `[minX, minY, maxX, maxY]` extent of the painted ink inside each
+ * named logical GUI rectangle: the pixels whose brightest channel exceeds
+ * the midpoint of that channel's range in the region, mapped back through
+ * the rectangle's projected corners. The detail view faces the panel to the
+ * camera, so the corner mapping is affine to well under a pixel.
+ */
+export async function galleryGuiInkBounds(
+  label: string,
+  rects: Readonly<Record<string, readonly [number, number, number, number]>>,
+): Promise<Record<string, readonly [number, number, number, number]>> {
+  const frame = requireCapture(label);
+  const quads = await projectGalleryGuiRects(frame, rects);
+  return Object.fromEntries(
+    Object.entries(quads).map(([name, quad]) => {
+      const [minX, minY, maxX, maxY] = rects[name]!;
+      const [[ax, ay], [bx, by], , [dx, dy]] = quad as [
+        readonly [number, number],
+        readonly [number, number],
+        readonly [number, number],
+        readonly [number, number],
+      ];
+      // Solve pixel = a + u (b - a) + v (d - a) for the logical fractions.
+      const det = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+      const logical = (px: number, py: number) => {
+        const u = ((px - ax) * (dy - ay) - (py - ay) * (dx - ax)) / det;
+        const v = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) / det;
+        return [minX + u * (maxX - minX), minY + v * (maxY - minY)] as const;
+      };
+      const pixels = quadPixels(frame, quad).map(
+        ([x, y]) =>
+          [x, y, Math.max(...sample(frame, x, y).slice(0, 3))] as const,
+      );
+      const values = pixels.map(([, , value]) => value);
+      const threshold = (Math.min(...values) + Math.max(...values)) / 2;
+      const ink = pixels.filter(([, , value]) => value > threshold);
+      if (ink.length === 0) throw new Error(`GUI region ${name} has no ink`);
+      const corners = ink.flatMap(([x, y]) => [
+        logical(x, y),
+        logical(x + 1, y + 1),
+      ]);
+      return [
+        name,
+        [
+          Math.min(...corners.map(([x]) => x)),
+          Math.min(...corners.map(([, y]) => y)),
+          Math.max(...corners.map(([x]) => x)),
+          Math.max(...corners.map(([, y]) => y)),
+        ] as const,
+      ];
+    }),
+  );
+}
+
+/** Project named logical GUI rectangles into completed-frame pixel quads,
+ * corners ordered min/min, max/min, max/max, min/max. */
+async function projectGalleryGuiRects(
+  frame: FrameCapture,
+  rects: Readonly<Record<string, readonly [number, number, number, number]>>,
+): Promise<Record<string, readonly (readonly [number, number])[]>> {
   const { entity, camera, surface } = await galleryGuiPlacement();
   const width = Number(surface.fields.width);
   const height = Number(surface.fields.height);
-  const frame = requireCapture(label);
   const names = Object.keys(rects);
   const projected = projectSnapshotPoints(
     entity,
@@ -393,22 +462,21 @@ export async function galleryGuiRegionStats(
       ].map(([x, y]) => [x! - width / 2, height / 2 - y!, 0]);
     }),
   );
-  const result: Record<string, GalleryGuiRegionStats> = {};
-  names.forEach((name, index) => {
-    const quad = projected
-      .slice(index * 4, index * 4 + 4)
-      .map(({ x, y }) => [x * frame.width, y * frame.height] as const);
-    result[name] = quadStats(frame, quad, name);
-  });
-  return result;
+  return Object.fromEntries(
+    names.map((name, index) => [
+      name,
+      projected
+        .slice(index * 4, index * 4 + 4)
+        .map(({ x, y }) => [x * frame.width, y * frame.height] as const),
+    ]),
+  );
 }
 
-/** Channel statistics over pixels whose centres fall inside a convex quad. */
-function quadStats(
+/** Frame pixels whose centres fall inside a convex quad. */
+function quadPixels(
   frame: FrameCapture,
   quad: readonly (readonly [number, number])[],
-  name: string,
-): GalleryGuiRegionStats {
+): (readonly [number, number])[] {
   const inside = (px: number, py: number) => {
     let sign = 0;
     for (let index = 0; index < quad.length; index++) {
@@ -427,25 +495,36 @@ function quadStats(
   const right = Math.min(frame.width - 1, Math.ceil(Math.max(...xs)));
   const top = Math.max(0, Math.floor(Math.min(...ys)));
   const bottom = Math.min(frame.height - 1, Math.ceil(Math.max(...ys)));
+  const pixels: (readonly [number, number])[] = [];
+  for (let y = top; y <= bottom; y++)
+    for (let x = left; x <= right; x++)
+      if (inside(x + 0.5, y + 0.5)) pixels.push([x, y]);
+  return pixels;
+}
+
+/** Channel statistics over pixels whose centres fall inside a convex quad. */
+function quadStats(
+  frame: FrameCapture,
+  quad: readonly (readonly [number, number])[],
+  name: string,
+): GalleryGuiRegionStats {
   const sum = [0, 0, 0];
   const min = [255, 255, 255];
   const max = [0, 0, 0];
-  let pixels = 0;
-  for (let y = top; y <= bottom; y++)
-    for (let x = left; x <= right; x++) {
-      if (!inside(x + 0.5, y + 0.5)) continue;
-      const pixel = sample(frame, x, y);
-      for (let channel = 0; channel < 3; channel++) {
-        sum[channel]! += pixel[channel]!;
-        min[channel] = Math.min(min[channel]!, pixel[channel]!);
-        max[channel] = Math.max(max[channel]!, pixel[channel]!);
-      }
-      pixels++;
+  const pixels = quadPixels(frame, quad);
+  for (const [x, y] of pixels) {
+    const pixel = sample(frame, x, y);
+    for (let channel = 0; channel < 3; channel++) {
+      sum[channel]! += pixel[channel]!;
+      min[channel] = Math.min(min[channel]!, pixel[channel]!);
+      max[channel] = Math.max(max[channel]!, pixel[channel]!);
     }
-  if (pixels === 0) throw new Error(`GUI region ${name} covers no pixels`);
+  }
+  if (pixels.length === 0)
+    throw new Error(`GUI region ${name} covers no pixels`);
   return {
-    pixels,
-    mean: sum.map((value) => value / pixels) as [number, number, number],
+    pixels: pixels.length,
+    mean: sum.map((value) => value / pixels.length) as [number, number, number],
     min: min as [number, number, number],
     max: max as [number, number, number],
   };

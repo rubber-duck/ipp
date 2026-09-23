@@ -55,7 +55,7 @@ interface RegionStats {
 
 /** Verified Nerd Font code points, restated independently of the fixture. */
 const ICON_CODE_POINTS = {
-  cube: "\uf1b2",
+  dashboard: "\ueacd",
   signal: "\uf012",
   pulse: "\ueb31",
   aurora: "\uf2dc",
@@ -1908,10 +1908,14 @@ test("Gallery runs a real GUI demo and cleans it up", {
           near(icon[1] + icon[3] / 2, by + bh / 2, `${skin} icon y`);
           assert.ok(icon[0] + icon[2] <= bx + 0.27);
         }
-        const cube = textBounds(detail, ICON_CODE_POINTS.cube);
-        near(cube[0], px, "cube icon x");
-        near(cube[1] + cube[3] / 2, title[1] + title[3] / 2, "cube icon y");
-        assert.ok(cube[0] + cube[2] <= title[0]);
+        const dashboard = textBounds(detail, ICON_CODE_POINTS.dashboard);
+        near(dashboard[0], px, "dashboard icon x");
+        near(
+          dashboard[1] + dashboard[3] / 2,
+          title[1] + title[3] / 2,
+          "dashboard icon y",
+        );
+        assert.ok(dashboard[0] + dashboard[2] <= title[0]);
         const signal = textBounds(detail, ICON_CODE_POINTS.signal);
         near(
           signal[0] + signal[2],
@@ -1925,6 +1929,31 @@ test("Gallery runs a real GUI demo and cleans it up", {
             return [name, [x, y, x + width, y + height] as LogicalRect];
           }),
         );
+        // Painted ink, not just the layout box, is centred on each icon's
+        // intrinsic box, which the checks above pin to its cell: an icon
+        // box sized apart from its glyph leaves the ink off-centre.
+        const inkBounds = await g.call<Record<string, LogicalRect>>(
+          "galleryGuiInkBounds",
+          "gui-detail-neon",
+          Object.fromEntries(
+            Object.entries(iconRects).map(([name, [x0, y0, x1, y1]]) => [
+              name,
+              [x0 - 0.03, y0 - 0.03, x1 + 0.03, y1 + 0.03] as LogicalRect,
+            ]),
+          ),
+        );
+        evidence.iconInk = inkBounds;
+        for (const [name, [x0, y0, x1, y1]] of Object.entries(iconRects)) {
+          const ink = inkBounds[name]!;
+          for (const [axis, inkCentre, boxCentre] of [
+            ["x", (ink[0] + ink[2]) / 2, (x0 + x1) / 2],
+            ["y", (ink[1] + ink[3]) / 2, (y0 + y1) / 2],
+          ] as const)
+            assert.ok(
+              Math.abs(inkCentre - boxCentre) < 0.012,
+              `${name} icon ink ${axis} centre ${inkCentre} is not ${boxCentre}: ${JSON.stringify(ink)}`,
+            );
+        }
         const [ix, iy, iw, ih] = semanticNode(
           detail.semantic,
           "textInput",

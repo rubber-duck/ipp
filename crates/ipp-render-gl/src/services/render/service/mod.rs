@@ -142,8 +142,8 @@ pub struct RenderStats {
     #[cfg(feature = "surfaces")]
     pub surface_cache_reuses: u32,
     /// Opted-in visible Surfaces presented directly: inside their direct distance,
-    /// under GUI interaction, after a fallback or without cache support. Culled
-    /// Surfaces count in none of the cache counters.
+    /// under GUI interaction, after a fallback, while animated or without cache
+    /// support. Culled Surfaces count in none of the cache counters.
     #[cfg(feature = "surfaces")]
     pub surface_cache_direct: u32,
     /// Opted-in Surfaces presented directly because the byte budget, a zero budget,
@@ -151,6 +151,11 @@ pub struct RenderStats {
     /// interval left no usable image. Also counted in `surface_cache_direct`.
     #[cfg(feature = "surfaces")]
     pub surface_cache_fallbacks: u32,
+    /// Opted-in visible Surfaces presented directly because their paint changed and
+    /// was repainted at the refresh cap on every recent frame, where repainting costs
+    /// more than drawing directly. Also counted in `surface_cache_direct`.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_animated: u32,
     /// Cache images created or resized during this submission; each is repainted
     /// before it is shown.
     #[cfg(feature = "surfaces")]

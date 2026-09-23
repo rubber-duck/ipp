@@ -20,7 +20,8 @@ export type SurfaceCacheMode =
   | "unavailable"
   | "culled"
   | "reused"
-  | "repainted";
+  | "repainted"
+  | "animated";
 
 /** Presentation modes in the order of their renderer export codes. */
 export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
@@ -31,6 +32,7 @@ export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
   "culled",
   "reused",
   "repainted",
+  "animated",
 ];
 
 /**

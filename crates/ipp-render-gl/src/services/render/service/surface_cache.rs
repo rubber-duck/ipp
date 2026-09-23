@@ -422,6 +422,7 @@ impl<D: RenderDevice> RenderService<D> {
             stats.surface_cache_reuses = counts.reuses;
             stats.surface_cache_direct = counts.direct;
             stats.surface_cache_fallbacks = counts.fallbacks;
+            stats.surface_cache_animated = counts.animated;
             stats.surface_cache_allocations = counts.allocations;
         }
 

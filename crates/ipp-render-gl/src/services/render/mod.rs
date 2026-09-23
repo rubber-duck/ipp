@@ -58,5 +58,6 @@ pub use lighting::RenderLightingFrame;
 pub use service::{RenderError, RenderService, RenderStats};
 #[cfg(feature = "surfaces")]
 pub use surface_cache::{
-    DEFAULT_SURFACE_CACHE_BUDGET_BYTES, SurfaceCacheDiagnostic, SurfaceCachePresentation,
+    DEFAULT_SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_SETTLE_FRAMES,
+    SurfaceCacheDiagnostic, SurfaceCachePresentation,
 };

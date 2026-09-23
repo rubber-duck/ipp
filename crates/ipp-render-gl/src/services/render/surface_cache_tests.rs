@@ -145,6 +145,7 @@ fn counts(
         direct,
         fallbacks,
         allocations,
+        animated: 0,
     }
 }
 
@@ -687,4 +688,142 @@ fn refined_images_repaint_on_the_next_frame_until_refinement_ends() {
     // completes the refinement, after which the image is reused.
     assert_eq!(store.frame(0.0, &inputs), counts(1, 0, 0, 0, 0));
     assert_eq!(store.frame(0.0, &inputs), counts(0, 1, 0, 0, 0));
+}
+
+/// Frames 1/30 s apart with a 60 Hz cap: every changed frame is due for a repaint.
+fn fast(index: u64, paint: u64) -> SurfaceCacheInput {
+    SurfaceCacheInput {
+        policy: SurfaceCachePolicy {
+            max_refresh_hz: 60.0,
+            ..policy()
+        },
+        ..input(index, 5.0, paint, 1)
+    }
+}
+
+#[test]
+fn paint_repainted_at_the_cap_every_frame_presents_directly_until_it_settles() {
+    use SurfaceCachePresentation as P;
+
+    let mut store = Store::new();
+    let mut time = 0.0;
+    let mut step = |store: &mut Store, paint: u64| {
+        time += 1.0 / 30.0;
+        store.frame(time, &[fast(1, paint)])
+    };
+    step(&mut store, 1);
+
+    // The paint changes every frame: each frame repaints at the cap until the
+    // streak is long enough, then the next due repaint presents directly.
+    for paint in 2..2 + u64::from(SURFACE_CACHE_ANIMATED_FRAMES) {
+        assert_eq!(step(&mut store, paint).repaints, 1, "paint {paint}");
+    }
+    let mut paint = 2 + u64::from(SURFACE_CACHE_ANIMATED_FRAMES);
+    let animated = step(&mut store, paint);
+    assert_eq!(
+        animated,
+        SurfaceCacheFrameCounts {
+            direct: 1,
+            animated: 1,
+            ..counts(0, 0, 0, 0, 0)
+        }
+    );
+    assert_eq!(store.diagnostic(1).presentation, P::Animated);
+    assert_eq!(P::Animated.code(), 7);
+    assert!(P::Animated.is_direct());
+    // The image stays resident for the return.
+    assert_eq!(store.cache.resident().0, 1);
+
+    // While the paint keeps changing, the Surface stays direct.
+    for _ in 0..20 {
+        paint += 1;
+        assert_eq!(step(&mut store, paint).animated, 1);
+    }
+
+    // A pause shorter than the settle window keeps it direct.
+    for _ in 1..SURFACE_CACHE_SETTLE_FRAMES {
+        assert_eq!(step(&mut store, paint).animated, 1);
+    }
+    paint += 1;
+    assert_eq!(step(&mut store, paint).animated, 1);
+
+    // Once the paint holds for the settle window, the stale image repaints and the
+    // Surface is cached again.
+    for _ in 1..SURFACE_CACHE_SETTLE_FRAMES {
+        assert_eq!(step(&mut store, paint).animated, 1);
+    }
+    assert_eq!(step(&mut store, paint), counts(1, 0, 0, 0, 0));
+    assert_eq!(step(&mut store, paint), counts(0, 1, 0, 0, 0));
+    assert_eq!(store.diagnostic(1).presentation, P::Reused);
+}
+
+#[test]
+fn caps_below_the_frame_rate_keep_animated_paint_cached() {
+    let mut store = Store::new();
+    // 10 Hz cap at 60 frames per second: repaints are never on consecutive frames.
+    let mut repaints = 0;
+    for frame in 0..120_u32 {
+        let counts = store.frame(
+            f64::from(frame) / 60.0,
+            &[input(1, 5.0, u64::from(frame) + 1, 1)],
+        );
+        assert_eq!(counts.animated, 0, "frame {frame}");
+        repaints += counts.repaints;
+    }
+
+    // One paint per elapsed 0.1 s over 1.98 s, plus the first.
+    assert_eq!(repaints, 20);
+}
+
+#[test]
+fn direct_presentation_for_other_reasons_resets_the_animated_state() {
+    let mut store = Store::new();
+    let mut time = 0.0;
+    let mut frame = |store: &mut Store, input: SurfaceCacheInput| {
+        time += 1.0 / 30.0;
+        store.frame(time, &[input])
+    };
+    // The first paint, a streak of repaints at the cap, then direct presentation.
+    let mut paint = 1;
+    for _ in 0..SURFACE_CACHE_ANIMATED_FRAMES + 2 {
+        paint += 1;
+        frame(&mut store, fast(1, paint));
+    }
+    assert_eq!(
+        store.diagnostic(1).presentation,
+        SurfaceCachePresentation::Animated
+    );
+
+    // Interaction takes priority and ends the animated state.
+    paint += 1;
+    let interacting = frame(
+        &mut store,
+        SurfaceCacheInput {
+            interaction: true,
+            ..fast(1, paint)
+        },
+    );
+    assert_eq!((interacting.direct, interacting.animated), (1, 0));
+
+    // Afterwards the stale image repaints at once and a new streak must build up.
+    assert_eq!(frame(&mut store, fast(1, paint)).repaints, 1);
+    for _ in 0..SURFACE_CACHE_ANIMATED_FRAMES {
+        paint += 1;
+        assert_eq!(frame(&mut store, fast(1, paint)).repaints, 1);
+    }
+    paint += 1;
+    assert_eq!(frame(&mut store, fast(1, paint)).animated, 1);
+
+    // Culled frames keep the state.
+    paint += 1;
+    let culled = frame(
+        &mut store,
+        SurfaceCacheInput {
+            visible: false,
+            ..fast(1, paint)
+        },
+    );
+    assert_eq!(culled.animated, 0);
+    paint += 1;
+    assert_eq!(frame(&mut store, fast(1, paint)).animated, 1);
 }

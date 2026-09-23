@@ -104,7 +104,11 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     ],
   });
   assert.match(source, /WorkerConnectOptions/);
-  assert.match(source, /workerTransport\(workerUrl, wasmUrl, options\)/);
+  // The worker bounds runtime messages by this target's contract budget.
+  assert.match(
+    source,
+    /workerTransport\(workerUrl, wasmUrl, MAX_MESSAGE_BYTES, options\)/,
+  );
   const mesh = codec.MeshInstance.insert(codec.Entity.alias(1), {
     source: "ipp://mesh/cube?width=1&height=1&length=1",
 

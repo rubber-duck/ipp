@@ -601,6 +601,7 @@ export async function pendingUnmountUsesRealAcknowledgement(
   const transport = workerTransport(
     configuration.workerScriptUrl,
     configuration.wasmUrl,
+    contract.MAX_MESSAGE_BYTES,
   );
   const gate = new BatchDeliveryGate(transport);
   const client = await contract.IppClient.connectTransport(gate, {

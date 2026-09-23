@@ -28,12 +28,19 @@ export interface WorldCreateOptions {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
+/** Host control message budget. The schema-independent Host protocol fixes
+ * it in `ipp-protocol` (`host.rs` bounds Host requests and responses by
+ * `MAX_MESSAGE_BYTES`) rather than in a target contract; World save and
+ * load chunks stay within it. World messages use the generated codec's
+ * contract-derived budget. */
+const HOST_MESSAGE_BYTES = 1_048_576;
+
 export class HostWireWriter {
   private parts: Uint8Array[] = [];
   private size = 0;
 
   raw(bytes: Uint8Array): void {
-    if (this.size + bytes.length > 1_048_576)
+    if (this.size + bytes.length > HOST_MESSAGE_BYTES)
       throw new RangeError("Host message exceeds byte budget");
     this.parts.push(bytes);
     this.size += bytes.length;
@@ -113,7 +120,7 @@ export class HostWireReader {
   private at = 0;
 
   constructor(private readonly input: Uint8Array) {
-    if (input.length > 1_048_576)
+    if (input.length > HOST_MESSAGE_BYTES)
       throw new Error("Host message exceeds byte budget");
   }
 

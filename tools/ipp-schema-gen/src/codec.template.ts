@@ -1855,7 +1855,7 @@ export class IppClient extends ClientBase {
   ): Promise<IppClient> {
     validateOptions(options);
     return IppClient.connectTransport(
-      workerTransport(workerUrl, wasmUrl, options),
+      workerTransport(workerUrl, wasmUrl, MAX_MESSAGE_BYTES, options),
       options,
     );
   }
@@ -2139,7 +2139,7 @@ export class IppHostClient extends GeneratedHostClientBase<IppClient> {
   ): Promise<IppHostClient> {
     validateOptions(options);
     return IppHostClient.connectTransport(
-      workerTransport(workerUrl, wasmUrl, options),
+      workerTransport(workerUrl, wasmUrl, MAX_MESSAGE_BYTES, options),
       options,
     );
   }

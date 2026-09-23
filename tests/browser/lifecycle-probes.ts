@@ -186,6 +186,7 @@ export async function observeResourceProgressWithoutFrames(
         type: "init",
         wasmUrl: configuration.wasmUrl,
         port: channel.port2,
+        maxMessageBytes: contract.MAX_MESSAGE_BYTES,
         probePort: probe.port2,
       },
       [channel.port2, probe.port2],
@@ -310,6 +311,7 @@ export async function observeVisibility(
         type: "init",
         wasmUrl: configuration.wasmUrl,
         port: channel.port2,
+        maxMessageBytes: contract.MAX_MESSAGE_BYTES,
         schedulerPort: scheduler.port2,
         hidden: initiallyHidden,
       },
@@ -451,7 +453,12 @@ export async function observeStalledReceiver(
       };
       channel.port1.start();
       worker.postMessage(
-        { type: "init", wasmUrl: configuration.wasmUrl, port: channel.port2 },
+        {
+          type: "init",
+          wasmUrl: configuration.wasmUrl,
+          port: channel.port2,
+          maxMessageBytes: contract.MAX_MESSAGE_BYTES,
+        },
         [channel.port2],
       );
     });

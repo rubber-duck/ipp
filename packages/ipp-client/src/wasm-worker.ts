@@ -12,7 +12,6 @@ import {
 } from "./logging.js";
 
 /** Dedicated worker owns ingress, the frame clock, and optional presentation. */
-const MAX_MESSAGE_BYTES = 1_048_576;
 const MAX_IN_FLIGHT_MESSAGES = 64;
 const FRAME_INTERVAL_MS = 1_000 / 60;
 const MAX_FRAME_DELTA_SECONDS = 0.25;
@@ -96,6 +95,9 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     partsMessages: 0,
     transferredAssetBytes: 0,
   };
+  // The paired target contract's message budget arrives with init and is
+  // validated before the runtime loads; nothing is accepted until then.
+  let maxMessageBytes = 0;
   let closed = false;
   let initialized = false;
   let paused = "hidden" in init && init.hidden === true;
@@ -138,7 +140,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     // Wasm i32 exports arrive signed; linear-memory addresses are u32.
     const pointer = runtime.ipp_output_ptr() >>> 0;
     const length = runtime.ipp_output_len() >>> 0;
-    if (length > MAX_MESSAGE_BYTES)
+    if (length > maxMessageBytes)
       throw new Error("WASM response exceeds bounds");
     return new Uint8Array(runtime.memory.buffer, pointer, length).slice();
   };
@@ -305,7 +307,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
             ? data.parts
             : [];
       const length = parts.reduce((total, part) => total + part.byteLength, 0);
-      if (length === 0 || length > MAX_MESSAGE_BYTES) {
+      if (length === 0 || length > maxMessageBytes) {
         throw new Error("Message exceeds WASM ingress bounds");
       }
       if (pendingInputs.length >= 128)
@@ -323,6 +325,16 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
 
   void (async () => {
     try {
+      const budget = "maxMessageBytes" in init ? init.maxMessageBytes : 0;
+      if (
+        typeof budget !== "number" ||
+        !Number.isSafeInteger(budget) ||
+        budget <= 0
+      )
+        throw new RangeError(
+          "maxMessageBytes must be the target contract's positive message budget",
+        );
+      maxMessageBytes = budget;
       const resourceUrls = resourceUrlMappings(
         "resourceUrls" in init ? init.resourceUrls : undefined,
       );

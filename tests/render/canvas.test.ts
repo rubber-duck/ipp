@@ -738,7 +738,9 @@ test("resource URL mapping validates directories before worker creation and pres
   ])
     assert.throws(
       () =>
-        workerTransport("worker.js", "runtime.wasm", { resourceUrls: invalid }),
+        workerTransport("worker.js", "runtime.wasm", 1_048_576, {
+          resourceUrls: invalid,
+        }),
       TypeError,
     );
 });

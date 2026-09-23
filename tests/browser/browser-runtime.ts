@@ -726,6 +726,7 @@ async function createWorkerTransport(
   const transportModule = await loadTransportModule(
     configuration.transportModuleUrl,
   );
+  const contract = await loadContract(configuration.contractModuleUrl);
   const worker = new Worker(configuration.workerScriptUrl, {
     type: "module",
     name: "ipp-runtime-probe",
@@ -750,6 +751,7 @@ async function createWorkerTransport(
       type: "init",
       wasmUrl: new URL(configuration.wasmUrl, globalThis.location.href).href,
       port: channel.port2,
+      maxMessageBytes: contract.MAX_MESSAGE_BYTES,
     },
     [channel.port2],
   );

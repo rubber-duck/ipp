@@ -10,6 +10,7 @@ import type {
 } from "@ipp/client";
 
 export interface GeneratedModule {
+  readonly MAX_MESSAGE_BYTES: number;
   readonly IppClient: {
     connectWorker(
       workerUrl: string | URL,

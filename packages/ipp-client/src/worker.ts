@@ -18,13 +18,21 @@ export interface WorkerOptions {
 
 const MAX_ASSET_CACHE_BYTES = 0xffff_ffff;
 
-/** Owns one dedicated worker and its fresh world until close or failure. */
+/** Owns one dedicated worker and its fresh world until close or failure.
+ * `maxMessageBytes` is the paired target contract's application message
+ * budget (the generated codec's `MAX_MESSAGE_BYTES`); the worker bounds
+ * runtime ingress and egress by it. */
 export function workerTransport(
   workerUrl: string | URL,
   wasmUrl: string | URL,
+  maxMessageBytes: number,
   options: WorkerOptions = {},
 ): MessageTransport {
   validateOptions(options);
+  if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes <= 0)
+    throw new RangeError(
+      "maxMessageBytes must be the target contract's positive message budget",
+    );
   if (
     options.assetCacheBytes !== undefined &&
     (!Number.isInteger(options.assetCacheBytes) ||
@@ -74,6 +82,7 @@ export function workerTransport(
         resourceUrls,
         wasmUrl: new URL(wasmUrl, globalThis.location.href).href,
         port: channel.port2,
+        maxMessageBytes,
         hidden: visibilityOwner?.hidden ?? false,
         logLevel: options.logLevel ?? "info",
         ...(options.assetCacheBytes !== undefined

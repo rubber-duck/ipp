@@ -94,6 +94,7 @@ type Vec2 = readonly [number, number];
 type Vec3 = readonly [number, number, number];
 
 interface GeneratedModule {
+  readonly MAX_MESSAGE_BYTES: number;
   readonly IppClient: {
     connectTransport(
       transport: import("@ipp/client").MessageTransport,
@@ -239,6 +240,7 @@ export async function initializeTextures(
     const transport = workerTransport(
       configuration.workerScriptUrl,
       configuration.wasmUrl,
+      contract.MAX_MESSAGE_BYTES,
       {
         canvas: canvas.transferControlToOffscreen(),
       },

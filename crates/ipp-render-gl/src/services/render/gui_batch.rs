@@ -10,8 +10,10 @@
 //! Batch boundaries within a run of compatible boxes follow primitive identities rather
 //! than positions, so inserting, removing or resizing a box rebuilds only its own batch.
 //! A box whose geometry changed recently is volatile and batches apart from stable
-//! boxes, so an animated control re-uploads only its own small batch each frame. The
-//! clip is a draw-time uniform: clip-only changes reuse vertex storage.
+//! boxes, so an animated control re-uploads only its own small batch each frame.
+//! Volatility is the only partition: backgrounds, fills, icons and focus rings of one
+//! clip share batches. The clip is a draw-time uniform: clip-only changes reuse vertex
+//! storage.
 
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
@@ -21,8 +23,8 @@ use std::rc::Rc;
 
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::surface::{
-    GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfaceClipRect, SurfacePrimitiveIdentity,
-    SurfacePrimitiveStyle, SurfaceRenderPrimitive,
+    GuiShapeFill, GuiShapeGlow, SurfaceClipRect, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
+    SurfaceRenderPrimitive,
 };
 
 /// One vertex in a non-indexed GUI triangle batch (136 bytes).
@@ -81,35 +83,6 @@ impl RetainedSurfaceSubmission<'_> {
     }
 }
 
-/// Compatibility partition distinguishing frequently changing cursor/control work
-/// from static backgrounds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum GuiPartClass {
-    /// Resizable panel, container and card backgrounds.
-    Background,
-    /// Slider value fill and progress bars.
-    Fill,
-    /// Transient focus indicator ring.
-    FocusRing,
-    /// Authored items or unclassified parts.
-    Other,
-}
-
-impl GuiPartClass {
-    /// Classify a primitive identity into a volatility partition.
-    pub fn from_identity(identity: SurfacePrimitiveIdentity) -> Self {
-        match identity {
-            SurfacePrimitiveIdentity::Gui(gui) => match gui.part {
-                GuiPrimitivePart::Background => Self::Background,
-                GuiPrimitivePart::Fill => Self::Fill,
-                GuiPrimitivePart::FocusRing => Self::FocusRing,
-                _ => Self::Other,
-            },
-            SurfacePrimitiveIdentity::Authored(_) => Self::Other,
-        }
-    }
-}
-
 /// Stable key identifying one retained GPU batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GuiBatchKey {
@@ -117,8 +90,6 @@ pub struct GuiBatchKey {
     pub entity: ipp_core::EntityId,
     /// Identity of the initial primitive in this batch.
     pub initial_primitive: SurfacePrimitiveIdentity,
-    /// Volatility partition of the batch.
-    pub part_class: GuiPartClass,
 }
 
 /// Stable key identifying one live primitive's CPU geometry cache entry.
@@ -229,7 +200,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         program: &D::Program,
         entity: ipp_core::EntityId,
         clip: SurfaceClipRect,
-        part_class: GuiPartClass,
         boxes: &[&SurfaceRenderPrimitive],
         mvp: &[f32; 16],
         stats: &mut RenderStats,
@@ -310,7 +280,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 continue;
             }
 
-            self.draw_run_batch(program, entity, clip, part_class, start..index, mvp, stats)?;
+            self.draw_run_batch(program, entity, clip, start..index, mvp, stats)?;
             start = index;
         }
 
@@ -339,7 +309,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         program: &D::Program,
         entity: ipp_core::EntityId,
         clip: SurfaceClipRect,
-        part_class: GuiPartClass,
         range: std::ops::Range<usize>,
         mvp: &[f32; 16],
         stats: &mut RenderStats,
@@ -348,7 +317,6 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         let batch_key = GuiBatchKey {
             entity,
             initial_primitive: boxes[0].identity,
-            part_class,
         };
 
         let mut batch_hasher = std::collections::hash_map::DefaultHasher::new();

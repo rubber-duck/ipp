@@ -6,8 +6,8 @@ use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use super::{
-    GuiBatchRenderCache, GuiBoxVertex, GuiPartClass, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
-    VOLATILE_FRAMES, generate_box_vertices,
+    GuiBatchRenderCache, GuiBoxVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission, VOLATILE_FRAMES,
+    generate_box_vertices,
 };
 use crate::{GlyphVertex, RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
@@ -590,15 +590,7 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     // Frame 1: Cold upload
     let mut stats1 = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &boxes,
-            &mvp,
-            &mut stats1,
-        )
+        .draw_box_batch(&1, entity, clip, &boxes, &mvp, &mut stats1)
         .unwrap();
 
     assert_eq!(stats1.gui_allocations, 1);
@@ -613,15 +605,7 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     // Frame 2: Warm unchanged frame
     let mut stats2 = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &boxes,
-            &mvp,
-            &mut stats2,
-        )
+        .draw_box_batch(&1, entity, clip, &boxes, &mvp, &mut stats2)
         .unwrap();
 
     assert_eq!(stats2.gui_allocations, 0);
@@ -661,15 +645,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
 
     let mut stats1 = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &boxes_initial,
-            &mvp,
-            &mut stats1,
-        )
+        .draw_box_batch(&1, entity, clip, &boxes_initial, &mvp, &mut stats1)
         .unwrap();
     assert_eq!(stats1.gui_rebuilds, 2);
 
@@ -686,15 +662,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
 
     let mut stats2 = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &boxes_modified,
-            &mvp,
-            &mut stats2,
-        )
+        .draw_box_batch(&1, entity, clip, &boxes_modified, &mvp, &mut stats2)
         .unwrap();
 
     assert_eq!(
@@ -742,7 +710,6 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
                 &1,
                 ipp_core::EntityId::from_bits(1),
                 [0.0, 0.0, 4.0, 2.0],
-                GuiPartClass::Background,
                 &[primitive],
                 &[0.0; 16],
                 &mut stats,
@@ -769,31 +736,39 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
 }
 
 #[test]
-fn cursor_work_is_separated_from_background_batches() {
-    let bg_class = GuiPartClass::from_identity(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(1),
-        lifetime: 1,
-        part: GuiPrimitivePart::Background,
-    }));
-    let fill_class = GuiPartClass::from_identity(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(2),
-        lifetime: 1,
-        part: GuiPrimitivePart::Fill,
-    }));
-    let focus_class = GuiPartClass::from_identity(SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
-        root_incarnation: 1,
-        node: GuiNodeId(1),
-        lifetime: 1,
-        part: GuiPrimitivePart::FocusRing,
-    }));
+fn boxes_of_every_part_class_share_one_batch() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let part_box = |node: u32, part: GuiPrimitivePart, x: f32| {
+        sample_box_primitive(node, 1, part, [x, 0.0], [0.4, 0.4], None)
+    };
 
-    assert_eq!(bg_class, GuiPartClass::Background);
-    assert_eq!(fill_class, GuiPartClass::Fill);
-    assert_eq!(focus_class, GuiPartClass::FocusRing);
-    assert_ne!(bg_class, fill_class);
-    assert_ne!(bg_class, focus_class);
+    // A row's background, slider track, fill, checkbox icon and focus ring paint in
+    // this order under one clip; none of them changed recently.
+    let row = [
+        part_box(1, GuiPrimitivePart::Background, 0.0),
+        part_box(2, GuiPrimitivePart::Background, 0.5),
+        part_box(2, GuiPrimitivePart::Fill, 0.6),
+        part_box(3, GuiPrimitivePart::Icon, 1.0),
+        part_box(3, GuiPrimitivePart::FocusRing, 1.0),
+    ];
+    let boxes: Vec<_> = row.iter().collect();
+    let mut stats = RenderStats::default();
+    cache
+        .draw_box_batch(
+            &1,
+            ipp_core::EntityId::from_bits(1),
+            [0.0, 0.0, 4.0, 2.0],
+            &boxes,
+            &[0.0; 16],
+            &mut stats,
+        )
+        .unwrap();
+
+    assert_eq!(stats.gui_batches, 1, "{stats:?}");
+    assert_eq!(stats.draw_calls, 1);
+    assert_eq!(device.borrow().created_batches.len(), 1);
+    assert_eq!(device.borrow().created_batches[0].1, 5 * 6);
 }
 
 #[test]
@@ -815,15 +790,7 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
 
     let mut stats1 = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &[&box_gen1],
-            &mvp,
-            &mut stats1,
-        )
+        .draw_box_batch(&1, entity, clip, &[&box_gen1], &mvp, &mut stats1)
         .unwrap();
     assert_eq!(stats1.gui_allocations, 1);
 
@@ -839,15 +806,7 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
 
     let mut stats2 = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &[&box_gen2],
-            &mvp,
-            &mut stats2,
-        )
+        .draw_box_batch(&1, entity, clip, &[&box_gen2], &mvp, &mut stats2)
         .unwrap();
 
     // Lifetime difference creates a new batch rather than reusing or overwriting stale handles
@@ -885,26 +844,10 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
 
     let mut stats = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity1,
-            clip,
-            GuiPartClass::Background,
-            &[&box1],
-            &mvp,
-            &mut stats,
-        )
+        .draw_box_batch(&1, entity1, clip, &[&box1], &mvp, &mut stats)
         .unwrap();
     cache
-        .draw_box_batch(
-            &1,
-            entity2,
-            clip,
-            GuiPartClass::Background,
-            &[&box2],
-            &mvp,
-            &mut stats,
-        )
+        .draw_box_batch(&1, entity2, clip, &[&box2], &mvp, &mut stats)
         .unwrap();
 
     let mut live = std::collections::BTreeSet::new();
@@ -944,15 +887,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     let mvp = [0.0; 16];
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, entity, stats: &mut _| {
         cache
-            .draw_box_batch(
-                &1,
-                entity,
-                clip,
-                GuiPartClass::Background,
-                &[&panel],
-                &mvp,
-                stats,
-            )
+            .draw_box_batch(&1, entity, clip, &[&panel], &mvp, stats)
             .unwrap();
     };
     let live = BTreeSet::from([shown, culled]);
@@ -1027,7 +962,6 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
             &1,
             entity,
             clip,
-            GuiPartClass::Background,
             &[primitive],
             &mvp,
             &mut RenderStats::default(),
@@ -1099,15 +1033,7 @@ fn draw_run_frame(
     let refs: Vec<_> = boxes.iter().collect();
     let mut stats = RenderStats::default();
     cache
-        .draw_box_batch(
-            &1,
-            entity,
-            clip,
-            GuiPartClass::Background,
-            &refs,
-            &[0.0; 16],
-            &mut stats,
-        )
+        .draw_box_batch(&1, entity, clip, &refs, &[0.0; 16], &mut stats)
         .unwrap();
     let live = BTreeSet::from([entity]);
     cache.finish_frame(Some(&RetainedSurfaceSubmission {

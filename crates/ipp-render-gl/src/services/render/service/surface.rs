@@ -66,11 +66,9 @@ impl<D: RenderDevice> RenderService<D> {
             self.surface_analytic_text = false;
         }
 
+        // Clip of the contiguous box run being collected.
         #[cfg(feature = "gui")]
-        let mut current_box_batch: Option<(
-            ipp_core::systems::surface::SurfaceClipRect,
-            super::super::gui_batch::GuiPartClass,
-        )> = None;
+        let mut current_box_batch: Option<ipp_core::systems::surface::SurfaceClipRect> = None;
 
         #[cfg(feature = "gui")]
         let mut pending_boxes: Vec<&ipp_core::SurfaceRenderPrimitive> = Vec::new();
@@ -96,45 +94,33 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 }
 
-                let part_class = super::super::gui_batch::GuiPartClass::from_identity(
-                    primitive.style().identity,
-                );
-
-                match current_box_batch {
-                    Some((batch_clip, batch_class))
-                        if batch_clip == clip && batch_class == part_class =>
-                    {
-                        pending_boxes.push(primitive);
-                    }
-                    Some((batch_clip, batch_class)) => {
-                        self.flush_gui_boxes(
-                            world.id(),
-                            item.entity,
-                            batch_clip,
-                            batch_class,
-                            &mut pending_boxes,
-                            mvp,
-                            stats,
-                        )?;
-                        current_box_batch = Some((clip, part_class));
-                        pending_boxes.push(primitive);
-                    }
-                    None => {
-                        current_box_batch = Some((clip, part_class));
-                        pending_boxes.push(primitive);
-                    }
+                // Boxes batch across part classes; the retained cache isolates
+                // recently changed boxes by volatility instead.
+                if let Some(batch_clip) = current_box_batch
+                    && batch_clip != clip
+                {
+                    self.flush_gui_boxes(
+                        world.id(),
+                        item.entity,
+                        batch_clip,
+                        &mut pending_boxes,
+                        mvp,
+                        stats,
+                    )?;
                 }
+
+                current_box_batch = Some(clip);
+                pending_boxes.push(primitive);
 
                 continue;
             }
 
             #[cfg(feature = "gui")]
-            if let Some((batch_clip, batch_class)) = current_box_batch.take() {
+            if let Some(batch_clip) = current_box_batch.take() {
                 self.flush_gui_boxes(
                     world.id(),
                     item.entity,
                     batch_clip,
-                    batch_class,
                     &mut pending_boxes,
                     mvp,
                     stats,
@@ -373,12 +359,11 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         #[cfg(feature = "gui")]
-        if let Some((batch_clip, batch_class)) = current_box_batch.take() {
+        if let Some(batch_clip) = current_box_batch.take() {
             self.flush_gui_boxes(
                 world.id(),
                 item.entity,
                 batch_clip,
-                batch_class,
                 &mut pending_boxes,
                 mvp,
                 stats,
@@ -781,7 +766,6 @@ impl<D: RenderDevice> RenderService<D> {
         world: ipp_core::WorldId,
         entity: ipp_core::EntityId,
         batch_clip: ipp_core::systems::surface::SurfaceClipRect,
-        part_class: super::super::gui_batch::GuiPartClass,
         boxes: &mut Vec<&ipp_core::SurfaceRenderPrimitive>,
         mvp: &[f32; 16],
         stats: &mut RenderStats,
@@ -803,7 +787,7 @@ impl<D: RenderDevice> RenderService<D> {
             super::super::gui_batch::GuiBatchRenderCache::new(self.device.clone())
         });
         // The cache splits the run into bounded batches with stable boundaries.
-        cache.draw_box_batch(program, entity, batch_clip, part_class, boxes, mvp, stats)?;
+        cache.draw_box_batch(program, entity, batch_clip, boxes, mvp, stats)?;
 
         boxes.clear();
 

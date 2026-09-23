@@ -42,7 +42,7 @@ pub use device::{PlatformRenderDevice, RenderDevice};
 #[cfg(feature = "gui")]
 pub use glyph_atlas::{GlyphAtlasLimits, GlyphVertex};
 #[cfg(feature = "gui")]
-pub use gui_batch::{GuiBoxVertex, GuiPartClass};
+pub use gui_batch::GuiBoxVertex;
 
 #[cfg(target_arch = "wasm32")]
 pub use device::WebGlRenderDevice;

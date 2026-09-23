@@ -1,15 +1,15 @@
-//! Byte layouts of retained GUI vertices, shared by both GL devices.
+//! Byte layout of retained GUI vertices, shared by both GL devices.
 //!
-//! Each layout is computed from its `#[repr(C)]` vertex with `offset_of!` and the
+//! The layout is computed from its `#[repr(C)]` vertex with `offset_of!` and the
 //! field array lengths, then validated at compile time: attributes use consecutive
 //! shader locations and tile the whole vertex in declaration order. Changing a vertex
-//! field therefore fails the build until this table, and the shaders it describes,
-//! agree. GLES configures attribute pointers from these tables and the WebGL bridge
+//! field therefore fails the build until this table, and the shader it describes,
+//! agree. GLES configures attribute pointers from this table and the WebGL bridge
 //! reads the same `#[repr(C)]` table from WASM memory, so neither restates the layout.
 
 use std::mem::{offset_of, size_of};
 
-use super::{GlyphVertex, GuiBoxVertex};
+use super::GuiVertex;
 
 /// One `f32` vector attribute of a retained vertex.
 #[repr(C)]
@@ -86,36 +86,26 @@ const fn validated_layout<const N: usize>(
     }
 }
 
-/// [`GuiBoxVertex`] inputs of `surface_box.vert`.
-pub(crate) const GUI_BOX_VERTEX_LAYOUT: RetainedVertexLayout<9> = validated_layout(
-    size_of::<GuiBoxVertex>(),
+/// [`GuiVertex`] inputs of `surface_gui.vert`, shared by boxes and glyph quads.
+pub(crate) const GUI_VERTEX_LAYOUT: RetainedVertexLayout<10> = validated_layout(
+    size_of::<GuiVertex>(),
     [
-        retained_attribute!(GuiBoxVertex, position, 0),
-        retained_attribute!(GuiBoxVertex, placement, 1),
-        retained_attribute!(GuiBoxVertex, shape, 2),
-        retained_attribute!(GuiBoxVertex, color0, 3),
-        retained_attribute!(GuiBoxVertex, color1, 4),
-        retained_attribute!(GuiBoxVertex, border_color, 5),
-        retained_attribute!(GuiBoxVertex, gradient_coords, 6),
-        retained_attribute!(GuiBoxVertex, material_params, 7),
-        retained_attribute!(GuiBoxVertex, glow_color, 8),
+        retained_attribute!(GuiVertex, position, 0),
+        retained_attribute!(GuiVertex, placement, 1),
+        retained_attribute!(GuiVertex, shape, 2),
+        retained_attribute!(GuiVertex, color0, 3),
+        retained_attribute!(GuiVertex, color1, 4),
+        retained_attribute!(GuiVertex, border_color, 5),
+        retained_attribute!(GuiVertex, gradient_coords, 6),
+        retained_attribute!(GuiVertex, material_params, 7),
+        retained_attribute!(GuiVertex, glow_color, 8),
+        retained_attribute!(GuiVertex, clip, 9),
     ],
 );
 
-/// [`GlyphVertex`] inputs of `surface_text.vert`.
-pub(crate) const GLYPH_VERTEX_LAYOUT: RetainedVertexLayout<3> = validated_layout(
-    size_of::<GlyphVertex>(),
-    [
-        retained_attribute!(GlyphVertex, position, 0),
-        retained_attribute!(GlyphVertex, uv, 1),
-        retained_attribute!(GlyphVertex, color, 2),
-    ],
-);
-
-// Pinned strides: resizing either vertex changes GPU memory accounting and every
+// Pinned stride: resizing the vertex changes GPU memory accounting and every
 // consumer's stride, so it must be a deliberate edit here as well.
-const _: () = assert!(GUI_BOX_VERTEX_LAYOUT.stride == 136);
-const _: () = assert!(GLYPH_VERTEX_LAYOUT.stride == 32);
+const _: () = assert!(GUI_VERTEX_LAYOUT.stride == 152);
 
 #[cfg(test)]
 mod tests {
@@ -142,46 +132,53 @@ mod tests {
             .collect()
     }
 
+    /// Value of `const float NAME = value;` declared in `source`.
+    fn shader_constant(source: &str, name: &str) -> f32 {
+        let prefix = format!("const float {name} = ");
+        source
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&prefix)?.strip_suffix(';'))
+            .unwrap_or_else(|| panic!("shader declares {name}"))
+            .parse()
+            .unwrap()
+    }
+
+    const VERTEX_SHADER: &str =
+        crate::services::render::embedded_shader!("shaders/surface_gui.vert");
+
+    const FRAGMENT_SHADER: &str =
+        crate::services::render::embedded_shader!("shaders/surface_gui.frag");
+
     #[test]
-    fn shader_inputs_match_retained_vertex_layouts() {
+    fn shader_inputs_match_the_retained_vertex_layout() {
         assert_eq!(
-            shader_inputs(crate::services::render::embedded_shader!(
-                "shaders/surface_box.vert"
-            )),
-            layout_inputs(&GUI_BOX_VERTEX_LAYOUT)
-        );
-        assert_eq!(
-            shader_inputs(crate::services::render::embedded_shader!(
-                "shaders/surface_text.vert"
-            )),
-            layout_inputs(&GLYPH_VERTEX_LAYOUT)
+            shader_inputs(VERTEX_SHADER),
+            layout_inputs(&GUI_VERTEX_LAYOUT)
         );
     }
 
     #[test]
     fn bridge_table_is_consecutive_words() {
         assert_eq!(
-            size_of::<RetainedVertexLayout<9>>(),
-            (2 + 9 * 3) * size_of::<u32>()
+            size_of::<RetainedVertexLayout<10>>(),
+            (2 + 10 * 3) * size_of::<u32>()
         );
-        assert_eq!(offset_of!(RetainedVertexLayout<9>, attributes), 8);
-        assert_eq!(GUI_BOX_VERTEX_LAYOUT.attributes[8].offset, 120);
-        assert_eq!(GLYPH_VERTEX_LAYOUT.attributes[2].offset, 16);
+        assert_eq!(offset_of!(RetainedVertexLayout<10>, attributes), 8);
+        assert_eq!(GUI_VERTEX_LAYOUT.attributes[8].offset, 120);
+        assert_eq!(GUI_VERTEX_LAYOUT.attributes[9].offset, 136);
     }
 
     #[test]
-    fn box_shader_pad_matches_generated_geometry() {
-        let declared = crate::services::render::embedded_shader!("shaders/surface_box.vert")
-            .lines()
-            .find_map(|line| {
-                line.trim()
-                    .strip_prefix("const float GUI_BOX_ANTIALIAS_PAD = ")?
-                    .strip_suffix(';')
-            })
-            .expect("surface_box.vert declares GUI_BOX_ANTIALIAS_PAD");
+    fn shader_constants_match_generated_geometry() {
         assert_eq!(
-            declared.parse::<f32>().unwrap(),
+            shader_constant(VERTEX_SHADER, "GUI_BOX_ANTIALIAS_PAD"),
             crate::gui_batch::GUI_BOX_ANTIALIAS_PAD
         );
+        for source in [VERTEX_SHADER, FRAGMENT_SHADER] {
+            assert_eq!(
+                shader_constant(source, "GUI_FILL_GLYPH"),
+                crate::gui_batch::GUI_FILL_GLYPH
+            );
+        }
     }
 }

@@ -4,9 +4,7 @@ use std::ptr;
 use std::rc::Rc;
 
 #[cfg(feature = "gui")]
-pub use super::GlyphVertex;
-#[cfg(feature = "gui")]
-pub use super::GuiBoxVertex;
+pub use super::GuiVertex;
 use super::RenderDevice;
 #[cfg(feature = "surfaces")]
 use super::{SurfacePathDescriptor, SurfacePathInstance};
@@ -120,22 +118,13 @@ pub struct GlesRenderMesh {
     weight: u32,
 }
 
-/// Native vertex array and buffer for a retained GUI triangle batch.
+/// Native vertex array and buffer holding one Surface's retained GUI vertices.
 #[cfg(feature = "gui")]
 pub struct GlesGuiBatch {
     pub(crate) vao: u32,
     pub(crate) vbo: u32,
-    pub(crate) vertex_count: i32,
-    pub(crate) bytes: usize,
-}
-
-/// Native vertex array and buffer for a retained glyph quad batch.
-#[cfg(feature = "gui")]
-pub struct GlesGlyphBatch {
-    pub(crate) vao: u32,
-    pub(crate) vbo: u32,
-    pub(crate) vertex_count: i32,
-    pub(crate) bytes: usize,
+    /// Allocated vertices.
+    pub(crate) capacity: usize,
 }
 
 /// Native texture and framebuffer for one glyph atlas page.

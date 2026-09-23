@@ -161,7 +161,7 @@ const reports = [];
     for (const name of [
       "draw_gui_batch",
       "create_gui_batch",
-      "create_glyph_batch",
+      "write_gui_batch",
       "create_glyph_atlas_page",
     ])
       assert.equal(

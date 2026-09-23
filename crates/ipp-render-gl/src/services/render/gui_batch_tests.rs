@@ -1,16 +1,17 @@
-//! Tests for retained GUI triangle batches and safe GPU storage replacement.
+//! Tests for retained GUI triangle batches and their per-Surface GPU storage.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use super::super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
 use super::super::retained_surfaces::SurfacePaint;
 use super::{
-    GuiBatchRenderCache, GuiBoxVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission, VOLATILE_FRAMES,
-    generate_box_vertices,
+    GUI_FILL_GLYPH, GuiBatchRenderCache, GuiVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
+    VOLATILE_FRAMES, generate_box_vertices,
 };
-use crate::{GlyphVertex, RenderDevice, RenderError, RenderStats};
+use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::gui::GuiNodeId;
 use ipp_core::systems::surface::{
     GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfaceClipRect,
@@ -19,18 +20,22 @@ use ipp_core::systems::surface::{
 
 #[derive(Default)]
 struct MockGuiDevice {
-    created_batches: Vec<(usize, usize)>, // (id, vertex_count)
-    updated_batches: Vec<(usize, usize)>, // (id, vertex_count)
+    /// `(id, capacity)` of every storage allocation.
+    created_batches: Vec<(usize, usize)>,
+    /// `(id, first, len)` of every storage write.
+    writes: Vec<(usize, usize, usize)>,
     deleted_batches: Vec<usize>,
-    draws: Vec<(usize, [f32; 4])>,
+    /// Drawn vertices of every draw, and whether it bound an atlas.
+    draws: Vec<(usize, Vec<GuiVertex>, bool)>,
+    /// Current contents of every live storage allocation.
+    contents: BTreeMap<usize, Vec<GuiVertex>>,
     next_id: usize,
-    fail_updates: bool,
+    fail_writes: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct MockGuiBatch {
     id: usize,
-    vertex_count: usize,
 }
 
 impl RenderDevice for MockGuiDevice {
@@ -43,7 +48,6 @@ impl RenderDevice for MockGuiDevice {
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockGuiBatch;
-    type GlyphBatch = MockGuiBatch;
     type GlyphAtlasPage = u32;
 
     fn set_lighting(
@@ -161,34 +165,34 @@ impl RenderDevice for MockGuiDevice {
 
     fn delete_program(&mut self, _program: Self::Program) {}
 
-    fn create_gui_batch(
-        &mut self,
-        vertices: &[GuiBoxVertex],
-    ) -> Result<Self::GuiBatch, RenderError> {
+    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         self.next_id += 1;
         let id = self.next_id;
-        self.created_batches.push((id, vertices.len()));
+        self.created_batches.push((id, capacity));
+        self.contents.insert(id, vec![GuiVertex::EMPTY; capacity]);
         Ok(MockGuiBatch {
             id,
-            vertex_count: vertices.len(),
         })
     }
 
-    fn update_gui_batch(
+    fn write_gui_batch(
         &mut self,
         batch: &mut Self::GuiBatch,
-        vertices: &[GuiBoxVertex],
+        first: usize,
+        vertices: &[GuiVertex],
     ) -> Result<(), RenderError> {
-        if self.fail_updates {
-            return Err(RenderError::RenderDevice("injected update failure".into()));
+        if self.fail_writes {
+            return Err(RenderError::RenderDevice("injected write failure".into()));
         }
 
-        batch.vertex_count = vertices.len();
-        self.updated_batches.push((batch.id, vertices.len()));
+        self.writes.push((batch.id, first, vertices.len()));
+        self.contents.get_mut(&batch.id).expect("live storage")[first..first + vertices.len()]
+            .copy_from_slice(vertices);
         Ok(())
     }
 
     fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
+        self.contents.remove(&batch.id);
         self.deleted_batches.push(batch.id);
     }
 
@@ -196,49 +200,13 @@ impl RenderDevice for MockGuiDevice {
         &mut self,
         _program: &Self::Program,
         batch: &Self::GuiBatch,
+        atlas: Option<&Self::Texture>,
         _mvp: &[f32; 16],
-        clip: &[f32; 4],
+        first: usize,
+        count: usize,
     ) -> Result<(), RenderError> {
-        self.draws.push((batch.id, *clip));
-        Ok(())
-    }
-
-    fn create_glyph_batch(
-        &mut self,
-        vertices: &[GlyphVertex],
-    ) -> Result<Self::GlyphBatch, RenderError> {
-        self.next_id += 1;
-        let id = self.next_id;
-        self.created_batches.push((id, vertices.len()));
-        Ok(MockGuiBatch {
-            id,
-            vertex_count: vertices.len(),
-        })
-    }
-
-    fn update_glyph_batch(
-        &mut self,
-        batch: &mut Self::GlyphBatch,
-        vertices: &[GlyphVertex],
-    ) -> Result<(), RenderError> {
-        batch.vertex_count = vertices.len();
-        self.updated_batches.push((batch.id, vertices.len()));
-        Ok(())
-    }
-
-    fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
-        self.deleted_batches.push(batch.id);
-    }
-
-    fn draw_glyph_batch(
-        &mut self,
-        _program: &Self::Program,
-        batch: &Self::GlyphBatch,
-        _atlas: &Self::Texture,
-        _mvp: &[f32; 16],
-        clip: &[f32; 4],
-    ) -> Result<(), RenderError> {
-        self.draws.push((batch.id, *clip));
+        let drawn = self.contents[&batch.id][first..first + count].to_vec();
+        self.draws.push((batch.id, drawn, atlas.is_some()));
         Ok(())
     }
 
@@ -297,6 +265,44 @@ fn sample_box_primitive(
     }
 }
 
+/// Clip of generated test geometry.
+const CLIP: SurfaceClipRect = [-100.0, -100.0, 100.0, 100.0];
+
+/// One Surface submission whose boxes all share a clip, as the service performs it.
+trait DrawBoxBatch {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_box_batch(
+        &mut self,
+        program: &u32,
+        entity: ipp_core::EntityId,
+        clip: SurfaceClipRect,
+        paint: SurfacePaint,
+        boxes: &[&SurfaceRenderPrimitive],
+        mvp: &[f32; 16],
+        stats: &mut RenderStats,
+    ) -> Result<(), RenderError>;
+}
+
+impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
+    fn draw_box_batch(
+        &mut self,
+        program: &u32,
+        entity: ipp_core::EntityId,
+        clip: SurfaceClipRect,
+        paint: SurfacePaint,
+        boxes: &[&SurfaceRenderPrimitive],
+        mvp: &[f32; 16],
+        stats: &mut RenderStats,
+    ) -> Result<(), RenderError> {
+        let clipped: Vec<_> = boxes.iter().map(|&primitive| (primitive, clip)).collect();
+        self.begin_surface(entity);
+        self.push_boxes(paint, &clipped, stats);
+        self.commit_surface(|_, _| &[], stats)?;
+        let pieces = self.piece_count();
+        self.draw_pieces(program, 0..pieces, |_| None, mvp, stats)
+    }
+}
+
 #[test]
 fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
     let style = SurfacePrimitiveStyle {
@@ -317,7 +323,16 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
     let border_color = [0.0, 1.0, 0.0, 1.0];
     let fill = GuiShapeFill::Solid([1.0, 0.0, 0.0, 1.0]);
 
-    let vertices = generate_box_vertices(&style, &size, &corner, 0.05, &border_color, &fill, None);
+    let vertices = generate_box_vertices(
+        &style,
+        &size,
+        &corner,
+        0.05,
+        &border_color,
+        &fill,
+        None,
+        CLIP,
+    );
     assert_eq!(vertices.len(), 6);
 
     // Quad corners in Surface coordinates with 0.002 conservative AA padding:
@@ -341,6 +356,7 @@ fn box_vertices_form_two_counter_clockwise_triangles_per_quad() {
         assert_eq!(v.gradient_coords, [0.0; 4]);
         assert_eq!(v.material_params, [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(v.glow_color, [0.0; 4]);
+        assert_eq!(v.clip, CLIP);
     }
 }
 
@@ -374,6 +390,7 @@ fn linear_gradient_fill_sets_coordinates_and_material_type() {
         &[0.0; 4],
         &fill,
         None,
+        CLIP,
     );
     assert_eq!(vertices.len(), 6);
 
@@ -415,6 +432,7 @@ fn radial_gradient_fill_sets_center_radius_and_material_type() {
         &[0.0; 4],
         &fill,
         None,
+        CLIP,
     );
     assert_eq!(vertices.len(), 6);
 
@@ -456,6 +474,7 @@ fn glow_expands_quad_padding_and_packs_glow_parameters() {
         &[0.0; 4],
         &GuiShapeFill::Solid([0.0; 4]),
         Some(&glow),
+        CLIP,
     );
     assert_eq!(vertices.len(), 6);
 
@@ -512,6 +531,7 @@ fn border_only_box_splits_into_four_edge_strips_without_interior() {
             &border_color,
             &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
             glow,
+            CLIP,
         );
         assert_eq!(
             vertices.len(),
@@ -555,6 +575,7 @@ fn small_border_only_box_uses_single_quad() {
         &border_color,
         &GuiShapeFill::Solid([0.0, 0.0, 0.0, 0.0]),
         None,
+        CLIP,
     );
     assert_eq!(
         vertices.len(),
@@ -607,10 +628,10 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     assert_eq!(stats1.gui_rebuilds, 2);
     assert_eq!(stats1.gui_batches, 1);
     assert_eq!(stats1.triangles, 4); // 2 boxes * 2 triangles
-    let expected_bytes = 12 * std::mem::size_of::<GuiBoxVertex>() as u32;
+    let expected_bytes = 12 * std::mem::size_of::<GuiVertex>() as u32;
     assert_eq!(stats1.uploaded_bytes, expected_bytes);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(device.borrow().created_batches[0].1, 12);
+    assert_eq!(device.borrow().writes, [(1, 0, 12)]);
 
     // Frame 2: Warm unchanged frame
     let mut stats2 = RenderStats::default();
@@ -632,7 +653,7 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     assert_eq!(stats2.triangles, 4);
     assert_eq!(stats2.uploaded_bytes, 0, "warm frame must upload 0 bytes");
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(device.borrow().updated_batches.len(), 0);
+    assert_eq!(device.borrow().writes.len(), 1);
 }
 
 #[test]
@@ -704,11 +725,13 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
         "only the modified primitive geometry rebuilds"
     );
     // The changed box turns volatile and leaves its stable neighbour's batch: that
-    // batch replaces its storage without it, and the changed box gets its own batch.
+    // batch rewrites its slot without it, and the changed box's own batch follows it
+    // in the same storage, in one upload.
     assert_eq!(stats2.gui_allocations, 2);
-    assert_eq!(device.borrow().updated_batches, [(1, 6)]);
-    assert_eq!(device.borrow().created_batches.len(), 2);
-    let expected_bytes = 12 * std::mem::size_of::<GuiBoxVertex>() as u32;
+    assert_eq!(device.borrow().writes[1..], [(1, 0, 12)]);
+    assert_eq!(device.borrow().created_batches.len(), 1);
+    assert_eq!(stats2.draw_calls, 1);
+    let expected_bytes = 12 * std::mem::size_of::<GuiVertex>() as u32;
     assert_eq!(stats2.uploaded_bytes, expected_bytes);
 }
 
@@ -767,7 +790,7 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
     assert_eq!(stats.gui_rebuilds, 0);
     assert_eq!(stats.gui_allocations, 0);
     assert_eq!(stats.uploaded_bytes, 0);
-    assert!(device.borrow().updated_batches.is_empty());
+    assert_eq!(device.borrow().writes.len(), 1);
 }
 
 #[test]
@@ -804,7 +827,7 @@ fn boxes_of_every_part_class_share_one_batch() {
     assert_eq!(stats.gui_batches, 1, "{stats:?}");
     assert_eq!(stats.draw_calls, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(device.borrow().created_batches[0].1, 5 * 6);
+    assert_eq!(device.borrow().writes, [(1, 0, 5 * 6)]);
 }
 
 #[test]
@@ -983,12 +1006,17 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
     }));
 
     assert_eq!(
-        device.borrow().deleted_batches.len(),
-        1,
-        "destroyed entity batch must be freed on GPU"
+        device.borrow().deleted_batches,
+        [2],
+        "destroyed entity storage must be freed on GPU"
     );
-    let batch_bytes = 6 * std::mem::size_of::<GuiBoxVertex>();
-    assert_eq!(cache.resident_bytes(), batch_bytes);
+    // A quad, the room its slot reserves to grow and room for appended work.
+    let storage_bytes = device.borrow().created_batches[0].1 * std::mem::size_of::<GuiVertex>();
+    assert_eq!(
+        storage_bytes,
+        (6 + 24 + 12) * std::mem::size_of::<GuiVertex>()
+    );
+    assert_eq!(cache.resident_bytes(), storage_bytes);
 }
 
 #[test]
@@ -1050,9 +1078,9 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     assert_eq!(visible_again.gui_allocations, 0);
     assert_eq!(visible_again.gui_batches, 1);
     assert_eq!(device.borrow().created_batches.len(), 2);
-    assert!(device.borrow().updated_batches.is_empty());
+    assert_eq!(device.borrow().writes.len(), 2);
 
-    // Submitting a Surface without a batch it retained releases that batch.
+    // Submitting a Surface without the work it retained releases that storage.
     cache.finish_frame(Some(&RetainedSurfaceSubmission {
         live: &live,
         submitted: &BTreeSet::from([shown, culled]),
@@ -1060,7 +1088,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     assert_eq!(device.borrow().deleted_batches, [1]);
     assert_eq!(
         cache.resident_bytes(),
-        6 * std::mem::size_of::<GuiBoxVertex>()
+        (6 + 24 + 12) * std::mem::size_of::<GuiVertex>()
     );
 }
 
@@ -1101,7 +1129,7 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
     };
 
     draw(&mut cache, &panel).unwrap();
-    device.borrow_mut().fail_updates = true;
+    device.borrow_mut().fail_writes = true;
     assert!(draw(&mut cache, &moved).is_err());
     assert_eq!(device.borrow().deleted_batches, [1]);
     assert_eq!(cache.resident_bytes(), 0);
@@ -1112,14 +1140,14 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
     );
 
     // The next frame allocates complete storage instead of reusing the failed batch.
-    device.borrow_mut().fail_updates = false;
+    device.borrow_mut().fail_writes = false;
     draw(&mut cache, &moved).unwrap();
     assert_eq!(device.borrow().created_batches.len(), 2);
     assert_eq!(device.borrow().draws.last().unwrap().0, 2);
 }
 
 /// Bytes of one filled box quad.
-const BOX_BYTES: u32 = 6 * std::mem::size_of::<GuiBoxVertex>() as u32;
+const BOX_BYTES: u32 = 6 * std::mem::size_of::<GuiVertex>() as u32;
 
 /// A long run of small filled boxes, one per GUI node.
 fn box_run(nodes: std::ops::RangeInclusive<u32>) -> Vec<SurfaceRenderPrimitive> {
@@ -1193,13 +1221,15 @@ fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
 
     let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     assert!(cold.gui_batches >= 4, "{cold:?}");
+    assert_eq!(cold.draw_calls, 1, "one Surface storage draws as one range");
     assert_eq!(cold.uploaded_bytes, 400 * BOX_BYTES);
+    assert_eq!(device.borrow().writes.len(), cold.gui_batches as usize);
     assert!(
         device
             .borrow()
-            .created_batches
+            .writes
             .iter()
-            .all(|(_, vertices)| *vertices <= MAX_BATCH_BOXES * 6)
+            .all(|&(_, _, vertices)| vertices <= MAX_BATCH_BOXES * 6)
     );
 
     let warm = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
@@ -1209,19 +1239,20 @@ fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
 
 #[test]
 fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
+    // Vertices of the first `count` batches, written one per batch by a cold frame.
     let first_batches = |device: &Rc<RefCell<MockGuiDevice>>, count: usize| {
-        device.borrow().created_batches[..count]
+        device.borrow().writes[..count]
             .iter()
-            .map(|(_, vertices)| *vertices as u32 / 6)
+            .map(|&(_, _, vertices)| vertices as u32 / 6)
             .sum::<u32>()
     };
 
-    // Resizing the first box rebuilds only its own batch.
+    // Resizing the first box rewrites only its own batch.
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let mut boxes = box_run(1..=400);
     let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    let created = device.borrow().created_batches.len();
+    let written = device.borrow().writes.len();
     if let SurfaceRenderPrimitive::Box {
         size,
         ..
@@ -1235,36 +1266,31 @@ fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
         resized.uploaded_bytes <= first_batches(&device, 1) * BOX_BYTES,
         "{resized:?}"
     );
-    assert!(
-        device.borrow().updated_batches.len() + device.borrow().created_batches.len() - created
-            <= 2
-    );
+    assert!(device.borrow().writes.len() - written <= 2);
+    assert_eq!(device.borrow().created_batches.len(), 1);
     assert!(resized.gui_batches <= cold.gui_batches + 1);
 
-    // Inserting a box before the first one creates at most the batches around it.
+    // Inserting a box before the first one rewrites at most the batches around it.
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let mut boxes = box_run(1..=400);
     draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    let created = device.borrow().created_batches.len();
+    let written = device.borrow().writes.len();
     let bound = (first_batches(&device, 2) + 1) * BOX_BYTES;
     boxes.insert(0, box_run(1000..=1000).remove(0));
     let inserted = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     assert_eq!(inserted.gui_rebuilds, 1);
     assert!(inserted.uploaded_bytes <= bound, "{inserted:?}");
-    assert!(device.borrow().updated_batches.is_empty());
-    assert!(device.borrow().created_batches.len() - created <= 2);
-    assert!(device.borrow().deleted_batches.len() <= 2);
+    assert!(device.borrow().writes.len() - written <= 2);
+    assert_eq!(device.borrow().created_batches.len(), 1);
+    assert!(device.borrow().deleted_batches.is_empty());
 
     // Removing an early box likewise leaves every later batch untouched.
     boxes.remove(3);
-    let created = device.borrow().created_batches.len();
+    let written = device.borrow().writes.len();
     let removed = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     assert!(removed.uploaded_bytes <= bound, "{removed:?}");
-    assert!(
-        device.borrow().updated_batches.len() + device.borrow().created_batches.len() - created
-            <= 2
-    );
+    assert!(device.borrow().writes.len() - written <= 2);
 }
 
 #[test]
@@ -1290,6 +1316,7 @@ fn animating_one_box_in_a_large_run_uploads_only_that_box_each_frame() {
         assert_eq!(animated.uploaded_bytes, BOX_BYTES, "frame {frame}");
         assert_eq!((animated.gui_rebuilds, animated.gui_allocations), (1, 1));
         assert_eq!(animated.gui_batches, split.gui_batches);
+        assert_eq!(animated.draw_calls, 1);
     }
 
     // At rest the box rejoins its neighbours once, after which frames upload nothing.
@@ -1301,31 +1328,327 @@ fn animating_one_box_in_a_large_run_uploads_only_that_box_each_frame() {
     let settled = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     assert_eq!(settled.uploaded_bytes, 0);
     assert_eq!(settled.gui_batches, cold.gui_batches);
+    assert_eq!(device.borrow().created_batches.len(), 1);
 }
 
 #[test]
-fn clip_only_changes_reuse_vertex_storage() {
+fn clip_changes_rewrite_only_the_boxes_they_clip() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());
     let boxes = box_run(1..=40);
     draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    let created = device.borrow().created_batches.len();
 
+    // Scrolling a container changes the clip its boxes carry in every vertex.
     let scrolled = [0.5, 0.0, 3.0, 1.0];
     let stats = draw_run_frame(&mut cache, &boxes, scrolled);
-    assert_eq!(
-        (
-            stats.uploaded_bytes,
-            stats.gui_rebuilds,
-            stats.gui_allocations
-        ),
-        (0, 0, 0)
-    );
-    assert_eq!(device.borrow().created_batches.len(), created);
-    assert!(device.borrow().updated_batches.is_empty());
+    assert_eq!(stats.gui_rebuilds, 40);
+    assert_eq!(stats.uploaded_bytes, 40 * BOX_BYTES);
+    assert_eq!(device.borrow().created_batches.len(), 1);
+    let drawn = device.borrow().draws.last().unwrap().1.clone();
     assert!(
-        device.borrow().draws[created..]
+        drawn
             .iter()
-            .all(|(_, clip)| *clip == scrolled)
+            .all(|vertex| *vertex == GuiVertex::EMPTY || vertex.clip == scrolled)
+    );
+
+    // Clipping one box of the run differently rewrites only that box's batch.
+    let refs: Vec<_> = boxes.iter().collect();
+    let mut clipped: Vec<_> = refs
+        .iter()
+        .map(|&primitive| (primitive, scrolled))
+        .collect();
+    clipped[20].1 = [1.0, 0.0, 2.0, 1.0];
+    let mut stats = RenderStats::default();
+    cache.begin_surface(ipp_core::EntityId::from_bits(1));
+    cache.push_boxes(SurfacePaint::UNKNOWN, &clipped, &mut stats);
+    cache.commit_surface(|_, _| &[], &mut stats).unwrap();
+    assert_eq!(stats.gui_rebuilds, 1);
+    assert!(
+        stats.uploaded_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES,
+        "{stats:?}"
+    );
+}
+
+/// Glyph quad vertices of one test text batch, tinted and clipped.
+fn glyph_quads(count: usize, x: f32, clip: SurfaceClipRect) -> Vec<GuiVertex> {
+    (0..count * 6)
+        .map(|index| GuiVertex {
+            position: [x + (index / 6) as f32 * 0.01, 0.0],
+            color0: [1.0, 1.0, 1.0, 1.0],
+            gradient_coords: [0.5, 0.5, 0.0, 0.0],
+            material_params: [GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
+            clip,
+            ..GuiVertex::EMPTY
+        })
+        .collect()
+}
+
+/// One Surface's painter-order GUI work: box runs and text batches.
+enum TestWork {
+    Boxes(Vec<(SurfaceRenderPrimitive, SurfaceClipRect)>),
+    Text {
+        node: u32,
+        page: usize,
+        revision: u64,
+        vertices: Vec<GuiVertex>,
+    },
+}
+
+fn text_identity(node: u32) -> SurfacePrimitiveIdentity {
+    SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+        root_incarnation: 1,
+        node: GuiNodeId(node),
+        lifetime: 1,
+        part: GuiPrimitivePart::Label,
+    })
+}
+
+/// One submitted Surface: its stats, its draws' vertices and whether each bound an
+/// atlas, and the painter-order vertices its work should paint.
+struct SubmittedWork {
+    stats: RenderStats,
+    draws: Vec<(Vec<GuiVertex>, bool)>,
+    expected: Vec<GuiVertex>,
+}
+
+/// Submit `work` as one Surface and draw it.
+fn submit_work(
+    cache: &mut GuiBatchRenderCache<MockGuiDevice>,
+    device: &Rc<RefCell<MockGuiDevice>>,
+    work: &[TestWork],
+) -> SubmittedWork {
+    let mut stats = RenderStats::default();
+    let entity = ipp_core::EntityId::from_bits(1);
+    cache.begin_surface(entity);
+    let mut expected = Vec::new();
+    let mut text: BTreeMap<SurfacePrimitiveIdentity, &[GuiVertex]> = BTreeMap::new();
+    for item in work {
+        match item {
+            TestWork::Boxes(boxes) => {
+                let refs: Vec<_> = boxes
+                    .iter()
+                    .map(|(primitive, clip)| (primitive, *clip))
+                    .collect();
+                cache.push_boxes(SurfacePaint::UNKNOWN, &refs, &mut stats);
+                for (primitive, clip) in boxes {
+                    let SurfaceRenderPrimitive::Box {
+                        style,
+                        size,
+                        corner_radius,
+                        border_width,
+                        border_color,
+                        fill,
+                        glow,
+                    } = primitive
+                    else {
+                        unreachable!();
+                    };
+                    expected.extend(generate_box_vertices(
+                        style,
+                        size,
+                        corner_radius,
+                        *border_width,
+                        border_color,
+                        fill,
+                        glow.as_ref(),
+                        *clip,
+                    ));
+                }
+            }
+            TestWork::Text {
+                node,
+                page,
+                revision,
+                vertices,
+            } => {
+                let identity = text_identity(*node);
+                cache.push_glyphs([GuiPiece {
+                    key: GuiPieceKey::Glyphs(identity, 0),
+                    hash: *revision,
+                    len: vertices.len(),
+                    page: Some(*page),
+                    source: GuiPieceSource::Glyphs(identity, 0),
+                }]);
+                text.insert(identity, vertices);
+                expected.extend_from_slice(vertices);
+            }
+        }
+    }
+
+    cache
+        .commit_surface(|identity, _| text[&identity], &mut stats)
+        .unwrap();
+    let before = device.borrow().draws.len();
+    let pieces = cache.piece_count();
+    let textures = [10, 11];
+    cache
+        .draw_pieces(
+            &1,
+            0..pieces,
+            |page| textures.get(page),
+            &[0.0; 16],
+            &mut stats,
+        )
+        .unwrap();
+    let draws = device.borrow().draws[before..]
+        .iter()
+        .map(|(_, vertices, atlas)| (vertices.clone(), *atlas))
+        .collect();
+    SubmittedWork {
+        stats,
+        draws,
+        expected,
+    }
+}
+
+#[test]
+fn boxes_and_text_under_different_clips_draw_once_per_atlas_page() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let clips = [[0.0, 0.0, 1.0, 1.0], [0.2, 0.0, 0.8, 1.0]];
+    let row = |node: u32, clip: SurfaceClipRect| {
+        TestWork::Boxes(
+            box_run(node..=node + 2)
+                .into_iter()
+                .map(|primitive| (primitive, clip))
+                .collect(),
+        )
+    };
+    let text = |node: u32, page: usize, clip| TestWork::Text {
+        node,
+        page,
+        revision: u64::from(node),
+        vertices: glyph_quads(3, 0.1 * node as f32, clip),
+    };
+
+    // Box, text, box and text runs of one page under alternating clips: one draw.
+    let work = [
+        row(1, clips[0]),
+        text(100, 0, clips[1]),
+        row(10, clips[1]),
+        text(101, 0, clips[0]),
+    ];
+    let SubmittedWork {
+        stats,
+        draws,
+        expected,
+    } = submit_work(&mut cache, &device, &work);
+    assert_eq!(stats.draw_calls, 1, "{stats:?}");
+    assert_eq!(stats.gui_batches, 4);
+    assert!(draws[0].1, "the range samples its atlas page");
+    let painted: Vec<_> = draws[0]
+        .0
+        .iter()
+        .copied()
+        .filter(|vertex| *vertex != GuiVertex::EMPTY)
+        .collect();
+    assert_eq!(painted, expected, "painter order with per-vertex clips");
+
+    // Text on a second page ends the range; later work continues from there.
+    let work = [
+        row(1, clips[0]),
+        text(100, 0, clips[1]),
+        text(102, 1, clips[1]),
+        row(10, clips[1]),
+    ];
+    let SubmittedWork {
+        stats,
+        draws,
+        ..
+    } = submit_work(&mut cache, &device, &work);
+    assert_eq!(stats.draw_calls, 2, "{stats:?}");
+    assert!(draws.iter().all(|(_, atlas)| *atlas));
+}
+
+#[test]
+fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let clip = [0.0, 0.0, 8.0, 2.0];
+
+    // Deterministic edits: resize, recolour, insert, remove and retext, including runs
+    // that outgrow their slots and force new storage.
+    let mut seed = 0x2545_f491_u64;
+    let mut next = move |bound: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % bound
+    };
+    let mut boxes = box_run(1..=120);
+    let mut glyphs = [4usize, 9, 2];
+    let mut revisions = [1u64, 2, 3];
+    let mut fresh = 5000;
+    for frame in 0..200 {
+        match next(6) {
+            0 => {
+                let index = next(boxes.len() as u64) as usize;
+                set_fill(&mut boxes[index], frame as f32 / 200.0);
+            }
+            1 if boxes.len() < 300 => {
+                let index = next(boxes.len() as u64 + 1) as usize;
+                fresh += 1;
+                let count = 1 + next(12) as u32;
+                boxes.splice(index..index, box_run(fresh..=fresh + count - 1));
+                fresh += count;
+            }
+            2 if boxes.len() > 10 => {
+                let index = next(boxes.len() as u64 - 5) as usize;
+                boxes.drain(index..index + 1 + next(5) as usize);
+            }
+            3 => {
+                let run = next(3) as usize;
+                glyphs[run] = 1 + next(40) as usize;
+                revisions[run] += 10;
+            }
+            _ => {}
+        }
+
+        let thirds = boxes.len() / 3;
+        let with_clip = |range: std::ops::Range<usize>| {
+            boxes[range]
+                .iter()
+                .map(|primitive| (primitive.clone(), clip))
+                .collect()
+        };
+        let text = |run: usize| TestWork::Text {
+            node: 100 + run as u32,
+            page: 0,
+            revision: revisions[run],
+            vertices: glyph_quads(glyphs[run], run as f32, clip),
+        };
+        let work = [
+            TestWork::Boxes(with_clip(0..thirds)),
+            text(0),
+            TestWork::Boxes(with_clip(thirds..2 * thirds)),
+            text(1),
+            text(2),
+            TestWork::Boxes(with_clip(2 * thirds..boxes.len())),
+        ];
+        let SubmittedWork {
+            stats,
+            draws,
+            expected,
+        } = submit_work(&mut cache, &device, &work);
+        assert_eq!(stats.draw_calls, 1, "frame {frame}");
+        let painted: Vec<_> = draws[0]
+            .0
+            .iter()
+            .copied()
+            .filter(|vertex| *vertex != GuiVertex::EMPTY)
+            .collect();
+        assert!(painted == expected, "frame {frame}: drawn work differs");
+
+        let live = BTreeSet::from([ipp_core::EntityId::from_bits(1)]);
+        cache.finish_frame(Some(&RetainedSurfaceSubmission {
+            live: &live,
+            submitted: &live,
+        }));
+    }
+
+    assert_eq!(
+        device.borrow().contents.len(),
+        1,
+        "replaced storage is released"
     );
 }

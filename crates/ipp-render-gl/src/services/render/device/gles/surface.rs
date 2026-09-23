@@ -1,7 +1,5 @@
 #[cfg(feature = "gui")]
-use super::super::retained_vertices::{
-    GLYPH_VERTEX_LAYOUT, GUI_BOX_VERTEX_LAYOUT, RetainedVertexLayout,
-};
+use super::super::retained_vertices::{GUI_VERTEX_LAYOUT, RetainedVertexLayout};
 #[cfg(feature = "gui")]
 use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
 use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
@@ -507,17 +505,23 @@ impl GlesRenderDevice {
     #[cfg(feature = "gui")]
     pub(super) fn create_gui_batch(
         &mut self,
-        vertices: &[crate::services::render::gui_batch::GuiBoxVertex],
+        capacity: usize,
     ) -> Result<super::GlesGuiBatch, RenderError> {
         self.submission.invalidate();
-        let vertex_count = i32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
-        let bytes = std::mem::size_of_val(vertices);
+        let bytes = capacity
+            .checked_mul(std::mem::size_of::<
+                crate::services::render::gui_batch::GuiVertex,
+            >())
+            .and_then(|bytes| isize::try_from(bytes).ok())
+            .filter(|_| i32::try_from(capacity).is_ok())
+            .ok_or_else(|| RenderError::RenderDevice("too many gui batch vertices".into()))?;
+        // GLES leaves new buffer contents undefined; storage relies on zero vertices.
+        let zeros = vec![0u8; bytes as usize];
         let mut vao = 0;
         let mut vbo = 0;
         // SAFETY: GL allocates exclusive handles for the current context. BufferData
-        // copies the live `vertices` slice synchronously, and the attribute offsets
-        // index that newly bound buffer rather than client memory.
+        // copies the live `zeros` slice synchronously, and the attribute offsets index
+        // that newly bound buffer rather than client memory.
         unsafe {
             (self.gl.gen_vertex_arrays)(1, &mut vao);
             (self.gl.gen_buffers)(1, &mut vbo);
@@ -534,61 +538,56 @@ impl GlesRenderDevice {
             }
             self.bind_vertex_array(vao);
             (self.gl.bind_buffer)(ARRAY_BUFFER, vbo);
-            (self.gl.buffer_data)(
-                ARRAY_BUFFER,
-                bytes as isize,
-                vertices.as_ptr().cast(),
-                DYNAMIC_DRAW,
-            );
-            self.point_retained_attributes(&GUI_BOX_VERTEX_LAYOUT);
+            (self.gl.buffer_data)(ARRAY_BUFFER, bytes, zeros.as_ptr().cast(), DYNAMIC_DRAW);
+            self.point_retained_attributes(&GUI_VERTEX_LAYOUT);
             self.bind_vertex_array(0);
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
-        if let Err(error) = self.check() {
-            self.delete_gui_batch(super::GlesGuiBatch {
-                vao,
-                vbo,
-                vertex_count,
-                bytes,
-            });
-            return Err(error);
-        }
-        Ok(super::GlesGuiBatch {
+        let batch = super::GlesGuiBatch {
             vao,
             vbo,
-            vertex_count,
-            bytes,
-        })
+            capacity,
+        };
+        if let Err(error) = self.check() {
+            self.delete_gui_batch(batch);
+            return Err(error);
+        }
+        Ok(batch)
     }
 
     #[cfg(feature = "gui")]
-    pub(super) fn update_gui_batch(
+    pub(super) fn write_gui_batch(
         &mut self,
         batch: &mut super::GlesGuiBatch,
-        vertices: &[crate::services::render::gui_batch::GuiBoxVertex],
+        first: usize,
+        vertices: &[crate::services::render::gui_batch::GuiVertex],
     ) -> Result<(), RenderError> {
-        let vertex_count = i32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many gui batch vertices".into()))?;
-        let bytes = std::mem::size_of_val(vertices);
-        // SAFETY: BufferData replaces the complete store and copies the live slice
-        // synchronously. GL preserves storage needed by queued consumers; replacement
-        // permits driver retirement but does not promise stall-free allocation.
+        if first
+            .checked_add(vertices.len())
+            .is_none_or(|end| end > batch.capacity)
+        {
+            return Err(RenderError::RenderDevice(
+                "gui batch write exceeds its storage".into(),
+            ));
+        }
+        let stride = std::mem::size_of::<crate::services::render::gui_batch::GuiVertex>();
+        // SAFETY: The range lies within the allocated store, checked above. BufferSubData
+        // copies the live `vertices` slice synchronously; GL keeps the previous contents
+        // for queued draws that read them.
         unsafe {
             (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
-            (self.gl.buffer_data)(
+            (self.gl.buffer_sub_data)(
                 ARRAY_BUFFER,
-                bytes as isize,
+                (first * stride) as isize,
+                std::mem::size_of_val(vertices) as isize,
                 vertices.as_ptr().cast(),
-                DYNAMIC_DRAW,
             );
             (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
         }
 
-        // Outside exhaustive mode this frame's end checks the replacement.
+        // Outside exhaustive mode this frame's end checks the write.
         self.check_draw()?;
         self.error_checks.note_retained_upload();
-        batch.vertex_count = vertex_count;
-        batch.bytes = bytes;
         Ok(())
     }
 
@@ -611,23 +610,41 @@ impl GlesRenderDevice {
         &mut self,
         program: &GlesRenderProgram,
         batch: &super::GlesGuiBatch,
+        atlas_texture: Option<&u32>,
         mvp: &[f32; 16],
-        clip: &[f32; 4],
+        first: usize,
+        count: usize,
     ) -> Result<(), RenderError> {
+        if first
+            .checked_add(count)
+            .is_none_or(|end| end > batch.capacity)
+        {
+            return Err(RenderError::RenderDevice(
+                "gui batch draw exceeds its storage".into(),
+            ));
+        }
         self.alpha_blend(true)?;
         self.use_program(program.id);
         let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
         self.program_mat4(program, program.mvp, mvp);
-        self.program_vec4(program, self.surface_location(program, c"u_clip"), clip);
         self.program_vec4(
             program,
             self.surface_location(program, c"u_viewport"),
             &viewport,
         );
+        self.program_int(program, self.surface_location(program, c"u_atlas"), 0);
         self.bind_vertex_array(batch.vao);
-        // SAFETY: The bound VAO encapsulates this batch's attribute pointers into
-        // its owned buffer; the draw reads its current vertex count.
-        unsafe { (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count) };
+        // SAFETY: The bound VAO encapsulates this storage's attribute pointers and the
+        // drawn range lies within it, checked above. A glyph range binds its live
+        // atlas texture, which stays on unit 0 until rebound; box-only ranges never
+        // sample unit 0.
+        unsafe {
+            if let Some(texture) = atlas_texture {
+                (self.gl.active_texture)(0x84C0);
+                (self.gl.bind_texture)(0x0DE1, *texture);
+            }
+            (self.gl.draw_arrays)(TRIANGLES, first as i32, count as i32);
+        }
         self.check_draw()
     }
 
@@ -665,140 +682,6 @@ impl GlesRenderDevice {
             (self.gl.bind_texture)(0x0DE1, *texture);
             (self.gl.draw_arrays)(0x0005, 0, 4);
         }
-        self.check_draw()
-    }
-
-    #[cfg(feature = "gui")]
-    pub(super) fn create_glyph_batch(
-        &mut self,
-        vertices: &[crate::services::render::glyph_atlas::GlyphVertex],
-    ) -> Result<super::GlesGlyphBatch, RenderError> {
-        self.submission.invalidate();
-        let vertex_count = i32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
-        let bytes = std::mem::size_of_val(vertices);
-        let mut vao = 0;
-        let mut vbo = 0;
-
-        // SAFETY: GL allocates exclusive handles for the current context. BufferData
-        // copies the live `vertices` slice synchronously, and the attribute offsets
-        // index that newly bound buffer rather than client memory.
-        unsafe {
-            (self.gl.gen_vertex_arrays)(1, &mut vao);
-            (self.gl.gen_buffers)(1, &mut vbo);
-            if vao == 0 || vbo == 0 {
-                if vao != 0 {
-                    (self.gl.delete_vertex_arrays)(1, &vao);
-                }
-                if vbo != 0 {
-                    (self.gl.delete_buffers)(1, &vbo);
-                }
-                return Err(RenderError::RenderDevice(
-                    "glyph batch allocation failed".into(),
-                ));
-            }
-            self.bind_vertex_array(vao);
-            (self.gl.bind_buffer)(ARRAY_BUFFER, vbo);
-            (self.gl.buffer_data)(
-                ARRAY_BUFFER,
-                bytes as isize,
-                vertices.as_ptr().cast(),
-                DYNAMIC_DRAW,
-            );
-            self.point_retained_attributes(&GLYPH_VERTEX_LAYOUT);
-            self.bind_vertex_array(0);
-            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
-        }
-
-        if let Err(error) = self.check() {
-            self.delete_glyph_batch(super::GlesGlyphBatch {
-                vao,
-                vbo,
-                vertex_count,
-                bytes,
-            });
-            return Err(error);
-        }
-
-        Ok(super::GlesGlyphBatch {
-            vao,
-            vbo,
-            vertex_count,
-            bytes,
-        })
-    }
-
-    #[cfg(feature = "gui")]
-    pub(super) fn update_glyph_batch(
-        &mut self,
-        batch: &mut super::GlesGlyphBatch,
-        vertices: &[crate::services::render::glyph_atlas::GlyphVertex],
-    ) -> Result<(), RenderError> {
-        let vertex_count = i32::try_from(vertices.len())
-            .map_err(|_| RenderError::RenderDevice("too many glyph batch vertices".into()))?;
-        let bytes = std::mem::size_of_val(vertices);
-
-        // SAFETY: BufferData replaces the complete store and copies the live slice
-        // synchronously. GL preserves storage needed by queued consumers; replacement
-        // permits driver retirement but does not promise stall-free allocation.
-        unsafe {
-            (self.gl.bind_buffer)(ARRAY_BUFFER, batch.vbo);
-            (self.gl.buffer_data)(
-                ARRAY_BUFFER,
-                bytes as isize,
-                vertices.as_ptr().cast(),
-                DYNAMIC_DRAW,
-            );
-            (self.gl.bind_buffer)(ARRAY_BUFFER, 0);
-        }
-
-        // Outside exhaustive mode this frame's end checks the replacement.
-        self.check_draw()?;
-        self.error_checks.note_retained_upload();
-        batch.vertex_count = vertex_count;
-        batch.bytes = bytes;
-        Ok(())
-    }
-
-    #[cfg(feature = "gui")]
-    pub(super) fn delete_glyph_batch(&mut self, batch: super::GlesGlyphBatch) {
-        self.submission.invalidate();
-
-        // SAFETY: Handle deletion is context-checked; invalid handles are tolerated.
-        unsafe {
-            if batch.vao != 0 {
-                (self.gl.delete_vertex_arrays)(1, &batch.vao);
-            }
-            if batch.vbo != 0 {
-                (self.gl.delete_buffers)(1, &batch.vbo);
-            }
-        }
-    }
-
-    #[cfg(feature = "gui")]
-    pub(super) fn draw_glyph_batch(
-        &mut self,
-        program: &GlesRenderProgram,
-        batch: &super::GlesGlyphBatch,
-        atlas_texture: &u32,
-        mvp: &[f32; 16],
-        clip: &[f32; 4],
-    ) -> Result<(), RenderError> {
-        self.alpha_blend(true)?;
-        self.use_program(program.id);
-        self.program_mat4(program, program.mvp, mvp);
-        self.program_vec4(program, self.surface_location(program, c"u_clip"), clip);
-        self.program_int(program, self.surface_location(program, c"u_atlas"), 0);
-        self.bind_vertex_array(batch.vao);
-
-        // SAFETY: The bound VAO encapsulates this batch's attribute pointers; the
-        // draw reads its vertex count. The atlas stays on unit 0 until rebound.
-        unsafe {
-            (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, *atlas_texture);
-            (self.gl.draw_arrays)(TRIANGLES, 0, batch.vertex_count);
-        }
-
         self.check_draw()
     }
 

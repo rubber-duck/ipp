@@ -1,20 +1,27 @@
 #version 300 es
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// GUI-only parameterized fill/border box with gradients and glow. Colors are straight linear RGBA;
-// the single display conversion happens downstream in the present pass.
+// GUI-only parameterized fill/border boxes with gradients and glow, and atlas glyph
+// quads, each clipped by its own rectangle. Colors are straight linear RGBA; the single
+// display conversion happens downstream in the present pass.
 precision highp float;
 
-uniform vec4 u_clip; // min.xy, max.xy in Surface metres
+// Fill type of glyph quads; see surface_gui.vert.
+const float GUI_FILL_GLYPH = 3.0;
+
+// Single-channel glyph coverage page, bound when the drawn range contains glyphs.
+uniform sampler2D u_atlas;
 
 in vec2 v_surface_position;
+in vec2 v_uv; // glyph atlas coordinates
 flat in vec4 v_placement; // position.xy, size.xy in Surface metres
 flat in vec4 v_shape; // corner_rx, corner_ry, border_width, reserved
 flat in vec4 v_color0; // straight linear start/solid RGBA
 flat in vec4 v_color1; // straight linear end RGBA
 flat in vec4 v_border_color; // straight linear border RGBA
 flat in vec4 v_gradient_coords; // linear: [start.xy, end.xy], radial: [center.xy, radius, 0.0]
-flat in vec4 v_material_params; // fill_type (0=solid, 1=linear, 2=radial), glow_intensity, glow_radius, glow_falloff
+flat in vec4 v_material_params; // fill_type (0=solid, 1=linear, 2=radial, 3=glyph), glow_intensity, glow_radius, glow_falloff
 flat in vec4 v_glow_color; // straight linear glow RGBA
+flat in vec4 v_clip; // min.xy, max.xy in Surface metres
 
 out vec4 o_color;
 
@@ -53,10 +60,13 @@ vec4 gradient_color(float t) {
     return color.a > 0.0 ? vec4(color.rgb / color.a, color.a) : vec4(0.0);
 }
 
-void main() {
-    // Every screen-space derivative is taken first, in uniform control flow: GLSL ES
-    // 3.00 leaves derivatives undefined once a fragment of the quad has discarded.
-    // A zero border evaluates the inner contour as the outer one.
+// Straight RGB and unclipped alpha of a box fragment.
+//
+// Called only for box fragments. The fill type is flat, so every invocation of a
+// 2x2 quad, which shades a single primitive, takes the same branch and the
+// derivatives below stay defined. A zero border evaluates the inner contour as
+// the outer one.
+vec4 box_color() {
     vec2 half_size = abs(v_placement.zw) * 0.5;
     vec2 center = v_placement.xy + v_placement.zw * 0.5;
     // Clamp each explicit radius to the corresponding placed half size.
@@ -69,14 +79,10 @@ void main() {
         max(half_size - border_width, vec2(0.0)),
         max(corner - border_width, vec2(0.0))
     );
-    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
     // Each distance spans one pixel across its footprint. A two-footprint
     // smoothstep blurs subpixel rails and borders into the surrounding halo.
     float edge = max(length(vec2(dFdx(outer), dFdy(outer))), 1.0 / 65536.0);
     float inner_edge = max(length(vec2(dFdx(inner), dFdy(inner))), 1.0 / 65536.0);
-
-    vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
-    float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
 
     // Shape interior coverage [0.0, 1.0]; the fill ends at the inner border contour.
     float shape_cov = clamp(0.5 - outer / edge, 0.0, 1.0);
@@ -127,9 +133,31 @@ void main() {
 
     // Shape and glow cover disjoint parts of the pixel: composite straight linear RGBA.
     float combined_alpha = shape_alpha + glow_alpha;
-    float out_alpha = combined_alpha * clip_coverage;
+    if (combined_alpha <= 0.0) return vec4(0.0);
+
+    vec3 rgb = (shape_rgb * shape_alpha + v_glow_color.rgb * glow_alpha) / combined_alpha;
+    return vec4(rgb, combined_alpha);
+}
+
+void main() {
+    // Every screen-space derivative precedes the discard: GLSL ES 3.00 leaves
+    // derivatives undefined once a fragment of the quad has discarded.
+    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
+    vec2 clip_inside = min(v_surface_position - v_clip.xy, v_clip.zw - v_surface_position);
+    float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
+
+    vec4 color;
+    if (v_material_params.x > GUI_FILL_GLYPH - 0.5) {
+        // Atlas pages have no mipmaps, so level zero equals implicit-derivative
+        // sampling. R8 pages store coverage in red; their alpha always samples as one.
+        float coverage = textureLod(u_atlas, v_uv, 0.0).r;
+        color = vec4(v_color0.rgb, v_color0.a * coverage);
+    } else {
+        color = box_color();
+    }
+
+    float out_alpha = color.a * clip_coverage;
     if (out_alpha <= 0.0) discard;
 
-    vec3 out_rgb = (shape_rgb * shape_alpha + v_glow_color.rgb * glow_alpha) / combined_alpha;
-    o_color = vec4(out_rgb, out_alpha);
+    o_color = vec4(color.rgb, out_alpha);
 }

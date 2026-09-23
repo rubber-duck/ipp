@@ -34,11 +34,11 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             surface_analytic_text: false,
             #[cfg(feature = "gui")]
-            surface_box_program: None,
+            surface_gui_program: None,
             #[cfg(feature = "gui")]
             gui_batch_cache: BTreeMap::new(),
             #[cfg(feature = "gui")]
-            surface_text_program: None,
+            surface_ops: Vec::new(),
             #[cfg(feature = "gui")]
             glyph_atlas: super::super::glyph_atlas::GlyphAtlas::new(device.clone()),
             #[cfg(feature = "gui")]
@@ -203,15 +203,11 @@ impl<D: RenderDevice> RenderService<D> {
             cache.clear();
         }
         #[cfg(feature = "gui")]
-        if let Some(program) = self.surface_box_program.take() {
+        if let Some(program) = self.surface_gui_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
-        #[cfg(feature = "gui")]
-        if let Some(program) = self.surface_text_program.take() {
-            self.device.borrow_mut().delete_program(program);
-        }
         // Glyph atlas layout, demand and run bands survive, so recovered text
         // repopulates its original slots.
         #[cfg(feature = "gui")]

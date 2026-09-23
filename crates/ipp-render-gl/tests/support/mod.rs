@@ -49,8 +49,9 @@ pub struct DeviceState {
     /// Analytic instance streams currently allocated.
     #[cfg(feature = "surfaces")]
     pub live_analytic_streams: Cell<i32>,
+    /// Retained GUI storage writes.
     #[cfg(feature = "gui")]
-    pub glyph_batch_uploads: Cell<u32>,
+    pub gui_batch_writes: Cell<u32>,
     #[cfg(feature = "gui")]
     pub atlas_populations: Cell<u32>,
     #[cfg(feature = "gui")]
@@ -64,7 +65,7 @@ pub struct DeviceState {
     #[cfg(feature = "gui")]
     pub atlas_pages_created: Cell<u32>,
     #[cfg(feature = "gui")]
-    pub fail_glyph_batch: RefCell<Option<RenderError>>,
+    pub fail_gui_batch_write: RefCell<Option<RenderError>>,
     /// Largest cache target dimension; zero (the default) disables caching.
     #[cfg(feature = "surfaces")]
     pub cache_limit: Cell<u32>,
@@ -91,14 +92,15 @@ pub struct DeviceState {
     /// Curve-path draws, excluding analytic glyph instances.
     #[cfg(feature = "surfaces")]
     pub surface_path_draws: Cell<u32>,
+    /// Retained GUI draws sampling an atlas page.
     #[cfg(feature = "gui")]
     pub glyph_batch_draws: Cell<u32>,
-    /// Retained GUI box batch draws.
+    /// Retained GUI draws of boxes only.
     #[cfg(feature = "gui")]
     pub gui_batch_draws: Cell<u32>,
     /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
-    /// `P` draws paths, `G` analytic glyphs, `T` atlas text, `X` GUI boxes,
-    /// `F` begins the frame.
+    /// `P` draws paths, `G` analytic glyphs, `T` retained GUI work sampling atlas
+    /// text, `X` retained GUI boxes only, `F` begins the frame.
     #[cfg(feature = "surfaces")]
     pub surface_events: RefCell<String>,
 }
@@ -120,8 +122,6 @@ impl RenderDevice for TestDevice {
     type ShadowMap = ();
     #[cfg(feature = "gui")]
     type GuiBatch = ();
-    #[cfg(feature = "gui")]
-    type GlyphBatch = ();
     #[cfg(feature = "gui")]
     type GlyphAtlasPage = ();
 
@@ -466,17 +466,24 @@ impl RenderDevice for TestDevice {
     }
 
     #[cfg(feature = "gui")]
-    fn create_gui_batch(&mut self, _: &[ipp_render_gl::GuiBoxVertex]) -> Result<(), RenderError> {
+    fn create_gui_batch(&mut self, _: usize) -> Result<(), RenderError> {
         Ok(())
     }
 
     #[cfg(feature = "gui")]
-    fn update_gui_batch(
+    fn write_gui_batch(
         &mut self,
         _: &mut (),
-        _: &[ipp_render_gl::GuiBoxVertex],
+        _: usize,
+        _: &[ipp_render_gl::GuiVertex],
     ) -> Result<(), RenderError> {
-        Ok(())
+        self.0
+            .gui_batch_writes
+            .set(self.0.gui_batch_writes.get() + 1);
+        match self.0.fail_gui_batch_write.borrow().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     #[cfg(feature = "gui")]
@@ -484,57 +491,24 @@ impl RenderDevice for TestDevice {
         &mut self,
         _: &(),
         _: &(),
+        atlas: Option<&()>,
         _: &[f32; 16],
-        _: &[f32; 4],
-    ) -> Result<(), RenderError> {
-        self.0.gui_batch_draws.set(self.0.gui_batch_draws.get() + 1);
-        self.0.surface_events.borrow_mut().push('X');
-        Ok(())
-    }
-
-    #[cfg(feature = "gui")]
-    fn create_glyph_batch(&mut self, _: &[ipp_render_gl::GlyphVertex]) -> Result<(), RenderError> {
-        self.0
-            .glyph_batch_uploads
-            .set(self.0.glyph_batch_uploads.get() + 1);
-        match self.0.fail_glyph_batch.borrow().clone() {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-
-    #[cfg(feature = "gui")]
-    fn update_glyph_batch(
-        &mut self,
-        _: &mut (),
-        _: &[ipp_render_gl::GlyphVertex],
-    ) -> Result<(), RenderError> {
-        self.0
-            .glyph_batch_uploads
-            .set(self.0.glyph_batch_uploads.get() + 1);
-        match self.0.fail_glyph_batch.borrow().clone() {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-
-    #[cfg(feature = "gui")]
-    fn draw_glyph_batch(
-        &mut self,
-        _: &(),
-        _: &(),
-        _: &(),
-        _: &[f32; 16],
-        _: &[f32; 4],
+        _: usize,
+        _: usize,
     ) -> Result<(), RenderError> {
         assert!(
             !self.0.atlas_target_bound.get(),
             "the main pass never draws into an atlas page"
         );
-        self.0
-            .glyph_batch_draws
-            .set(self.0.glyph_batch_draws.get() + 1);
-        self.0.surface_events.borrow_mut().push('T');
+        if atlas.is_some() {
+            self.0
+                .glyph_batch_draws
+                .set(self.0.glyph_batch_draws.get() + 1);
+            self.0.surface_events.borrow_mut().push('T');
+        } else {
+            self.0.gui_batch_draws.set(self.0.gui_batch_draws.get() + 1);
+            self.0.surface_events.borrow_mut().push('X');
+        }
         Ok(())
     }
 

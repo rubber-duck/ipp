@@ -87,18 +87,19 @@ pub struct RenderStats {
     pub shadow_resident_bytes: u32,
     /// Private debug GPU bytes, separately bounded and absent from world assets.
     pub debug_resident_bytes: u32,
-    /// Batches submitted for GUI primitives.
+    /// Retained GUI box and glyph batches drawn. Consecutive batches of a Surface
+    /// share draws, which [`Self::draw_calls`] counts.
     #[cfg(feature = "gui")]
     pub gui_batches: u32,
     /// GUI box primitives whose CPU geometry was regenerated, plus glyph batches
     /// rebuilt after a text edit or the retirement of an atlas page they sampled.
     #[cfg(feature = "gui")]
     pub gui_rebuilds: u32,
-    /// Number of GPU batch buffers allocated or replaced during this frame.
+    /// Retained GUI batches written to GPU storage during this frame.
     #[cfg(feature = "gui")]
     pub gui_allocations: u32,
-    /// Resident bytes of retained GUI box and glyph batch GPU buffers across every
-    /// World presented through this context.
+    /// Resident bytes of retained per-Surface GUI GPU storage across every World
+    /// presented through this context.
     #[cfg(feature = "gui")]
     pub gui_resident_bytes: u32,
     /// Distinct glyph atlas entries that visible text demanded but did not find
@@ -223,16 +224,18 @@ pub struct RenderService<D: RenderDevice> {
     /// atlas entries were not all resident.
     #[cfg(feature = "gui")]
     surface_analytic_text: bool,
+    /// Program drawing GUI boxes and atlas glyphs.
     #[cfg(feature = "gui")]
-    surface_box_program: Option<D::Program>,
+    surface_gui_program: Option<D::Program>,
     #[cfg(feature = "gui")]
     gui_batch_cache: BTreeMap<ipp_core::WorldId, super::gui_batch::GuiBatchRenderCache<D>>,
     #[cfg(feature = "gui")]
-    surface_text_program: Option<D::Program>,
-    #[cfg(feature = "gui")]
     pub(super) glyph_atlas: super::glyph_atlas::GlyphAtlas<D>,
     #[cfg(feature = "gui")]
-    glyph_batch_cache: BTreeMap<ipp_core::WorldId, super::glyph_atlas::GlyphBatchRenderCache<D>>,
+    glyph_batch_cache: BTreeMap<ipp_core::WorldId, super::glyph_atlas::GlyphBatchRenderCache>,
+    /// Painter-order work of the Surface being submitted.
+    #[cfg(feature = "gui")]
+    surface_ops: Vec<surface::SurfaceOp>,
     /// Glyph misses, population queue and outcomes of the current World frame.
     #[cfg(feature = "gui")]
     glyph_frame: super::glyph_atlas::GlyphFrameWork,

@@ -110,24 +110,14 @@ pub(crate) fn run(context: &super::egl::Context, evidence: &std::path::Path) -> 
         "error raised before a composite reported by the frame {reported} end\n"
     ));
 
-    // Replacing retained storage checks the same frame's end.
+    // Writing retained storage checks the same frame's end.
     #[cfg(feature = "gui")]
     {
-        let vertex = ipp_render_gl::GuiBoxVertex {
-            position: [0.0; 2],
-            placement: [0.0; 4],
-            shape: [0.0; 4],
-            color0: [0.0; 4],
-            color1: [0.0; 4],
-            border_color: [0.0; 4],
-            gradient_coords: [0.0; 4],
-            material_params: [0.0; 4],
-            glow_color: [0.0; 4],
-        };
-        let mut batch = device.create_gui_batch(&[vertex; 3])?;
+        let vertex = ipp_render_gl::GuiVertex::EMPTY;
+        let mut batch = device.create_gui_batch(6)?;
         device.begin_frame(WIDTH, HEIGHT, &CLEAR)?;
         context.raise_gl_error()?;
-        device.update_gui_batch(&mut batch, &[vertex; 6])?;
+        device.write_gui_batch(&mut batch, 0, &[vertex; 6])?;
         draw(&mut device)?;
         let ended = device.end_frame();
         device.delete_gui_batch(batch);

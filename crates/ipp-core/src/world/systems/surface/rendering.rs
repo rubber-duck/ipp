@@ -482,12 +482,12 @@ pub struct SurfaceRenderItem {
     pub cache: Option<super::SurfaceCachePolicy>,
     /// World-monotonic revision of the prepared paint (primitives and clip
     /// size). Placement is excluded; a value never repeats within one World.
-    /// Zero while `cache` is `None`; see RenderSystem's `surface_cache_inputs`
-    /// module for the inputs that advance it.
+    /// Published for cached and direct Surfaces alike; see RenderSystem's
+    /// `surface_cache_inputs` module for the inputs that advance it.
     pub paint_revision: u64,
     /// World-monotonic revision of the resource identities this item
     /// references and their load status. A change bypasses the cache refresh
-    /// cadence. Zero while `cache` is `None`.
+    /// cadence for cached Surfaces.
     pub resource_revision: u64,
     /// Live keyboard focus, hover, press or capture on this Surface's GuiRoot,
     /// which forces direct presentation regardless of distance.

@@ -169,12 +169,35 @@ fn default_policy() -> SurfaceCachePolicy {
 }
 
 #[test]
-fn surfaces_without_a_policy_publish_direct_inputs() {
+fn direct_surfaces_publish_revisions_that_follow_paint_edits() {
     let (mut host, id, entity) = label_world(None);
     let mut world = host.world_mut(id).unwrap();
     update(&mut world, 0.0);
-    assert_eq!(published(&world, entity), (None, 0, 0));
+    let (policy, paint, resource) = published(&world, entity);
+    assert_eq!(policy, None);
+    assert!(paint > 0 && resource > 0 && paint != resource);
     assert!(!item(&world, entity).primitives.is_empty());
+
+    // Unchanged frames hold both revisions.
+    for _ in 0..3 {
+        update(&mut world, 1.0 / 60.0);
+        assert_eq!(published(&world, entity), (None, paint, resource));
+    }
+
+    // A paint edit advances only the paint revision, which then holds.
+    edit_item(
+        &mut world,
+        entity,
+        SurfaceItemPatch {
+            opacity: Some(0.5),
+            ..Default::default()
+        },
+    );
+    let (_, edited, edited_resource) = published(&world, entity);
+    assert!(edited > paint);
+    assert_eq!(edited_resource, resource);
+    update(&mut world, 1.0 / 60.0);
+    assert_eq!(published(&world, entity), (None, edited, resource));
 }
 
 #[test]
@@ -509,14 +532,14 @@ fn tracked_revisions_follow_paint_and_resource_identity_but_not_placement() {
     inputs.publish_with(&mut items, policy);
     assert_eq!(revisions(&items), [(6, 7), (10, 11)]);
 
-    // Opting out publishes zero; opting back in takes fresh revisions.
+    // Opting out and back in each take fresh revisions.
     inputs.publish_with(&mut items, |entity| {
         (entity != crate::EntityId::from_bits(1)).then(default_policy)
     });
-    assert_eq!(revisions(&items), [(0, 0), (10, 11)]);
+    assert_eq!(revisions(&items), [(12, 13), (10, 11)]);
     assert_eq!(items[0].cache, None);
     inputs.publish_with(&mut items, policy);
-    assert_eq!(revisions(&items), [(12, 13), (10, 11)]);
+    assert_eq!(revisions(&items), [(14, 15), (10, 11)]);
 
     // A dropped item stops being tracked.
     items.remove(1);
@@ -539,7 +562,10 @@ fn removing_and_restoring_the_policy_or_surface_takes_fresh_revisions() {
         }],
     )
     .unwrap();
-    assert_eq!(published(&world, entity), (None, 0, 0));
+    let (removed, paint, resource) = published(&world, entity);
+    assert_eq!(removed, None);
+    assert!(paint > issued && resource > issued);
+    let issued = paint.max(resource);
 
     let policy = SurfaceCache {
         direct_distance: 0.0,
@@ -625,6 +651,7 @@ fn invalid_policies_are_rejected_without_changing_published_inputs() {
     // An invalid insertion on a direct Surface leaves it direct.
     let (mut host, id, entity) = label_world(None);
     let mut world = host.world_mut(id).unwrap();
+    let before = published(&world, entity);
     let result = run(
         &mut world,
         vec![Command::InsertComponentValue {
@@ -636,7 +663,8 @@ fn invalid_policies_are_rejected_without_changing_published_inputs() {
         }],
     );
     assert_eq!(result, Err(ErrorReason::InvalidValue));
-    assert_eq!(published(&world, entity), (None, 0, 0));
+    assert_eq!(published(&world, entity), before);
+    assert_eq!(before.0, None);
 }
 
 #[cfg(feature = "gui")]

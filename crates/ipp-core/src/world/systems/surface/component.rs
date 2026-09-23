@@ -438,6 +438,46 @@ impl ComponentLifecycle for Surface {
     }
 }
 
+/// Opt-in whole-Surface texture caching for the Surface on the same entity.
+///
+/// Absence keeps direct presentation. The component carries only authored
+/// thresholds; [`super::SurfaceCachePolicy`] documents the distance bands,
+/// hysteresis and refresh caps derived from them. Cached images, deadlines and
+/// interaction priority stay transient renderer state.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
+pub struct SurfaceCache {
+    /// Camera-to-anchor distance in metres below which presentation stays
+    /// direct. Zero caches at every distance.
+    pub direct_distance: f32,
+    /// Cache texel density in the first cached band, per Surface metre.
+    pub texels_per_metre: f32,
+    /// Maximum content refresh rate in the first cached band, in hertz.
+    pub max_refresh_hz: f32,
+}
+
+impl Default for SurfaceCache {
+    fn default() -> Self {
+        Self {
+            direct_distance: 4.0,
+            texels_per_metre: 512.0,
+            max_refresh_hz: 30.0,
+        }
+    }
+}
+
+impl ComponentLifecycle for SurfaceCache {
+    fn validate(&self) -> Result<(), ErrorReason> {
+        super::SurfaceCachePolicy::new(self).map(|_| ())
+    }
+
+    fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {
+        // Every field is independently bounded; checking the whole value keeps
+        // one validation rule for partial writes and complete insertion.
+        self.validate()
+    }
+}
+
 fn property_name(id: SurfaceItemId, suffix: &str) -> String {
     format!("item_{}_{}", id.0, suffix)
 }

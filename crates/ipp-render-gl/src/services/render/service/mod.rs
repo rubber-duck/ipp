@@ -9,6 +9,8 @@ mod lifecycle;
 mod shadow;
 #[cfg(feature = "surfaces")]
 mod surface;
+#[cfg(feature = "surfaces")]
+mod surface_cache;
 
 use std::fmt;
 use std::{
@@ -122,6 +124,30 @@ pub struct RenderStats {
     /// Total resident bytes occupied by the shared glyph atlas page textures.
     #[cfg(feature = "gui")]
     pub glyph_resident_bytes: usize,
+    /// Opted-in Surfaces repainted into their cache images during this submission.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_repaints: u32,
+    /// Opted-in Surfaces composited from an unchanged cache image, without repainting.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_reuses: u32,
+    /// Opted-in visible Surfaces presented directly: inside their direct distance,
+    /// under GUI interaction, after a fallback or without cache support.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_direct: u32,
+    /// Opted-in Surfaces presented directly because the byte budget or a
+    /// recoverable allocation failure left no usable image.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_fallbacks: u32,
+    /// Cache images allocated or resized during this submission.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_allocations: u32,
+    /// Resident cache images across every World presented through this context.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_entries: u32,
+    /// Resident bytes of cache images across every World presented through this
+    /// context, four per texel.
+    #[cfg(feature = "surfaces")]
+    pub surface_cache_resident_bytes: u32,
 }
 /// Host-owned rendering of evaluated World inputs through one graphics context.
 ///
@@ -161,6 +187,11 @@ pub struct RenderService<D: RenderDevice> {
     surface_instance_program: Option<D::Program>,
     #[cfg(feature = "surfaces")]
     surface_bitmap_program: Option<D::Program>,
+    #[cfg(feature = "surfaces")]
+    surface_cache_program: Option<D::Program>,
+    /// Whole-Surface cache images shared by every World on this context.
+    #[cfg(feature = "surfaces")]
+    surface_cache: super::surface_cache::SurfaceTextureCache,
     #[cfg(feature = "gui")]
     surface_box_program: Option<D::Program>,
     #[cfg(feature = "gui")]

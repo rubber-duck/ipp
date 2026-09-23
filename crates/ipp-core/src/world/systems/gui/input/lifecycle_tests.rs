@@ -12,6 +12,13 @@ use crate::{
     GuiNodeStyle,
 };
 
+fn interaction_roots(context: &crate::WorldContext<'_>) -> BTreeSet<EntityId> {
+    context
+        .system::<GuiInputSystem>(GuiInputSystem::ID)
+        .unwrap()
+        .interaction_roots()
+}
+
 #[test]
 fn node_removal_without_new_input_invalidates_all_retained_cursors() {
     let mut fixture = setup();
@@ -53,6 +60,7 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
         assert!(context.gui_input_hover(1).is_some());
         assert!(context.gui_input_pressed(1).is_some());
         assert_eq!(context.gui_input_scroll(panel, GuiNodeId(2)), [1.0, 2.0]);
+        assert_eq!(interaction_roots(&context), BTreeSet::from([panel]));
     }
 
     let report = {
@@ -70,6 +78,10 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
     assert!(world(&mut fixture).gui_input_focus().is_none());
     assert!(world(&mut fixture).gui_input_hover(1).is_none());
     assert!(world(&mut fixture).gui_input_pressed(1).is_none());
+    assert!(
+        interaction_roots(&world(&mut fixture)).is_empty(),
+        "removed targets leave no interaction priority"
+    );
     assert_eq!(
         world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
         [0.0, 0.0]

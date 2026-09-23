@@ -165,6 +165,11 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "surfaces")]
     type SurfacePath;
 
+    /// Context-owned SRGB8_ALPHA8 texture and framebuffer holding one
+    /// premultiplied whole-Surface image.
+    #[cfg(feature = "surfaces")]
+    type SurfaceCacheTarget;
+
     /// Context-owned depth texture and framebuffer for the bounded spot shadow pass.
     #[cfg(feature = "shadows")]
     type ShadowMap;
@@ -351,6 +356,90 @@ pub trait RenderDevice: 'static {
             "surface bitmaps unavailable".into(),
         ))
     }
+
+    /// Largest Surface cache target dimension this context supports; zero
+    /// makes every opted-in Surface present directly.
+    #[cfg(feature = "surfaces")]
+    fn surface_cache_limit(&self) -> u32 {
+        0
+    }
+
+    /// Allocate a target cleared to transparent black, with linear filtering
+    /// and edge clamping, and validate framebuffer completeness. Dimensions
+    /// are positive and no larger than [`Self::surface_cache_limit`].
+    #[cfg(feature = "surfaces")]
+    fn create_surface_cache_target(
+        &mut self,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Self::SurfaceCacheTarget, RenderError> {
+        Err(RenderError::RenderDevice(
+            "Surface cache targets unavailable".into(),
+        ))
+    }
+
+    /// Reallocate the target's storage in place with undefined contents.
+    ///
+    /// On failure the target is unusable and callers delete it.
+    #[cfg(feature = "surfaces")]
+    fn resize_surface_cache_target(
+        &mut self,
+        _target: &mut Self::SurfaceCacheTarget,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "Surface cache targets unavailable".into(),
+        ))
+    }
+
+    /// Save the current draw/read targets, viewport and Surface antialiasing
+    /// viewport, bind the target at its full size with scissor, stencil and
+    /// depth writes disabled, and clear it to transparent black.
+    ///
+    /// Surface draws until [`Self::end_surface_cache_target`] use the target's
+    /// dimensions for antialiasing. Glyph atlas population may nest inside: its
+    /// end restores this target rather than the host target.
+    #[cfg(feature = "surfaces")]
+    fn begin_surface_cache_target(
+        &mut self,
+        _target: &Self::SurfaceCacheTarget,
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "Surface cache targets unavailable".into(),
+        ))
+    }
+
+    /// Restore the state saved by [`Self::begin_surface_cache_target`], also
+    /// after failed draws, then check errors so a failed repaint is never kept
+    /// as a complete image. Context loss reports [`RenderError::ContextLost`].
+    #[cfg(feature = "surfaces")]
+    fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "Surface cache targets unavailable".into(),
+        ))
+    }
+
+    /// Composite a premultiplied image over Surface content `[0, 0, size]` at
+    /// `mvp`, scaled by root-clip coverage, with premultiplied blending, scene
+    /// depth testing and no depth writes. Callers select double-sided
+    /// rasterization as for direct Surface draws.
+    #[cfg(feature = "surfaces")]
+    fn draw_surface_cache(
+        &mut self,
+        _program: &Self::Program,
+        _target: &Self::SurfaceCacheTarget,
+        _mvp: &[f32; 16],
+        _size: &[f32; 2],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "Surface cache targets unavailable".into(),
+        ))
+    }
+
+    /// Release a target, tolerating invalid handles after context loss.
+    #[cfg(feature = "surfaces")]
+    fn delete_surface_cache_target(&mut self, _target: Self::SurfaceCacheTarget) {}
 
     /// Allocate and upload a retained non-indexed GUI triangle batch.
     #[cfg(feature = "gui")]

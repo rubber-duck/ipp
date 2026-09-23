@@ -14,6 +14,11 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "surfaces")]
     type SurfacePath = super::GlesSurfacePath;
 
+    // ipp-s1ge.2.1 replaces this placeholder with the GLES texture/framebuffer
+    // target; until then the trait defaults report caching as unavailable.
+    #[cfg(feature = "surfaces")]
+    type SurfaceCacheTarget = ();
+
     #[cfg(feature = "shadows")]
     type ShadowMap = lighting::GlesShadowMap;
 

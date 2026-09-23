@@ -59,7 +59,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(not(feature = "gui"))]
         let populated = Ok(());
         // Always release draw bindings, including when upload/draw fails.
-        #[cfg_attr(not(feature = "gui"), allow(unused_mut))]
+        #[cfg_attr(not(feature = "surfaces"), allow(unused_mut))]
         let mut result = populated.and_then(|()| {
             self.draw_items(
                 world,
@@ -72,6 +72,8 @@ impl<D: RenderDevice> RenderService<D> {
         let finish = self.device.borrow_mut().end_frame();
         #[cfg(feature = "gui")]
         self.finish_retained_surfaces(world.id(), surface_items, result.as_mut().ok());
+        #[cfg(feature = "surfaces")]
+        self.finish_surface_caches(result.as_mut().ok());
 
         let stats = result?;
         finish?;

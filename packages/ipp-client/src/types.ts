@@ -468,6 +468,8 @@ export type {
   FrameCapture,
   ClientPresentation,
   GlyphAtlasLimits,
+  SurfaceCacheMode,
+  SurfaceCacheRecord,
 } from "./presentation.js";
 
 /** World-local controller state, observed at the inspection/event tick. */

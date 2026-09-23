@@ -13,7 +13,19 @@ pub(crate) struct RenderSurfaceService {
     tick: u64,
     stats: RenderStats,
     pending_uploaded_bytes: u32,
+    /// Reused diagnostics scratch for the records export.
+    #[cfg(feature = "surfaces")]
+    surface_cache_diagnostics: Vec<ipp_render_gl::SurfaceCacheDiagnostic>,
+    /// Packed [`SURFACE_CACHE_RECORD_WORDS`]-word records of the last completed frame.
+    #[cfg(feature = "surfaces")]
+    surface_cache_records: Vec<u32>,
 }
+
+/// Words per exported Surface cache record: entity low and high words,
+/// presentation code, band, width, height, repaints, reuses, World time of the
+/// last repaint in milliseconds, and resident bytes.
+#[cfg(feature = "surfaces")]
+const SURFACE_CACHE_RECORD_WORDS: usize = 10;
 
 impl RenderSurfaceService {
     pub(crate) fn new(world: &mut ipp_core::HostRuntime) -> Self {
@@ -30,6 +42,10 @@ impl RenderSurfaceService {
             tick: 0,
             stats: RenderStats::default(),
             pending_uploaded_bytes: 0,
+            #[cfg(feature = "surfaces")]
+            surface_cache_diagnostics: Vec::new(),
+            #[cfg(feature = "surfaces")]
+            surface_cache_records: Vec::new(),
         }
     }
 
@@ -92,6 +108,8 @@ impl RenderSurfaceService {
         self.tick = 0;
         self.stats = RenderStats::default();
         self.pending_uploaded_bytes = 0;
+        #[cfg(feature = "surfaces")]
+        self.surface_cache_records.clear();
     }
 
     fn detach(&mut self, world: &mut ipp_core::WorldContext<'_>) {
@@ -100,6 +118,39 @@ impl RenderSurfaceService {
         self.active = false;
         self.tick = 0;
         self.stats = RenderStats::default();
+        #[cfg(feature = "surfaces")]
+        self.surface_cache_records.clear();
+    }
+
+    /// Refill the records export from the renderer after a completed frame.
+    #[cfg(feature = "surfaces")]
+    fn publish_surface_caches(&mut self, world: ipp_core::WorldId) {
+        self.surface_cache_diagnostics.clear();
+        self.renderer
+            .surface_cache_diagnostics(world, &mut self.surface_cache_diagnostics);
+        self.surface_cache_records.clear();
+        for diagnostic in &self.surface_cache_diagnostics {
+            let entity = diagnostic.entity.to_bits();
+            let painted_at_ms = (diagnostic.painted_at * 1_000.0)
+                .round()
+                .clamp(0.0, f64::from(u32::MAX)) as u32;
+            self.surface_cache_records.extend([
+                entity as u32,
+                (entity >> 32) as u32,
+                diagnostic.presentation.code(),
+                u32::from(diagnostic.band),
+                diagnostic.size[0],
+                diagnostic.size[1],
+                diagnostic.repaints,
+                diagnostic.reuses,
+                painted_at_ms,
+                diagnostic.resident_bytes,
+            ]);
+        }
+        debug_assert_eq!(
+            self.surface_cache_records.len(),
+            self.surface_cache_diagnostics.len() * SURFACE_CACHE_RECORD_WORDS
+        );
     }
 
     pub(crate) fn render(
@@ -115,6 +166,8 @@ impl RenderSurfaceService {
                     self.pending_uploaded_bytes = 0;
                     self.stats = stats;
                     self.tick = world.tick();
+                    #[cfg(feature = "surfaces")]
+                    self.publish_surface_caches(world.id());
                 }
                 Err(error) => {
                     let scope = match error {
@@ -410,6 +463,120 @@ pub extern "C" fn ipp_render_glyph_resident_bytes() -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| {
         boundary.presentation().map_or(0, |presentation| {
             presentation.stats.glyph_resident_bytes as u32
+        })
+    })
+}
+
+/// Opted-in Surfaces repainted into cache images in the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_repaints() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.surface_cache_repaints)
+    })
+}
+
+/// Opted-in Surfaces composited from unchanged cache images in the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_reuses() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.surface_cache_reuses)
+    })
+}
+
+/// Opted-in visible Surfaces presented directly in the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_direct() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.surface_cache_direct)
+    })
+}
+
+/// Opted-in Surfaces presented directly after budget or allocation fallback in the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_fallbacks() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.surface_cache_fallbacks)
+    })
+}
+
+/// Surface cache images allocated or resized in the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_allocations() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary.presentation().map_or(0, |presentation| {
+            presentation.stats.surface_cache_allocations
+        })
+    })
+}
+
+/// Resident Surface cache images on this context after the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_entries() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .map_or(0, |presentation| presentation.stats.surface_cache_entries)
+    })
+}
+
+/// Resident Surface cache image bytes on this context after the last completed frame.
+// SAFETY: Unique diagnostic symbol returning an owned scalar under exclusive Host access.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_resident_bytes() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary.presentation().map_or(0, |presentation| {
+            presentation.stats.surface_cache_resident_bytes
+        })
+    })
+}
+
+/// Read-only Surface cache records of the last completed frame, or null when
+/// empty. Each record has `SURFACE_CACHE_RECORD_WORDS` little-endian `u32`
+/// words; copy them before the next render, detach or World change.
+// SAFETY: Unique symbol; the pointer refers to renderer-owned storage that stays
+// valid and unaliased by Rust until the next exclusive render or reset call.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_records_ptr() -> *const u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary
+            .presentation()
+            .filter(|presentation| !presentation.surface_cache_records.is_empty())
+            .map_or(std::ptr::null(), |presentation| {
+                presentation.surface_cache_records.as_ptr()
+            })
+    })
+}
+
+/// Length in `u32` words of the records at [`ipp_render_surface_cache_records_ptr`].
+// SAFETY: Unique symbol; returns a length without retaining a reference.
+#[cfg(feature = "surfaces")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_render_surface_cache_records_len() -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        boundary.presentation().map_or(0, |presentation| {
+            presentation.surface_cache_records.len() as u32
         })
     })
 }

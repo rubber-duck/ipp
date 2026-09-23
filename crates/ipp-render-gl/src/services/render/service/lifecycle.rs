@@ -23,6 +23,10 @@ impl<D: RenderDevice> RenderService<D> {
             surface_instance_program: None,
             #[cfg(feature = "surfaces")]
             surface_bitmap_program: None,
+            #[cfg(feature = "surfaces")]
+            surface_cache_program: None,
+            #[cfg(feature = "surfaces")]
+            surface_cache: Default::default(),
             #[cfg(feature = "gui")]
             surface_box_program: None,
             #[cfg(feature = "gui")]
@@ -179,6 +183,14 @@ impl<D: RenderDevice> RenderService<D> {
         if let Some(program) = self.surface_bitmap_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
+        // Cache images are rebuilt from current evaluated inputs; the budget survives.
+        #[cfg(feature = "surfaces")]
+        {
+            self.surface_cache.clear();
+            if let Some(program) = self.surface_cache_program.take() {
+                self.device.borrow_mut().delete_program(program);
+            }
+        }
         #[cfg(feature = "gui")]
         if let Some(program) = self.surface_box_program.take() {
             self.device.borrow_mut().delete_program(program);
@@ -266,6 +278,8 @@ impl<D: RenderDevice> RenderService<D> {
     /// stay resident.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
         self.light_selections.remove(&world);
+        #[cfg(feature = "surfaces")]
+        self.surface_cache.forget_world(world);
         #[cfg(feature = "gui")]
         {
             self.gui_batch_cache.remove(&world);

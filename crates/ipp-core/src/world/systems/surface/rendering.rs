@@ -477,6 +477,18 @@ pub struct SurfaceRenderItem {
     pub clip_size: [f32; 2],
     /// Explicit painter order; batching may combine only compatible contiguous entries.
     pub primitives: Vec<SurfaceRenderPrimitive>,
+    /// Authored whole-Surface cache policy; `None` keeps direct presentation.
+    pub cache: Option<super::SurfaceCachePolicy>,
+    /// World-monotonic revision of the prepared paint (primitives and clip size).
+    /// Placement is excluded; a value never repeats within one World.
+    pub paint_revision: u64,
+    /// World-monotonic revision of the resource identities this item references.
+    /// A change bypasses the cache refresh cadence.
+    pub resource_revision: u64,
+    /// Live keyboard focus, hover, press or capture on this Surface's GuiRoot,
+    /// which forces direct presentation regardless of distance.
+    #[cfg(feature = "gui")]
+    pub interaction: bool,
 }
 
 /// Root content rectangle `[0, 0, width, height]` for a Surface of the given size.
@@ -685,6 +697,13 @@ pub(in crate::world) fn prepare_surface_render_items(
                     anchor,
                     clip_size: [surface.width, surface.height],
                     primitives: Vec::with_capacity(surface.items().len()),
+                    // ipp-s1ge.1 populates the policy, revisions and interaction
+                    // priority; until then every Surface presents directly.
+                    cache: None,
+                    paint_revision: 0,
+                    resource_revision: 0,
+                    #[cfg(feature = "gui")]
+                    interaction: false,
                 },
             );
         }

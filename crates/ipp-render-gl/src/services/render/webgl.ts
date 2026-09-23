@@ -180,6 +180,58 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         viewport: Int32Array;
       }
     | undefined;
+  /** Whole-Surface cache images keyed by never-reused `id()` handles. */
+  const surfaceCacheTargets = IPP_SURFACES
+    ? new Map<
+        number,
+        {
+          texture: WebGLTexture;
+          framebuffer: WebGLFramebuffer;
+          width: number;
+          height: number;
+        }
+      >()
+    : undefined;
+  /** The bound cache target and the host state saved when it was bound. */
+  let surfaceCacheTarget:
+    | {
+        handle: number;
+        width: number;
+        height: number;
+        framebuffer: WebGLFramebuffer | null;
+        readFramebuffer: WebGLFramebuffer | null;
+        viewport: Int32Array;
+        depthMask: boolean;
+      }
+    | undefined;
+
+  /** Rebind the host state saved when the cache target was bound, if any. */
+  function restoreSurfaceCacheTarget(): void {
+    const saved = surfaceCacheTarget;
+    if (!saved) return;
+    surfaceCacheTarget = undefined;
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, saved.framebuffer);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, saved.readFramebuffer);
+    gl.viewport(
+      saved.viewport[0]!,
+      saved.viewport[1]!,
+      saved.viewport[2]!,
+      saved.viewport[3]!,
+    );
+    gl.depthMask(saved.depthMask);
+    // Repaint draws changed blending and depth writes behind the submission
+    // cache; the next draw reapplies its state.
+    blendMode = undefined;
+  }
+
+  /** Antialiasing viewport of Surface draws: atlas page, then cache target, then drawing buffer. */
+  function activeSurfaceViewport(): [number, number] {
+    if (IPP_GUI && glyphAtlasTarget)
+      return [glyphAtlasTarget.width, glyphAtlasTarget.height];
+    if (IPP_SURFACES && surfaceCacheTarget)
+      return [surfaceCacheTarget.width, surfaceCacheTarget.height];
+    return [gl.drawingBufferWidth, gl.drawingBufferHeight];
+  }
   const shadows = IPP_SHADOWS
     ? new Map<
         number,
@@ -651,6 +703,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceQuadVao = null;
       surfaceInstanceBuffer = null;
       surfaceInstanceCapacity = 0;
+      surfaceCacheTargets!.clear();
+      surfaceCacheTarget = undefined;
     }
     if (IPP_GUI) {
       guiBatches!.clear();
@@ -680,6 +734,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       surfaceQuadVao = null;
       surfaceInstanceBuffer = null;
       surfaceInstanceCapacity = 0;
+      surfaceCacheTargets!.clear();
+      surfaceCacheTarget = undefined;
     }
     if (IPP_GUI) {
       guiBatches!.clear();
@@ -1334,14 +1390,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 parameterLocation(program, "u_band_width"),
                 path.bandWidth,
               );
+              const [viewportWidth, viewportHeight] = activeSurfaceViewport();
               gl.uniform4f(
                 parameterLocation(program, "u_viewport"),
-                IPP_GUI && glyphAtlasTarget
-                  ? glyphAtlasTarget.width
-                  : gl.drawingBufferWidth,
-                IPP_GUI && glyphAtlasTarget
-                  ? glyphAtlasTarget.height
-                  : gl.drawingBufferHeight,
+                viewportWidth,
+                viewportHeight,
                 0,
                 0,
               );
@@ -1453,14 +1506,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 parameterLocation(program, "u_fill_rule"),
                 fillRule >>> 0,
               );
+              const [viewportWidth, viewportHeight] = activeSurfaceViewport();
               gl.uniform4f(
                 parameterLocation(program, "u_viewport"),
-                IPP_GUI && glyphAtlasTarget
-                  ? glyphAtlasTarget.width
-                  : gl.drawingBufferWidth,
-                IPP_GUI && glyphAtlasTarget
-                  ? glyphAtlasTarget.height
-                  : gl.drawingBufferHeight,
+                viewportWidth,
+                viewportHeight,
                 0,
                 0,
               );
@@ -1536,6 +1586,272 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               return 1;
             });
           },
+          surface_cache_limit(): number {
+            if (disposed || gl.isContextLost()) return 0;
+            return Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
+          },
+          create_surface_cache_target(width: number, height: number): number {
+            return status(() => {
+              width >>>= 0;
+              height >>>= 0;
+              const limit = Math.min(
+                maxTextureSize,
+                maxViewport[0]!,
+                maxViewport[1]!,
+              );
+              if (
+                width === 0 ||
+                height === 0 ||
+                width > limit ||
+                height > limit
+              )
+                throw new Error("Invalid Surface cache target dimensions");
+              const texture = gl.createTexture();
+              const framebuffer = gl.createFramebuffer();
+              if (!texture || !framebuffer) {
+                if (texture) gl.deleteTexture(texture);
+                if (framebuffer) gl.deleteFramebuffer(framebuffer);
+                throw new Error("Surface cache target allocation failed");
+              }
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, texture);
+              // Linear sRGB storage matches the main target: blending runs in
+              // linear space and sampling decodes before filtering.
+              gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.SRGB8_ALPHA8,
+                width,
+                height,
+                0,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                null,
+              );
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+              gl.texParameteri(
+                gl.TEXTURE_2D,
+                gl.TEXTURE_WRAP_S,
+                gl.CLAMP_TO_EDGE,
+              );
+              gl.texParameteri(
+                gl.TEXTURE_2D,
+                gl.TEXTURE_WRAP_T,
+                gl.CLAMP_TO_EDGE,
+              );
+              gl.bindTexture(gl.TEXTURE_2D, null);
+              const prevDraw = gl.getParameter(
+                gl.DRAW_FRAMEBUFFER_BINDING,
+              ) as WebGLFramebuffer | null;
+              const prevRead = gl.getParameter(
+                gl.READ_FRAMEBUFFER_BINDING,
+              ) as WebGLFramebuffer | null;
+              const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+              gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+              gl.framebufferTexture2D(
+                gl.FRAMEBUFFER,
+                gl.COLOR_ATTACHMENT0,
+                gl.TEXTURE_2D,
+                texture,
+                0,
+              );
+              const complete =
+                gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
+                gl.FRAMEBUFFER_COMPLETE;
+              if (complete) {
+                gl.viewport(0, 0, width, height);
+                gl.clearColor(0, 0, 0, 0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+              }
+              gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevDraw);
+              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevRead);
+              gl.viewport(
+                prevViewport[0]!,
+                prevViewport[1]!,
+                prevViewport[2]!,
+                prevViewport[3]!,
+              );
+              try {
+                if (!complete)
+                  throw new Error("Surface cache framebuffer incomplete");
+                check();
+              } catch (error) {
+                gl.deleteTexture(texture);
+                gl.deleteFramebuffer(framebuffer);
+                throw error;
+              }
+              const handle = id();
+              surfaceCacheTargets!.set(handle, {
+                texture,
+                framebuffer,
+                width,
+                height,
+              });
+              return handle;
+            });
+          },
+          resize_surface_cache_target(
+            handle: number,
+            width: number,
+            height: number,
+          ): number {
+            return status(() => {
+              const target = surfaceCacheTargets!.get(handle >>> 0);
+              if (!target) throw new Error("Stale Surface cache target handle");
+              if (surfaceCacheTarget?.handle === handle >>> 0)
+                throw new Error("Cannot resize the bound Surface cache target");
+              width >>>= 0;
+              height >>>= 0;
+              const limit = Math.min(
+                maxTextureSize,
+                maxViewport[0]!,
+                maxViewport[1]!,
+              );
+              if (
+                width === 0 ||
+                height === 0 ||
+                width > limit ||
+                height > limit
+              )
+                throw new Error("Invalid Surface cache target dimensions");
+              // Respecifying the attached level keeps the attachment; contents
+              // are undefined until the next repaint clears them.
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, target.texture);
+              gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.SRGB8_ALPHA8,
+                width,
+                height,
+                0,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                null,
+              );
+              gl.bindTexture(gl.TEXTURE_2D, null);
+              target.width = width;
+              target.height = height;
+              check();
+              return 1;
+            });
+          },
+          begin_surface_cache_target(handle: number): number {
+            return status(() => {
+              const target = surfaceCacheTargets!.get(handle >>> 0);
+              if (!target) throw new Error("Stale Surface cache target handle");
+              if (surfaceCacheTarget)
+                throw new Error("Surface cache targets cannot nest");
+              if (IPP_GUI && glyphAtlasTarget)
+                throw new Error("Surface cache target inside atlas population");
+              surfaceCacheTarget = {
+                handle: handle >>> 0,
+                width: target.width,
+                height: target.height,
+                framebuffer: gl.getParameter(
+                  gl.DRAW_FRAMEBUFFER_BINDING,
+                ) as WebGLFramebuffer | null,
+                readFramebuffer: gl.getParameter(
+                  gl.READ_FRAMEBUFFER_BINDING,
+                ) as WebGLFramebuffer | null,
+                viewport: gl.getParameter(gl.VIEWPORT) as Int32Array,
+                depthMask: gl.getParameter(gl.DEPTH_WRITEMASK) as boolean,
+              };
+              gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+              gl.viewport(0, 0, target.width, target.height);
+              gl.disable(gl.SCISSOR_TEST);
+              gl.disable(gl.STENCIL_TEST);
+              gl.depthMask(false);
+              gl.clearColor(0, 0, 0, 0);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+              try {
+                check();
+              } catch (error) {
+                restoreSurfaceCacheTarget();
+                throw error;
+              }
+              return 1;
+            });
+          },
+          end_surface_cache_target(): number {
+            return status(() => {
+              restoreSurfaceCacheTarget();
+              // A failed repaint must not be kept as a complete image.
+              check();
+              return 1;
+            });
+          },
+          draw_surface_cache(
+            programHandle: number,
+            handle: number,
+            mvpPointer: number,
+            sizePointer: number,
+          ): number {
+            return status(() => {
+              const program = programs.get(programHandle >>> 0);
+              const target = surfaceCacheTargets!.get(handle >>> 0);
+              if (!program || !target)
+                throw new Error("Stale Surface cache handle");
+              if (surfaceCacheTarget?.handle === handle >>> 0)
+                throw new Error("Cannot sample the bound Surface cache target");
+              const size = floats(sizePointer >>> 0, 2);
+              const width = size[0]!;
+              const height = size[1]!;
+              if (!(width > 0 && height > 0))
+                throw new Error("Invalid Surface cache composite size");
+              if (blendMode !== 4) {
+                // Premultiplied colour: opacity was applied once when painting.
+                gl.enable(gl.BLEND);
+                gl.blendEquation(gl.FUNC_ADD);
+                gl.blendFuncSeparate(
+                  gl.ONE,
+                  gl.ONE_MINUS_SRC_ALPHA,
+                  gl.ONE,
+                  gl.ONE_MINUS_SRC_ALPHA,
+                );
+                gl.depthMask(false);
+                blendMode = 4;
+              }
+              if (!surfaceQuadVao) surfaceQuadVao = gl.createVertexArray();
+              if (!surfaceQuadVao)
+                throw new Error("Surface quad allocation failed");
+              useProgram(program.object);
+              matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              gl.uniform4f(
+                parameterLocation(program, "u_placement"),
+                0,
+                0,
+                width,
+                height,
+              );
+              gl.uniform4f(
+                parameterLocation(program, "u_clip"),
+                0,
+                0,
+                width,
+                height,
+              );
+              gl.uniform1i(parameterLocation(program, "u_surface_cache"), 0);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, target.texture);
+              bindVertexArray(surfaceQuadVao);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+              bindVertexArray(null);
+              gl.bindTexture(gl.TEXTURE_2D, null);
+              check();
+              return 1;
+            });
+          },
+          delete_surface_cache_target(handle: number): void {
+            const target = surfaceCacheTargets!.get(handle >>> 0);
+            if (!target) return;
+            surfaceCacheTargets!.delete(handle >>> 0);
+            if (!disposed && !gl.isContextLost()) {
+              gl.deleteFramebuffer(target.framebuffer);
+              gl.deleteTexture(target.texture);
+            }
+          },
         }
       : {}),
     // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
@@ -1604,10 +1920,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               }
               useProgram(program.object);
               matrixUniform(program.mvp, mvpPointer >>> 0, 16);
+              const [viewportWidth, viewportHeight] = activeSurfaceViewport();
               gl.uniform4f(
                 parameterLocation(program, "u_viewport"),
-                gl.drawingBufferWidth,
-                gl.drawingBufferHeight,
+                viewportWidth,
+                viewportHeight,
                 0,
                 0,
               );
@@ -2507,12 +2824,17 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.deleteFramebuffer(page.framebuffer);
         }
         for (const texture of textures.values()) gl.deleteTexture(texture);
-        if (IPP_SURFACES)
+        if (IPP_SURFACES) {
           for (const path of surfacePaths.values()) {
             gl.deleteTexture(path.texture);
             gl.deleteTexture(path.bandTexture);
             gl.deleteVertexArray(path.vao);
           }
+          for (const target of surfaceCacheTargets!.values()) {
+            gl.deleteFramebuffer(target.framebuffer);
+            gl.deleteTexture(target.texture);
+          }
+        }
         surfacePaths.clear();
         gl.deleteBuffer(surfaceInstanceBuffer);
         surfaceInstanceBuffer = null;
@@ -2527,6 +2849,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         glyphBatches!.clear();
         glyphAtlasPages!.clear();
         glyphAtlasTarget = undefined;
+      }
+      if (IPP_SURFACES) {
+        surfaceCacheTargets!.clear();
+        surfaceCacheTarget = undefined;
       }
       meshes.clear();
       textures.clear();
@@ -2571,6 +2897,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         maxVertexAttributes: gl.getParameter(gl.MAX_VERTEX_ATTRIBS),
         maxViewport: Array.from(maxViewport),
         maxTextureSize,
+        ...(IPP_SURFACES
+          ? { surfaceCacheTargetsLive: surfaceCacheTargets!.size }
+          : {}),
         depthBits: gl.getParameter(gl.DEPTH_BITS),
         contextAttributes: gl.getContextAttributes(),
         colorSpace: gl.drawingBufferColorSpace,

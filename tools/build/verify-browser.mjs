@@ -134,6 +134,21 @@ const reports = [];
       "Surface bridge dispatch differs from selected capability",
     );
     for (const name of [
+      "surface_cache_limit",
+      "create_surface_cache_target",
+      "resize_surface_cache_target",
+      "begin_surface_cache_target",
+      "end_surface_cache_target",
+      "draw_surface_cache",
+      "delete_surface_cache_target",
+      "surfaceCacheTargetsLive",
+    ])
+      assert.equal(
+        bridge.includes(name),
+        surfaces,
+        `Surface cache bridge dispatch ${name} differs from selected capability`,
+      );
+    for (const name of [
       "draw_gui_batch",
       "create_gui_batch",
       "create_glyph_batch",
@@ -191,6 +206,7 @@ const reports = [];
       : []),
     ...(surfaces ? ["Surface"] : []),
     ...(gui ? ["GuiRoot"] : []),
+    ...(surfaces ? ["SurfaceCache"] : []),
   ]);
   assert.equal(client.components.UnlitTexture.id, 6);
   assert.equal(client.components.BaseColorTexture.id, 19);
@@ -324,6 +340,25 @@ const reports = [];
       typeof runtime[name] === "function",
       rendering && gui,
       `retained GUI export ${name} differs from selected capability`,
+    );
+  // The cache imports and the surface_cache.frag marker join these checks once
+  // RenderService composites cached Surfaces (ipp-s1ge.2.3); until then the
+  // linker drops the unreferenced imports and shader.
+  for (const name of [
+    "ipp_render_surface_cache_repaints",
+    "ipp_render_surface_cache_reuses",
+    "ipp_render_surface_cache_direct",
+    "ipp_render_surface_cache_fallbacks",
+    "ipp_render_surface_cache_allocations",
+    "ipp_render_surface_cache_entries",
+    "ipp_render_surface_cache_resident_bytes",
+    "ipp_render_surface_cache_records_ptr",
+    "ipp_render_surface_cache_records_len",
+  ])
+    assert.equal(
+      typeof runtime[name] === "function",
+      rendering && surfaces,
+      `Surface cache export ${name} differs from selected capability`,
     );
   assert.equal(
     glImports.some((entry) => entry.name === "set_skin_palette"),

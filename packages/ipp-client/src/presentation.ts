@@ -12,6 +12,49 @@ export interface FrameCapture {
   backend: Record<string, unknown>;
 }
 
+/** How an opted-in Surface was presented by the last completed frame. */
+export type SurfaceCacheMode =
+  | "near"
+  | "interaction"
+  | "fallback"
+  | "unavailable"
+  | "culled"
+  | "reused"
+  | "repainted";
+
+/** Presentation modes in the order of their renderer export codes. */
+export const SURFACE_CACHE_MODES: readonly SurfaceCacheMode[] = [
+  "near",
+  "interaction",
+  "fallback",
+  "unavailable",
+  "culled",
+  "reused",
+  "repainted",
+];
+
+/**
+ * Read-only whole-Surface cache state of one opted-in Surface, reported by
+ * `FrameCapture.backend.surfaceCaches` in render builds with Surfaces.
+ */
+export interface SurfaceCacheRecord {
+  /** Generational entity identity within the captured World. */
+  entity: bigint;
+  mode: SurfaceCacheMode;
+  /** Selected distance band; 0 is direct. */
+  band: number;
+  /** Resident image size in texels; zero without an image. */
+  width: number;
+  height: number;
+  /** Repaints and unchanged-image reuses since the entry was created. */
+  repaints: number;
+  reuses: number;
+  /** World time of the last repaint, in milliseconds. */
+  paintedAtMs: number;
+  /** Resident image bytes. */
+  residentBytes: number;
+}
+
 /**
  * Bounds of the renderer's shared glyph atlas on one graphics context. Limits
  * survive context loss and apply at the renderer's next glyph demand publication.

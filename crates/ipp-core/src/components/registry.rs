@@ -39,6 +39,8 @@ ipp_schema_derive::component_registry! {
         Surface = 25,
         #[cfg(feature = "gui")]
         GuiRoot = 26,
+        #[cfg(feature = "surfaces")]
+        SurfaceCache = 27,
     }
 }
 

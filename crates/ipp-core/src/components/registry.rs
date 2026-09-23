@@ -46,6 +46,22 @@ ipp_schema_derive::component_registry! {
     }
 }
 
+/// Receives one occupied stable component cell typed as its component, from
+/// [`ComponentStorage::visit_cell`]. Implementations bind through the derived
+/// schema and lifecycle accessors of `C`; the pointer carries the storage
+/// cell's binding contract (see `ComponentStorage` bound pointers).
+pub(crate) trait ComponentCellVisitor {
+    /// Result produced from the typed cell.
+    type Output;
+
+    /// Visit the stable cell of one component value.
+    fn visit<C>(self, cell: std::ptr::NonNull<C>) -> Self::Output
+    where
+        C: crate::components::schema::SchemaComponent
+            + crate::components::schema::ComponentLifecycle
+            + 'static;
+}
+
 /// Streams target/build identity and the feature-conditioned compiled registry.
 pub fn write_contract(sink: &mut impl ContractSink) {
     sink.write(&4u16.to_le_bytes());

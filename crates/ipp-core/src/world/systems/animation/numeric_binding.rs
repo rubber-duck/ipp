@@ -1,4 +1,10 @@
 //! Bind-time proofs for direct numeric operators. No schema inspection at sampling.
+//!
+//! Only fixed `repr(C)` fields receive raw pointers here. Dynamic properties
+//! and schema-row properties never do: their buffers and tables may relocate
+//! while the component stays bound, so their destinations retain the stable
+//! component cell plus a validated descriptor or row offset and resolve the
+//! value on every write (see `driver::DynamicValueDestination`).
 
 use super::{AnimationDriver, AnimationInterpolation, AnimationSample, AnimationValue};
 use crate::{
@@ -42,7 +48,7 @@ pub(super) fn bind_frozen_f32(
         _ => return None,
     };
     // SAFETY: the property was previously accepted as a scalar transition target, so its repr(C)
-    // offset identifies one f32 lane. The stable component cell remains valid until lifecycle
+    // offset identifies one f32 field. The stable component cell remains valid until lifecycle
     // invalidation, and transition evaluation has exclusive storage access while writing.
     Some(unsafe { ComponentBinding::new(base.add(offset as usize).cast::<f32>()) })
 }
@@ -104,7 +110,7 @@ pub(super) fn bind_frozen_rotation(
     let base = storage
         .transform_ptr(identity.entity.index() as usize)?
         .cast::<u8>();
-    // SAFETY: Transform is repr(C), the checked quaternion fields are four adjacent f32 lanes,
+    // SAFETY: Transform is repr(C), the checked quaternion fields are four adjacent f32 fields,
     // and occupied component storage stays stable until synchronous lifecycle invalidation.
     Some(unsafe { ComponentBinding::new(base.add(offset_of!(Transform, qx)).cast::<[f32; 4]>()) })
 }
@@ -276,7 +282,7 @@ pub(super) fn bind_transition<T: AnimationSample>(
         _ => return None,
     };
     // SAFETY: Exact type and repr(C) field offsets were checked above; quaternion
-    // fields are four adjacent f32 lanes. The pointer originates from a stable cell,
+    // fields are four adjacent f32 values. The pointer originates from a stable cell,
     // never a temporary &mut. Animation's incarnation hooks drop every driver before
     // target removal/reuse, and all access borrows this World's component storage.
     Some(unsafe { ComponentBinding::new(base.add(offset as usize).cast::<T>()) })

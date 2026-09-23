@@ -1090,7 +1090,10 @@ impl AnimationValue {
         mut field: impl FnMut(u32) -> Option<FieldValue>,
     ) -> Result<Self, ErrorReason> {
         if let [offset] = property.offsets.as_slice() {
+            // An absent optional row property and a whole row table are not
+            // animatable values; their kinds would also collide with pose tags.
             return field(*offset)
+                .filter(|value| !matches!(value, FieldValue::Rows(_) | FieldValue::Unset))
                 .map(Self::Field)
                 .ok_or(ErrorReason::InvalidField);
         }

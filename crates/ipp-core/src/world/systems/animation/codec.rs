@@ -331,11 +331,11 @@ fn encode_value(writer: &mut WorldBinaryWriter, value: &AnimationValue) -> Resul
             writer.u8(2)?;
             writer.count(values.len())?;
             for value in values {
-                for lane in [
+                for component in [
                     value.x, value.y, value.z, value.qx, value.qy, value.qz, value.qw, value.sx,
                     value.sy, value.sz,
                 ] {
-                    writer.u32(lane.to_bits())?;
+                    writer.u32(component.to_bits())?;
                 }
             }
         }
@@ -650,7 +650,7 @@ fn validate_frozen_value(value: &AnimationFrozenTransitionValue) -> Result<(), S
                 AnimationValue::Field(crate::components::schema::FieldValue::F32(b)),
             ) => a.is_finite() && b.is_finite(),
             (AnimationValue::Rotation(a), AnimationValue::Rotation(b)) => {
-                a.iter().chain(b).all(|lane| lane.is_finite())
+                a.iter().chain(b).all(|component| component.is_finite())
             }
             (
                 AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(a)),

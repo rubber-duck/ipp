@@ -76,7 +76,7 @@ impl AnimationComponentValues {
             .chain(self.legacy.values_mut())
     }
 
-    /// The patch contains only owned numeric lanes. Reads see earlier writes in
+    /// The patch contains only owned numeric properties. Reads see earlier writes in
     /// declaration order, including a whole-value edit to the same component.
     pub fn numeric_current(
         &self,
@@ -103,11 +103,15 @@ impl AnimationComponentValues {
         } else {
             storage.field(key.1, key.0.index() as usize, offset)?
         };
+        // Absent optional row properties and whole row tables are never
+        // numeric animation targets.
         match value {
             FieldValue::Dynamic(crate::DynamicValue::Asset(_))
             | FieldValue::Bytes(_)
             | FieldValue::String(_)
-            | FieldValue::Entity(_) => None,
+            | FieldValue::Entity(_)
+            | FieldValue::Rows(_)
+            | FieldValue::Unset => None,
             value => Some(value),
         }
     }
@@ -123,6 +127,7 @@ impl AnimationComponentValues {
                 value.validate().map_err(|_| ErrorReason::InvalidValue)?
             }
             FieldValue::F32(value) if !value.is_finite() => return Err(ErrorReason::InvalidValue),
+            FieldValue::Rows(_) | FieldValue::Unset => return Err(ErrorReason::InvalidField),
             _ => {}
         }
         if !self.reuse

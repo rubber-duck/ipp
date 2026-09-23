@@ -23,6 +23,13 @@ pub(crate) trait ComponentLifecycle: Clone {
         &[]
     }
 
+    /// Whether animation of any kind, numeric or discrete, may target an exposed
+    /// field or property. Components return false for fields with another sole
+    /// writer, such as committed control values or rows an evaluator owns.
+    fn animatable_field(_offset: u32) -> bool {
+        true
+    }
+
     /// Numeric fields eligible for in-place writes without changing resources or runtime identity.
     fn supports_numeric_property(_offset: u32) -> bool {
         false

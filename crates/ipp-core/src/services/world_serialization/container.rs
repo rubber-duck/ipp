@@ -330,6 +330,8 @@ fn encode_field(writer: &mut WorldBinaryWriter, field: FieldValue) -> Result<(),
         FieldValue::String(value) => writer.string(&value),
         FieldValue::Bytes(value) => writer.blob(&value),
         FieldValue::Bool(value) => writer.u8(u8::from(value)),
+        FieldValue::Rows(value) => writer.blob(&value),
+        FieldValue::Unset => Err("Row property absence is not a serialized field".into()),
     }
 }
 
@@ -363,6 +365,12 @@ fn decode_field(reader: &mut WorldBinaryReader<'_>) -> Result<FieldValue, String
             1 => true,
             _ => return Err("Invalid serialized boolean".into()),
         }),
+        // A whole rows table; the component decodes and validates it on restore.
+        8 => {
+            let bytes = reader.blob()?;
+            reader.claim(bytes.len())?;
+            FieldValue::Rows(bytes.to_vec())
+        }
         _ => return Err("Unknown serialized field kind".into()),
     })
 }
@@ -418,6 +426,87 @@ mod tests {
         assert_eq!(
             WorldSnapshot::decode(&encoded, 123, Default::default()).unwrap(),
             snapshot
+        );
+    }
+
+    #[test]
+    fn rows_fields_persist_as_one_table_record_each() {
+        use crate::components::{RowsFixture, RowsFixtureItem, RowsFixtureTag};
+        use crate::services::asset_management::{AssetSource, AssetTypeId};
+
+        let mut fixture = RowsFixture::default();
+        fixture
+            .items
+            .push(RowsFixtureItem {
+                weight: 2.0,
+                texture: Some(AssetSource {
+                    kind: AssetTypeId(4),
+                    uri: "textures/row.png".into(),
+                    variant: 1,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        fixture.items.push(RowsFixtureItem::default()).unwrap();
+        fixture.items.remove(0);
+        fixture
+            .tags
+            .insert(
+                3,
+                RowsFixtureTag {
+                    value: 7,
+                },
+            )
+            .unwrap();
+
+        let component = ComponentValue::RowsFixture(fixture);
+        assert_eq!(
+            component
+                .fields()
+                .iter()
+                .filter(|(_, value)| matches!(value, FieldValue::Rows(_)))
+                .count(),
+            2
+        );
+
+        let snapshot = WorldSnapshot {
+            metadata: crate::WorldMetadata {
+                symbolic_id: "rows".into(),
+                persistent_id: WorldPersistentId(1),
+            },
+            capacity_hints: Default::default(),
+            next_entity_id: 1,
+            entities: vec![WorldSerializedEntity {
+                persistent_id: EntityPersistentId(1),
+                metadata: EntityMetadata::default(),
+                components: vec![component],
+            }],
+            systems: BTreeMap::new(),
+        };
+        let encoded = snapshot.encode(5, Default::default()).unwrap();
+        let decoded = WorldSnapshot::decode(&encoded, 5, Default::default()).unwrap();
+        assert_eq!(decoded, snapshot);
+        let ComponentValue::RowsFixture(restored) = &decoded.entities[0].components[0] else {
+            panic!("restored component type");
+        };
+        assert_eq!(restored.items.next_slot(), 2);
+        assert!(!restored.items.is_live(0));
+        assert_eq!(restored.tags.next_slot(), 4);
+
+        // A table that fails row validation rejects the whole candidate.
+        let table = restored.tags.encode();
+        let at = encoded
+            .windows(table.len())
+            .position(|window| window == table)
+            .unwrap();
+        let mut corrupt = encoded.clone();
+        corrupt[at..at + 4].copy_from_slice(&0u32.to_le_bytes());
+        let digest = checksum(&corrupt[32..]);
+        corrupt[24..32].copy_from_slice(&digest.to_le_bytes());
+        assert!(
+            WorldSnapshot::decode(&corrupt, 5, Default::default())
+                .unwrap_err()
+                .contains("Invalid persistent field")
         );
     }
 

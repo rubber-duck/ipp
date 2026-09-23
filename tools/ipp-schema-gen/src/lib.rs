@@ -83,6 +83,61 @@ mod tests {
     }
 
     #[test]
+    fn rows_layouts_require_their_region_and_supported_unique_properties() {
+        use super::export_reader::read_rows_layout;
+
+        let layout = |base: u32, properties: &[(&str, u8, u8, u8)]| {
+            let mut bytes = base.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&(properties.len() as u16).to_le_bytes());
+            for (name, kind, optional, hint) in properties {
+                bytes.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(name.as_bytes());
+                bytes.extend_from_slice(&[*kind, *optional, *hint]);
+            }
+            bytes
+        };
+        let read = |bytes: &[u8], ordinal| {
+            read_rows_layout(
+                &mut Reader {
+                    bytes,
+                    at: 0,
+                },
+                ordinal,
+            )
+        };
+
+        let valid = layout(
+            0x2000_0000,
+            &[
+                ("weight", 1, 0, 0),
+                ("rotation", 7, 1, 1),
+                ("source", 12, 1, 0),
+            ],
+        );
+        let parsed = read(&valid, 2).unwrap();
+        assert_eq!(parsed.region_base, 0x2000_0000);
+        assert_eq!(parsed.properties.len(), 3);
+        assert!(parsed.properties[1].optional && parsed.properties[1].rotation);
+        assert_eq!(parsed.properties[2].kind, 12);
+
+        assert!(
+            read(&valid, 1).is_err(),
+            "region follows the rows field ordinal"
+        );
+        assert!(read(&layout(0x8000_0000, &[("a", 1, 0, 0)]), 8).is_err());
+        assert!(read(&layout(0x1000_0000, &[]), 1).is_err(), "empty layout");
+        for invalid in [
+            [("a", 8, 0, 0), ("b", 1, 0, 0)], // matrices are not row properties
+            [("a", 6, 0, 1), ("b", 1, 0, 0)], // rotation requires Vec4
+            [("a", 1, 2, 0), ("b", 1, 0, 0)], // optional flag
+            [("a", 1, 0, 0), ("a", 3, 0, 0)], // duplicate property
+            [("a", 1, 0, 0), ("class", 3, 0, 0)], // reserved identifier
+        ] {
+            assert!(read(&layout(0x1000_0000, &invalid), 1).is_err());
+        }
+    }
+
+    #[test]
     fn template_conditions_nest_and_reject_malformed_directives() {
         let capabilities = Capabilities {
             builtin_assets: true,

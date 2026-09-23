@@ -365,6 +365,14 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             offset: 66,
             value: FieldValue::Bytes(vec![9, 7, 5]),
         },
+        FieldWrite {
+            offset: 99,
+            value: FieldValue::Rows(vec![0, 0, 0, 0, 0, 0, 0, 0]),
+        },
+        FieldWrite {
+            offset: 0x1000_0002,
+            value: FieldValue::Unset,
+        },
     ];
     let encoded_writes = vec![
         manifest_field(
@@ -418,6 +426,18 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 "VALUE_BYTES",
                 ManifestValue::Bytes(vec![9, 7, 5]),
             ),
+        ),
+        manifest_field(
+            99,
+            manifest_typed_value(
+                "value-rows",
+                "VALUE_ROWS",
+                ManifestValue::Bytes(vec![0, 0, 0, 0, 0, 0, 0, 0]),
+            ),
+        ),
+        manifest_field(
+            0x1000_0002,
+            manifest_layout("value-unset", [("tag", ManifestValue::Tag("VALUE_UNSET"))]),
         ),
     ];
 
@@ -1490,6 +1510,23 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 "snapshot-value-bytes",
                 "SNAPSHOT_VALUE_BYTES",
                 ManifestValue::Bytes(vec![9, 7, 5]),
+            ),
+        ),
+        (
+            99,
+            ResolvedValue::Rows(vec![1, 0, 0, 0, 0, 0, 0, 0]),
+            manifest_typed_value(
+                "snapshot-value-rows",
+                "SNAPSHOT_VALUE_ROWS",
+                ManifestValue::Bytes(vec![1, 0, 0, 0, 0, 0, 0, 0]),
+            ),
+        ),
+        (
+            0x1000_0002,
+            ResolvedValue::Unset,
+            manifest_layout(
+                "snapshot-value-unset",
+                [("tag", ManifestValue::Tag("SNAPSHOT_VALUE_UNSET"))],
             ),
         ),
     ];

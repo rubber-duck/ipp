@@ -6,6 +6,8 @@ ipp_schema_derive::component_registry! {
         Scalar = 1,
         #[cfg(test)]
         PreparedBuffer = 60000,
+        #[cfg(test)]
+        RowsFixture = 60001,
         LinearDriver = 2,
         #[runtime(crate::systems::hierarchy::ObjectTransformRuntime)]
         Transform = 3,
@@ -152,6 +154,8 @@ fn schema_value(
         crate::FieldValue::String(v) => crate::components::schema::FieldValue::String(v),
         crate::FieldValue::Bytes(v) => crate::components::schema::FieldValue::Bytes(v),
         crate::FieldValue::Bool(v) => crate::components::schema::FieldValue::Bool(v),
+        crate::FieldValue::Rows(v) => crate::components::schema::FieldValue::Rows(v),
+        crate::FieldValue::Unset => crate::components::schema::FieldValue::Unset,
         crate::FieldValue::Entity(crate::EntityRef::Handle(id)) => {
             crate::components::schema::FieldValue::Entity(id)
         }

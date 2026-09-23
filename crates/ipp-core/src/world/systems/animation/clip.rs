@@ -1007,6 +1007,9 @@ impl AnimationValue {
 
     fn validate(&self) -> Result<(), ErrorReason> {
         match self {
+            // Row tables and absence are never animation keys; their kind tags
+            // would also collide with the rotation and pose value tags.
+            Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => Err(ErrorReason::InvalidAsset),
             Self::Field(FieldValue::Dynamic(value)) => {
                 value.validate().map_err(|_| ErrorReason::InvalidAsset)
             }
@@ -1122,6 +1125,9 @@ impl AnimationValue {
             Self::Field(FieldValue::Bool(_)) => 1,
             Self::Field(FieldValue::String(v)) => 4 + v.len(),
             Self::Field(FieldValue::Bytes(v)) => 4 + v.len(),
+            Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => {
+                unreachable!("clip validation rejects row tables and absence")
+            }
             Self::Rotation(_) => 16,
             #[cfg(feature = "skeletal-animation")]
             Self::Pose(pose) => 4 + pose.len() * 40,
@@ -1148,6 +1154,9 @@ impl AnimationValue {
             Self::Field(FieldValue::Bytes(v)) => {
                 out.extend_from_slice(&(v.len() as u32).to_le_bytes());
                 out.extend_from_slice(v);
+            }
+            Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => {
+                unreachable!("clip validation rejects row tables and absence")
             }
             #[cfg(feature = "skeletal-animation")]
             Self::Pose(pose) => {

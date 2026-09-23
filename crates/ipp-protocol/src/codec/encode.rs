@@ -288,6 +288,12 @@ impl Writer {
                 self.u8(REF_HANDLE)?;
                 self.u64(id.to_bits())?;
             }
+            ResolvedValue::Rows(table) => {
+                // One typed table value; the response budget bounds it.
+                self.count(table.len(), MAX_MESSAGE_BYTES)?;
+                self.raw(&table)?;
+            }
+            ResolvedValue::Unset => {}
         }
         Ok(())
     }

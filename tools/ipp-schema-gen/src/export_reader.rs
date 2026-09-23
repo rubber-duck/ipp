@@ -1,5 +1,5 @@
 use crate::binary_reader::Reader;
-use crate::model::{Component, Export, Field, TargetFeature};
+use crate::model::{Component, Export, Field, RowProperty, RowsLayout, TargetFeature};
 use crate::typescript_names::{identifier, js_string};
 use crate::wire_contract;
 
@@ -62,6 +62,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         let mut fields = Vec::new();
         let mut offsets = std::collections::BTreeSet::new();
         let mut names = std::collections::BTreeSet::new();
+        let mut row_fields = 0u32;
         for _ in 0..n {
             let name = r.string()?;
             identifier(&name)?;
@@ -72,6 +73,13 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
             if offset >= size || !offsets.insert(offset) || !names.insert(name.clone()) {
                 return Err("field layout".into());
             }
+
+            let rows = if kind == ROWS_KIND {
+                row_fields += 1;
+                Some(read_rows_layout(&mut r, row_fields)?)
+            } else {
+                None
+            };
 
             let default = if !creatable {
                 "undefined".into()
@@ -96,14 +104,14 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
                         1 => "true".into(),
                         _ => return Err("boolean default".into()),
                     },
-                    6 => {
+                    6 | ROWS_KIND => {
                         let n = r.u32()? as usize;
                         format!("{:?} as const", r.take(n)?)
                     }
                     _ => return Err("unknown field kind".into()),
                 }
             };
-            if !(1..=7).contains(&kind) {
+            if !(1..=ROWS_KIND).contains(&kind) {
                 return Err("unknown field kind".into());
             }
 
@@ -123,6 +131,7 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
                 field_align,
                 kind,
                 default,
+                rows,
             });
         }
 
@@ -156,6 +165,60 @@ pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
         features,
         components,
         wire,
+    })
+}
+
+/// Field kind of a schema rows table.
+pub(super) const ROWS_KIND: u8 = 8;
+
+/// Offset span of one rows region; region `k` starts at `(k + 1)` spans.
+const ROW_REGION_SPAN: u32 = 0x1000_0000;
+
+/// Read the region base and ordered row layout that follow a rows field's kind.
+/// `ordinal` is the 1-based position among the component's rows fields.
+pub(super) fn read_rows_layout(r: &mut Reader<'_>, ordinal: u32) -> Result<RowsLayout, String> {
+    let region_base = r.u32()?;
+    if ordinal > 7 || region_base != ROW_REGION_SPAN * ordinal {
+        return Err("rows region".into());
+    }
+
+    let count = r.u16()?;
+    if count == 0 || count > 256 {
+        return Err("rows layout size".into());
+    }
+
+    let mut names = std::collections::BTreeSet::new();
+    let mut properties = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        let name = r.string()?;
+        identifier(&name)?;
+        let kind = r.u8()?;
+        let optional = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err("row property optional flag".into()),
+        };
+        let rotation = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err("row property hint".into()),
+        };
+        // DynamicPropertyKind F32..Vec4 and Asset; matrices are not row properties.
+        if !(matches!(kind, 1..=7 | 12)) || (rotation && kind != 7) || !names.insert(name.clone()) {
+            return Err("row property layout".into());
+        }
+
+        properties.push(RowProperty {
+            name,
+            kind,
+            optional,
+            rotation,
+        });
+    }
+
+    Ok(RowsLayout {
+        region_base,
+        properties,
     })
 }
 

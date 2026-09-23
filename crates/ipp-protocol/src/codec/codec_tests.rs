@@ -124,6 +124,82 @@ fn owned_field_codecs_are_feature_independent() {
 }
 
 #[test]
+fn row_property_writes_use_raw_offsets_while_named_properties_stay_rejected() {
+    let row = 0x1000_0000u32 + 3 * 9 + 2;
+    let mut bytes = row.to_le_bytes().to_vec();
+    bytes.push(VALUE_UNSET);
+    bytes.extend_from_slice(&row.to_le_bytes());
+    bytes.push(VALUE_DYNAMIC);
+    let value = ipp_core::DynamicValue::Vec3([1.0, 2.0, 3.0]).encode();
+    bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&value);
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.push(VALUE_ROWS);
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 8]);
+
+    let mut reader = Reader {
+        bytes: &bytes,
+        at: 0,
+    };
+    assert_eq!(
+        reader.field().unwrap(),
+        FieldWrite {
+            offset: row,
+            value: FieldValue::Unset,
+        }
+    );
+    assert_eq!(
+        reader.field().unwrap(),
+        FieldWrite {
+            offset: row,
+            value: FieldValue::Dynamic(ipp_core::DynamicValue::Vec3([1.0, 2.0, 3.0])),
+        }
+    );
+    assert_eq!(
+        reader.field().unwrap(),
+        FieldWrite {
+            offset: 8,
+            value: FieldValue::Rows(vec![0; 8]),
+        }
+    );
+    assert_eq!(reader.at, bytes.len());
+
+    let mut dynamic = 0x8000_0001u32.to_le_bytes().to_vec();
+    dynamic.push(VALUE_UNSET);
+    assert!(
+        Reader {
+            bytes: &dynamic,
+            at: 0,
+        }
+        .field()
+        .is_err()
+    );
+}
+
+#[test]
+fn inspected_rows_tables_encode_once_with_their_kind_tag() {
+    let table = vec![1, 0, 0, 0, 0, 0, 0, 0];
+    let mut writer = Writer(Vec::new());
+    writer
+        .resolved_field(24, ResolvedValue::Rows(table.clone()))
+        .unwrap();
+    let mut expected = 24u32.to_le_bytes().to_vec();
+    expected.push(SNAPSHOT_VALUE_ROWS);
+    expected.extend_from_slice(&(table.len() as u32).to_le_bytes());
+    expected.extend_from_slice(&table);
+    assert_eq!(writer.0, expected);
+
+    let mut writer = Writer(Vec::new());
+    writer
+        .resolved_field(0x1000_0000, ResolvedValue::Unset)
+        .unwrap();
+    let mut expected = 0x1000_0000u32.to_le_bytes().to_vec();
+    expected.push(SNAPSHOT_VALUE_UNSET);
+    assert_eq!(writer.0, expected);
+}
+
+#[test]
 fn string_fields_own_strict_bounded_utf8_and_encode_at_target_offsets() {
     let offset = std::mem::offset_of!(ipp_core::components::MeshInstance, source) as u32;
     let source = "https://example.test/é.ippm";

@@ -146,6 +146,8 @@ impl<'a> Reader<'a> {
                 ipp_core::DynamicValue::decode(&self.bytes()?)
                     .map_err(|_| ProtocolError::Malformed("dynamic value"))?,
             ),
+            VALUE_ROWS => FieldValue::Rows(self.bytes_bounded(crate::MAX_MESSAGE_BYTES)?),
+            VALUE_UNSET => FieldValue::Unset,
             tag => return Err(ProtocolError::Unsupported(tag)),
         };
         Ok(FieldWrite {

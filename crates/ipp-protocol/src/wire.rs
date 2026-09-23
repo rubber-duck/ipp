@@ -532,6 +532,22 @@ layouts! {
         field!("tag", Variant => "snapshot-value"),
         field!("value", Bytes, MESSAGE_BYTES),
     ];
+    // A whole schema rows table in the component's row layout.
+    "value-rows" [Base] => [
+        field!("tag", Variant => "value"),
+        field!("value", Bytes, MESSAGE_BYTES),
+    ];
+    "snapshot-value-rows" [Base] => [
+        field!("tag", Variant => "snapshot-value"),
+        field!("value", Bytes, MESSAGE_BYTES),
+    ];
+    // Absence of an optional schema row property.
+    "value-unset" [Base] => [
+        field!("tag", Variant => "value"),
+    ];
+    "snapshot-value-unset" [Base] => [
+        field!("tag", Variant => "snapshot-value"),
+    ];
     // An effective component repeats its base descriptor table by reference.
     "snapshot-value-base-descriptors" [Base] => [
         field!("tag", Variant => "snapshot-value"),
@@ -991,6 +1007,10 @@ tags! {
     SnapshotValue [Base] SNAPSHOT_VALUE_STRING = ipp_core::components::schema::FieldKind::String as u8 => "snapshot-value-string";
     SnapshotValue [Base] SNAPSHOT_VALUE_BYTES = ipp_core::components::schema::FieldKind::Bytes as u8 => "snapshot-value-bytes";
     SnapshotValue [Base] SNAPSHOT_VALUE_BASE_DESCRIPTORS = 12 => "snapshot-value-base-descriptors";
+    Value [Base] VALUE_ROWS = ipp_core::components::schema::FieldKind::Rows as u8 => "value-rows";
+    SnapshotValue [Base] SNAPSHOT_VALUE_ROWS = ipp_core::components::schema::FieldKind::Rows as u8 => "snapshot-value-rows";
+    Value [Base] VALUE_UNSET = ipp_core::components::schema::FieldKind::Unset as u8 => "value-unset";
+    SnapshotValue [Base] SNAPSHOT_VALUE_UNSET = ipp_core::components::schema::FieldKind::Unset as u8 => "snapshot-value-unset";
     SnapshotReference [Base] SNAPSHOT_REF_HANDLE = REF_HANDLE => "empty";
 
     Request [Animation] REQUEST_CONTROLLER_CREATE = 15 => "request-controller-create";

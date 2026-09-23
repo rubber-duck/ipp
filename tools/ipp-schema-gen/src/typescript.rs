@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 
-use crate::model::{Capabilities, Export};
-use crate::typescript_names::js_string;
+use crate::export_reader::ROWS_KIND;
+use crate::model::{Capabilities, Export, RowsLayout};
+use crate::typescript_names::{identifier, js_string};
 use crate::wire_contract;
 
 pub(super) fn render(export: Export) -> Result<String, String> {
@@ -129,12 +130,37 @@ function freezeContract<T>(value: T): T {\n\
         )
         .unwrap();
         for f in &c.fields {
-            writeln!(
+            write!(
                 out,
-                "    {}: {{ offset: {}, size: {}, alignment: {}, kind: {}, default: {} }},",
+                "    {}: {{ offset: {}, size: {}, alignment: {}, kind: {}, default: {}",
                 f.name, f.offset, f.field_size, f.field_align, f.kind, f.default
             )
             .unwrap();
+            if let Some(rows) = &f.rows {
+                write!(
+                    out,
+                    ", rows: {{ regionBase: {}, properties: [",
+                    rows.region_base
+                )
+                .unwrap();
+                for property in &rows.properties {
+                    write!(
+                        out,
+                        " {{ name: {}, kind: {}, optional: {}, hint: {} }},",
+                        js_string(&property.name),
+                        js_string(row_property_kind(property.kind)),
+                        property.optional,
+                        js_string(if property.rotation {
+                            "rotation"
+                        } else {
+                            "none"
+                        }),
+                    )
+                    .unwrap();
+                }
+                out.push_str(" ] }");
+            }
+            out.push_str(" },\n");
         }
         out.push_str("  } },\n");
     }
@@ -193,19 +219,29 @@ function freezeContract<T>(value: T): T {\n\
     }
 
     for c in &components {
+        for f in &c.fields {
+            if let Some(rows) = &f.rows {
+                render_row_types(&mut out, &c.name, &f.name, rows)?;
+            }
+        }
+    }
+
+    for c in &components {
         // Only implemented command kinds receive mutation helpers.
         if c.fields
             .iter()
-            .any(|f| ![1, 2, 3, 4, 5, 6, 7].contains(&f.kind))
+            .any(|f| ![1, 2, 3, 4, 5, 6, 7, ROWS_KIND].contains(&f.kind))
         {
             continue;
         }
 
+        // Row tables are addressed per property, not replaced by generic helpers.
+        let scalar_fields: Vec<_> = c.fields.iter().filter(|f| f.rows.is_none()).collect();
         writeln!(out, "\nexport const {} = {{", c.name).unwrap();
         writeln!(out, "  ...components.{},", c.name).unwrap();
         if c.creatable {
             write!(out, "  insert(entity: EntityRef, values: {{ ").unwrap();
-            for f in &c.fields {
+            for f in &scalar_fields {
                 write!(out, "{}?: {}; ", f.name, field_type(f.kind)).unwrap();
             }
             writeln!(
@@ -213,7 +249,7 @@ function freezeContract<T>(value: T): T {\n\
                 "}} = {{}}): Command {{\n    const fields: FieldWrite[] = [];"
             )
             .unwrap();
-            for f in &c.fields {
+            for f in &scalar_fields {
                 writeln!(
                 out,
                 "    if (values.{} !== undefined) fields.push({{ offset: components.{}.fields.{}.offset, value: {{ kind: {}, value: values.{} }} }});",
@@ -232,9 +268,8 @@ function freezeContract<T>(value: T): T {\n\
         )
         .unwrap();
         }
-        for f in &c.fields {
-            let mut title = f.name.clone();
-            title[0..1].make_ascii_uppercase();
+        for f in &scalar_fields {
+            let title = title_case(&f.name);
             writeln!(
                 out,
                 "  set{title}(entity: EntityRef, value: {}): Command {{ return {{ kind: 'setField', entity, component: components.{}.id, field: {{ offset: components.{}.fields.{}.offset, value: {{ kind: {}, value }} }} }}; }},",
@@ -243,6 +278,19 @@ function freezeContract<T>(value: T): T {\n\
                 c.name,
                 f.name,
                 js_string(field_kind(f.kind)),
+            )
+            .unwrap();
+        }
+        for f in c.fields.iter().filter(|f| f.rows.is_some()) {
+            let title = title_case(&f.name);
+            let row = format!("{}{title}Row", c.name);
+            let (component, field) = (&c.name, &f.name);
+            writeln!(
+                out,
+                "  {field}Offset(slot: number, property: keyof {row}): number {{ return rowFieldOffset(components.{component}, {name}, slot, property); }},\n  \
+                 patch{title}(entity: EntityRef, slot: number, patch: {row}Patch): Command[] {{ return rowPatchCommands(entity, components.{component}, {name}, slot, patch); }},\n  \
+                 decode{title}(table: Uint8Array): RowsTable<{row}> {{ return decodeRowsTable<{row}>(components.{component}.fields.{field}.rows, table); }},",
+                name = js_string(field),
             )
             .unwrap();
         }
@@ -284,6 +332,96 @@ pub(super) fn render_template(
         return Err("unterminated template condition".into());
     }
     Ok(out)
+}
+
+/// Emit the typed row interface and its patch type for one rows field.
+fn render_row_types(
+    out: &mut String,
+    component: &str,
+    field: &str,
+    rows: &RowsLayout,
+) -> Result<(), String> {
+    let row = format!("{component}{}Row", title_case(field));
+    identifier(&row)?;
+    identifier(&format!("{row}Patch"))?;
+
+    writeln!(
+        out,
+        "\n/** One `{component}.{field}` schema row; optional properties may be absent. */"
+    )
+    .unwrap();
+    writeln!(out, "export interface {row} {{").unwrap();
+    for property in &rows.properties {
+        let optional = if property.optional {
+            "?"
+        } else {
+            ""
+        };
+        writeln!(
+            out,
+            "  {}{optional}: {};",
+            property.name,
+            row_value_type(property.kind)
+        )
+        .unwrap();
+    }
+    out.push_str("}\n");
+
+    writeln!(
+        out,
+        "/** Sparse `{component}.{field}` row write; `null` clears an optional property. */"
+    )
+    .unwrap();
+    writeln!(out, "export interface {row}Patch {{").unwrap();
+    for property in &rows.properties {
+        let clear = if property.optional {
+            " | null"
+        } else {
+            ""
+        };
+        writeln!(
+            out,
+            "  {}?: {}{clear};",
+            property.name,
+            row_value_type(property.kind)
+        )
+        .unwrap();
+    }
+    out.push_str("}\n");
+    Ok(())
+}
+
+/// Generated helper names uppercase only a field's first letter, as setters always have.
+fn title_case(name: &str) -> String {
+    let mut title = name.to_owned();
+    title[0..1].make_ascii_uppercase();
+    title
+}
+
+fn row_property_kind(kind: u8) -> &'static str {
+    match kind {
+        1 => "f32",
+        2 => "i32",
+        3 => "u32",
+        4 => "bool",
+        5 => "vec2",
+        6 => "vec3",
+        7 => "vec4",
+        12 => "asset",
+        _ => unreachable!("export reader accepts only row property kinds"),
+    }
+}
+
+fn row_value_type(kind: u8) -> &'static str {
+    match kind {
+        1..=3 => "number",
+        4 => "boolean",
+        5 => "readonly [number, number]",
+        6 => "readonly [number, number, number]",
+        7 => "readonly [number, number, number, number]",
+        12 => "RowAssetValue",
+        _ => unreachable!("export reader accepts only row property kinds"),
+    }
 }
 
 fn field_type(kind: u8) -> &'static str {

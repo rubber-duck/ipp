@@ -90,6 +90,11 @@ import type {
   ResponseBody,
   StateOverlayAlias,
   ComponentDescriptor,
+  ComponentFieldValue,
+  RowAssetValue,
+  RowPropertyValue,
+  RowsLayoutDescriptor,
+  RowsTable,
   StateOverlayLifecycleDiagnostic,
 } from "./types.js";
 export type * from "./types.js";
@@ -125,6 +130,173 @@ export const INSPECTED_BYTES_LIMIT = wireFieldLimit(
   "snapshot-value-bytes",
   "value",
 );
+/** Whole schema rows tables written by insertion or inspected by snapshots. */
+const ROWS_VALUE_BYTES = wireFieldLimit("value-rows", "value");
+const INSPECTED_ROWS_LIMIT = wireFieldLimit("snapshot-value-rows", "value");
+/** Offset span of one rows region; region k starts at (k + 1) spans. */
+const ROW_REGION_SPAN = 0x10000000;
+const ROW_PROPERTY_KINDS = [
+  "f32",
+  "i32",
+  "u32",
+  "bool",
+  "vec2",
+  "vec3",
+  "vec4",
+] as const;
+function rowsLayout(
+  component: ComponentDescriptor,
+  field: string,
+): RowsLayoutDescriptor {
+  return (
+    component.fields[field]?.rows ?? fail(`${field} is not a schema rows field`)
+  );
+}
+/**
+ * Field offset of one schema row property: `regionBase + slot * count + index`.
+ * Slots are never reused; writes to dead or unallocated slots fail in the World.
+ */
+export function rowFieldOffset(
+  component: ComponentDescriptor,
+  field: string,
+  slot: number,
+  property: string,
+): number {
+  const layout = rowsLayout(component, field);
+  const count = layout.properties.length;
+  const index = layout.properties.findIndex(
+    (candidate) => candidate.name === property,
+  );
+  if (index < 0) fail(`unknown row property ${field}.${property}`);
+  if (
+    !Number.isSafeInteger(slot) ||
+    slot < 0 ||
+    slot >= Math.floor(ROW_REGION_SPAN / count)
+  )
+    fail("row slot out of range");
+  return layout.regionBase + slot * count + index;
+}
+/**
+ * One `setField` per listed property in layout order: values replace a property
+ * and `null` clears an optional one.
+ */
+export function rowPatchCommands(
+  entity: EntityRef,
+  component: ComponentDescriptor,
+  field: string,
+  slot: number,
+  patch: object,
+): Command[] {
+  const values = patch as Readonly<
+    Record<string, RowPropertyValue | null | undefined>
+  >;
+  const layout = rowsLayout(component, field);
+  for (const name of Object.keys(values))
+    if (!layout.properties.some((property) => property.name === name))
+      fail(`unknown row property ${field}.${name}`);
+  const commands: Command[] = [];
+  for (const property of layout.properties) {
+    const value = values[property.name];
+    if (value === undefined) continue;
+    if (value === null && !property.optional)
+      fail(`required row property ${field}.${property.name} cannot be cleared`);
+    commands.push({
+      kind: "setField",
+      entity,
+      component: component.id,
+      field: {
+        offset: rowFieldOffset(component, field, slot, property.name),
+        value:
+          value === null
+            ? { kind: "unset" }
+            : {
+                kind: "dynamic",
+                value: {
+                  kind: property.kind,
+                  value,
+                } as import("./dynamic-properties.js").DynamicValue,
+              },
+      },
+    });
+  }
+  return commands;
+}
+/** Decode a schema rows table in its exported row layout. */
+export function decodeRowsTable<Row = Record<string, RowPropertyValue>>(
+  layout: RowsLayoutDescriptor,
+  bytes: Uint8Array,
+): RowsTable<Row> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let at = 0;
+  const take = (length: number): number => {
+    if (at + length > bytes.length) fail("truncated rows table");
+    const start = at;
+    at += length;
+    return start;
+  };
+  const u32 = (): number => view.getUint32(take(4), true);
+  const f32 = (): number => {
+    const value = view.getFloat32(take(4), true);
+    if (!Number.isFinite(value)) fail("nonfinite row property");
+    return value;
+  };
+  const count = layout.properties.length;
+  const maskBytes = Math.ceil(count / 8);
+  const nextSlot = u32();
+  const live = u32();
+  if (
+    nextSlot > Math.floor(ROW_REGION_SPAN / count) ||
+    live > (bytes.length - at) / (4 + maskBytes)
+  )
+    fail("rows table size");
+  const rows = new Map<number, Row>();
+  let previous = -1;
+  for (let row = 0; row < live; row++) {
+    const slot = u32();
+    if (slot >= nextSlot || slot <= previous) fail("rows table slot order");
+    previous = slot;
+    const mask = take(maskBytes);
+    if (count % 8 !== 0 && bytes[mask + maskBytes - 1]! >> (count % 8) !== 0)
+      fail("rows table presence mask");
+    const values: Record<string, RowPropertyValue> = {};
+    layout.properties.forEach((property, index) => {
+      if ((bytes[mask + (index >> 3)]! & (1 << (index & 7))) === 0) {
+        if (!property.optional) fail("rows table omits a required property");
+        return;
+      }
+      const kind = ROW_PROPERTY_KINDS.indexOf(
+        property.kind as (typeof ROW_PROPERTY_KINDS)[number],
+      );
+      if (property.kind === "asset") {
+        const type = view.getUint16(take(2), true);
+        const variant = u32();
+        const length = u32();
+        const start = take(length);
+        const asset: RowAssetValue = {
+          kind: type,
+          source: new TextDecoder("utf-8", { fatal: true }).decode(
+            bytes.subarray(start, start + length),
+          ),
+          variant,
+        };
+        values[property.name] = asset;
+      } else if (property.kind === "i32")
+        values[property.name] = view.getInt32(take(4), true);
+      else if (property.kind === "u32") values[property.name] = u32();
+      else if (property.kind === "bool") {
+        const flag = u32();
+        if (flag > 1) fail("invalid row boolean");
+        values[property.name] = flag === 1;
+      } else if (property.kind === "f32") values[property.name] = f32();
+      else if (kind >= 4)
+        values[property.name] = Array.from({ length: kind - 2 }, f32);
+      else fail("unsupported row property kind");
+    });
+    rows.set(slot, values as Row);
+  }
+  if (at !== bytes.length) fail("trailing rows table bytes");
+  return { nextSlot, rows };
+}
 // #if gui
 const GUI_EDITS_BYTES = wireFieldLimit("request-gui", "edits");
 const GUI_INPUT_BYTES = wireFieldLimit("request-gui-input", "input");
@@ -415,6 +587,14 @@ function writeField(w: Writer, f: FieldWrite): void {
     case "entity":
       w.u8(WIRE.VALUE_ENTITY);
       writeRef(w, value.value);
+      break;
+    case "rows":
+      w.u8(WIRE.VALUE_ROWS);
+      w.count(value.value.byteLength, ROWS_VALUE_BYTES);
+      w.raw(value.value);
+      break;
+    case "unset":
+      w.u8(WIRE.VALUE_UNSET);
       break;
     default:
       fail("unsupported field value");
@@ -894,13 +1074,9 @@ function readComponent(
     string,
     import("./dynamic-properties.js").DynamicValue
   > = Object.create(null);
-  const fields: Record<
-    string,
-    boolean | number | bigint | string | Uint8Array<ArrayBuffer>
-  > = Object.create(null) as Record<
-    string,
-    boolean | number | bigint | string | Uint8Array<ArrayBuffer>
-  >;
+  const fields: Record<string, ComponentFieldValue> = Object.create(
+    null,
+  ) as Record<string, ComponentFieldValue>;
   for (let i = 0; i < n; i++) {
     const offset = r.u32();
     const kind = r.u8();
@@ -946,6 +1122,11 @@ function readComponent(
     else if (kind === WIRE.SNAPSHOT_VALUE_STRING) fields[entry[0]] = r.string();
     else if (kind === WIRE.SNAPSHOT_VALUE_BYTES)
       fields[entry[0]] = r.raw(r.count(INSPECTED_BYTES_LIMIT));
+    else if (kind === WIRE.SNAPSHOT_VALUE_ROWS)
+      fields[entry[0]] = decodeRowsTable(
+        entry[1].rows ?? fail("inspected rows field has no layout"),
+        r.raw(r.count(INSPECTED_ROWS_LIMIT)),
+      );
     else if (kind === WIRE.SNAPSHOT_VALUE_ENTITY) {
       if (r.u8() !== WIRE.SNAPSHOT_REF_HANDLE)
         fail("unresolved inspected alias");

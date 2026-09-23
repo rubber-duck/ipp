@@ -477,6 +477,15 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let row_assets = entries.iter().map(|e| {
+        let attrs = &e.attrs;
+        let component = &e.name;
+        quote! {
+            #(#attrs)*
+            Self::#component(value) => ::ipp_core::components::schema::SchemaComponent::visit_row_assets(value, visit),
+        }
+    });
+
     let retained_bytes = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
@@ -738,6 +747,14 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
             pub(crate) fn retained_bytes(&self) -> Option<usize> {
                 let bytes: Option<usize> = match self { #(#retained_bytes)* };
                 bytes?.checked_add(self.dynamic_properties().map_or(0, |p| p.retained_bytes()))
+            }
+
+            /// Visit present asset properties held in schema rows fields.
+            pub(crate) fn visit_row_assets(
+                &self,
+                visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
+            ) {
+                match self { #(#row_assets)* }
             }
 
             /// Default dependencies declared by the compiled component implementation.

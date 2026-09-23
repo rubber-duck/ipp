@@ -6,6 +6,7 @@ pub mod dynamic_properties;
 pub mod lifecycle;
 pub mod primitives;
 pub mod registry;
+pub mod rows;
 pub mod schema;
 pub(crate) mod storage;
 
@@ -44,6 +45,12 @@ mod preparation_fixture;
 
 #[cfg(test)]
 pub use preparation_fixture::{BufferCounters, PreparedBuffer};
+
+#[cfg(test)]
+mod rows_fixture;
+
+#[cfg(test)]
+pub use rows_fixture::{RowsFixture, RowsFixtureItem, RowsFixtureTag};
 
 #[cfg(feature = "particles")]
 pub use crate::systems::particles::{

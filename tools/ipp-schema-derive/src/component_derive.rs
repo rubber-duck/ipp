@@ -48,19 +48,30 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
     };
 
     let mut exposed = Vec::new();
+    let mut row_fields = Vec::new();
     for field in fields.named {
         let mut ignore = false;
+        let mut row_field = false;
         for attr in &field.attrs {
             if attr.path().is_ident("schema") {
                 attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("ignore") {
                         ignore = true;
                         Ok(())
+                    } else if meta.path.is_ident("rows") {
+                        row_field = true;
+                        Ok(())
                     } else {
-                        Err(meta.error("only schema(ignore) is supported"))
+                        Err(meta.error("only schema(ignore) and schema(rows) are supported"))
                     }
                 })?;
             }
+        }
+        if ignore && row_field {
+            return Err(syn::Error::new_spanned(
+                field.ident,
+                "schema(rows) fields cannot be ignored",
+            ));
         }
         if !ignore {
             let ident = field.ident.unwrap();
@@ -70,8 +81,20 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
                     "raw schema identifiers are unsupported",
                 ));
             }
+            if row_field {
+                row_fields.push(exposed.len());
+            }
             exposed.push((ident, field.ty));
         }
+    }
+
+    // Region k of rows field k starts at 0x1000_0000 * (k + 1), below the dynamic bit.
+    let rows: Vec<_> = row_fields.iter().map(|&index| &exposed[index]).collect();
+    if rows.len() > 7 {
+        return Err(syn::Error::new_spanned(
+            &rows[7].0,
+            "schema components support at most seven rows fields",
+        ));
     }
 
     let count = exposed.len() as u16;
@@ -126,13 +149,70 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
         }
     });
 
+    let rows_path = quote!(::ipp_core::components::rows);
+    let row_index = |field: &Ident| rows.iter().position(|(row, _)| row == field);
+
+    let row_has = rows.iter().enumerate().map(|(k, (_, t))| {
+        quote! {
+            if let Some(relative) = #rows_path::row_region_relative(offset, #k) {
+                return <#t as #rows_path::SchemaRowsField>::has_row_field(relative);
+            }
+        }
+    });
+
+    let row_getters = rows.iter().enumerate().map(|(k, (f, t))| {
+        quote! {
+            if let Some(relative) = #rows_path::row_region_relative(offset, #k) {
+                return <#t as #rows_path::SchemaRowsField>::row_field(&self.#f, relative);
+            }
+        }
+    });
+
+    let row_setters = rows.iter().enumerate().map(|(k, (f, t))| {
+        quote! {
+            if let Some(relative) = #rows_path::row_region_relative(offset, #k) {
+                return <#t as #rows_path::SchemaRowsField>::set_row_field(&mut self.#f, relative, value);
+            }
+        }
+    });
+
+    let row_validation = rows.iter().enumerate().map(|(k, (_, t))| {
+        quote! {
+            if let Some(relative) = #rows_path::row_region_relative(offset, #k) {
+                return <#t as #rows_path::SchemaRowsField>::validate_row_field(relative, kind);
+            }
+        }
+    });
+
+    let row_assets = rows.iter().map(|(f, t)| {
+        quote! {
+            <#t as #rows_path::SchemaRowsField>::visit_assets(&self.#f, visit);
+        }
+    });
+    let visit_row_assets = (!rows.is_empty()).then(|| {
+        quote! {
+            fn visit_row_assets(
+                &self,
+                visit: &mut dyn FnMut(&::ipp_core::services::asset_management::AssetSource),
+            ) {
+                #(#row_assets)*
+            }
+        }
+    });
+
     let writes = exposed.iter().map(|(f, t)| {
+        let layout = row_index(f).map(|k| {
+            quote! {
+                <#t as #rows_path::SchemaRowsField>::write_row_contract(#k, sink);
+            }
+        });
         quote! {
             ::ipp_core::components::schema::write_string(sink, stringify!(#f));
             sink.write(&(::core::mem::offset_of!(Self, #f) as u32).to_le_bytes());
             sink.write(&(::core::mem::size_of::<#t>() as u32).to_le_bytes());
             sink.write(&(::core::mem::align_of::<#t>() as u32).to_le_bytes());
             sink.write(&[<#t as ::ipp_core::components::schema::SchemaField>::KIND as u8]);
+            #layout
             if let Some(defaults) = &defaults {
                 <#t as ::ipp_core::components::schema::SchemaField>::write_default(&defaults.#f, sink);
             }
@@ -145,7 +225,11 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
 
             fn create() -> Option<Self> { #creation }
 
-            fn has_field(offset: u32) -> bool { [#(#offsets),*].contains(&offset) }
+            fn has_field(offset: u32) -> bool {
+                #(#row_has)*
+
+                [#(#offsets),*].contains(&offset)
+            }
 
             fn fields(&self) -> Vec<(u32, ::ipp_core::components::schema::FieldValue)> {
                 vec![#(#reads),*]
@@ -153,6 +237,8 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
 
             fn field(&self, offset: u32) -> Result<::ipp_core::components::schema::FieldValue, ::ipp_core::components::schema::FieldError> {
                 #(#getters)*
+
+                #(#row_getters)*
 
                 Err(::ipp_core::components::schema::FieldError::UnknownField)
             }
@@ -170,6 +256,8 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
             ) -> Result<(), ::ipp_core::components::schema::FieldError> {
                 #(#setters)*
 
+                #(#row_setters)*
+
                 Err(::ipp_core::components::schema::FieldError::UnknownField)
             }
 
@@ -178,6 +266,8 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
                 kind: ::ipp_core::components::schema::FieldKind,
             ) -> Result<(), ::ipp_core::components::schema::FieldError> {
                 #(#validation)*
+
+                #(#row_validation)*
 
                 Err(::ipp_core::components::schema::FieldError::UnknownField)
             }
@@ -192,6 +282,8 @@ pub(super) fn derive_component(input: DeriveInput) -> syn::Result<proc_macro2::T
                 sink.write(&[u8::from(defaults.is_some())]);
                 #(#writes)*
             }
+
+            #visit_row_assets
         }
     })
 }

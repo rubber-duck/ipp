@@ -78,11 +78,73 @@ pub fn create(id: u16) -> Result<ComponentValue, crate::ErrorReason> {
 }
 
 /// Apply a command after the world has resolved provisional references.
+///
+/// The write is atomic per field and costs the written field, not the whole
+/// component: it replaces the field in place and restores the previous value when
+/// field-local lifecycle validation rejects the result. Replacing the dynamic
+/// property metadata rebuilds every property, so it validates a staged copy.
 pub fn write(
     component: &mut ComponentValue,
     field: &crate::FieldWrite,
 ) -> Result<(), crate::ErrorReason> {
-    let value = match field.value.clone() {
+    write_field(component, field).map(|_| ())
+}
+
+/// [`write`], also reporting whether the component's value equality changed.
+pub(crate) fn write_field(
+    component: &mut ComponentValue,
+    field: &crate::FieldWrite,
+) -> Result<bool, crate::ErrorReason> {
+    use crate::components::dynamic_properties::{DYNAMIC_METADATA, is_dynamic_field};
+
+    let value = schema_value(field)?;
+    if field.offset == DYNAMIC_METADATA {
+        let mut staged = component.clone();
+        staged.set_field(field.offset, value).map_err(field_error)?;
+        staged.validate_field_lifecycle(field.offset)?;
+        let changed = staged != *component;
+        *component = staged;
+        return Ok(changed);
+    }
+
+    // Dynamic values compare by their stored bytes, exactly like whole values.
+    let stored = |component: &ComponentValue| {
+        component
+            .dynamic_properties()
+            .and_then(|properties| properties.stored_value(field.offset))
+    };
+    let dynamic = is_dynamic_field(field.offset);
+    let before = dynamic.then(|| stored(component));
+    let previous = component.field(field.offset).map_err(field_error)?;
+    component
+        .set_field(field.offset, value)
+        .map_err(field_error)?;
+    if let Err(reason) = component.validate_field_lifecycle(field.offset) {
+        component
+            .set_field(field.offset, previous)
+            .expect("previous field value remains writable");
+        return Err(reason);
+    }
+    Ok(match before {
+        Some(before) => stored(component) != before,
+        None => component.field(field.offset).ok().as_ref() != Some(&previous),
+    })
+}
+
+/// Replay a field write that already passed validation on an identical value.
+pub(crate) fn replay_field(
+    component: &mut ComponentValue,
+    field: &crate::FieldWrite,
+) -> Result<(), crate::ErrorReason> {
+    component
+        .set_field(field.offset, schema_value(field)?)
+        .map_err(field_error)
+}
+
+fn schema_value(
+    field: &crate::FieldWrite,
+) -> Result<crate::components::schema::FieldValue, crate::ErrorReason> {
+    Ok(match field.value.clone() {
         crate::FieldValue::Dynamic(v) => crate::components::schema::FieldValue::Dynamic(v),
         crate::FieldValue::F32(v) => crate::components::schema::FieldValue::F32(v),
         crate::FieldValue::U32(v) => crate::components::schema::FieldValue::U32(v),
@@ -96,12 +158,7 @@ pub fn write(
         crate::FieldValue::Entity(crate::EntityRef::Alias(_)) => {
             return Err(crate::ErrorReason::UnknownAlias);
         }
-    };
-    let mut staged = component.clone();
-    staged.set_field(field.offset, value).map_err(field_error)?;
-    staged.validate_field_lifecycle(field.offset)?;
-    *component = staged;
-    Ok(())
+    })
 }
 
 fn field_error(error: crate::components::schema::FieldError) -> crate::ErrorReason {

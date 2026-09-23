@@ -1,7 +1,7 @@
 //! World-owned declaration updates; errors retain partial changes.
 
 use super::registry::{ComponentStateOverlay, EntityOverlayBinding, StateOverlayOwner};
-use super::{StateOverlayBatch, StateOverlayEntry, StateOverlayFields};
+use super::{ComponentStagedInput, StateOverlayBatch, StateOverlayEntry, StateOverlayFields};
 use crate::world::{ComponentStateInstance, WorldEntityRecord, WorldLimits};
 use crate::{
     Command, ComponentOverlayMode, EntityId, EntityMetadata, EntityOverlayMode, ErrorReason,
@@ -446,10 +446,15 @@ impl super::StateOverlayMutationAccess<'_> {
                 }
                 if owns_properties {
                     let properties = descriptors.clone();
+                    let inputs = &mut layer.inputs;
+                    let layered = match &mut inputs.staged {
+                        ComponentStagedInput::Layered(value) => Some(value),
+                        _ => None,
+                    };
                     for input in [
-                        &mut layer.inputs.base_value,
-                        &mut layer.inputs.fallback_value,
-                        &mut layer.inputs.resolved_value,
+                        inputs.base_value.as_mut(),
+                        inputs.fallback_value.as_mut(),
+                        layered,
                     ]
                     .into_iter()
                     .flatten()
@@ -655,25 +660,24 @@ impl super::StateOverlayMutationAccess<'_> {
                     }))
                 )
             });
-            let (fallback, fallback_value) =
-                if layer.inputs.base.is_none() && (auto || layer.inputs.required) {
-                    match layer.inputs.fallback {
-                        Some(value) => (Some(value), layer.inputs.fallback_value.clone()),
-                        None => {
-                            let value = registry::create(component)?;
-                            let incarnation = self.incarnation()?;
-                            (
-                                Some(ComponentStateInstance {
-                                    base: (),
-                                    incarnation,
-                                }),
-                                Some(Box::new(value)),
-                            )
-                        }
+            let fallback = if layer.inputs.base.is_none() && (auto || layer.inputs.required) {
+                match layer.inputs.fallback {
+                    Some(value) => Some((value, None)),
+                    None => {
+                        let value = registry::create(component)?;
+                        let incarnation = self.incarnation()?;
+                        Some((
+                            ComponentStateInstance {
+                                base: (),
+                                incarnation,
+                            },
+                            Some(Box::new(value)),
+                        ))
                     }
-                } else {
-                    (None, None)
-                };
+                }
+            } else {
+                None
+            };
             let layer = self
                 .staged
                 .entities_state
@@ -683,15 +687,41 @@ impl super::StateOverlayMutationAccess<'_> {
                 .layers
                 .get_mut(&component)
                 .unwrap();
-            layer.inputs.fallback = fallback;
-            layer.inputs.fallback_value = fallback_value;
+            match fallback {
+                Some((value, created)) => {
+                    layer.inputs.fallback = Some(value);
+                    if created.is_some() {
+                        layer.inputs.fallback_value = created;
+                    }
+                }
+                None => {
+                    layer.inputs.fallback = None;
+                    layer.inputs.fallback_value = None;
+                }
+            }
             layer.inputs.resolved = layer.inputs.base.or(layer.inputs.fallback);
-            layer.inputs.resolved_value = layer
+            layer.inputs.hidden_fields.clear();
+            if handles.is_empty() {
+                // Without overlay declarations the effective input is the staged
+                // producer or fallback itself; no copy, winners or hidden values.
+                layer.inputs.staged = if layer.inputs.base_value.is_some() {
+                    ComponentStagedInput::Base
+                } else if layer.inputs.fallback_value.is_some() {
+                    ComponentStagedInput::Fallback
+                } else {
+                    ComponentStagedInput::Unstaged
+                };
+                continue;
+            }
+            layer.inputs.staged = match layer
                 .inputs
                 .base_value
-                .clone()
-                .or_else(|| layer.inputs.fallback_value.clone());
-            layer.inputs.hidden_fields.clear();
+                .as_ref()
+                .or(layer.inputs.fallback_value.as_ref())
+            {
+                Some(value) => ComponentStagedInput::Layered(value.clone()),
+                None => ComponentStagedInput::Unstaged,
+            };
             let current = layer.input().map(|value| value.incarnation);
 
             for &id in &handles {
@@ -758,10 +788,9 @@ impl super::StateOverlayMutationAccess<'_> {
                     if crate::components::dynamic_properties::is_dynamic_field(field.offset)
                         && !layer
                             .inputs
-                            .resolved_value
-                            .as_ref()
+                            .staged_value()
                             .and_then(|v| v.dynamic_properties())
-                            .is_some_and(|p| p.get_key(field.offset).is_some())
+                            .is_some_and(|p| p.descriptor(field.offset).is_some())
                     {
                         continue;
                     }
@@ -780,19 +809,19 @@ impl super::StateOverlayMutationAccess<'_> {
                 .layers
                 .get_mut(&component)
                 .unwrap();
-            if let Some(value) = layer.inputs.resolved_value.as_ref() {
-                layer.inputs.hidden_fields = value
-                    .fields()
-                    .into_iter()
-                    .filter(|(offset, _)| winners.contains_key(offset))
+            // Hidden producer values are read only at overridden offsets.
+            if let Some(value) = layer.inputs.layered_value_mut() {
+                let hidden = winners
+                    .keys()
+                    .filter_map(|&offset| value.field(offset).ok().map(|field| (offset, field)))
                     .collect();
+                layer.inputs.hidden_fields = hidden;
             }
             for (_, (_, field)) in winners {
                 registry::write(
                     layer
                         .inputs
-                        .resolved_value
-                        .as_mut()
+                        .layered_value_mut()
                         .expect("active declaration has effective input"),
                     field,
                 )?;

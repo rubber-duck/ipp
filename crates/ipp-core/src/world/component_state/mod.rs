@@ -7,11 +7,17 @@
 //! their phase and invalidation contracts unchanged.
 //!
 //! - [`access`]: read access to staged and retained values.
-//! - [`staging`]: input hydration, dirty tracking and preparation.
-//! - [`mutation`]: per-command component application.
-//! - [`observations`]: lifecycle effect and observation recording.
+//! - [`staging`]: input hydration, dirty tracking and preparation deferred to
+//!   commit for copy-prepared components.
+//! - [`mutation`]: per-command component application, writing staged producers
+//!   in place.
+//! - [`observations`]: lifecycle effect and observation recording, classifying
+//!   in-place writes without whole-value comparison.
 
 pub(super) mod access;
 pub(super) mod mutation;
 pub(super) mod observations;
 pub(super) mod staging;
+
+#[cfg(test)]
+mod staging_tests;

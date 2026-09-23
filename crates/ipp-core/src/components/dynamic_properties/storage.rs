@@ -25,15 +25,51 @@ pub struct DynamicPropertyDescriptor {
 }
 
 /// The sole effective values of a component's named properties.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct DynamicProperties {
     descriptors: BTreeMap<String, DynamicPropertyDescriptor>,
     /// Prepared identity lookup. This mirrors descriptors, never values, and is
     /// rebuilt from durable metadata with the component incarnation.
     descriptors_by_key: BTreeMap<u32, DynamicPropertyDescriptor>,
     buffer: Vec<u8>,
+    /// Numeric bytes held by live descriptors; the rest of the buffer is gaps.
+    occupied: usize,
     assets: BTreeMap<u32, AssetSource>,
     next_key: u32,
+}
+
+impl Clone for DynamicProperties {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        clone_count::record();
+        Self {
+            descriptors: self.descriptors.clone(),
+            descriptors_by_key: self.descriptors_by_key.clone(),
+            buffer: self.buffer.clone(),
+            occupied: self.occupied,
+            assets: self.assets.clone(),
+            next_key: self.next_key,
+        }
+    }
+}
+
+/// Per-thread count of whole property-set copies, for staging cost tests.
+#[cfg(test)]
+pub(crate) mod clone_count {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CLONES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record() {
+        CLONES.with(|clones| clones.set(clones.get() + 1));
+    }
+
+    /// Return and reset this thread's copy count.
+    pub(crate) fn take() -> usize {
+        CLONES.with(|clones| clones.replace(0))
+    }
 }
 
 impl Default for DynamicProperties {
@@ -42,6 +78,7 @@ impl Default for DynamicProperties {
             descriptors: BTreeMap::new(),
             descriptors_by_key: BTreeMap::new(),
             buffer: Vec::new(),
+            occupied: 0,
             assets: BTreeMap::new(),
             next_key: DYNAMIC_METADATA + 1,
         }
@@ -146,6 +183,23 @@ impl DynamicProperties {
         self.descriptors.get(name).map(|descriptor| descriptor.key)
     }
 
+    /// Stored representation of one identity, compared exactly as whole-value
+    /// equality compares it (numeric bytes, not float equality).
+    pub(crate) fn stored_value(
+        &self,
+        key: u32,
+    ) -> Option<(DynamicPropertyKind, Vec<u8>, Option<AssetSource>)> {
+        let descriptor = self.descriptors_by_key.get(&key)?;
+        let start = descriptor.offset as usize;
+        Some((
+            descriptor.kind,
+            self.buffer
+                .get(start..start + descriptor.kind.byte_len())?
+                .to_vec(),
+            self.assets.get(&key).cloned(),
+        ))
+    }
+
     /// Resolve one live identity to its prepared descriptor without scanning names.
     pub(crate) fn descriptor(&self, key: u32) -> Option<DynamicPropertyDescriptor> {
         self.descriptors_by_key.get(&key).copied()
@@ -189,6 +243,7 @@ impl DynamicProperties {
         };
         self.descriptors.insert(name.into(), descriptor);
         self.descriptors_by_key.insert(key, descriptor);
+        self.occupied += descriptor.kind.byte_len();
         self.next_key = next_key;
         self.set_key(key, value)?;
         Ok(key)
@@ -244,6 +299,7 @@ impl DynamicProperties {
     pub fn remove(&mut self, name: &str) -> Option<u32> {
         let descriptor = self.descriptors.remove(name)?;
         self.descriptors_by_key.remove(&descriptor.key);
+        self.occupied -= descriptor.kind.byte_len();
         self.assets.remove(&descriptor.key);
         let start = descriptor.offset as usize;
         self.buffer[start..start + descriptor.kind.byte_len()].fill(0);
@@ -260,20 +316,15 @@ impl DynamicProperties {
     /// Reserve `size` bytes at the first offset where they fit between
     /// existing properties, else at the buffer end. Gaps exist only after
     /// removals: when fewer free bytes remain than `size`, the first fit is
-    /// the end, found without collecting or sorting descriptors. Zero-sized
-    /// kinds occupy no bytes and use offset zero.
+    /// the end, found from the retained occupied byte count without visiting
+    /// descriptors. Zero-sized kinds occupy no bytes and use offset zero.
     fn allocate(&mut self, size: usize) -> Result<u32, FieldError> {
         if size == 0 {
             return Ok(0);
         }
 
-        let occupied: usize = self
-            .descriptors_by_key
-            .values()
-            .map(|d| d.kind.byte_len())
-            .sum();
         let mut offset = self.buffer.len();
-        if self.buffer.len().saturating_sub(occupied) >= size {
+        if self.buffer.len().saturating_sub(self.occupied) >= size {
             let mut spans: Vec<_> = self
                 .descriptors_by_key
                 .values()
@@ -443,6 +494,7 @@ impl DynamicProperties {
         if !bytes.is_empty() {
             return Err(FieldError::WrongType);
         }
+        value.occupied = value.buffer.len();
         value.next_key = next_key;
         Ok(value)
     }

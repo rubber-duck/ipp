@@ -5,6 +5,7 @@
 //! [`super::super`].
 
 use super::super::*;
+use super::observations::ComponentStagedWrite;
 
 impl WorldMutationState {
     pub(in crate::world) fn apply(
@@ -95,21 +96,38 @@ impl WorldMutationState {
                         .get_mut(&id)
                         .and_then(|entity| entity.layers.get_mut(component))
                         .ok_or(ErrorReason::MissingComponent)?;
+                    let direct = layer.inputs.stages_producer_directly();
                     let properties = layer
                         .inputs
                         .base_value_mut()
                         .ok_or(ErrorReason::MissingComponent)?
                         .dynamic_properties_mut()
                         .ok_or(ErrorReason::InvalidField)?;
+
+                    // Report whether the value changed so the lifecycle observation
+                    // needs no whole-value comparison.
                     let old = properties.key(name);
-                    let key = properties
-                        .set(name, value.clone())
-                        .map_err(|_| ErrorReason::InvalidValue)?;
+                    let before = old.and_then(|key| properties.stored_value(key));
+                    let key = properties.set(name, value.clone());
+                    let current = properties.key(name);
+                    let changed = current != old
+                        || current.and_then(|key| properties.stored_value(key)) != before;
+                    if direct && (key.is_ok() || current == old) {
+                        self.touch_component_write(
+                            id,
+                            *component,
+                            ComponentStagedWrite::SetProperty(name.clone(), value.clone()),
+                            changed,
+                        );
+                    } else {
+                        self.touch_component(id, *component);
+                    }
+
+                    let key = key.map_err(|_| ErrorReason::InvalidValue)?;
                     if let Some(old) = old {
                         self.explicit_fields.insert((id, *component, old));
                     }
                     self.explicit_fields.insert((id, *component, key));
-                    self.touch_component(id, *component);
                 }
                 Command::RemoveDynamicProperty {
                     entity,
@@ -124,16 +142,28 @@ impl WorldMutationState {
                         .get_mut(&id)
                         .and_then(|entity| entity.layers.get_mut(component))
                         .ok_or(ErrorReason::MissingComponent)?;
+                    let direct = layer.inputs.stages_producer_directly();
                     let properties = layer
                         .inputs
                         .base_value_mut()
                         .ok_or(ErrorReason::MissingComponent)?
                         .dynamic_properties_mut()
                         .ok_or(ErrorReason::InvalidField)?;
-                    if let Some(key) = properties.remove(name) {
+
+                    let removed = properties.remove(name);
+                    if let Some(key) = removed {
                         self.explicit_fields.insert((id, *component, key));
                     }
-                    self.touch_component(id, *component);
+                    if direct {
+                        self.touch_component_write(
+                            id,
+                            *component,
+                            ComponentStagedWrite::RemoveProperty(name.clone()),
+                            removed.is_some(),
+                        );
+                    } else {
+                        self.touch_component(id, *component);
+                    }
                 }
                 Command::RemoveComponent {
                     entity,
@@ -160,7 +190,7 @@ impl WorldMutationState {
         result
     }
 
-    /// Update one producer field without changing incarnation or ownership.
+    /// Update one producer field in place without changing incarnation or ownership.
     /// Errors leave prior writes applied; callers finish affected lifecycle work.
     pub(in crate::world) fn write_component_field(
         &mut self,
@@ -169,21 +199,39 @@ impl WorldMutationState {
         component: u16,
         field: &FieldWrite,
     ) -> Result<(), ErrorReason> {
+        ComponentValue::field_count(component).map_err(|_| ErrorReason::UnknownComponent)?;
         self.stage_component(components, id, component);
-        self.touch_component(id, component);
-        let mut value = self.component(components, id, component)?;
-        registry::write(&mut value, field)?;
-        *self
+
+        let layer = self
             .entities_state
             .entities
             .get_mut(&id)
-            .unwrap()
-            .layers
-            .get_mut(&component)
-            .unwrap()
-            .inputs
-            .base_value_mut()
-            .unwrap() = value;
+            .and_then(|record| record.layers.get_mut(&component));
+        let direct = layer
+            .as_ref()
+            .is_some_and(|layer| layer.inputs.stages_producer_directly())
+            && field.offset != crate::components::dynamic_properties::DYNAMIC_METADATA;
+        let Some(value) = layer
+            .filter(|layer| layer.inputs.base().is_some())
+            .and_then(|layer| layer.inputs.base_value_mut())
+        else {
+            self.touch_component(id, component);
+            return Err(ErrorReason::MissingComponent);
+        };
+
+        // A field write is atomic: failure leaves the producer unchanged.
+        let written = registry::write_field(value, field);
+        match written {
+            Ok(changed) if direct => self.touch_component_write(
+                id,
+                component,
+                ComponentStagedWrite::Field(field.clone()),
+                changed,
+            ),
+            _ => self.touch_component(id, component),
+        }
+        written?;
+
         self.explicit_fields.insert((id, component, field.offset));
         Ok(())
     }

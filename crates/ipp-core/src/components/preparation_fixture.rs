@@ -45,6 +45,10 @@ impl Clone for PreparedBuffer {
 }
 
 impl crate::components::schema::ComponentLifecycle for PreparedBuffer {
+    fn defers_preparation() -> bool {
+        false
+    }
+
     fn activation_bytes(&self) -> usize {
         self.allocation
             .as_ref()

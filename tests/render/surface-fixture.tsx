@@ -197,12 +197,16 @@ export async function initialize(config: {
  * next completed frame, which observes work a following frame would finish.
  */
 export async function capture(label: string, options: { next?: boolean } = {}) {
+  const captureStarted = performance.now();
+  const update = pendingUpdate;
+  pendingUpdate = undefined;
   const tick = options.next ? undefined : (await client.inspect()).tick;
   if (failures.length)
     throw new Error(
       `Surface runtime failures: ${JSON.stringify(failures, (_, value) => (typeof value === "bigint" ? String(value) : value))}`,
     );
   const frame = await client.presentation!.capture(tick);
+  const presentedAt = performance.now();
   frames.set(label, frame);
   const pixels = new Uint8Array(frame.pixels);
   let textPixels = 0;
@@ -236,6 +240,19 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
       ),
     ) as Record<string, unknown>,
     textPixels,
+    inPage: {
+      // Update start to pixels delivered to the page, measured in the page,
+      // for a capture following a workload update; null otherwise.
+      updateToReadbackMs:
+        update === undefined ? null : presentedAt - update.startedAt,
+      updateMs:
+        update === undefined ? null : update.appliedAt - update.startedAt,
+      captureMs: presentedAt - captureStarted,
+      readbackMs:
+        typeof frame.backend.readbackMs === "number"
+          ? frame.backend.readbackMs
+          : null,
+    },
     background: sample(frame.width >> 1, Math.round(frame.height * 0.875)),
     corner: sample(0, 0),
     bitmap: sample(
@@ -244,6 +261,9 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
     ),
   };
 }
+
+/** In-page timestamps of the latest workload update, consumed by the next capture. */
+let pendingUpdate: { startedAt: number; appliedAt: number } | undefined;
 
 /** The same application fixture runs against analytic and retained builds. */
 export async function workload(
@@ -256,6 +276,8 @@ export async function workload(
     cache?: SurfaceCachePolicy;
   },
 ) {
+  const startedAt = performance.now();
+  pendingUpdate = undefined;
   client.presentation!.resize(config.width ?? 640, config.height ?? 480);
   for (const id of [...cachePolicies.keys()])
     if (id.startsWith("workload-")) cachePolicies.delete(id);
@@ -285,6 +307,7 @@ export async function workload(
       </Entity>
     )),
   );
+  pendingUpdate = { startedAt, appliedAt: performance.now() };
 }
 
 /** Sizes of the application's printable and unseen glyph sets. */

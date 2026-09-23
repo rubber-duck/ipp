@@ -447,7 +447,9 @@ export class RenderWorkerService {
     for (const [id, request] of this.captures) {
       if (tick < request.afterTick) continue;
       // capture finishes pending GPU work and copies top-left RGBA pixels.
+      const readbackStarted = performance.now();
       const pixels = this.device.capture();
+      const readbackMs = performance.now() - readbackStarted;
       const frame: FrameCapture = {
         session: this.session,
         tick,
@@ -462,6 +464,8 @@ export class RenderWorkerService {
           uploadedBytes: runtime.ipp_render_uploaded_bytes(),
           totalUploadedBytes: this.totalUploadedBytes,
           failedDrawCalls: runtime.ipp_render_failed_draw_calls(),
+          // Worker time spent finishing GPU work and reading the pixels back.
+          readbackMs,
           // Unavailable counters are omitted, never reported as zero work.
           ...(this.retainedStatistics
             ? {

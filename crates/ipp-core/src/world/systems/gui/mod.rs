@@ -99,5 +99,7 @@ pub(crate) use tree::component::validate_property_value as validate_gui_property
 pub(crate) use tree::controls::slider_rail;
 pub use tree::{
     GuiContainerKind, GuiControlState, GuiControlValue, GuiControls, GuiNode, GuiNodeContent,
-    GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes, GuiRoot, MAX_GUI_TEXT_BYTES,
+    GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
+    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow,
+    GuiNodes, GuiRoot, MAX_GUI_TEXT_BYTES,
 };

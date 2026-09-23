@@ -1,5 +1,11 @@
 use super::controls::{GuiControlState, GuiControls};
+use super::node_rows::{
+    GuiNodeDataProperty, GuiNodeDataRow, GuiNodePropertyRef, GuiNodeRowProperty,
+    GuiNodeStyleProperty, GuiNodeStyleRow, validate_node_data_property,
+    validate_node_style_property,
+};
 use super::nodes::{GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes};
+use crate::components::rows::{RowAddress, Rows, row_address, row_region_relative};
 use crate::components::schema::ComponentLifecycle;
 use crate::{DynamicProperties, DynamicValue, ErrorReason};
 use ipp_schema_derive::SchemaComponent;
@@ -61,18 +67,120 @@ pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 23] = [
 ///
 /// The node tree, including committed control values, changes only through
 /// GuiCommand while a root incarnation is live; a new incarnation may supply
-/// it. Node style is stored once, as `node_<id>_<lane>` named properties.
+/// it. Node style and scalar node data rows live in `node_style` and
+/// `node_data` at slot = node id; readers and writers still use the named
+/// properties and node content until they migrate to the rows.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiRoot {
     /// Authoritative root-local node tree and committed control values.
     nodes: GuiNodes,
+    /// Node style rows at slot = node id; rows field 0.
+    #[schema(rows)]
+    node_style: Rows<GuiNodeStyleRow>,
+    /// Scalar kind-specific node data at slot = node id; rows field 1.
+    #[schema(rows)]
+    node_data: Rows<GuiNodeDataRow>,
     /// Authoritative style, layout and named-part properties.
     #[schema(ignore)]
     pub properties: DynamicProperties,
 }
 
 impl GuiRoot {
+    /// Rows field index of `node_style`; its region starts at `0x1000_0000`.
+    pub const NODE_STYLE_FIELD: usize = 0;
+
+    /// Rows field index of `node_data`; its region starts at `0x2000_0000`.
+    pub const NODE_DATA_FIELD: usize = 1;
+
+    /// Field offset of one node style property, or None for a node id the
+    /// region cannot address.
+    pub const fn node_style_offset(node: GuiNodeId, property: GuiNodeStyleProperty) -> Option<u32> {
+        Rows::<GuiNodeStyleRow>::offset(Self::NODE_STYLE_FIELD, node.0, property.index())
+    }
+
+    /// Field offset of one node data property, or None for a node id the
+    /// region cannot address.
+    pub const fn node_data_offset(node: GuiNodeId, property: GuiNodeDataProperty) -> Option<u32> {
+        Rows::<GuiNodeDataRow>::offset(Self::NODE_DATA_FIELD, node.0, property.index())
+    }
+
+    /// Node and row property addressed by a field offset; None outside the
+    /// two node regions and for node id zero, which is never valid.
+    pub const fn node_property(offset: u32) -> Option<GuiNodePropertyRef> {
+        let (slot, property) =
+            if let Some(relative) = row_region_relative(offset, Self::NODE_STYLE_FIELD) {
+                let Some(RowAddress {
+                    slot,
+                    property,
+                }) = row_address(relative, GuiNodeStyleProperty::COUNT)
+                else {
+                    return None;
+                };
+                let Some(property) = GuiNodeStyleProperty::from_index(property) else {
+                    return None;
+                };
+                (slot, GuiNodeRowProperty::Style(property))
+            } else if let Some(relative) = row_region_relative(offset, Self::NODE_DATA_FIELD) {
+                let Some(RowAddress {
+                    slot,
+                    property,
+                }) = row_address(relative, GuiNodeDataProperty::COUNT)
+                else {
+                    return None;
+                };
+                let Some(property) = GuiNodeDataProperty::from_index(property) else {
+                    return None;
+                };
+                (slot, GuiNodeRowProperty::Data(property))
+            } else {
+                return None;
+            };
+
+        if slot == 0 {
+            return None;
+        }
+
+        Some(GuiNodePropertyRef {
+            node: GuiNodeId(slot),
+            property,
+        })
+    }
+
+    /// Whether numeric animation and overlays may target an offset: numeric
+    /// style properties and `image_size`. False for `enabled`, `asset`, the
+    /// command-owned control values and slider range, and any other offset.
+    pub const fn numeric_animatable(offset: u32) -> bool {
+        match Self::node_property(offset) {
+            Some(reference) => reference.property.numeric_animatable(),
+            None => false,
+        }
+    }
+
+    /// Accept a value for the node property at `offset`: exact type, finite
+    /// and the property's own range. Row-wide rules (presence by node kind,
+    /// slider `min <= value <= max`) are checked on the row.
+    pub fn validate_node_property(offset: u32, value: &DynamicValue) -> Result<(), ErrorReason> {
+        match Self::node_property(offset)
+            .ok_or(ErrorReason::InvalidField)?
+            .property
+        {
+            GuiNodeRowProperty::Style(property) => validate_node_style_property(property, value),
+            GuiNodeRowProperty::Data(property) => validate_node_data_property(property, value),
+        }
+    }
+
+    /// Node style rows keyed by node id.
+    pub fn node_style(&self) -> &Rows<GuiNodeStyleRow> {
+        &self.node_style
+    }
+
+    /// Scalar node data rows keyed by node id, including committed checkbox
+    /// and slider values.
+    pub fn node_data(&self) -> &Rows<GuiNodeDataRow> {
+        &self.node_data
+    }
+
     pub(in crate::world::systems::gui) const fn nodes_field() -> u32 {
         std::mem::offset_of!(Self, nodes) as u32
     }
@@ -228,9 +336,23 @@ impl GuiRoot {
     ) -> Result<Self, ErrorReason> {
         let mut scope = Self {
             nodes: self.nodes.clone(),
+            node_style: Rows::new(),
+            node_data: Rows::new(),
             properties: DynamicProperties::default(),
         };
         if let Some(id) = node {
+            if let Some(row) = self.node_style.get(id.0) {
+                scope
+                    .node_style
+                    .insert(id.0, row.clone())
+                    .map_err(field_error)?;
+            }
+            if let Some(row) = self.node_data.get(id.0) {
+                scope
+                    .node_data
+                    .insert(id.0, row.clone())
+                    .map_err(field_error)?;
+            }
             let prefix = node_property_prefix(id);
             for (name, descriptor) in self.properties.named_with_prefix(&prefix) {
                 let value = self
@@ -454,6 +576,16 @@ impl ComponentLifecycle for GuiRoot {
 
     fn validate(&self) -> Result<(), ErrorReason> {
         self.nodes.validate().map_err(field_error)?;
+        for (_, row) in self.node_style.iter() {
+            row.validate()?;
+        }
+        for (slot, row) in self.node_data.iter() {
+            let node = self
+                .nodes
+                .node(GuiNodeId(slot))
+                .ok_or(ErrorReason::InvalidField)?;
+            row.validate_for(&node.content)?;
+        }
         self.validate_properties()
     }
 
@@ -483,6 +615,7 @@ impl ComponentLifecycle for GuiRoot {
         >,
     ) {
         self.properties.resource_demand(demand);
+        self.node_style.resource_demand(demand);
     }
 }
 

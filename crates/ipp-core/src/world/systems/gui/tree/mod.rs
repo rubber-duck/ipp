@@ -6,10 +6,15 @@
 
 pub(super) mod component;
 pub(super) mod controls;
+pub(super) mod node_rows;
 pub(super) mod nodes;
 
 pub use component::GuiRoot;
 pub use controls::{GuiControlState, GuiControls};
+pub use node_rows::{
+    GuiNodeDataProperty, GuiNodeDataRow, GuiNodePropertyRef, GuiNodeRowProperty,
+    GuiNodeStyleProperty, GuiNodeStyleRow,
+};
 pub use nodes::{
     GuiContainerKind, GuiControlValue, GuiNode, GuiNodeContent, GuiNodeHandle, GuiNodeId,
     GuiNodePatch, GuiNodeStyle, GuiNodes, MAX_GUI_TEXT_BYTES,

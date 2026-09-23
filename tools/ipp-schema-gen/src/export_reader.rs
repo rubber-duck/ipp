@@ -1,6 +1,6 @@
 use crate::binary_reader::Reader;
 use crate::model::{Component, Export, Field, RowProperty, RowsLayout, TargetFeature};
-use crate::typescript_names::{identifier, js_string};
+use crate::typescript_names::{identifier, js_string, member_identifier};
 use crate::wire_contract;
 
 pub(super) fn read_export(bytes: &[u8]) -> Result<Export, String> {
@@ -191,7 +191,7 @@ pub(super) fn read_rows_layout(r: &mut Reader<'_>, ordinal: u32) -> Result<RowsL
     let mut properties = Vec::with_capacity(usize::from(count));
     for _ in 0..count {
         let name = r.string()?;
-        identifier(&name)?;
+        member_identifier(&name)?;
         let kind = r.u8()?;
         let optional = match r.u8()? {
             0 => false,

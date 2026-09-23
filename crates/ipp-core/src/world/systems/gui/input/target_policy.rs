@@ -7,6 +7,10 @@ use crate::{ComponentValue, EntityId};
 use std::borrow::Cow;
 
 /// Current status of one fully fenced input target.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "statuses are matched immediately; boxing would allocate per target check"
+)]
 pub(super) enum GuiTargetStatus<'a> {
     /// Producer identity and evaluated eligibility all match.
     Eligible(Cow<'a, GuiRoot>),

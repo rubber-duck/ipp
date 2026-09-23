@@ -18,7 +18,7 @@ mod tests {
     use super::export_reader::read_target_features;
     use super::model::Capabilities;
     use super::typescript::render_template;
-    use super::typescript_names::{identifier, js_string};
+    use super::typescript_names::{identifier, js_string, member_identifier};
     use super::*;
 
     #[test]
@@ -44,6 +44,14 @@ mod tests {
             assert!(identifier(name).is_err());
         }
         assert!(identifier("LinearDriver").is_ok());
+
+        // Row property names are interface members only, so template bindings
+        // such as `asset` are allowed while syntax and reserved words are not.
+        assert!(identifier("asset").is_err());
+        assert!(member_identifier("asset").is_ok());
+        for name in ["class", "__proto__", "a-b", "9name", ""] {
+            assert!(member_identifier(name).is_err());
+        }
     }
 
     #[test]

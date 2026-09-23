@@ -307,7 +307,7 @@ pub(in crate::world) fn commit_components(
     let mut cleanup = Vec::new();
     let mut validation = Ok(());
     #[cfg(feature = "profiling")]
-    let measurement = crate::profiling::Stage::new(19 * 6, "profile.commit.validate");
+    let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitValidate);
 
     instances.visit(current.as_deref_mut(), |system| {
         let result = system.validate_commit(&systems::SystemCommitContext {
@@ -322,7 +322,7 @@ pub(in crate::world) fn commit_components(
     #[cfg(feature = "profiling")]
     drop(measurement);
     #[cfg(feature = "profiling")]
-    let measurement = crate::profiling::Stage::new(20 * 6, "profile.commit.before");
+    let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitBefore);
 
     for round in 0..64 {
         instances.visit(current.as_deref_mut(), |system| {
@@ -376,7 +376,7 @@ pub(in crate::world) fn commit_components(
     #[cfg(feature = "profiling")]
     drop(measurement);
     #[cfg(feature = "profiling")]
-    let measurement = crate::profiling::Stage::new(21 * 6, "profile.commit.storage");
+    let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitStorage);
 
     for entity in std::mem::take(&mut staged.retired_entities) {
         staged.allocator.release(entity);
@@ -444,7 +444,7 @@ pub(in crate::world) fn commit_components(
     #[cfg(feature = "profiling")]
     drop(measurement);
     #[cfg(feature = "profiling")]
-    let _measurement = crate::profiling::Stage::new(22 * 6, "profile.commit.after");
+    let _measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitAfter);
 
     instances.visit(current.as_deref_mut(), |system| {
         system.after_commit(&mut systems::SystemCommitContext {

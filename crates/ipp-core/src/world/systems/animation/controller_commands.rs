@@ -565,7 +565,7 @@ impl AnimationAccess<'_, '_> {
 
         #[cfg(feature = "profiling")]
         let measurement =
-            crate::profiling::Stage::new(17 * 6, "profile.animation.restore_and_stage");
+            crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationRestoreAndStage);
 
         let Some(mut controller) = self.system.state.take_controller(id) else {
             return;

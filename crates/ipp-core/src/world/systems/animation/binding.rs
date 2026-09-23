@@ -649,7 +649,8 @@ impl<'a> AnimationReadAccess<'a> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = crate::profiling::AllocationScope::new(195, "animation.validate");
         #[cfg(feature = "profiling")]
-        let _measurement = crate::profiling::Stage::new(23 * 6, "profile.animation.validate");
+        let _measurement =
+            crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationValidate);
 
         if crate::stress_optimizations_enabled() {
             for key in staged.changed.keys() {

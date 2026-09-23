@@ -72,7 +72,7 @@ impl AnimationAccess<'_, '_> {
     ) -> Result<(), ErrorReason> {
         #[cfg(feature = "profiling")]
         let _measurement =
-            crate::profiling::Stage::new(18 * 6, "profile.animation.apply_component");
+            crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationApplyComponent);
 
         let resource_patch = value.is_none()
             && properties.iter().any(|((target, _), value)| {
@@ -884,7 +884,7 @@ impl AnimationAccess<'_, '_> {
         let _allocation_scope = crate::profiling::AllocationScope::new(197, "animation.sample");
         #[cfg(feature = "profiling")]
         let _measurement =
-            crate::profiling::Stage::new(16 * 6, "profile.animation.sample_and_stage");
+            crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationSampleAndStage);
 
         let mut values = super::component_values::AnimationComponentValues::new(
             std::mem::take(&mut self.system.state.component_scratch),

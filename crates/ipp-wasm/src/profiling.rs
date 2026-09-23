@@ -32,7 +32,7 @@ pub extern "C" fn ipp_profile_reset(enabled: u32) {
 // SAFETY: Unique diagnostic export; bounded read of atomic counters only.
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_profile_counter(index: usize) -> u64 {
-    if index < 768 {
+    if index < ipp_core::profiling::STAGE_SLOTS * 4 {
         ipp_core::profiling::counter(index)
     } else {
         0

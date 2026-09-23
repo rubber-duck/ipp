@@ -4,7 +4,7 @@ Opt-in benchmarks exercise real IPP update, protocol, Blender import and renderi
 
 Use the [stress scene guide](stress.md) for maintained native/GLES and browser commands, scene contents, captures, allocation counters and profiling. The generator creates both the original physics scene and its baked replay, so large binary assets need not be checked in.
 
-The optional `profiling` feature adds stage timing and allocation counters without changing runtime behavior; it is absent from normal builds. Timing windows disable counters, and allocation windows run separately. Native hardware GLES timing is the primary rendering baseline; software browser timing does not predict hardware performance.
+The optional `profiling` feature adds stage timing and allocation counters without changing runtime behavior; it is absent from normal builds. Timing windows disable counters, and allocation windows run separately. Stage counters use separate ranges: the first 30 scheduled Systems time each frame phase in their own slots, and fixed commit and animation timers follow in a range of their own, so no System position aliases a fixed timer; [profiling.rs](../../crates/ipp-core/src/profiling.rs) owns the slot layout and names. Native hardware GLES timing is the primary rendering baseline; software browser timing does not predict hardware performance.
 
 ## Measurements
 

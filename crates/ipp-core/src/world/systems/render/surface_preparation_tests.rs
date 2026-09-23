@@ -2787,5 +2787,6 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
     assert!(clicked > 10, "only {clicked} committed clicks");
 }
 
+#[cfg(feature = "gui")]
 #[path = "skin_transition_tests.rs"]
 mod skin_transitions;

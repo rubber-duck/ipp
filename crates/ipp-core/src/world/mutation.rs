@@ -608,6 +608,11 @@ impl WorldContext<'_> {
     }
 
     /// Admit queued inputs through subsystem hooks before shared service progression.
+    ///
+    /// When a subsystem holds deferred input, such as a GUI input commit, this
+    /// first runs the Restore phase with full restoration, so the admitted
+    /// input stages authored values rather than retained evaluated output.
+    /// The following `step` then skips its own Restore.
     pub fn prepare_update(&mut self, dt: f64) -> Result<(), ErrorReason> {
         if self.world.updating || !dt.is_finite() || dt < 0.0 || !(self.world.time + dt).is_finite()
         {
@@ -632,6 +637,7 @@ impl WorldContext<'_> {
         if subsystem_ingress && self.world.fault.is_none() && !self.world.mutation_prepared {
             self.restore_for_ingress(dt, &mut report)?;
         }
+
         self.dispatch_phase(dt, SystemFramePhase::Accept, &mut report)?;
         self.world.prepared_frame = true;
         Ok(())

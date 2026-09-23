@@ -2717,3 +2717,6 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
         .control_revision;
     assert!(clicked > 10, "only {clicked} committed clicks");
 }
+
+#[path = "skin_transition_tests.rs"]
+mod skin_transitions;

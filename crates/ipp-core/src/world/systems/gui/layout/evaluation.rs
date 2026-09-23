@@ -100,6 +100,7 @@
 //! renderer through the internal retained Surface preparation path, never
 //! through self-issued client commands.
 
+use super::super::tree::component::GuiNodeLanes;
 use super::super::{
     GuiContainerKind, GuiControlValue, GuiNode, GuiNodeContent, GuiNodeId, GuiNodeStyle, GuiRoot,
 };
@@ -245,7 +246,7 @@ fn hash_option_vec4(hasher: &mut Fingerprint, value: Option<[f32; 4]>) {
     }
 }
 
-fn hash_asset(hasher: &mut Fingerprint, source: &Option<AssetSource>) {
+fn hash_asset(hasher: &mut Fingerprint, source: Option<&AssetSource>) {
     match source {
         Some(source) => {
             hasher.u32(1);
@@ -2605,13 +2606,9 @@ fn hash_node_structure(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) 
 /// nor paint edits remeasure text or reflow layout.
 fn hash_node_layout(
     hasher: &mut Fingerprint,
-    root: &GuiRoot,
-    id: GuiNodeId,
+    style: &GuiNodeStyle,
     resolver: &dyn GuiResourceResolver,
 ) {
-    let Some(style) = root.style(id) else {
-        return;
-    };
     hash_option_f32(hasher, style.width);
     hash_option_f32(hasher, style.height);
     hash_option_f32(hasher, style.min_width);
@@ -2624,7 +2621,7 @@ fn hash_node_layout(
     hash_option_vec4(hasher, style.padding);
     hash_option_vec4(hasher, style.margin);
     hasher.f32(style.font_size);
-    hash_asset(hasher, &style.asset);
+    hash_asset(hasher, style.asset.as_ref());
     // Readiness and replacement generations invalidate retained
     // measurement even when the authored reference is unchanged.
     match style
@@ -2642,12 +2639,11 @@ fn hash_node_layout(
 
 /// Hash visual-only lanes: translation and scale move paint and hit regions
 /// together without remeasuring text or reflowing layout.
-fn hash_node_visual(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) {
-    let (offset, scale) = root.visual_transform(id);
-    hasher.f32(offset[0]);
-    hasher.f32(offset[1]);
-    hasher.f32(scale[0]);
-    hasher.f32(scale[1]);
+fn hash_node_visual(hasher: &mut Fingerprint, lanes: &GuiNodeLanes) {
+    hasher.f32(lanes.position[0]);
+    hasher.f32(lanes.position[1]);
+    hasher.f32(lanes.scale[0]);
+    hasher.f32(lanes.scale[1]);
 }
 
 /// Hash paint-only lanes over the layout hash.
@@ -2655,11 +2651,9 @@ fn hash_node_paint(
     hasher: &mut Fingerprint,
     root: &GuiRoot,
     id: GuiNodeId,
+    style: &GuiNodeStyle,
     resolver: &dyn GuiResourceResolver,
 ) {
-    let Some(style) = root.style(id) else {
-        return;
-    };
     for lane in style.color {
         hasher.f32(lane);
     }
@@ -2730,74 +2724,52 @@ fn hash_control_state(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) {
 /// lanes a reskin leaves every fingerprint still and needs an unrelated
 /// trigger to repaint. All part states hash together: any part edit
 /// invalidates paint while cursors select the visible state, so paint
-/// rebuilds without remeasuring text or reflowing layout.
+/// rebuilds without remeasuring text or reflowing layout. Each lane hashes
+/// its name, storage type and stored bytes, read through one ordered scan.
 fn hash_node_part_paint(
     hasher: &mut Fingerprint,
     root: &GuiRoot,
     id: GuiNodeId,
     resolver: &dyn GuiResourceResolver,
 ) {
-    use crate::DynamicValue;
-
-    let prefix = format!("node_{}_part_", id.0);
-    let names: Vec<String> = root
-        .properties
-        .descriptors()
-        .range(prefix.clone()..)
-        .take_while(|(name, _)| name.starts_with(&prefix))
-        .map(|(name, _)| name.clone())
-        .collect();
-    for name in names {
-        hasher.string(&name);
-        let lane_kind = super::super::tree::component::GUI_PART_PROPERTIES
-            .iter()
-            .find_map(|(suffix, kind)| {
-                name.strip_suffix(suffix)
-                    .and_then(|part| part.ends_with('_').then_some(*kind))
-            });
-        match lane_kind {
-            Some(crate::DynamicPropertyKind::Vec4) => match root.properties.get(&name) {
-                Some(DynamicValue::Vec4(lanes)) => {
+    let prefix = super::super::tree::component::node_parts_prefix(id);
+    for (lane, descriptor) in root.part_lanes(&prefix) {
+        hasher.string(lane);
+        hasher.u32(descriptor.kind as u32);
+        if descriptor.kind == crate::DynamicPropertyKind::Asset {
+            let source = root.properties.descriptor_asset(descriptor);
+            hash_asset(hasher, source);
+            match source.and_then(|source| resolver.resource_generation(source)) {
+                Some(generation) => {
                     hasher.u32(1);
-                    for lane in lanes {
-                        hasher.f32(lane);
-                    }
+                    hasher.u64(generation);
                 }
-                _ => hasher.u32(0),
-            },
-            Some(crate::DynamicPropertyKind::F32) => match root.properties.get(&name) {
-                Some(DynamicValue::F32(value)) => {
-                    hasher.u32(2);
-                    hasher.f32(value);
-                }
-                _ => hasher.u32(0),
-            },
-            Some(crate::DynamicPropertyKind::Vec2) => match root.properties.get(&name) {
-                Some(DynamicValue::Vec2(lanes)) => {
-                    hasher.u32(3);
-                    for lane in lanes {
-                        hasher.f32(lane);
-                    }
-                }
-                _ => hasher.u32(0),
-            },
-            Some(crate::DynamicPropertyKind::Asset) => {
-                let source = root.properties.asset(&name).cloned();
-                hash_asset(hasher, &source);
-                match source
-                    .as_ref()
-                    .and_then(|source| resolver.resource_generation(source))
-                {
-                    Some(generation) => {
-                        hasher.u32(1);
-                        hasher.u64(generation);
-                    }
-                    None => hasher.u32(0),
-                }
+                None => hasher.u32(0),
             }
-            _ => hasher.u32(u32::MAX),
+            continue;
+        }
+
+        let start = descriptor.offset as usize;
+        match root
+            .properties
+            .buffer()
+            .get(start..start + descriptor.kind.byte_len())
+        {
+            Some(bytes) => hasher.bytes(bytes),
+            None => hasher.u32(u32::MAX),
         }
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static FINGERPRINT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Input fingerprint passes on this thread since the previous call.
+#[cfg(test)]
+pub(super) fn take_fingerprint_passes() -> usize {
+    FINGERPRINT_PASSES.with(|passes| passes.replace(0))
 }
 
 /// Compute the four input fingerprints for one root in storage order.
@@ -2807,6 +2779,9 @@ fn fingerprints(
     units: f32,
     resolver: &dyn GuiResourceResolver,
 ) -> (u64, u64, u64, u64) {
+    #[cfg(test)]
+    FINGERPRINT_PASSES.with(|passes| passes.set(passes.get() + 1));
+
     let mut structure = Fingerprint::new();
     let mut layout = Fingerprint::new();
     let mut visual = Fingerprint::new();
@@ -2815,9 +2790,12 @@ fn fingerprints(
     structure.u32(root.nodes().root_node().map(|id| id.0).unwrap_or(u32::MAX));
     for node in root.nodes().as_slice() {
         hash_node_structure(&mut structure, root, node.id);
-        hash_node_layout(&mut layout, root, node.id, resolver);
-        hash_node_visual(&mut visual, root, node.id);
-        hash_node_paint(&mut paint, root, node.id, resolver);
+        let Some(lanes) = root.node_lanes(node.id) else {
+            continue;
+        };
+        hash_node_layout(&mut layout, &lanes.style, resolver);
+        hash_node_visual(&mut visual, &lanes);
+        hash_node_paint(&mut paint, root, node.id, &lanes.style, resolver);
     }
     let structure = structure.finish();
     layout.u64(structure);
@@ -2901,6 +2879,13 @@ struct RetainedGuiRoot {
     root_incarnation: u64,
     layout_revision: u64,
     paint_revision: u64,
+    /// Advances with every paint revision except an in-place translation,
+    /// which moves geometry without changing any record's other fields.
+    content_revision: u64,
+    /// Translatable geometry of each record at the latest full evaluation,
+    /// index-aligned with the view's nodes. Translation always starts from
+    /// here, so repeated visual edits do not accumulate rounding.
+    base: Vec<RetainedGeometry>,
     struct_fp: u64,
     layout_fp: u64,
     visual_fp: u64,
@@ -2909,6 +2894,89 @@ struct RetainedGuiRoot {
     remeasure_count: u64,
     reflow_count: u64,
     view: GuiEvaluatedView,
+}
+
+/// Record geometry that a pure visual translation moves.
+#[derive(Clone, Copy)]
+struct RetainedGeometry {
+    origin: [f32; 2],
+    content_origin: [f32; 2],
+    visual_offset: [f32; 2],
+}
+
+fn retained_geometry(nodes: &[GuiEvaluatedNode]) -> Vec<RetainedGeometry> {
+    nodes
+        .iter()
+        .map(|node| RetainedGeometry {
+            origin: [node.rect[0], node.rect[1]],
+            content_origin: node.content_origin,
+            visual_offset: node.visual_offset,
+        })
+        .collect()
+}
+
+/// Apply changed visual translations to retained geometry without a layout
+/// pass. A translation moves its node and whole subtree by the same amount:
+/// sizes, alignment and measurement never observe it. Returns false, leaving
+/// the view for a full evaluation to replace, when any scale changed, an
+/// unavailable node's translation changed, or a moved subtree would move a
+/// ScrollView viewport (and so descendant clips).
+fn translate_in_place(
+    root: &GuiRoot,
+    units: f32,
+    base: &[RetainedGeometry],
+    nodes: &mut [GuiEvaluatedNode],
+) -> bool {
+    if base.len() != nodes.len() {
+        return false;
+    }
+
+    // (depth, accumulated translation from the latest full evaluation)
+    let mut ancestors: Vec<(u32, [f32; 2])> = Vec::new();
+    for (record, base) in nodes.iter_mut().zip(base) {
+        while ancestors
+            .last()
+            .is_some_and(|(depth, _)| *depth >= record.depth)
+        {
+            ancestors.pop();
+        }
+        let inherited = ancestors.last().map_or([0.0, 0.0], |(_, shift)| *shift);
+        let (offset, scale) = visual_scaled(root, record.node, units);
+        // Placeholders ignore their own translation, so only unchanged
+        // offsets keep them valid.
+        if scale != record.visual_scale || (!record.available && offset != base.visual_offset) {
+            return false;
+        }
+
+        let shift = [
+            inherited[0] + (offset[0] - base.visual_offset[0]),
+            inherited[1] + (offset[1] - base.visual_offset[1]),
+        ];
+        if shift != [0.0, 0.0] && record.content_extents.is_some() {
+            return false;
+        }
+
+        let origin = [base.origin[0] + shift[0], base.origin[1] + shift[1]];
+        let content_origin = [
+            base.content_origin[0] + shift[0],
+            base.content_origin[1] + shift[1],
+        ];
+        if !origin
+            .iter()
+            .chain(&content_origin)
+            .all(|value| value.is_finite())
+        {
+            return false;
+        }
+
+        record.rect[0] = origin[0];
+        record.rect[1] = origin[1];
+        record.content_origin = content_origin;
+        record.visual_offset = offset;
+        ancestors.push((record.depth, shift));
+    }
+
+    true
 }
 
 /// Retained constraint evaluation for every live GUI root. Unchanged frames
@@ -2951,6 +3019,7 @@ impl GuiLayoutCache {
             retained.paint_fp = u64::MAX;
             if retained.view.available {
                 retained.paint_revision = retained.paint_revision.saturating_add(1);
+                retained.content_revision = retained.content_revision.saturating_add(1);
                 retained.view.paint_revision = retained.paint_revision;
             }
             retained.view.available = false;
@@ -3013,10 +3082,28 @@ impl GuiLayoutCache {
             && retained.struct_fp == struct_fp
             && retained.layout_fp == layout_fp
         {
-            // No reflow. Visual-only edits rebuild retained geometry without
-            // remeasuring text or advancing reflow counters; paint-only edits
-            // refresh retained colours without touching measurement.
+            // No reflow. Translation-only edits move retained geometry in
+            // place; other visual edits rebuild it without remeasuring text or
+            // advancing reflow counters; paint-only edits refresh retained
+            // colours without touching measurement.
             if retained.visual_fp != visual_fp {
+                if translate_in_place(
+                    request.root,
+                    request.units_per_metre,
+                    &retained.base,
+                    &mut retained.view.nodes,
+                ) {
+                    retained.visual_fp = visual_fp;
+                    retained.paint_revision += 1;
+                    retained.view.paint_revision = retained.paint_revision;
+                    if retained.paint_fp != paint_fp {
+                        refresh_paint(request.root, &mut retained.view);
+                        retained.paint_fp = paint_fp;
+                        retained.content_revision += 1;
+                    }
+                    return &retained.view;
+                }
+
                 let (nodes, diagnostics, remeasured, texts) =
                     evaluate_tree(request, resolver, std::mem::take(&mut retained.texts));
                 retained.texts = texts;
@@ -3026,6 +3113,8 @@ impl GuiLayoutCache {
                 retained.visual_fp = visual_fp;
                 retained.paint_fp = paint_fp;
                 retained.paint_revision += 1;
+                retained.content_revision += 1;
+                retained.base = retained_geometry(&nodes);
                 let view = &mut retained.view;
                 view.nodes = nodes;
                 view.diagnostics = diagnostics;
@@ -3035,6 +3124,7 @@ impl GuiLayoutCache {
                 refresh_paint(request.root, &mut retained.view);
                 retained.paint_fp = paint_fp;
                 retained.paint_revision += 1;
+                retained.content_revision += 1;
                 retained.view.paint_revision = retained.paint_revision;
             }
 
@@ -3053,6 +3143,8 @@ impl GuiLayoutCache {
         retained.reflow_count += 1;
         retained.layout_revision += 1;
         retained.paint_revision += 1;
+        retained.content_revision += 1;
+        retained.base = retained_geometry(&nodes);
         let view = GuiEvaluatedView {
             entity,
             root_incarnation: request.root_incarnation,
@@ -3083,6 +3175,29 @@ impl GuiLayoutCache {
         self.roots
             .get(&entity)
             .map(|retained| retained.paint_revision)
+    }
+
+    /// Current content revision for one root entity: it follows the paint
+    /// revision except across in-place translations, so consumers that do
+    /// not read translated geometry can skip those frames.
+    pub fn content_revision(&self, entity: EntityId) -> Option<u64> {
+        self.roots
+            .get(&entity)
+            .map(|retained| retained.content_revision)
+    }
+
+    /// Whether `entity` holds retained output for this root incarnation.
+    pub(crate) fn is_current(&self, entity: EntityId, root_incarnation: u64) -> bool {
+        self.roots
+            .get(&entity)
+            .is_some_and(|retained| retained.root_incarnation == root_incarnation)
+    }
+
+    /// Advance the evaluation tick of an unchanged root without evaluating.
+    pub(crate) fn touch(&mut self, entity: EntityId, evaluation_tick: u64) {
+        if let Some(retained) = self.roots.get_mut(&entity) {
+            retained.view.evaluation_tick = evaluation_tick;
+        }
     }
 
     /// Drop one root's retained output, invalidating it before reuse.
@@ -3117,6 +3232,8 @@ impl RetainedGuiRoot {
             root_incarnation,
             layout_revision: 0,
             paint_revision: 0,
+            content_revision: 0,
+            base: Vec::new(),
             struct_fp: u64::MAX,
             layout_fp: u64::MAX,
             visual_fp: u64::MAX,

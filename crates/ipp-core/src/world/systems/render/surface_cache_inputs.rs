@@ -11,13 +11,15 @@
 //!
 //! Both revisions come from one counter owned by this World's RenderSystem.
 //! Every issued value is larger than all earlier ones, so a revision never
-//! repeats within the World and a Surface that stops being tracked (policy
-//! removed, Surface removed, entity deleted) takes fresh values when it is
-//! tracked again. Surfaces without a valid policy publish zero for both.
+//! repeats within the World. Every prepared Surface publishes revisions,
+//! cached or presented directly, so the renderer can also reuse derived
+//! data of direct Surfaces while their paint holds. A Surface that stops
+//! being prepared (Surface removed, entity deleted) or changes between
+//! cached and direct presentation takes fresh values.
 //!
 //! Revisions are derived after RenderSystem re-prepares Surface primitives,
 //! which it already does only when some painted input changed. The tracker
-//! hashes the prepared paint of each opted-in Surface on those frames and
+//! hashes the prepared paint of each Surface on those frames and
 //! issues a new paint revision when the hash differs from the previous one.
 //! Frames without re-preparation (camera motion, unrelated edits) do no
 //! hashing and keep every revision. Each painted input reaches the hash
@@ -72,7 +74,7 @@ use std::hash::{DefaultHasher, Hasher};
 /// Per-World bookkeeping for the prepared cache inputs.
 #[derive(Default)]
 pub(in crate::world) struct SurfaceCacheInputs {
-    /// Hashes last published for each opted-in Surface.
+    /// Hashes last published for each prepared Surface.
     tracked: BTreeMap<EntityId, SurfaceCacheInputHashes>,
     /// Last issued revision; zero means none was issued.
     last_revision: u64,
@@ -87,6 +89,8 @@ pub(in crate::world) struct SurfaceCacheInputs {
 struct SurfaceCacheInputHashes {
     paint: u64,
     resources: u64,
+    /// Whether the Surface had a valid cache policy when hashed.
+    cached: bool,
 }
 
 impl SurfaceCacheInputs {
@@ -117,20 +121,15 @@ impl SurfaceCacheInputs {
     ) {
         for item in items.iter_mut() {
             item.cache = policy(item.entity);
-            if item.cache.is_none() {
-                item.paint_revision = 0;
-                item.resource_revision = 0;
-                continue;
-            }
-
             let hashes = SurfaceCacheInputHashes {
                 paint: paint_hash(item),
                 resources: resource_hash(item, &mut self.resource_keys),
+                cached: item.cache.is_some(),
             };
             let previous = self
                 .tracked
                 .insert(item.entity, hashes)
-                .filter(|_| item.paint_revision != 0);
+                .filter(|previous| item.paint_revision != 0 && previous.cached == hashes.cached);
             let Some(previous) = previous else {
                 item.paint_revision = next_revision(&mut self.last_revision);
                 item.resource_revision = next_revision(&mut self.last_revision);
@@ -149,7 +148,7 @@ impl SurfaceCacheInputs {
         self.tracked.retain(|entity, _| {
             items
                 .binary_search_by_key(entity, |item| item.entity)
-                .is_ok_and(|index| items[index].cache.is_some())
+                .is_ok()
         });
     }
 

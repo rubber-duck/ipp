@@ -19,6 +19,20 @@ pub(super) struct GuiSkinPresentation {
     last_painted: crate::systems::gui::GuiSkinnedAppearance,
 }
 
+/// Every input skin reconciliation reads, compared before each pass so an
+/// unchanged frame skips it. Roots carry their layout content revision
+/// (evaluated records, paint lanes and control values, not translated
+/// geometry) and committed-change count (authored lanes that animation may
+/// hide); cursors select interaction states; controller states carry
+/// acknowledgements, rejections, failures and crossfade completion.
+#[cfg(feature = "gui")]
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct GuiSkinReconcileKey {
+    roots: Vec<(crate::EntityId, u64, u64)>,
+    cursors: crate::systems::gui::GuiSkinCursors,
+    controllers: Vec<crate::systems::animation::GuiSkinControllerState>,
+}
+
 #[cfg(feature = "gui")]
 #[derive(Clone, Debug)]
 pub(super) struct GuiSkinPendingTransition {
@@ -171,6 +185,28 @@ impl RenderSystem {
             GuiSkinAnimationOwner,
         };
 
+        // Unchanged inputs reproduce the retained presentations. A pending
+        // transition reissues its request every frame until acknowledged.
+        let key = GuiSkinReconcileKey {
+            roots: layout.content_states(),
+            cursors: self.gui_skin_cursors.clone(),
+            controllers: animation.skin_controller_states(),
+        };
+        let pending = self
+            .gui_skin_presentations
+            .values()
+            .any(|presentation| presentation.pending.is_some());
+        if !pending && self.gui_skin_key.as_ref() == Some(&key) {
+            return false;
+        }
+        self.gui_skin_key = Some(key);
+
+        #[cfg(test)]
+        super::system::PREPARATION_COUNTS.with(|counts| {
+            let (passes, reconciliations) = counts.get();
+            counts.set((passes, reconciliations + 1));
+        });
+
         let mut live = std::collections::BTreeSet::new();
         let mut overrides = std::collections::BTreeMap::new();
         let mut next_request = self.next_skin_animation_request;
@@ -182,17 +218,30 @@ impl RenderSystem {
             let Some(effective_root) = world.components.gui_root(entity.index() as usize) else {
                 continue;
             };
-            let mut underlying = crate::ComponentValue::GuiRoot(effective_root.clone());
-            animation
-                .state
-                .restore_underlying(entity, view.root_incarnation, &mut underlying);
-            let crate::ComponentValue::GuiRoot(authored_root) = underlying else {
-                unreachable!("restored GUI root remains a GUI root")
+            // Borrow the effective root unless animation holds authored
+            // values underneath it.
+            let restored;
+            let authored_root = if animation.state.has_underlying(
+                entity,
+                view.root_incarnation,
+                crate::ComponentValue::GUI_ROOT,
+            ) {
+                let mut underlying = crate::ComponentValue::GuiRoot(effective_root.clone());
+                animation
+                    .state
+                    .restore_underlying(entity, view.root_incarnation, &mut underlying);
+                let crate::ComponentValue::GuiRoot(root) = underlying else {
+                    unreachable!("restored GUI root remains a GUI root")
+                };
+                restored = root;
+                &restored
+            } else {
+                effective_root
             };
 
             let parts = crate::systems::gui::skinned_parts_for_view(
                 view,
-                &authored_root,
+                authored_root,
                 &self.gui_skin_cursors,
             );
             for part in parts {
@@ -208,7 +257,7 @@ impl RenderSystem {
                     node.enabled,
                 );
                 let Some(desired) = crate::systems::gui::resolve_paint_appearance(
-                    &authored_root,
+                    authored_root,
                     node,
                     &interaction,
                     id.part,
@@ -216,7 +265,7 @@ impl RenderSystem {
                     continue;
                 };
                 let motion = crate::systems::gui::resolve_state_part_motion(
-                    &authored_root,
+                    authored_root,
                     id.node,
                     id.part.as_str(),
                     desired.state,
@@ -309,7 +358,7 @@ impl RenderSystem {
                     presentation.acknowledged = None;
                     presentation.last_painted = desired.clone();
                     if let Some(to) = motion.as_ref()
-                        && skin_numeric_base_complete(&authored_root, id.node, id.part)
+                        && skin_numeric_base_complete(authored_root, id.node, id.part)
                         && let Some(sample) = skin_animation_sample(&desired)
                         && next_request != 0
                     {
@@ -326,7 +375,7 @@ impl RenderSystem {
                     presentation.refused = None;
                 } else if appearance_changed {
                     if let Some((from, to)) = presentation.motion.as_ref().zip(motion.as_ref())
-                        && skin_numeric_base_complete(&authored_root, id.node, id.part)
+                        && skin_numeric_base_complete(authored_root, id.node, id.part)
                         && let Some(source_sample) = skin_animation_sample(&presentation.desired)
                         && skin_animation_sample(&desired).is_some()
                     {

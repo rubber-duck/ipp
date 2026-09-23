@@ -521,3 +521,179 @@ fn pending_font_recovers_without_unrelated_edits() {
     assert_eq!(view.remeasure_count, 1);
     assert!(node_by_id(view, leaf).available);
 }
+
+/// Records match a fresh full evaluation: translated geometry within float
+/// rounding, every other field exactly.
+fn assert_matches_full_evaluation(
+    cached: &GuiEvaluatedView,
+    root: &GuiRoot,
+    resolver: &TestResolver<'_>,
+) {
+    let full = GuiLayoutCache::default()
+        .evaluate(entity(), &request(root, 1), resolver)
+        .clone();
+    assert_eq!(cached.nodes.len(), full.nodes.len());
+
+    let close = |actual: &[f32], expected: &[f32]| {
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() <= 1e-4)
+    };
+    for (cached, full) in cached.nodes.iter().zip(&full.nodes) {
+        assert!(close(&cached.rect, &full.rect), "{cached:?} != {full:?}");
+        assert!(close(&cached.content_origin, &full.content_origin));
+        assert!(close(&cached.visual_offset, &full.visual_offset));
+
+        let mut aligned = cached.clone();
+        aligned.rect = full.rect;
+        aligned.content_origin = full.content_origin;
+        aligned.visual_offset = full.visual_offset;
+        assert_eq!(&aligned, full);
+    }
+    assert_eq!(cached.diagnostics, full.diagnostics);
+}
+
+/// Column root with a translated row of text and a sized box, and a
+/// ScrollView whose clipped content can translate independently.
+fn translation_tree() -> (GuiRoot, [GuiNodeId; 5]) {
+    let mut tree = TreeBuilder::new();
+    let root = tree.add(
+        None,
+        GuiNodeContent::Container(GuiContainerKind::Column),
+        sized(4.0, 2.0),
+    );
+    let row = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::Row),
+        sized(4.0, 0.5),
+    );
+    let text = tree.add(
+        Some(row),
+        GuiNodeContent::Text("Ae".to_owned()),
+        text_style(),
+    );
+    tree.add(
+        Some(row),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            background_color: Some([0.2, 0.3, 0.4, 1.0]),
+            ..sized(1.0, 0.25)
+        },
+    );
+    let scroll = tree.add(
+        Some(root),
+        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeStyle {
+            flex: Some(1.0),
+            width: Some(4.0),
+            ..Default::default()
+        },
+    );
+    let content = tree.add(
+        Some(scroll),
+        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeStyle::default(),
+    );
+    let item = tree.add(
+        Some(content),
+        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeStyle {
+            background_color: Some([0.5, 0.5, 0.5, 1.0]),
+            ..sized(4.0, 1.0)
+        },
+    );
+    let mut root_tree = tree.build();
+    for id in [row, text, scroll, item] {
+        let mut builder = TreeBuilder {
+            root: root_tree,
+        };
+        builder.set_visual(id, [0.0, 0.0], [1.0, 1.0]);
+        root_tree = builder.build();
+    }
+    (root_tree, [row, text, scroll, content, item])
+}
+
+fn set_position(root: &mut GuiRoot, id: GuiNodeId, position: [f32; 2]) {
+    root.properties
+        .set(
+            &GuiRoot::property_name(id, "position").unwrap(),
+            DynamicValue::Vec2(position),
+        )
+        .unwrap();
+}
+
+#[test]
+fn translation_only_edits_move_geometry_in_place_like_full_evaluation() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let (mut root_tree, [row, text, _, _, item]) = translation_tree();
+
+    let mut cache = GuiLayoutCache::default();
+    let first = cache
+        .evaluate(entity(), &request(&root_tree, 1), &resolver)
+        .clone();
+    let content = cache.content_revision(entity()).unwrap();
+
+    // Animated translations of a subtree, a leaf inside it and a node
+    // inside the ScrollView: no reflow, no remeasure and no content change,
+    // while paint advances every frame and never drifts.
+    for frame in 0..200_u64 {
+        let t = frame as f32 * 0.37;
+        set_position(&mut root_tree, row, [t.sin() * 0.3, t.cos() * 0.1]);
+        set_position(&mut root_tree, text, [0.05 * t.cos(), 0.0]);
+        set_position(&mut root_tree, item, [0.0, 0.2 * t.sin()]);
+
+        let view = cache
+            .evaluate(entity(), &request(&root_tree, frame + 2), &resolver)
+            .clone();
+        assert_eq!(view.reflow_count, first.reflow_count);
+        assert_eq!(view.layout_revision, first.layout_revision);
+        assert_eq!(view.remeasure_count, first.remeasure_count);
+        assert_eq!(view.paint_revision, first.paint_revision + frame + 1);
+        assert_eq!(cache.content_revision(entity()), Some(content));
+        assert_matches_full_evaluation(&view, &root_tree, &resolver);
+    }
+}
+
+#[test]
+fn scale_edits_and_moved_scroll_viewports_fall_back_to_full_evaluation() {
+    let font = test_font();
+    let resolver = TestResolver::with_font(&font);
+    let (mut root_tree, [row, _, scroll, _, _]) = translation_tree();
+
+    let mut cache = GuiLayoutCache::default();
+    cache.evaluate(entity(), &request(&root_tree, 1), &resolver);
+    let content = cache.content_revision(entity()).unwrap();
+
+    // Scale changes accumulated geometry: rebuild the records.
+    let mut builder = TreeBuilder {
+        root: root_tree,
+    };
+    builder.set_visual(row, [0.1, 0.0], [1.5, 1.0]);
+    root_tree = builder.build();
+    let view = cache
+        .evaluate(entity(), &request(&root_tree, 2), &resolver)
+        .clone();
+    assert_eq!(cache.content_revision(entity()), Some(content + 1));
+    assert_matches_full_evaluation(&view, &root_tree, &resolver);
+
+    // Moving a ScrollView moves its viewport and so its descendants' clips.
+    set_position(&mut root_tree, scroll, [0.0, 0.3]);
+    let view = cache
+        .evaluate(entity(), &request(&root_tree, 3), &resolver)
+        .clone();
+    assert_eq!(cache.content_revision(entity()), Some(content + 2));
+    assert_matches_full_evaluation(&view, &root_tree, &resolver);
+
+    // Paint edits on a translation frame still refresh paint records.
+    set_position(&mut root_tree, row, [0.2, 0.0]);
+    let mut recoloured = root_tree.style(row).unwrap();
+    recoloured.background_color = Some([1.0, 0.0, 0.0, 1.0]);
+    root_tree.install_node_style(row, &recoloured).unwrap();
+    let view = cache
+        .evaluate(entity(), &request(&root_tree, 4), &resolver)
+        .clone();
+    assert_eq!(cache.content_revision(entity()), Some(content + 3));
+    assert_matches_full_evaluation(&view, &root_tree, &resolver);
+}

@@ -16,6 +16,21 @@ pub struct AnimationSystem {
         std::collections::BTreeMap<super::GuiSkinAnimationOwner, GuiSkinAnimationController>,
 }
 
+/// Observable state of one derived skin controller; see
+/// [`AnimationSystem::skin_controller_states`].
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::world) struct GuiSkinControllerState {
+    owner: super::GuiSkinAnimationOwner,
+    request: u64,
+    rejection: Option<crate::ErrorReason>,
+    controller: Option<(
+        super::AnimationPlaybackStatus,
+        Option<crate::ErrorReason>,
+        bool,
+    )>,
+}
+
 #[cfg(feature = "gui")]
 #[derive(Clone, Copy, Debug)]
 struct GuiSkinAnimationController {
@@ -44,6 +59,31 @@ impl AnimationSystem {
                 .then_some(crate::ErrorReason::InvalidValue)
         });
         Some((owned.request, &controller.snapshot, failure))
+    }
+
+    /// Everything skin presentation observes about each derived skin
+    /// controller, in owner order: its request, rejection, and the owned
+    /// controller's playback status, failure and whether it is still
+    /// crossfading. Clock time is excluded; sampled values reach the
+    /// GuiRoot through ordinary numeric writes.
+    #[cfg(feature = "gui")]
+    pub(in crate::world) fn skin_controller_states(&self) -> Vec<GuiSkinControllerState> {
+        self.skin_controllers
+            .iter()
+            .map(|(&owner, owned)| GuiSkinControllerState {
+                owner,
+                request: owned.request,
+                rejection: owned.rejection,
+                controller: owned.id.and_then(|id| {
+                    let controller = self.state.controllers.get(&id)?;
+                    Some((
+                        controller.snapshot.state,
+                        controller.failure,
+                        controller.snapshot.transition.is_some(),
+                    ))
+                }),
+            })
+            .collect()
     }
 
     #[cfg(feature = "gui")]

@@ -33,6 +33,20 @@ pub struct GuiLayoutSystem {
     /// per Surface metre. Absent entries use [`DEFAULT_UNITS_PER_METRE`];
     /// entries clear with their entity before identity reuse.
     units: BTreeMap<EntityId, f32>,
+    /// Entities holding a GuiRoot, in entity order, maintained by the
+    /// commit lifecycle so each frame visits roots rather than every entity.
+    roots: crate::world::component_query::ComponentQuery<super::super::GuiRoot>,
+    /// Roots whose GuiRoot or Surface changed through a commit or numeric
+    /// write since their last evaluation. Other retained roots keep their
+    /// output without recomputing input fingerprints.
+    stale: BTreeSet<EntityId>,
+    /// Every root re-evaluates: resource readiness, replacement or release
+    /// can change measurement and paint without a component change.
+    all_stale: bool,
+    /// Count of committed GuiRoot changes per root entity. Numeric writes do
+    /// not advance it, so consumers of authored (restored) input can tell a
+    /// commit from an animation sample.
+    commits: BTreeMap<EntityId, u64>,
 }
 
 crate::system_parameter!(super::super::GuiSystem);
@@ -69,6 +83,21 @@ impl GuiLayoutSystem {
         states
     }
 
+    /// Every evaluated root entity with the revisions consumers of its
+    /// evaluated records key on, in entity order: the content revision,
+    /// which follows paint except across in-place translations, and the
+    /// count of committed GuiRoot changes.
+    pub(crate) fn content_states(&self) -> Vec<(EntityId, u64, u64)> {
+        self.evaluated_entities()
+            .into_iter()
+            .filter_map(|entity| {
+                let revision = self.cache.content_revision(entity)?;
+                let commits = self.commits.get(&entity).copied().unwrap_or(0);
+                Some((entity, revision, commits))
+            })
+            .collect()
+    }
+
     /// Entities with retained layout output, in ascending order.
     pub fn evaluated_entities(&self) -> Vec<EntityId> {
         self.cache.entities()
@@ -96,17 +125,20 @@ impl GuiLayoutSystem {
             return Err(ErrorReason::InvalidValue);
         }
         self.units.insert(entity, units);
+        self.stale.insert(entity);
         Ok(())
     }
 
     /// Evaluate one root against explicit inputs without a World. Test and
-    /// tooling seam sharing the retained cache with the scheduled pass.
+    /// tooling seam sharing the retained cache with the scheduled pass,
+    /// which re-evaluates the root from World inputs on its next update.
     pub fn evaluate_for_test(
         &mut self,
         entity: EntityId,
         request: &GuiLayoutRequest<'_>,
         resolver: &dyn GuiResourceResolver,
     ) -> &GuiEvaluatedView {
+        self.stale.insert(entity);
         self.cache.evaluate(entity, request, resolver)
     }
 }
@@ -136,11 +168,60 @@ impl SystemFactory for GuiLayoutSystemFactory {
             cache: GuiLayoutCache::default(),
             bindings: crate::systems::SystemBindings::resolve(context)?,
             units: BTreeMap::new(),
+            roots: Default::default(),
+            stale: BTreeSet::new(),
+            all_stale: true,
+            commits: BTreeMap::new(),
         }))
     }
 }
 
 impl System for GuiLayoutSystem {
+    fn before_numeric_update(&mut self, context: &mut crate::systems::SystemNumericContext<'_>) {
+        for &(entity, component) in context.changed_components() {
+            if layout_input(component) {
+                self.stale.insert(entity);
+            }
+        }
+    }
+
+    fn before_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
+        for (entity, component) in context.changed_components() {
+            if layout_input(component) {
+                self.stale.insert(entity);
+            }
+            if component == ComponentValue::GUI_ROOT {
+                let commits = self.commits.entry(entity).or_default();
+                *commits = commits.wrapping_add(1);
+            }
+        }
+        self.roots.before_commit(context, ComponentValue::GUI_ROOT);
+    }
+
+    fn before_asset_release(
+        &mut self,
+        _context: &mut crate::systems::SystemAssetContext<'_>,
+        _event: &crate::services::asset_management::AssetLifecycleEvent,
+    ) {
+        self.all_stale = true;
+    }
+
+    fn asset_lifecycle(
+        &mut self,
+        _context: &mut crate::systems::SystemAssetContext<'_>,
+        _event: &crate::services::asset_management::AssetLifecycleEvent,
+    ) {
+        self.all_stale = true;
+    }
+
+    fn after_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
+        self.roots.after_commit(
+            context,
+            ComponentValue::GUI_ROOT,
+            crate::components::registry::ComponentStorage::gui_root_ptr,
+        );
+    }
+
     crate::system_update!(bindings);
 }
 
@@ -223,14 +304,17 @@ impl GuiLayoutSystem {
     ) {
         let world_id = ecs.id();
         let tick = ecs.world.tick;
-        let entities: Vec<EntityId> = ecs.world.state.entities.keys().copied().collect();
         let resolver = SystemResolver {
             world: world_id,
             assets,
         };
+        self.roots.prepare(
+            ecs.world,
+            crate::components::registry::ComponentStorage::gui_root_ptr,
+        );
 
         let mut live = BTreeSet::new();
-        for entity in entities {
+        for &(entity, _) in self.roots.entries() {
             let index = entity.index() as usize;
             let (Some(surface), Some(root)) = (
                 ecs.world.components.surface(index),
@@ -252,22 +336,45 @@ impl GuiLayoutSystem {
                 .and_then(|record| record.input(ComponentValue::GUI_ROOT))
                 .map(|input| input.incarnation)
                 .unwrap_or(0);
+            live.insert(entity);
+
+            // Unchanged inputs keep retained output; only the evaluation
+            // tick advances, as it would on a no-op refresh.
+            if !self.all_stale
+                && !self.stale.contains(&entity)
+                && self.cache.is_current(entity, root_incarnation)
+            {
+                self.cache.touch(entity, tick);
+                continue;
+            }
+
             let request = GuiLayoutRequest {
                 root,
                 root_incarnation,
                 surface_size: [surface.width, surface.height],
-                units_per_metre: self.units_per_metre(entity),
+                units_per_metre: self
+                    .units
+                    .get(&entity)
+                    .copied()
+                    .unwrap_or(DEFAULT_UNITS_PER_METRE),
                 evaluation_tick: tick,
             };
             self.cache.evaluate(entity, &request, &resolver);
-            live.insert(entity);
         }
 
         // Entities and components that went away invalidate their retained
         // output before any identity can be reused.
         self.cache.retain_entities(&live);
         self.units.retain(|entity, _| live.contains(entity));
+        self.commits.retain(|entity, _| live.contains(entity));
+        self.stale.clear();
+        self.all_stale = false;
     }
+}
+
+/// Components whose changes can alter a root's evaluated layout or paint.
+fn layout_input(component: u16) -> bool {
+    component == ComponentValue::GUI_ROOT || component == ComponentValue::SURFACE
 }
 
 impl crate::WorldContext<'_> {
@@ -285,6 +392,7 @@ impl crate::WorldContext<'_> {
         }
         self.with_system::<GuiLayoutSystem, _>(GuiLayoutSystem::ID, |system, _| {
             system.units.insert(entity, units);
+            system.stale.insert(entity);
         });
         Ok(())
     }

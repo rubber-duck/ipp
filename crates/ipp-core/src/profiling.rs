@@ -1,4 +1,13 @@
 //! Opt-in stage timing and allocation counters for profiling builds.
+//!
+//! Stage slots hold four counters each (calls, nanoseconds, allocation calls,
+//! requested bytes) at `slot * 4`. Slots `0..FIXED_STAGE_BASE` time the
+//! scheduled Systems: `position * SYSTEM_PHASES + phase`, with phases in
+//! check, accept, restore, prepare, evaluate and finish order. Slots from
+//! [`FIXED_STAGE_BASE`] time fixed commit and animation sections, so a System
+//! at any timed position never shares a slot with a fixed timer. Each stage
+//! also owns allocation category `slot + 1`; named allocation scopes use
+//! categories above [`STAGE_SLOTS`].
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 
@@ -8,12 +17,74 @@ static ALLOCS: AtomicU64 = AtomicU64::new(0);
 static BYTES: AtomicU64 = AtomicU64::new(0);
 static NAMES: [std::sync::Mutex<&'static str>; 32] = [const { std::sync::Mutex::new("") }; 32];
 
+/// Timed phases per scheduled System.
+pub const SYSTEM_PHASES: usize = 6;
+
+/// Scheduled System positions with stage slots; later positions are not timed.
+pub const SYSTEM_STAGE_LIMIT: usize = 30;
+
+/// First stage slot of the fixed timers, after every System slot.
+pub const FIXED_STAGE_BASE: usize = SYSTEM_STAGE_LIMIT * SYSTEM_PHASES;
+
+/// Total stage slots; counters hold four values per slot.
+pub const STAGE_SLOTS: usize = 192;
+
+/// Fixed timers inside commit and animation work, independent of schedule positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FixedStage {
+    AnimationSampleAndStage,
+    AnimationRestoreAndStage,
+    AnimationApplyComponent,
+    CommitValidate,
+    CommitBefore,
+    CommitStorage,
+    CommitAfter,
+    AnimationValidate,
+    AnimationInvalidate,
+}
+
+impl FixedStage {
+    const ALL: [Self; 9] = [
+        Self::AnimationSampleAndStage,
+        Self::AnimationRestoreAndStage,
+        Self::AnimationApplyComponent,
+        Self::CommitValidate,
+        Self::CommitBefore,
+        Self::CommitStorage,
+        Self::CommitAfter,
+        Self::AnimationValidate,
+        Self::AnimationInvalidate,
+    ];
+
+    fn slot(self) -> usize {
+        FIXED_STAGE_BASE + self as usize
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::AnimationSampleAndStage => "profile.animation.sample_and_stage",
+            Self::AnimationRestoreAndStage => "profile.animation.restore_and_stage",
+            Self::AnimationApplyComponent => "profile.animation.apply_component",
+            Self::CommitValidate => "profile.commit.validate",
+            Self::CommitBefore => "profile.commit.before",
+            Self::CommitStorage => "profile.commit.storage",
+            Self::CommitAfter => "profile.commit.after",
+            Self::AnimationValidate => "profile.animation.validate",
+            Self::AnimationInvalidate => "profile.animation.invalidate",
+        }
+    }
+}
+
+// Stage categories are `slot + 1`; named allocation scopes start at 193.
+const _: () = assert!(FIXED_STAGE_BASE + FixedStage::ALL.len() <= STAGE_SLOTS);
+const _: () = assert!(STAGE_SLOTS < 193);
+
 static ACTIVE_CATEGORY: AtomicUsize = AtomicUsize::new(0);
 static CATEGORY_NAMES: [std::sync::Mutex<&'static str>; 256] =
     [const { std::sync::Mutex::new("") }; 256];
 static CATEGORY_COUNTS: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
 
-static COUNTERS: [AtomicU64; 768] = [const { AtomicU64::new(0) }; 768];
+static COUNTERS: [AtomicU64; STAGE_SLOTS * 4] = [const { AtomicU64::new(0) }; STAGE_SLOTS * 4];
 
 /// Opt-in allocator for profiling executables; libraries do not select a global allocator.
 pub struct CountingAllocator;
@@ -111,17 +182,32 @@ pub(crate) struct Stage {
     start: u64,
     allocations: (u64, u64),
     enabled: bool,
-    _category: AllocationScope,
+    _category: Option<AllocationScope>,
 }
 
 impl Stage {
-    pub(crate) fn new(index: usize, name: &'static str) -> Self {
-        let enabled = ENABLED.load(Relaxed);
-        if enabled {
-            *NAMES[index / 6].lock().unwrap() = name;
+    /// Time one phase of the System at schedule `position`. Positions from
+    /// [`SYSTEM_STAGE_LIMIT`] are not timed rather than sharing another slot.
+    pub(crate) fn system(position: usize, phase: usize, name: &'static str) -> Self {
+        if position >= SYSTEM_STAGE_LIMIT || phase >= SYSTEM_PHASES {
+            return Self::disabled();
         }
+
+        if ENABLED.load(Relaxed) {
+            *NAMES[position].lock().unwrap() = name;
+        }
+        Self::start(position * SYSTEM_PHASES + phase, name)
+    }
+
+    /// Time one fixed commit or animation section in its own slot.
+    pub(crate) fn fixed(stage: FixedStage) -> Self {
+        Self::start(stage.slot(), stage.name())
+    }
+
+    fn start(index: usize, name: &'static str) -> Self {
+        let enabled = ENABLED.load(Relaxed);
         Self {
-            _category: AllocationScope::new(index + 1, name),
+            _category: Some(AllocationScope::new(index + 1, name)),
             index,
             start: if enabled {
                 nanos()
@@ -130,6 +216,16 @@ impl Stage {
             },
             allocations: allocations(),
             enabled,
+        }
+    }
+
+    fn disabled() -> Self {
+        Self {
+            index: 0,
+            start: 0,
+            allocations: (0, 0),
+            enabled: false,
+            _category: None,
         }
     }
 }
@@ -153,9 +249,17 @@ impl Drop for Stage {
     }
 }
 
-/// Stable schedule label for profile output.
+/// Stable schedule label for the System at one timed position.
 pub fn system_name(index: usize) -> &'static str {
     *NAMES[index].lock().unwrap()
+}
+
+/// Label of one stage slot: `system#phase` names come from [`system_name`];
+/// fixed slots return their fixed timer name, and unused slots are empty.
+pub fn fixed_stage_name(slot: usize) -> &'static str {
+    slot.checked_sub(FIXED_STAGE_BASE)
+        .and_then(|ordinal| FixedStage::ALL.get(ordinal))
+        .map_or("", |stage| stage.name())
 }
 
 /// Exclusive allocation attribution for a single-threaded profiling Host.
@@ -199,4 +303,22 @@ pub fn category_name(index: usize) -> &'static str {
 /// Flat counter index: category * 2 for calls, then requested bytes.
 pub fn category_counter(index: usize) -> u64 {
     CATEGORY_COUNTS[index].load(Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_timers_never_share_a_system_slot() {
+        let last_system_slot = SYSTEM_STAGE_LIMIT * SYSTEM_PHASES - 1;
+
+        for stage in FixedStage::ALL {
+            assert!(stage.slot() > last_system_slot);
+            assert!(stage.slot() < STAGE_SLOTS);
+            assert_eq!(fixed_stage_name(stage.slot()), stage.name());
+        }
+
+        assert_eq!(fixed_stage_name(last_system_slot), "");
+    }
 }

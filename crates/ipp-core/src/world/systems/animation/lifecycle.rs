@@ -245,7 +245,8 @@ impl AnimationSystem {
         #[cfg(feature = "profiling")]
         let _allocation_scope = crate::profiling::AllocationScope::new(199, "animation.invalidate");
         #[cfg(feature = "profiling")]
-        let _measurement = crate::profiling::Stage::new(24 * 6, "profile.animation.invalidate");
+        let _measurement =
+            crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationInvalidate);
 
         // Every real mutation invalidates held discrete output, including writes
         // from another System. The sampling controller acknowledges its own

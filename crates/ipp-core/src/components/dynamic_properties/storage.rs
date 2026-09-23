@@ -103,6 +103,44 @@ impl DynamicProperties {
         DynamicValue::decode(&bytes).ok()
     }
 
+    /// Borrow the asset selection behind a prepared asset descriptor.
+    #[cfg(feature = "gui")]
+    pub(crate) fn descriptor_asset(
+        &self,
+        descriptor: DynamicPropertyDescriptor,
+    ) -> Option<&AssetSource> {
+        (descriptor.kind == DynamicPropertyKind::Asset)
+            .then(|| self.assets.get(&descriptor.key))
+            .flatten()
+    }
+
+    /// Names starting with `prefix`, in name order, with the remainder of
+    /// each name after the prefix: one ordered seek instead of a lookup
+    /// per candidate name.
+    #[cfg(feature = "gui")]
+    pub(crate) fn with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, DynamicPropertyDescriptor)> + 'a {
+        self.named_with_prefix(prefix)
+            .map(move |(name, descriptor)| (&name[prefix.len()..], descriptor))
+    }
+
+    /// Full names starting with `prefix`, in name order.
+    #[cfg(feature = "gui")]
+    pub(crate) fn named_with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, DynamicPropertyDescriptor)> + 'a {
+        self.descriptors
+            .range::<str, _>((
+                std::ops::Bound::Included(prefix),
+                std::ops::Bound::Unbounded,
+            ))
+            .take_while(move |(name, _)| name.starts_with(prefix))
+            .map(|(name, descriptor)| (name.as_str(), *descriptor))
+    }
+
     /// Resolve a name once for a prepared property binding.
     pub fn key(&self, name: &str) -> Option<u32> {
         self.descriptors.get(name).map(|descriptor| descriptor.key)
@@ -143,32 +181,11 @@ impl DynamicProperties {
             .filter(|v| *v != u32::MAX)
             .ok_or(FieldError::UnknownField)?;
         self.remove(name);
-        let size = value.kind().byte_len();
-        let mut occupied: Vec<_> = self
-            .descriptors
-            .values()
-            .filter(|d| d.kind.byte_len() > 0)
-            .map(|d| (d.offset as usize, d.kind.byte_len()))
-            .collect();
-        occupied.sort_unstable();
-        let mut offset = 0usize;
-        for (start, length) in occupied {
-            if start >= offset + size {
-                break;
-            }
-            offset = start + length;
-        }
-        let end = offset
-            .checked_add(size)
-            .filter(|n| *n <= u32::MAX as usize)
-            .ok_or(FieldError::UnknownField)?;
-        if end > self.buffer.len() {
-            self.buffer.resize(end, 0);
-        }
+        let offset = self.allocate(value.kind().byte_len())?;
         let descriptor = DynamicPropertyDescriptor {
             key,
             kind: value.kind(),
-            offset: offset as u32,
+            offset,
         };
         self.descriptors.insert(name.into(), descriptor);
         self.descriptors_by_key.insert(key, descriptor);
@@ -238,6 +255,49 @@ impl DynamicProperties {
             .unwrap_or(0);
         self.buffer.truncate(end);
         Some(descriptor.key)
+    }
+
+    /// Reserve `size` bytes at the first offset where they fit between
+    /// existing properties, else at the buffer end. Gaps exist only after
+    /// removals: when fewer free bytes remain than `size`, the first fit is
+    /// the end, found without collecting or sorting descriptors. Zero-sized
+    /// kinds occupy no bytes and use offset zero.
+    fn allocate(&mut self, size: usize) -> Result<u32, FieldError> {
+        if size == 0 {
+            return Ok(0);
+        }
+
+        let occupied: usize = self
+            .descriptors_by_key
+            .values()
+            .map(|d| d.kind.byte_len())
+            .sum();
+        let mut offset = self.buffer.len();
+        if self.buffer.len().saturating_sub(occupied) >= size {
+            let mut spans: Vec<_> = self
+                .descriptors_by_key
+                .values()
+                .filter(|d| d.kind.byte_len() > 0)
+                .map(|d| (d.offset as usize, d.kind.byte_len()))
+                .collect();
+            spans.sort_unstable();
+            offset = 0;
+            for (start, length) in spans {
+                if start >= offset + size {
+                    break;
+                }
+                offset = start + length;
+            }
+        }
+
+        let end = offset
+            .checked_add(size)
+            .filter(|n| *n <= u32::MAX as usize)
+            .ok_or(FieldError::UnknownField)?;
+        if end > self.buffer.len() {
+            self.buffer.resize(end, 0);
+        }
+        Ok(offset as u32)
     }
 
     /// Capture durable descriptors followed by typed property values.
@@ -387,3 +447,7 @@ impl DynamicProperties {
         Ok(value)
     }
 }
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod tests;

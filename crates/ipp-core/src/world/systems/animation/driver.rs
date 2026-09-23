@@ -1091,6 +1091,32 @@ pub(in crate::world) fn make_driver(
 }
 
 impl AnimationSystemState {
+    /// Whether [`Self::restore_underlying`] can change this component
+    /// incarnation, so callers clone it only when restoration applies.
+    #[cfg(feature = "gui")]
+    pub(in crate::world) fn has_underlying(
+        &self,
+        entity: EntityId,
+        incarnation: u64,
+        component: u16,
+    ) -> bool {
+        let matches = |identity: &AnimationTargetIdentity| {
+            identity.entity == entity
+                && identity.incarnation == incarnation
+                && identity.property.component() == component
+        };
+
+        self.pending_restorations
+            .iter()
+            .any(|(identity, _)| matches(identity) && identity.property.property().is_some())
+            || self.controllers.values().any(|controller| {
+                controller
+                    .drivers
+                    .iter()
+                    .any(|driver| matches(driver.identity()))
+            })
+    }
+
     /// Restore only driver-controlled fields into a temporary component snapshot.
     pub(in crate::world) fn restore_underlying(
         &self,

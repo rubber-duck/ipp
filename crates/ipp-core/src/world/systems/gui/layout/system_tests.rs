@@ -349,3 +349,165 @@ fn scheduled_pass_recovers_identical_valid_input_after_invalid_cache_entry() {
     assert!(!recovered.surface_primitives().is_empty());
     assert!(recovered.reflow_count > first.reflow_count);
 }
+
+fn panel_surface() -> ComponentValue {
+    let mut surface = Surface::default();
+    surface.width = 2.0;
+    surface.height = 1.0;
+    ComponentValue::Surface(surface)
+}
+
+fn apply(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> Vec<EntityId> {
+    let mut context = host.world_mut(world).unwrap();
+    let id = context.tick() + 1;
+    context
+        .enqueue(Batch {
+            id,
+            operations,
+        })
+        .unwrap();
+    let report = context.step(0.0).unwrap();
+    report.outcomes[0]
+        .result
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|(_, entity)| *entity)
+        .collect()
+}
+
+fn evaluated(host: &mut HostRuntime, world: WorldId) -> Vec<EntityId> {
+    host.world_mut(world)
+        .unwrap()
+        .system::<GuiLayoutSystem>(GuiLayoutSystem::ID)
+        .unwrap()
+        .evaluated_entities()
+}
+
+#[test]
+fn root_membership_follows_component_lifecycle_among_plain_entities() {
+    let (mut host, world, first) = setup();
+    let plain = apply(
+        &mut host,
+        world,
+        (0..2_000)
+            .map(|alias| Command::Create {
+                alias,
+                metadata: EntityMetadata::default(),
+            })
+            .collect(),
+    );
+    assert_eq!(evaluated(&mut host, world), vec![first]);
+
+    // A root added to an existing plain entity joins the next evaluation.
+    let second = plain[1_000];
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::InsertComponentValue {
+                entity: EntityRef::Handle(second),
+                value: panel_surface(),
+            },
+            Command::InsertComponentValue {
+                entity: EntityRef::Handle(second),
+                value: ComponentValue::GuiRoot(GuiRoot::default()),
+            },
+        ],
+    );
+    assert_eq!(evaluated(&mut host, world), vec![first, second]);
+
+    // Removing the component or deleting the entity drops retained output.
+    apply(
+        &mut host,
+        world,
+        vec![Command::RemoveComponent {
+            entity: EntityRef::Handle(first),
+            component: ComponentValue::GUI_ROOT,
+        }],
+    );
+    assert_eq!(evaluated(&mut host, world), vec![second]);
+
+    apply(
+        &mut host,
+        world,
+        vec![Command::Delete {
+            entity: EntityRef::Handle(second),
+        }],
+    );
+    assert!(evaluated(&mut host, world).is_empty());
+
+    // A reinserted root evaluates again under its new incarnation.
+    apply(
+        &mut host,
+        world,
+        vec![Command::InsertComponentValue {
+            entity: EntityRef::Handle(first),
+            value: ComponentValue::GuiRoot(GuiRoot::default()),
+        }],
+    );
+    assert_eq!(evaluated(&mut host, world), vec![first]);
+}
+
+#[test]
+fn unchanged_roots_keep_output_without_fingerprinting() {
+    let (mut host, world, panel) = setup();
+    apply(&mut host, world, Vec::new());
+    super::super::evaluation::take_fingerprint_passes();
+
+    for _ in 0..5 {
+        host.world_mut(world).unwrap().step(0.0).unwrap();
+    }
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 0);
+    let tick = host.world_mut(world).unwrap().tick();
+    let view = host
+        .world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap();
+    assert_eq!(
+        view.evaluation_tick,
+        tick - 1,
+        "no-op frames still advance the tick"
+    );
+
+    // A commit to the root, its Surface or its density re-evaluates it once.
+    apply(
+        &mut host,
+        world,
+        vec![Command::SetDynamicProperty {
+            entity: EntityRef::Handle(panel),
+            component: ComponentValue::GUI_ROOT,
+            name: "node_1_opacity".into(),
+            value: crate::DynamicValue::F32(0.5),
+        }],
+    );
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
+
+    apply(
+        &mut host,
+        world,
+        vec![Command::InsertComponentValue {
+            entity: EntityRef::Handle(panel),
+            value: panel_surface(),
+        }],
+    );
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
+    assert_eq!(
+        host.world_mut(world)
+            .unwrap()
+            .gui_layout_view(panel)
+            .unwrap()
+            .root_bounds,
+        [0.0, 0.0, 2.0, 1.0]
+    );
+
+    host.world_mut(world)
+        .unwrap()
+        .set_gui_units_per_metre(panel, 2.0)
+        .unwrap();
+    host.world_mut(world).unwrap().step(0.0).unwrap();
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
+    host.world_mut(world).unwrap().step(0.0).unwrap();
+    assert_eq!(super::super::evaluation::take_fingerprint_passes(), 0);
+}

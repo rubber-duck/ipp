@@ -12,6 +12,20 @@ use crate::systems::{
     SystemTeardownContext, SystemUpdateContext,
 };
 
+#[cfg(all(test, feature = "gui"))]
+std::thread_local! {
+    /// Render preparation passes and skin reconciliations on this thread.
+    pub(super) static PREPARATION_COUNTS: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Render preparation passes and skin reconciliations on this thread since
+/// the previous call.
+#[cfg(all(test, feature = "gui"))]
+pub(super) fn take_preparation_counts() -> (usize, usize) {
+    PREPARATION_COUNTS.with(|counts| counts.replace((0, 0)))
+}
+
 /// Fresh runtime state owned by one World.
 #[derive(Default)]
 pub struct RenderSystem {
@@ -70,6 +84,9 @@ pub struct RenderSystem {
     /// Monotonic renderer request fence for derived skin controller intents.
     #[cfg(feature = "gui")]
     pub(super) next_skin_animation_request: u64,
+    /// Inputs of the latest skin reconciliation; None forces the next one.
+    #[cfg(feature = "gui")]
+    pub(super) gui_skin_key: Option<super::gui_presentation::GuiSkinReconcileKey>,
 }
 
 impl RenderSystem {
@@ -120,6 +137,8 @@ impl SystemFactory for RenderSystemFactory {
             pending_skin_animation_commands: Default::default(),
             #[cfg(feature = "gui")]
             next_skin_animation_request: 1,
+            #[cfg(feature = "gui")]
+            gui_skin_key: None,
         }))
     }
 }
@@ -275,9 +294,11 @@ impl System for RenderSystem {
         context: &mut SystemUpdateContext<'_, '_>,
         report: &mut crate::WorldUpdateReport,
     ) {
-        #[cfg(feature = "gui")]
-        let needs_update = true;
-        #[cfg(not(feature = "gui"))]
+        // The evaluated pass already observed final GUI layout, input and
+        // skin controller state; only changes committed after it (deferred
+        // removals, later numeric writes) or pending resources prepare again.
+        // Skin animation requests queued below are acknowledged at the next
+        // mutation boundary, which the next frame's pass observes.
         let needs_update = self.prepared_dirty || !self.state.entries_ready;
         if needs_update {
             <Self as crate::systems::SystemBoundUpdate>::update_bound(
@@ -299,6 +320,7 @@ impl System for RenderSystem {
             {
                 // Presentations retain their unacknowledged request and retry
                 // at the next boundary without advancing authored state.
+                self.gui_skin_key = None;
             }
         }
         report
@@ -329,6 +351,7 @@ impl System for RenderSystem {
             self.gui_skin_overrides.clear();
             self.pending_skin_animation_commands.clear();
             self.next_skin_animation_request = 1;
+            self.gui_skin_key = None;
         }
     }
 
@@ -357,6 +380,12 @@ impl RenderSystem {
         #[cfg(feature = "gui")] gui_input: Option<&crate::systems::gui::GuiInputSystem>,
         _dt: f64,
     ) {
+        #[cfg(all(test, feature = "gui"))]
+        PREPARATION_COUNTS.with(|counts| {
+            let (passes, reconciliations) = counts.get();
+            counts.set((passes + 1, reconciliations));
+        });
+
         if !self.state.entries_ready {
             let mut entries = std::mem::take(&mut self.state.entries);
             let mut debug_entries = std::mem::take(&mut self.state.debug_entries);

@@ -115,85 +115,140 @@ impl GuiRoot {
     /// flowing them into paint or hit testing. These lanes never reflow:
     /// they move paint and hit regions together.
     pub fn visual_transform(&self, id: GuiNodeId) -> ([f32; 2], [f32; 2]) {
-        let lane = |suffix: &str, default: [f32; 2]| match self
-            .properties
-            .get(&node_property_name(id, suffix))
-        {
-            Some(DynamicValue::Vec2(value)) => value,
-            _ => default,
-        };
-        (lane("position", [0.0, 0.0]), lane("scale", [1.0, 1.0]))
+        let mut transform = ([0.0, 0.0], [1.0, 1.0]);
+        let prefix = node_property_prefix(id);
+        for (lane, descriptor) in self.properties.with_prefix(&prefix) {
+            match (lane, self.properties.get_descriptor(descriptor)) {
+                ("position", Some(DynamicValue::Vec2(value))) => transform.0 = value,
+                ("scale", Some(DynamicValue::Vec2(value))) => transform.1 = value,
+                _ => {}
+            }
+        }
+        transform
     }
 
     /// Copy authoritative effective style for one node.
     pub fn style(&self, id: GuiNodeId) -> Option<GuiNodeStyle> {
+        self.node_lanes(id).map(|lanes| lanes.style)
+    }
+
+    /// Read a node's style and visual transform in one ordered pass over its
+    /// named lanes, without building a name per lane. Part lanes are left to
+    /// [`Self::part_lanes`].
+    pub(crate) fn node_lanes(&self, id: GuiNodeId) -> Option<GuiNodeLanes> {
         self.nodes.node(id)?;
-        let mut style = GuiNodeStyle::default();
+        let mut lanes = GuiNodeLanes {
+            style: GuiNodeStyle::default(),
+            position: [0.0, 0.0],
+            scale: [1.0, 1.0],
+        };
+        let style = &mut lanes.style;
+        let prefix = node_property_prefix(id);
 
-        if let Some(DynamicValue::Bool(enabled)) =
-            self.properties.get(&node_property_name(id, "enabled"))
-        {
-            style.enabled = enabled;
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "width")) {
-            style.width = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "height")) {
-            style.height = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "min_width")) {
-            style.min_width = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "min_height")) {
-            style.min_height = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "max_width")) {
-            style.max_width = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "max_height")) {
-            style.max_height = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "padding")) {
-            style.padding = vec4(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "margin")) {
-            style.margin = vec4(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "flex")) {
-            style.flex = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "align_x")) {
-            style.align_x = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "align_y")) {
-            style.align_y = f32_value(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "color"))
-            && let Some(c) = vec4(&val)
-        {
-            style.color = c;
-        }
-        if let Some(val) = self
-            .properties
-            .get(&node_property_name(id, "background_color"))
-        {
-            style.background_color = vec4(&val);
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "opacity"))
-            && let Some(o) = f32_value(&val)
-        {
-            style.opacity = o;
-        }
-        if let Some(val) = self.properties.get(&node_property_name(id, "font_size"))
-            && let Some(fs) = f32_value(&val)
-        {
-            style.font_size = fs;
-        }
-        if let Some(asset) = self.properties.asset(&node_property_name(id, "asset")) {
-            style.asset = Some(asset.clone());
+        for (lane, descriptor) in self.properties.with_prefix(&prefix) {
+            if lane == "asset" {
+                if let Some(asset) = self.properties.descriptor_asset(descriptor) {
+                    style.asset = Some(asset.clone());
+                }
+                continue;
+            }
+            if lane.starts_with("part_") {
+                continue;
+            }
+
+            let Some(value) = self.properties.get_descriptor(descriptor) else {
+                continue;
+            };
+            match lane {
+                "enabled" => {
+                    if let DynamicValue::Bool(enabled) = value {
+                        style.enabled = enabled;
+                    }
+                }
+                "width" => style.width = f32_value(&value),
+                "height" => style.height = f32_value(&value),
+                "min_width" => style.min_width = f32_value(&value),
+                "min_height" => style.min_height = f32_value(&value),
+                "max_width" => style.max_width = f32_value(&value),
+                "max_height" => style.max_height = f32_value(&value),
+                "padding" => style.padding = vec4(&value),
+                "margin" => style.margin = vec4(&value),
+                "flex" => style.flex = f32_value(&value),
+                "align_x" => style.align_x = f32_value(&value),
+                "align_y" => style.align_y = f32_value(&value),
+                "color" => {
+                    if let Some(color) = vec4(&value) {
+                        style.color = color;
+                    }
+                }
+                "background_color" => style.background_color = vec4(&value),
+                "opacity" => {
+                    if let Some(opacity) = f32_value(&value) {
+                        style.opacity = opacity;
+                    }
+                }
+                "font_size" => {
+                    if let Some(font_size) = f32_value(&value) {
+                        style.font_size = font_size;
+                    }
+                }
+                "position" => {
+                    if let DynamicValue::Vec2(position) = value {
+                        lanes.position = position;
+                    }
+                }
+                "scale" => {
+                    if let DynamicValue::Vec2(scale) = value {
+                        lanes.scale = scale;
+                    }
+                }
+                _ => {}
+            }
         }
 
-        Some(style)
+        Some(lanes)
+    }
+
+    /// Every named-part lane of one node in name order, as the part-and-lane
+    /// remainder after `node_<id>_part_` and its prepared descriptor.
+    pub(crate) fn part_lanes<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, crate::DynamicPropertyDescriptor)> + 'a {
+        self.properties.with_prefix(prefix)
+    }
+
+    /// Copy of this root for editing at most one node: the complete tree and
+    /// committed values, with only `node`'s own and part lanes. Validating
+    /// and diffing the copy covers exactly what one command can change.
+    pub(in crate::world::systems::gui) fn edit_scope(
+        &self,
+        node: Option<GuiNodeId>,
+    ) -> Result<Self, ErrorReason> {
+        let mut scope = Self {
+            nodes: self.nodes.clone(),
+            properties: DynamicProperties::default(),
+        };
+        if let Some(id) = node {
+            let prefix = node_property_prefix(id);
+            for (name, descriptor) in self.properties.named_with_prefix(&prefix) {
+                let value = self
+                    .properties
+                    .get_descriptor(descriptor)
+                    .ok_or(ErrorReason::InvalidField)?;
+                scope.properties.set(name, value).map_err(field_error)?;
+            }
+        }
+        Ok(scope)
+    }
+
+    /// Full names and descriptors of every lane owned by `node`, including
+    /// its parts, in name order.
+    pub(in crate::world::systems::gui) fn node_properties<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, crate::DynamicPropertyDescriptor)> + 'a {
+        self.properties.named_with_prefix(prefix)
     }
 
     /// Apply partial style changes to named properties, preserving omitted fields.
@@ -334,6 +389,13 @@ impl GuiRoot {
         Ok(())
     }
 
+    /// Validate the node tree and committed values, which are all a control
+    /// commit changes; named lanes keep their validation from when they were
+    /// written.
+    pub(in crate::world::systems::gui) fn validate_tree(&self) -> Result<(), ErrorReason> {
+        self.nodes.validate().map_err(field_error)
+    }
+
     pub(in crate::world) fn validate_complete(&self) -> Result<(), ErrorReason> {
         <Self as ComponentLifecycle>::validate(self)
     }
@@ -425,6 +487,28 @@ impl ComponentLifecycle for GuiRoot {
 
 fn node_property_name(id: GuiNodeId, suffix: &str) -> String {
     format!("node_{}_{}", id.0, suffix)
+}
+
+/// Common prefix of every lane owned by one node, including its parts.
+pub(in crate::world::systems::gui) fn node_property_prefix(id: GuiNodeId) -> String {
+    format!("node_{}_", id.0)
+}
+
+/// Prefix of every lane owned by one named part of a node.
+pub(crate) fn part_property_prefix(id: GuiNodeId, part: &str) -> String {
+    format!("node_{}_part_{}_", id.0, part)
+}
+
+/// Prefix of every named-part lane owned by one node.
+pub(crate) fn node_parts_prefix(id: GuiNodeId) -> String {
+    format!("node_{}_part_", id.0)
+}
+
+/// A node's effective style and visual transform, read in one pass.
+pub(crate) struct GuiNodeLanes {
+    pub(crate) style: GuiNodeStyle,
+    pub(crate) position: [f32; 2],
+    pub(crate) scale: [f32; 2],
 }
 
 fn field_error(_: crate::components::schema::FieldError) -> ErrorReason {

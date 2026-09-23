@@ -4,11 +4,12 @@ use super::super::{GuiLayoutSystem, GuiRoot};
 use super::system::GuiInputTarget;
 use crate::world::WorldSimulationState;
 use crate::{ComponentValue, EntityId};
+use std::borrow::Cow;
 
 /// Current status of one fully fenced input target.
-pub(super) enum GuiTargetStatus {
+pub(super) enum GuiTargetStatus<'a> {
     /// Producer identity and evaluated eligibility all match.
-    Eligible(GuiRoot),
+    Eligible(Cow<'a, GuiRoot>),
     /// Entity, root incarnation, node, or node lifetime no longer matches.
     Removed,
     /// The target identity survives but is disabled, hidden, or unavailable.
@@ -24,33 +25,29 @@ pub(super) enum GuiTargetValidity {
     Ineligible,
 }
 
-/// Cloned producer root with its component incarnation, if live.
+/// Producer root with its component incarnation, if live. Borrowed unless
+/// hidden overlay originals must be restored into a copy.
 pub(super) fn producer_root(
     sim: &WorldSimulationState,
     entity: EntityId,
-) -> Option<(u64, GuiRoot)> {
+) -> Option<(u64, Cow<'_, GuiRoot>)> {
     let incarnation = sim
         .state
         .entities
         .get(&entity)?
         .input(ComponentValue::GUI_ROOT)?
         .incarnation;
-    let ComponentValue::GuiRoot(root) =
-        sim.state
-            .producer_value(&sim.components, entity, ComponentValue::GUI_ROOT)?
-    else {
-        return None;
-    };
+    let root = super::super::system::producer_root(&sim.state, &sim.components, entity)?;
     Some((incarnation, root))
 }
 
 /// Validate producer identity and authored eligibility without retained layout.
 ///
 /// Lifecycle callbacks use this synchronous subset before the next evaluation.
-pub(super) fn producer_status(
-    sim: &WorldSimulationState,
+pub(super) fn producer_status<'a>(
+    sim: &'a WorldSimulationState,
     target: &GuiInputTarget,
-) -> GuiTargetStatus {
+) -> GuiTargetStatus<'a> {
     let Some((incarnation, root)) = producer_root(sim, target.entity) else {
         return GuiTargetStatus::Removed;
     };
@@ -58,11 +55,11 @@ pub(super) fn producer_status(
 }
 
 /// Validate a target against an owned root observed at a lifecycle boundary.
-pub(super) fn status_in_root(
-    root: GuiRoot,
+pub(super) fn status_in_root<'a>(
+    root: Cow<'a, GuiRoot>,
     incarnation: u64,
     target: &GuiInputTarget,
-) -> GuiTargetStatus {
+) -> GuiTargetStatus<'a> {
     match producer_validity(&root, incarnation, target) {
         GuiTargetValidity::Eligible => GuiTargetStatus::Eligible(root),
         GuiTargetValidity::Removed => GuiTargetStatus::Removed,
@@ -100,11 +97,11 @@ pub(super) fn producer_validity(
 ///
 /// Missing views and records fail closed: unavailable measurement never leaves a
 /// stale input target eligible.
-pub(super) fn evaluated_status(
-    sim: &WorldSimulationState,
+pub(super) fn evaluated_status<'a>(
+    sim: &'a WorldSimulationState,
     layout: &GuiLayoutSystem,
     target: &GuiInputTarget,
-) -> GuiTargetStatus {
+) -> GuiTargetStatus<'a> {
     let Some((incarnation, root)) = producer_root(sim, target.entity) else {
         return GuiTargetStatus::Removed;
     };

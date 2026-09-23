@@ -351,6 +351,8 @@ mod system_state;
 pub use system_state::{AnimationController, AnimationSystemState};
 
 mod system;
+#[cfg(feature = "gui")]
+pub(in crate::world) use system::GuiSkinControllerState;
 pub use system::{AnimationSystem, AnimationSystemFactory};
 
 mod codec;

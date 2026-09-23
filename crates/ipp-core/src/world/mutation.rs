@@ -443,7 +443,7 @@ impl WorldContext<'_> {
             };
             #[cfg(feature = "profiling")]
             let _measurement =
-                crate::profiling::Stage::new(index * 6 + phase as usize, current_system.id.0);
+                crate::profiling::Stage::system(index, phase as usize, current_system.id.0);
             match phase {
                 SystemFramePhase::Check => current_system.system.prepare_frame(&mut context)?,
                 SystemFramePhase::Accept => current_system.system.accept_ingress(&mut context),

@@ -33,6 +33,9 @@ pub struct GuiLayoutSystem {
     /// per Surface metre. Absent entries use [`DEFAULT_UNITS_PER_METRE`];
     /// entries clear with their entity before identity reuse.
     units: BTreeMap<EntityId, f32>,
+    /// Entities holding a GuiRoot, in entity order, maintained by the
+    /// commit lifecycle so each frame visits roots rather than every entity.
+    roots: crate::world::component_query::ComponentQuery<super::super::GuiRoot>,
 }
 
 crate::system_parameter!(super::super::GuiSystem);
@@ -136,11 +139,24 @@ impl SystemFactory for GuiLayoutSystemFactory {
             cache: GuiLayoutCache::default(),
             bindings: crate::systems::SystemBindings::resolve(context)?,
             units: BTreeMap::new(),
+            roots: Default::default(),
         }))
     }
 }
 
 impl System for GuiLayoutSystem {
+    fn before_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
+        self.roots.before_commit(context, ComponentValue::GUI_ROOT);
+    }
+
+    fn after_commit(&mut self, context: &mut crate::systems::SystemCommitContext<'_>) {
+        self.roots.after_commit(
+            context,
+            ComponentValue::GUI_ROOT,
+            crate::components::registry::ComponentStorage::gui_root_ptr,
+        );
+    }
+
     crate::system_update!(bindings);
 }
 
@@ -223,14 +239,17 @@ impl GuiLayoutSystem {
     ) {
         let world_id = ecs.id();
         let tick = ecs.world.tick;
-        let entities: Vec<EntityId> = ecs.world.state.entities.keys().copied().collect();
         let resolver = SystemResolver {
             world: world_id,
             assets,
         };
+        self.roots.prepare(
+            ecs.world,
+            crate::components::registry::ComponentStorage::gui_root_ptr,
+        );
 
         let mut live = BTreeSet::new();
-        for entity in entities {
+        for &(entity, _) in self.roots.entries() {
             let index = entity.index() as usize;
             let (Some(surface), Some(root)) = (
                 ecs.world.components.surface(index),
@@ -256,7 +275,11 @@ impl GuiLayoutSystem {
                 root,
                 root_incarnation,
                 surface_size: [surface.width, surface.height],
-                units_per_metre: self.units_per_metre(entity),
+                units_per_metre: self
+                    .units
+                    .get(&entity)
+                    .copied()
+                    .unwrap_or(DEFAULT_UNITS_PER_METRE),
                 evaluation_tick: tick,
             };
             self.cache.evaluate(entity, &request, &resolver);

@@ -66,6 +66,13 @@ impl<D: RenderDevice> RenderService<D> {
             self.surface_analytic_text = false;
         }
 
+        // Unchanged paint lets retained work skip hashing its inputs.
+        #[cfg(feature = "gui")]
+        let paint = self.surface_paint.get(&world.id()).map_or(
+            super::super::surface_paint::SurfacePaint::UNKNOWN,
+            |tracker| tracker.paint(item),
+        );
+
         // Clip of the contiguous box run being collected.
         #[cfg(feature = "gui")]
         let mut current_box_batch: Option<ipp_core::systems::surface::SurfaceClipRect> = None;
@@ -103,6 +110,7 @@ impl<D: RenderDevice> RenderService<D> {
                         world.id(),
                         item.entity,
                         batch_clip,
+                        paint,
                         &mut pending_boxes,
                         mvp,
                         stats,
@@ -121,6 +129,7 @@ impl<D: RenderDevice> RenderService<D> {
                     world.id(),
                     item.entity,
                     batch_clip,
+                    paint,
                     &mut pending_boxes,
                     mvp,
                     stats,
@@ -364,11 +373,18 @@ impl<D: RenderDevice> RenderService<D> {
                 world.id(),
                 item.entity,
                 batch_clip,
+                paint,
                 &mut pending_boxes,
                 mvp,
                 stats,
             )?;
         }
+
+        #[cfg(feature = "gui")]
+        self.surface_paint
+            .entry(world.id())
+            .or_default()
+            .drawn(item, paint);
 
         Ok(())
     }
@@ -395,6 +411,7 @@ impl<D: RenderDevice> RenderService<D> {
         let atlas = &mut self.glyph_atlas;
         let work = &mut self.glyph_frame;
         let device = &self.device;
+        let tracker = self.surface_paint.entry(world.id()).or_default();
         let cache = self
             .glyph_batch_cache
             .entry(world.id())
@@ -419,6 +436,7 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 super::surface_cache::SurfaceRaster::Draw(mvp, viewport) => (mvp, viewport),
             };
+            let paint = tracker.paint(item);
 
             for primitive in &item.primitives {
                 let ipp_core::SurfaceRenderPrimitive::Glyphs {
@@ -467,7 +485,7 @@ impl<D: RenderDevice> RenderService<D> {
                         .filter(|range| range.curve_range[1] != 0)
                         .and_then(|_| data.glyph_bounds.get(glyph_id as usize).copied())
                 };
-                cache.publish_run(atlas, &run, height, bounds, work);
+                cache.publish_run(atlas, &run, paint, height, bounds, work);
             }
         }
 
@@ -753,6 +771,10 @@ impl<D: RenderDevice> RenderService<D> {
             cache.finish_frame(surfaces.as_ref());
         }
 
+        if let (Some(tracker), Some(_)) = (self.surface_paint.get_mut(&world), &surfaces) {
+            tracker.retain(&live);
+        }
+
         let Some(stats) = stats else {
             return;
         };
@@ -779,6 +801,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: ipp_core::WorldId,
         entity: ipp_core::EntityId,
         batch_clip: ipp_core::systems::surface::SurfaceClipRect,
+        paint: super::super::surface_paint::SurfacePaint,
         boxes: &mut Vec<&ipp_core::SurfaceRenderPrimitive>,
         mvp: &[f32; 16],
         stats: &mut RenderStats,
@@ -800,7 +823,7 @@ impl<D: RenderDevice> RenderService<D> {
             super::super::gui_batch::GuiBatchRenderCache::new(self.device.clone())
         });
         // The cache splits the run into bounded batches with stable boundaries.
-        cache.draw_box_batch(program, entity, batch_clip, boxes, mvp, stats)?;
+        cache.draw_box_batch(program, entity, batch_clip, paint, boxes, mvp, stats)?;
 
         boxes.clear();
 

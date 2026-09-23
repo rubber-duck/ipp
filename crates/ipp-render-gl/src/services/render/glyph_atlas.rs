@@ -27,6 +27,7 @@ use ipp_core::systems::surface::{
     SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
 };
 
+use super::surface_paint::SurfacePaint;
 use crate::{RenderDevice, RenderError, RenderStats};
 
 /// Page width and height in texels for each atlas page texture.
@@ -927,6 +928,8 @@ struct RetainedGlyphRun<D: RenderDevice> {
     band: Option<u16>,
     demand_hash: Option<u64>,
     geometry_hash: u64,
+    /// Paint revision and band the hashes were computed under.
+    hashed: Option<(u64, Option<u16>)>,
     /// Sorted demanded entries.
     keys: Vec<GlyphKey>,
     /// Residency generation at which every demanded entry was resident.
@@ -952,6 +955,8 @@ pub struct GlyphBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     surfaces: BTreeMap<ipp_core::EntityId, RetainedGlyphSurface<D>>,
     publication: u64,
+    /// Sum of `bytes` over every retained batch.
+    resident: usize,
     scratch_keys: Vec<GlyphKey>,
 }
 
@@ -962,6 +967,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
             device,
             surfaces: BTreeMap::new(),
             publication: 0,
+            resident: 0,
             scratch_keys: Vec::new(),
         }
     }
@@ -976,6 +982,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                 }
             }
         }
+        self.resident = 0;
     }
 
     /// Release retained batches before the graphics context goes away.
@@ -995,6 +1002,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
             run.built_hash = None;
             run.resident = None;
         }
+        self.resident = 0;
     }
 
     /// Release this World's demand from the atlas and every retained batch.
@@ -1009,12 +1017,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
 
     /// Total resident bytes occupied by retained text run GPU batches.
     pub fn resident_bytes(&self) -> usize {
-        self.surfaces
-            .values()
-            .flat_map(|surface| surface.runs.values())
-            .flat_map(|run| &run.batches)
-            .map(|batch| batch.bytes)
-            .sum()
+        self.resident
     }
 
     /// Start publishing this World's demand for one frame.
@@ -1033,11 +1036,14 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     /// Publish one visible run's band and demand, recording entries missing from the atlas.
     ///
     /// `glyph_bounds` returns font-unit bounds for glyphs with coverage; other glyphs need
-    /// no entry. Unchanged runs only hash their inputs.
+    /// no entry. Unchanged runs only hash their inputs, and not even that when the
+    /// Surface's reusable `paint` revision and the band match their last hashes.
+    #[allow(clippy::too_many_arguments)]
     pub fn publish_run(
         &mut self,
         atlas: &mut GlyphAtlas<D>,
         run: &TextRun<'_>,
+        paint: SurfacePaint,
         projected_height: f32,
         glyph_bounds: impl Fn(u32) -> Option<[f32; 4]>,
         work: &mut GlyphFrameWork,
@@ -1066,10 +1072,19 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
         }
 
         record.band = select_resolution_band(projected_height, record.band);
-        let (demand_hash, geometry_hash) = run.hashes(record.band);
-        record.geometry_hash = geometry_hash;
+        let hashed = record
+            .hashed
+            .is_some_and(|(revision, band)| paint.reuses(revision) && band == record.band);
+        let demand_hash = if hashed {
+            record.demand_hash
+        } else {
+            let (demand_hash, geometry_hash) = run.hashes(record.band);
+            record.geometry_hash = geometry_hash;
+            record.hashed = Some((paint.revision, record.band));
+            Some(demand_hash)
+        };
 
-        if record.demand_hash != Some(demand_hash) {
+        if record.demand_hash != demand_hash {
             self.scratch_keys.clear();
             if let Some(band) = record.band {
                 let unit = run.font_size / run.units_per_em as f32;
@@ -1092,7 +1107,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
             atlas.acquire(&self.scratch_keys);
             atlas.release(&record.keys);
             std::mem::swap(&mut record.keys, &mut self.scratch_keys);
-            record.demand_hash = Some(demand_hash);
+            record.demand_hash = demand_hash;
             record.resident = None;
         }
 
@@ -1118,10 +1133,11 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     pub fn end_publication(&mut self, atlas: &mut GlyphAtlas<D>) {
         let publication = self.publication;
         let mut device = self.device.borrow_mut();
+        let resident = &mut self.resident;
         self.surfaces.retain(|_, surface| {
             if surface.seen != publication {
                 for (_, run) in std::mem::take(&mut surface.runs) {
-                    release_run(atlas, &mut device, run);
+                    *resident -= release_run(atlas, &mut device, run);
                 }
                 return false;
             }
@@ -1135,7 +1151,8 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                         return true;
                     }
 
-                    release_run(atlas, &mut device, std::mem::replace(run, empty_run()));
+                    *resident -=
+                        release_run(atlas, &mut device, std::mem::replace(run, empty_run()));
                     false
                 });
             }
@@ -1181,7 +1198,11 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                 .iter()
                 .all(|batch| atlas.has_page(batch.page_index));
         if !reusable {
-            rebuild_batches(&self.device, atlas, record, run, band, stats)?;
+            let before: usize = record.batches.iter().map(|batch| batch.bytes).sum();
+            let rebuilt = rebuild_batches(&self.device, atlas, record, run, band, stats);
+            let after: usize = record.batches.iter().map(|batch| batch.bytes).sum();
+            self.resident = self.resident - before + after;
+            rebuilt?;
         }
 
         for batch in &record.batches {
@@ -1206,6 +1227,7 @@ fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
         band: None,
         demand_hash: None,
         geometry_hash: 0,
+        hashed: None,
         keys: Vec::new(),
         resident: None,
         seen: 0,
@@ -1214,15 +1236,20 @@ fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
     }
 }
 
+/// Release a run's demand and batches, returning the batch bytes released.
 fn release_run<D: RenderDevice>(
     atlas: &mut GlyphAtlas<D>,
     device: &mut D,
     run: RetainedGlyphRun<D>,
-) {
+) -> usize {
     atlas.release(&run.keys);
+    let mut bytes = 0;
     for batch in run.batches {
+        bytes += batch.bytes;
         device.delete_glyph_batch(batch.gpu);
     }
+
+    bytes
 }
 
 /// Glyph quads of one atlas page, in the order they paint.

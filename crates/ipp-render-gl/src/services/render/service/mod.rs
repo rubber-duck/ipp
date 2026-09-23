@@ -232,6 +232,9 @@ pub struct RenderService<D: RenderDevice> {
     /// Surfaces the current frame submitted; `None` until submission reaches them.
     #[cfg(feature = "gui")]
     submitted_surfaces: Option<std::collections::BTreeSet<ipp_core::EntityId>>,
+    /// Each World's last drawn Surface paint revisions and identity orders.
+    #[cfg(feature = "gui")]
+    surface_paint: BTreeMap<ipp_core::WorldId, super::surface_paint::SurfacePaintTracker>,
 }
 fn prepared_normal(item: &ipp_core::RenderItem) -> Result<&[f32; 16], RenderError> {
     #[cfg(feature = "particles")]

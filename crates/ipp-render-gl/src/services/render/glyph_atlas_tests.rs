@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::super::surface_paint::SurfacePaint;
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
     GlyphPopulationBudget, GlyphVertex, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME,
@@ -323,6 +324,7 @@ impl TestWorld {
             self.cache.publish_run(
                 atlas,
                 run,
+                SurfacePaint::UNKNOWN,
                 *height,
                 |glyph_id| (glyph_id != SPACE).then_some(INK),
                 &mut self.work,
@@ -1041,6 +1043,73 @@ fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() 
         world.cache.resident_bytes(),
         600 * 6 * std::mem::size_of::<GlyphVertex>()
     );
+}
+
+#[test]
+fn unchanged_paint_revisions_skip_run_hashing_until_revision_or_band_change() {
+    let (_, mut atlas, mut world) = setup();
+    let style = style(1);
+    let first = glyphs(&[1, 2]);
+    let edited = glyphs(&[1, 3]);
+    let publish = |world: &mut TestWorld,
+                   atlas: &mut Atlas,
+                   glyphs: &[SurfaceGlyph],
+                   paint: SurfacePaint,
+                   height: f32| {
+        world.work.clear();
+        atlas.begin_publication();
+        world.cache.begin_publication();
+        world.cache.publish_run(
+            atlas,
+            &text_run(1, &style, glyphs),
+            paint,
+            height,
+            |glyph_id| (glyph_id != SPACE).then_some(INK),
+            &mut world.work,
+        );
+        world.cache.end_publication(atlas);
+        world.work.misses
+    };
+    let paint = |revision, reusable| SurfacePaint {
+        revision,
+        reusable,
+    };
+
+    assert_eq!(
+        publish(
+            &mut world,
+            &mut atlas,
+            &first,
+            paint(4, false),
+            BAND_32_HEIGHT
+        ),
+        2
+    );
+
+    // Reused hashes keep the published demand: the new glyph 3 is not demanded.
+    publish(
+        &mut world,
+        &mut atlas,
+        &edited,
+        paint(4, true),
+        BAND_32_HEIGHT,
+    );
+    assert!(atlas.get(&key(3, 32)).is_none());
+    assert!(!world.work.missing.contains(&key(3, 32)));
+
+    // A new revision hashes the run again and demands the new glyph.
+    publish(
+        &mut world,
+        &mut atlas,
+        &edited,
+        paint(5, false),
+        BAND_32_HEIGHT,
+    );
+    assert!(world.work.missing.contains(&key(3, 32)));
+
+    // A band change hashes again even under a reusable revision.
+    publish(&mut world, &mut atlas, &edited, paint(5, true), 60.0);
+    assert!(world.work.missing.contains(&key(3, 64)));
 }
 
 #[test]

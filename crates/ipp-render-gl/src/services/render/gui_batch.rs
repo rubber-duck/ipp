@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use super::surface_paint::SurfacePaint;
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::systems::surface::{
     GuiShapeFill, GuiShapeGlow, SurfaceClipRect, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
@@ -122,6 +123,10 @@ const MAX_VOLATILE_BATCH_BOXES: usize = 8;
 pub struct CachedPrimitiveGeometry {
     /// Content hash of all geometry and material inputs.
     pub hash: u64,
+    /// Surface paint revision `hash` was computed under; zero when unknown.
+    revision: u64,
+    /// Whether the identity may start a batch; fixed per identity.
+    boundary: bool,
     /// Explicit vertices forming triangles (counter-clockwise front face).
     pub vertices: Vec<GuiBoxVertex>,
     /// Frame before which the box stays volatile after a geometry change.
@@ -149,6 +154,7 @@ struct RunBox {
     identity: SurfacePrimitiveIdentity,
     hash: u64,
     volatile: bool,
+    boundary: bool,
 }
 
 /// Renderer-owned retained cache of CPU geometry and GPU batches.
@@ -156,6 +162,8 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     retained_batches: BTreeMap<GuiBatchKey, RetainedGuiBatch<D>>,
     cpu_primitives: BTreeMap<PrimitiveKey, CachedPrimitiveGeometry>,
+    /// Sum of `bytes` over `retained_batches`.
+    resident: usize,
     scratch_vertices: Vec<GuiBoxVertex>,
     run_boxes: Vec<RunBox>,
     frame: u64,
@@ -168,6 +176,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             device,
             retained_batches: BTreeMap::new(),
             cpu_primitives: BTreeMap::new(),
+            resident: 0,
             scratch_vertices: Vec::new(),
             run_boxes: Vec::new(),
             frame: 0,
@@ -181,25 +190,29 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             device.delete_gui_batch(batch.gpu);
         }
         self.cpu_primitives.clear();
+        self.resident = 0;
         self.scratch_vertices.clear();
         self.run_boxes.clear();
     }
 
     /// Total resident bytes occupied by retained GPU batch allocations.
     pub fn resident_bytes(&self) -> usize {
-        self.retained_batches.values().map(|b| b.bytes).sum()
+        self.resident
     }
 
     /// Submit one contiguous run of compatible box primitives as bounded batches.
     ///
     /// Stable boxes split at identity-selected boundaries; volatile boxes form their own
     /// small batches. Each batch replaces its complete storage only when its boxes change.
+    /// Boxes whose retained hash was computed under the Surface's reusable `paint`
+    /// revision are not hashed again.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_box_batch(
         &mut self,
         program: &D::Program,
         entity: ipp_core::EntityId,
         clip: SurfaceClipRect,
+        paint: SurfacePaint,
         boxes: &[&SurfaceRenderPrimitive],
         mvp: &[f32; 16],
         stats: &mut RenderStats,
@@ -220,15 +233,17 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 continue;
             };
 
-            let hash = hash_box_inputs(
-                style,
-                size,
-                corner_radius,
-                *border_width,
-                border_color,
-                fill,
-                glow.as_ref(),
-            );
+            let hash = || {
+                hash_box_inputs(
+                    style,
+                    size,
+                    corner_radius,
+                    *border_width,
+                    border_color,
+                    fill,
+                    glow.as_ref(),
+                )
+            };
             let generate = || {
                 generate_box_vertices(
                     style,
@@ -247,18 +262,24 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             let cached = match self.cpu_primitives.entry(key) {
                 Entry::Occupied(entry) => {
                     let cached = entry.into_mut();
-                    if cached.hash != hash {
-                        cached.hash = hash;
-                        cached.vertices = generate();
-                        cached.volatile_until = self.frame + VOLATILE_FRAMES;
-                        stats.gui_rebuilds += 1;
+                    if !paint.reuses(cached.revision) {
+                        let hash = hash();
+                        if cached.hash != hash {
+                            cached.hash = hash;
+                            cached.vertices = generate();
+                            cached.volatile_until = self.frame + VOLATILE_FRAMES;
+                            stats.gui_rebuilds += 1;
+                        }
+                        cached.revision = paint.revision;
                     }
                     cached
                 }
                 Entry::Vacant(entry) => {
                     stats.gui_rebuilds += 1;
                     entry.insert(CachedPrimitiveGeometry {
-                        hash,
+                        hash: hash(),
+                        revision: paint.revision,
+                        boundary: identity_starts_batch(style.identity),
                         vertices: generate(),
                         volatile_until: 0,
                         seen: self.frame,
@@ -269,8 +290,9 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
 
             self.run_boxes.push(RunBox {
                 identity: style.identity,
-                hash,
+                hash: cached.hash,
                 volatile: cached.volatile_until > self.frame,
+                boundary: cached.boundary,
             });
         }
 
@@ -298,8 +320,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             return length >= MAX_VOLATILE_BATCH_BOXES;
         }
 
-        length >= MAX_BATCH_BOXES
-            || (length >= MIN_BATCH_BOXES && identity_starts_batch(current.identity))
+        length >= MAX_BATCH_BOXES || (length >= MIN_BATCH_BOXES && current.boundary)
     }
 
     /// Draw one batch of the current run, replacing its storage only when it changed.
@@ -356,12 +377,14 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                     // A failed replacement leaves the storage contents unknown. Release the
                     // batch so no later frame draws it with stale counts or vertices.
                     if let Some(batch) = self.retained_batches.remove(&batch_key) {
+                        self.resident -= batch.bytes;
                         self.device.borrow_mut().delete_gui_batch(batch.gpu);
                     }
                     return Err(error);
                 }
 
                 let bytes = self.scratch_vertices.len() * std::mem::size_of::<GuiBoxVertex>();
+                self.resident = self.resident - retained.bytes + bytes;
                 retained.hash = batch_hash;
                 retained.bytes = bytes;
                 retained.vertex_count = self.scratch_vertices.len();
@@ -403,6 +426,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         stats.triangles += (vertex_count / 3) as u32;
         stats.gui_batches += 1;
 
+        self.resident += bytes;
         self.retained_batches.insert(
             batch_key,
             RetainedGuiBatch {
@@ -434,6 +458,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             let mut device = self.device.borrow_mut();
             for key in stale {
                 if let Some(batch) = self.retained_batches.remove(&key) {
+                    self.resident -= batch.bytes;
                     device.delete_gui_batch(batch.gpu);
                 }
             }

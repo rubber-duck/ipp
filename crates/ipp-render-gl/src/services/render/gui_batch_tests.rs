@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use std::collections::BTreeSet;
 
+use super::super::surface_paint::SurfacePaint;
 use super::{
     GuiBatchRenderCache, GuiBoxVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission, VOLATILE_FRAMES,
     generate_box_vertices,
@@ -590,7 +591,15 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     // Frame 1: Cold upload
     let mut stats1 = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &boxes, &mvp, &mut stats1)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &boxes,
+            &mvp,
+            &mut stats1,
+        )
         .unwrap();
 
     assert_eq!(stats1.gui_allocations, 1);
@@ -605,7 +614,15 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     // Frame 2: Warm unchanged frame
     let mut stats2 = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &boxes, &mvp, &mut stats2)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &boxes,
+            &mvp,
+            &mut stats2,
+        )
         .unwrap();
 
     assert_eq!(stats2.gui_allocations, 0);
@@ -645,7 +662,15 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
 
     let mut stats1 = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &boxes_initial, &mvp, &mut stats1)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &boxes_initial,
+            &mvp,
+            &mut stats1,
+        )
         .unwrap();
     assert_eq!(stats1.gui_rebuilds, 2);
 
@@ -662,7 +687,15 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
 
     let mut stats2 = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &boxes_modified, &mvp, &mut stats2)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &boxes_modified,
+            &mvp,
+            &mut stats2,
+        )
         .unwrap();
 
     assert_eq!(
@@ -710,6 +743,7 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
                 &1,
                 ipp_core::EntityId::from_bits(1),
                 [0.0, 0.0, 4.0, 2.0],
+                SurfacePaint::UNKNOWN,
                 &[primitive],
                 &[0.0; 16],
                 &mut stats,
@@ -759,6 +793,7 @@ fn boxes_of_every_part_class_share_one_batch() {
             &1,
             ipp_core::EntityId::from_bits(1),
             [0.0, 0.0, 4.0, 2.0],
+            SurfacePaint::UNKNOWN,
             &boxes,
             &[0.0; 16],
             &mut stats,
@@ -769,6 +804,61 @@ fn boxes_of_every_part_class_share_one_batch() {
     assert_eq!(stats.draw_calls, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().created_batches[0].1, 5 * 6);
+}
+
+#[test]
+fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let entity = ipp_core::EntityId::from_bits(1);
+    let clip = [0.0, 0.0, 4.0, 2.0];
+    let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>,
+                paint: SurfacePaint,
+                boxes: &[&SurfaceRenderPrimitive]| {
+        let mut stats = RenderStats::default();
+        cache
+            .draw_box_batch(&1, entity, clip, paint, boxes, &[0.0; 16], &mut stats)
+            .unwrap();
+        stats
+    };
+    let first = sample_box_primitive(1, 1, GuiPrimitivePart::Background, [0.0; 2], [1.0; 2], None);
+    let second = sample_box_primitive(
+        2,
+        1,
+        GuiPrimitivePart::Background,
+        [1.5, 0.0],
+        [1.0; 2],
+        None,
+    );
+    let revision = |revision, reusable| SurfacePaint {
+        revision,
+        reusable,
+    };
+
+    assert_eq!(
+        draw(&mut cache, revision(5, false), &[&first, &second]).gui_rebuilds,
+        2
+    );
+
+    // A reusable revision promises unchanged inputs: the boxes are not hashed, so
+    // even inputs that differ do not rebuild.
+    let mut edited = second.clone();
+    set_fill(&mut edited, 0.9);
+    let reused = draw(&mut cache, revision(5, true), &[&first, &edited]);
+    assert_eq!((reused.gui_rebuilds, reused.uploaded_bytes), (0, 0));
+
+    // A new revision hashes every box and rebuilds only the edited one.
+    let rebuilt = draw(&mut cache, revision(6, false), &[&first, &edited]);
+    assert_eq!(rebuilt.gui_rebuilds, 1);
+    assert!(rebuilt.uploaded_bytes > 0);
+
+    // Hashes from another revision are never reused.
+    let mut again = edited.clone();
+    set_fill(&mut again, 0.1);
+    assert_eq!(
+        draw(&mut cache, revision(7, true), &[&first, &again]).gui_rebuilds,
+        1
+    );
 }
 
 #[test]
@@ -790,7 +880,15 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
 
     let mut stats1 = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &[&box_gen1], &mvp, &mut stats1)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &[&box_gen1],
+            &mvp,
+            &mut stats1,
+        )
         .unwrap();
     assert_eq!(stats1.gui_allocations, 1);
 
@@ -806,7 +904,15 @@ fn lifetime_fencing_prevents_reusing_recreated_node_batch() {
 
     let mut stats2 = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &[&box_gen2], &mvp, &mut stats2)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &[&box_gen2],
+            &mvp,
+            &mut stats2,
+        )
         .unwrap();
 
     // Lifetime difference creates a new batch rather than reusing or overwriting stale handles
@@ -844,10 +950,26 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
 
     let mut stats = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity1, clip, &[&box1], &mvp, &mut stats)
+        .draw_box_batch(
+            &1,
+            entity1,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &[&box1],
+            &mvp,
+            &mut stats,
+        )
         .unwrap();
     cache
-        .draw_box_batch(&1, entity2, clip, &[&box2], &mvp, &mut stats)
+        .draw_box_batch(
+            &1,
+            entity2,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &[&box2],
+            &mvp,
+            &mut stats,
+        )
         .unwrap();
 
     let mut live = std::collections::BTreeSet::new();
@@ -887,7 +1009,15 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     let mvp = [0.0; 16];
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, entity, stats: &mut _| {
         cache
-            .draw_box_batch(&1, entity, clip, &[&panel], &mvp, stats)
+            .draw_box_batch(
+                &1,
+                entity,
+                clip,
+                SurfacePaint::UNKNOWN,
+                &[&panel],
+                &mvp,
+                stats,
+            )
             .unwrap();
     };
     let live = BTreeSet::from([shown, culled]);
@@ -962,6 +1092,7 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
             &1,
             entity,
             clip,
+            SurfacePaint::UNKNOWN,
             &[primitive],
             &mvp,
             &mut RenderStats::default(),
@@ -1033,7 +1164,15 @@ fn draw_run_frame(
     let refs: Vec<_> = boxes.iter().collect();
     let mut stats = RenderStats::default();
     cache
-        .draw_box_batch(&1, entity, clip, &refs, &[0.0; 16], &mut stats)
+        .draw_box_batch(
+            &1,
+            entity,
+            clip,
+            SurfacePaint::UNKNOWN,
+            &refs,
+            &[0.0; 16],
+            &mut stats,
+        )
         .unwrap();
     let live = BTreeSet::from([entity]);
     cache.finish_frame(Some(&RetainedSurfaceSubmission {

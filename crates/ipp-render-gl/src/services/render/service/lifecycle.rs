@@ -48,6 +48,8 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             glyph_population: Default::default(),
             #[cfg(feature = "gui")]
+            surface_paint: BTreeMap::new(),
+            #[cfg(feature = "gui")]
             submitted_surfaces: None,
             device,
             asset_context_active: Rc::new(Cell::new(true)),
@@ -286,6 +288,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "gui")]
         {
             self.gui_batch_cache.remove(&world);
+            self.surface_paint.remove(&world);
             if let Some(mut cache) = self.glyph_batch_cache.remove(&world) {
                 cache.release_demand(&mut self.glyph_atlas);
             }

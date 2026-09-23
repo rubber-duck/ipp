@@ -612,6 +612,62 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
     assert_eq!(work(&returned), [0, 1, 0, 0, 0], "{returned:?}");
 }
 
+/// Retained box batches of a directly presented panel whose paint revision is
+/// published rebuild exactly when its paint changes, although unchanged frames
+/// reuse their hashes instead of hashing every box.
+#[cfg(feature = "gui")]
+#[test]
+fn published_paint_revisions_rebuild_retained_boxes_exactly_when_paint_changes() {
+    use ipp_core::{GuiCommand, GuiNodeHandle, GuiNodeId, GuiNodePatch};
+
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, _state, world_id, _) = scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+    let (panel, incarnation) = gui_panel(&mut world, -1.0);
+    // Always inside its direct distance: presented directly with a revision.
+    set_policy(
+        &mut world,
+        panel,
+        Some(SurfaceCache {
+            direct_distance: 1000.0,
+            ..ALWAYS
+        }),
+    );
+    let checkbox = GuiNodeHandle::new(GUI_SESSION, panel, incarnation, GuiNodeId(2), 1);
+
+    let cold = frame(&mut renderer, &mut world, 0.01);
+    assert!(cold.gui_rebuilds > 0, "{cold:?}");
+    assert_eq!(work(&cold), [0, 0, 1, 0, 0]);
+    let paint = revisions(&world, panel).0;
+    assert_ne!(paint, 0);
+    for _ in 0..3 {
+        let warm = frame(&mut renderer, &mut world, 0.01);
+        assert_eq!((warm.gui_rebuilds, warm.uploaded_bytes), (0, 0), "{warm:?}");
+        assert!(warm.gui_batches > 0);
+    }
+    assert_eq!(revisions(&world, panel).0, paint);
+
+    world
+        .enqueue_gui_command(
+            GUI_SESSION,
+            GuiCommand::UpdateNode {
+                handle: checkbox,
+                patch: GuiNodePatch {
+                    background_color: Some(Some([0.9, 0.1, 0.1, 1.0])),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+    let edited = frame(&mut renderer, &mut world, 0.01);
+    assert!(revisions(&world, panel).0 > paint);
+    assert!(edited.gui_rebuilds > 0, "{edited:?}");
+    assert!(edited.uploaded_bytes > 0);
+
+    let settled = frame(&mut renderer, &mut world, 0.01);
+    assert_eq!((settled.gui_rebuilds, settled.uploaded_bytes), (0, 0));
+}
+
 #[test]
 fn culled_surfaces_skip_repaints_and_refresh_stale_content_on_return() {
     let mut host = ipp_core::HostRuntime::new();

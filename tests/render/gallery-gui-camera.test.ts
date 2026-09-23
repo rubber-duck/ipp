@@ -172,10 +172,29 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       const sliderRegion = await g.call<
         readonly [number, number, number, number]
       >("galleryGuiRegion", { role: "slider" }, 0.02, 0.08);
+      // Accumulated render work since the worker started, read at a frame.
+      const renderTotals = async (label: string) => {
+        const { frame } = await g.call<{
+          frame: { tick: bigint; backend: Record<string, unknown> };
+        }>("captureUnflushedViewer", label);
+        return {
+          tick: Number(frame.tick),
+          rebuilds: Number(frame.backend.totalGuiRebuilds),
+          uploaded: Number(frame.backend.totalUploadedBytes),
+        };
+      };
+      // The idle demo still uploads its animated waveform every frame.
+      const idleStart = await renderTotals("sustained-slider-idle-start");
+      let idleEnd = idleStart;
+      while (idleEnd.tick - idleStart.tick < 20)
+        idleEnd = await renderTotals("sustained-slider-idle-end");
       await g.call("observeGalleryGuiInput");
       await g.page.mouse.move(sliderStart.clientX, sliderStart.clientY);
       await g.page.mouse.down();
+      let dragStart = idleEnd;
+      let dragEnd = idleEnd;
       try {
+        dragStart = await renderTotals("sustained-slider-drag-start");
         await g.page.evaluate(
           async ({ from, to }) => {
             const canvas =
@@ -207,6 +226,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           { from: sliderStart, to: sliderEnd },
         );
         await g.page.mouse.move(sliderEnd.clientX, sliderEnd.clientY);
+        dragEnd = await renderTotals("sustained-slider-drag-end");
       } finally {
         await g.page.mouse.up();
       }
@@ -217,6 +237,40 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         errors: string[];
       }>("finishGalleryGuiInputObservation");
       await scenario.evidence.record("sustained-slider-input", inputStream);
+
+      // Each drag frame commits a slider value, and GUI input frames restore
+      // animated values before admitting it. Neither may repaint or
+      // re-upload panels the drag did not touch: per frame, rebuilds stay
+      // within the slider's own background, fill and focus-ring boxes, and
+      // uploads beyond the idle waveform come only from rebuilt boxes.
+      // Measured on SwiftShader (ipp-9nx.61.20): 1.6-1.8 rebuilds per drag
+      // frame at about 800 bytes each, unchanged by the ingress restore.
+      const sliderBoxes = 3;
+      const maxBoxUploadBytes = 1024;
+      const idleUploadPerTick =
+        (idleEnd.uploaded - idleStart.uploaded) /
+        (idleEnd.tick - idleStart.tick);
+      const dragTicks = dragEnd.tick - dragStart.tick;
+      const dragRebuilds = dragEnd.rebuilds - dragStart.rebuilds;
+      const dragExtraUploads =
+        dragEnd.uploaded - dragStart.uploaded - idleUploadPerTick * dragTicks;
+      await scenario.evidence.record("sustained-slider-render-work", {
+        idleTicks: idleEnd.tick - idleStart.tick,
+        idleUploadPerTick,
+        dragTicks,
+        dragRebuilds,
+        dragExtraUploads,
+      });
+      assert.ok(dragTicks > 10, `drag spanned only ${dragTicks} frames`);
+      assert.ok(dragRebuilds > 0, "the dragged slider never repainted");
+      assert.ok(
+        dragRebuilds <= sliderBoxes * dragTicks,
+        `${dragRebuilds} GUI rebuilds in ${dragTicks} drag frames`,
+      );
+      assert.ok(
+        dragExtraUploads <= maxBoxUploadBytes * dragRebuilds,
+        `${dragExtraUploads} bytes beyond idle for ${dragRebuilds} rebuilt boxes`,
+      );
       assert.ok(inputStream.sent >= 362);
       assert.deepEqual(inputStream.errors, []);
       assert.equal(inputStream.completed, inputStream.sent);

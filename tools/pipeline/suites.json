@@ -649,6 +649,7 @@
       "dist/packages/ipp-react/tests/gui-commits.test.js",
       "dist/packages/ipp-react/tests/gui-controls.test.js",
       "dist/packages/ipp-react/tests/gui-declaration.test.js",
+      "dist/packages/ipp-react/tests/gui-diff.test.js",
       "dist/packages/ipp-react/tests/gui-effects.test.js",
       "dist/packages/ipp-react/tests/gui-ime.test.js",
       "dist/packages/ipp-react/tests/gui-input.test.js",

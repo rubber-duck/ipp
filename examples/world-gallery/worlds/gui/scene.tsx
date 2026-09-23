@@ -73,13 +73,15 @@ export type GuiSurfaceCacheMode = "automatic" | "cached" | "direct";
  * past 22 m (the 20 m boundary plus hysteresis) caches the panel. 80 texels
  * per content metre (about 592x384 texels, 0.87 MiB) roughly matches the on-screen
  * density of a 720-pixel-high canvas at that boundary, and each further
- * distance doubling halves density and refresh. 30 Hz keeps the scanning
- * trace smooth at a distance while bounding repaints.
+ * distance doubling halves density and refresh. The scanning trace changes
+ * paint every frame, so a cap near the host frame rate would repaint the
+ * image on every frame at more than the cost of drawing directly; 15 Hz
+ * keeps the distant trace readable at about half the repaints.
  */
 const GUI_SURFACE_CACHE = {
   direct_distance: 20,
   texels_per_metre: 80,
-  max_refresh_hz: 30,
+  max_refresh_hz: 15,
 } as const;
 
 const INITIAL_EVENTS = [

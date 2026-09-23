@@ -16,7 +16,28 @@ export interface WorkloadFrame {
   triangles: number;
   drawCalls: number;
   backend: Record<string, unknown>;
+  /** Timings taken inside the page; see {@link TIMING_DEFINITIONS}. */
+  inPage?: {
+    updateToReadbackMs: number | null;
+    updateMs: number | null;
+    captureMs: number;
+    readbackMs: number | null;
+  };
 }
+
+/** What each reported timing measures. */
+export const TIMING_DEFINITIONS = {
+  elapsedMs:
+    "Node-side wall time from requesting a React workload update to having the next completed frame: includes the harness round trips to the page, base64 pixel transfer and writing the PNG artifact.",
+  updateToReadbackMs:
+    "In-page time from starting the React workload update to the next completed frame's pixels arriving in the page: React commit and acknowledgement, the frame that presents the update, GPU finish and readback, and the worker-to-page transfer.",
+  updateMs:
+    "In-page time from starting the React workload update until the runtime acknowledged it.",
+  captureMs:
+    "In-page time from requesting the next completed frame until its pixels arrived in the page.",
+  readbackMs:
+    "Worker time inside the capture to finish pending GPU work and read the pixels back (readPixels wait).",
+} as const;
 
 export interface RetainedGuiDriver {
   call<T>(name: string, args?: readonly unknown[]): Promise<T>;
@@ -129,6 +150,7 @@ export async function exerciseRetainedGui(
     label: string;
     config: Record<string, unknown>;
     elapsedMs: number;
+    inPage: WorkloadFrame["inPage"] | null;
     frame: WorkloadFrame;
   }[] = [];
   const number = (
@@ -168,6 +190,7 @@ export async function exerciseRetainedGui(
       label,
       config,
       elapsedMs: performance.now() - started,
+      inPage: frame.inPage ?? null,
       frame,
     });
     // Only the atlas phase may exceed the page budget and back off populations.
@@ -523,8 +546,40 @@ export async function exerciseRetainedGui(
     worldSwitch,
     warm,
     samples,
+    timings: streamingTimings(
+      samples.filter(({ label }) => label.startsWith("stream-")),
+    ),
     timing:
-      "Wall time from submitting a React workload update to completed GPU readback; includes client, transport, scheduling and capture overhead. This is not frame rate or isolated GPU time.",
+      "Update-to-readback latency of streamed workload updates, not frame rate or isolated GPU time; see timingDefinitions.",
+    timingDefinitions: TIMING_DEFINITIONS,
+  };
+}
+
+/** Median and 90th percentile of each timing over the streamed updates. */
+function streamingTimings(
+  samples: readonly {
+    elapsedMs: number;
+    inPage: WorkloadFrame["inPage"] | null;
+  }[],
+) {
+  const summary = (values: readonly (number | null | undefined)[]) => {
+    const sorted = values
+      .filter((value): value is number => typeof value === "number")
+      .sort((a, b) => a - b);
+    if (sorted.length === 0) return null;
+    const at = (fraction: number) =>
+      Number(sorted[Math.round((sorted.length - 1) * fraction)]!.toFixed(2));
+    return { median: at(0.5), p90: at(0.9), samples: sorted.length };
+  };
+  return {
+    updates: samples.length,
+    elapsedMs: summary(samples.map(({ elapsedMs }) => elapsedMs)),
+    updateToReadbackMs: summary(
+      samples.map(({ inPage }) => inPage?.updateToReadbackMs),
+    ),
+    updateMs: summary(samples.map(({ inPage }) => inPage?.updateMs)),
+    captureMs: summary(samples.map(({ inPage }) => inPage?.captureMs)),
+    readbackMs: summary(samples.map(({ inPage }) => inPage?.readbackMs)),
   };
 }
 

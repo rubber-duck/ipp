@@ -441,6 +441,15 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-react/tests/gui-diff.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
   "dist/packages/ipp-react/tests/gui-effects.test.js": {
     "builds": [
       "typescript"

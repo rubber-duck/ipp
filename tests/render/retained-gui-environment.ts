@@ -17,6 +17,7 @@ import {
   exerciseRetainedGui,
   type RetainedGuiOptions,
   type RetainedGuiReport,
+  TIMING_DEFINITIONS,
   type WorkloadFrame,
 } from "./retained-gui-scenario.js";
 
@@ -222,6 +223,9 @@ export async function runRetainedGui(
           },
         },
         tolerance: COMPARISON_TOLERANCE,
+        // Streamed-update timings per build; definitions beside them.
+        timings: reports.map(({ build, timings }) => ({ build, ...timings })),
+        timingDefinitions: TIMING_DEFINITIONS,
         // Seven per-frame cache counters of each build's warm frame, running
         // totals after the last sample, and the warm frame's cache records.
         surfaceCache: options.surfaceCache

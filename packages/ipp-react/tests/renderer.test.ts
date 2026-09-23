@@ -11,6 +11,7 @@ import "./gui-soft-keyboard.test.js";
 import "./gui-text-bridge.test.js";
 import "./gui-controls.test.js";
 import "./gui-declaration.test.js";
+import "./gui-diff.test.js";
 import "./gui-commits.test.js";
 import "./gui-effects.test.js";
 import {

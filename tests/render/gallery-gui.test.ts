@@ -2236,7 +2236,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
 /** The gallery panel's cache policy, restated independently of scene.tsx. */
 const CACHE_DIRECT_DISTANCE = 20;
 const CACHE_TEXELS_PER_METRE = 80;
-const CACHE_REFRESH_HZ = 30;
+const CACHE_REFRESH_HZ = 15;
 const CACHE_HYSTERESIS = 0.1;
 
 /**
@@ -2272,6 +2272,7 @@ interface CacheObservation {
   readonly repaints: number;
   readonly allocations: number;
   readonly reuses: number;
+  readonly direct: number;
 }
 
 function cacheDelta(before: CacheObservation, after: CacheObservation) {
@@ -2343,7 +2344,10 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         );
       };
       const observe = async (label: string): Promise<CacheObservation> => {
-        const entity = guiEntity(await g.inspect())?.id;
+        const entity = await g.call<bigint | undefined>(
+          "galleryEntityId",
+          "gui-demo",
+        );
         const { frame } = await g.capture(label);
         const backend = frame.backend;
         const records = backend.surfaceCaches as
@@ -2360,6 +2364,7 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
           repaints: Number(backend.totalSurfaceCacheRepaints),
           allocations: Number(backend.totalSurfaceCacheAllocations),
           reuses: Number(backend.totalSurfaceCacheReuses),
+          direct: Number(backend.totalSurfaceCacheDirect),
         };
         const { ingress: _ingress, ...stats } = backend;
         await record(label, { ...stats, records });
@@ -2617,7 +2622,9 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       await record("ember-repaints", { ...reskin, reskinSeconds });
       const ember = await compareWithDirect("surface-cache-ember-band1", 1);
 
-      // Continuous scanning repaints at the cap without starving.
+      // Continuous scanning keeps the trace current without exceeding the
+      // cap: the cached image repaints at most at the cap, and either keeps
+      // repainting or the renderer presents the changing panel directly.
       previous = await observeUntil("surface-cache-before-scan", reused(1));
       await g.call(
         "galleryGuiAction",
@@ -2631,15 +2638,21 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       const scanStart = await observe("surface-cache-scan-start");
       await new Promise((resolve) => setTimeout(resolve, 1_000));
       const scanEnd = await observe("surface-cache-scan-end");
-      const scan = cacheDelta(scanStart, scanEnd);
+      const scan = {
+        ...cacheDelta(scanStart, scanEnd),
+        direct: scanEnd.direct - scanStart.direct,
+      };
       const scanSeconds =
         (scanEnd.record!.paintedAtMs - scanStart.record!.paintedAtMs) / 1000;
-      assert.ok(scan.repaints >= 2, "continuous scanning starved repaints");
+      assert.ok(
+        scan.repaints >= 2 || scan.direct > 0,
+        `continuous scanning starved presentation: ${JSON.stringify(scan)}`,
+      );
       assert.ok(
         scan.repaints <= Math.ceil(scanSeconds * CACHE_REFRESH_HZ) + 1,
-        `scan repaints exceeded the cap: ${JSON.stringify({ scan, scanSeconds })}`,
+        `scan repaints exceeded the ${CACHE_REFRESH_HZ} Hz cap: ${JSON.stringify({ scan, scanSeconds })}`,
       );
-      assert.equal(scan.allocations, 0);
+      if (scan.direct === 0) assert.equal(scan.allocations, 0);
       await record("scan-repaints", { ...scan, scanSeconds });
       await g.call(
         "galleryGuiAction",

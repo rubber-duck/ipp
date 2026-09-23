@@ -49,7 +49,7 @@ export async function openGallery(
     invoke<T>(page, helper, name, args);
   const inspect = () => call<Inspection>("settleGalleryInput");
   const settle = async () => {
-    await inspect();
+    await call("awaitGalleryIngress");
     await page.waitForFunction(
       () =>
         !document.querySelector("#selection-status") ||

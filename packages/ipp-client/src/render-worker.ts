@@ -68,6 +68,14 @@ const ACCUMULATED_GUI_STATISTICS = {
   glyphPageRetirements: "totalGlyphPageRetirements",
 } as const;
 
+/** Accumulated GUI counters as parallel arrays, so the per-frame read allocates nothing. */
+const ACCUMULATED_GUI_KEYS = Object.keys(
+  ACCUMULATED_GUI_STATISTICS,
+) as readonly (keyof typeof ACCUMULATED_GUI_STATISTICS)[];
+const ACCUMULATED_GUI_TOTALS = ACCUMULATED_GUI_KEYS.map(
+  (key) => ACCUMULATED_GUI_STATISTICS[key],
+);
+
 /**
  * Whole-Surface cache counters exported together by render builds with Surfaces,
  * independently of the GUI set. A partial set is a build error; an absent set
@@ -113,6 +121,14 @@ const ACCUMULATED_SURFACE_CACHE_STATISTICS = {
   surfaceCacheFallbacks: "totalSurfaceCacheFallbacks",
   surfaceCacheAllocations: "totalSurfaceCacheAllocations",
 } as const;
+
+/** Accumulated cache counters as parallel arrays, so the per-frame read allocates nothing. */
+const ACCUMULATED_SURFACE_CACHE_KEYS = Object.keys(
+  ACCUMULATED_SURFACE_CACHE_STATISTICS,
+) as readonly (keyof typeof ACCUMULATED_SURFACE_CACHE_STATISTICS)[];
+const ACCUMULATED_SURFACE_CACHE_TOTALS = ACCUMULATED_SURFACE_CACHE_KEYS.map(
+  (key) => ACCUMULATED_SURFACE_CACHE_STATISTICS[key],
+);
 
 /** Exports of one capability set: all present, or none. A partial set is a build error. */
 function completeExportSet(
@@ -404,28 +420,36 @@ export class RenderWorkerService {
     if (tick === 0n) return;
     if (tick !== this.observedRenderTick) {
       this.totalUploadedBytes += runtime.ipp_render_uploaded_bytes();
-      if (this.retainedStatistics)
-        for (const [key, total] of Object.entries(ACCUMULATED_GUI_STATISTICS))
+      const retained = this.retainedStatistics;
+      if (retained)
+        for (let index = 0; index < ACCUMULATED_GUI_KEYS.length; index += 1) {
+          const total = ACCUMULATED_GUI_TOTALS[index]!;
           this.retainedTotals[total] =
             (this.retainedTotals[total] ?? 0) +
-            this.retainedStatistics[
-              key as keyof typeof ACCUMULATED_GUI_STATISTICS
-            ]();
-      if (this.surfaceCacheExports)
-        for (const [key, total] of Object.entries(
-          ACCUMULATED_SURFACE_CACHE_STATISTICS,
-        ))
+            retained[ACCUMULATED_GUI_KEYS[index]!]();
+        }
+      const cache = this.surfaceCacheExports?.statistics;
+      if (cache)
+        for (
+          let index = 0;
+          index < ACCUMULATED_SURFACE_CACHE_KEYS.length;
+          index += 1
+        ) {
+          const total = ACCUMULATED_SURFACE_CACHE_TOTALS[index]!;
           this.surfaceCacheTotals[total] =
             (this.surfaceCacheTotals[total] ?? 0) +
-            this.surfaceCacheExports.statistics[
-              key as keyof typeof ACCUMULATED_SURFACE_CACHE_STATISTICS
-            ]();
+            cache[ACCUMULATED_SURFACE_CACHE_KEYS[index]!]();
+        }
       this.observedRenderTick = tick;
     }
+    // Most frames have no pending capture; skip creating the entry iterator.
+    if (this.captures.size === 0) return;
     for (const [id, request] of this.captures) {
       if (tick < request.afterTick) continue;
       // capture finishes pending GPU work and copies top-left RGBA pixels.
+      const readbackStarted = performance.now();
       const pixels = this.device.capture();
+      const readbackMs = performance.now() - readbackStarted;
       const frame: FrameCapture = {
         session: this.session,
         tick,
@@ -440,6 +464,8 @@ export class RenderWorkerService {
           uploadedBytes: runtime.ipp_render_uploaded_bytes(),
           totalUploadedBytes: this.totalUploadedBytes,
           failedDrawCalls: runtime.ipp_render_failed_draw_calls(),
+          // Worker time spent finishing GPU work and reading the pixels back.
+          readbackMs,
           // Unavailable counters are omitted, never reported as zero work.
           ...(this.retainedStatistics
             ? {

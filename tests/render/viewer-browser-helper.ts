@@ -1,4 +1,5 @@
 import type {
+  EntitySnapshot,
   FrameCapture,
   AnimationWorldClient,
   GuiSemanticAction,
@@ -71,29 +72,131 @@ function selectGuiNode(
   return matches[0]!;
 }
 
-async function galleryGuiContext(flush = true, completeInspection = false) {
-  const handle = requireCanvas();
-  if (flush) await handle.flush();
-  const client = handle.client as GuiWorldClient & SurfaceWorldClient;
-  const inspection = await client.inspect();
-  const entity = inspection.entities.find(
-    ({ metadata }) => metadata.symbolicId === "gui-demo",
+/** Entity IDs of named gallery objects per client, verified on each targeted read. */
+const galleryEntityIds = new WeakMap<object, Map<string, bigint>>();
+
+function knownGalleryEntities(): Map<string, bigint> {
+  const client = requireCanvas().client;
+  let ids = galleryEntityIds.get(client);
+  if (!ids) galleryEntityIds.set(client, (ids = new Map()));
+  return ids;
+}
+
+/** Page through the entity collection alone, recording every symbolic ID. */
+async function discoverGalleryEntities(): Promise<Map<string, EntitySnapshot>> {
+  const client = requireCanvas().client;
+  const ids = knownGalleryEntities();
+  ids.clear();
+  const found = new Map<string, EntitySnapshot>();
+  let after = 0n;
+  do {
+    const page = await client.inspectPage({ collection: "entities", after });
+    for (const entity of page.entities) {
+      const symbol = entity.metadata.symbolicId;
+      if (!symbol) continue;
+      ids.set(symbol, entity.id);
+      found.set(symbol, entity);
+    }
+    after = page.next;
+  } while (after !== 0n);
+  return found;
+}
+
+/**
+ * Current snapshots of named gallery entities. Known IDs are read through
+ * concurrent single-entity inspection pages instead of the whole World; an
+ * unknown, replaced or renamed ID is rediscovered from the entity collection.
+ * Absent entities read as undefined.
+ */
+async function galleryEntities(
+  symbols: readonly string[],
+): Promise<(EntitySnapshot | undefined)[]> {
+  const client = requireCanvas().client;
+  const ids = knownGalleryEntities();
+  const targeted = await Promise.all(
+    symbols.map(async (symbol) => {
+      const id = ids.get(symbol);
+      if (id === undefined) return undefined;
+      const page = await client
+        .inspectPage({ collection: "entities", target: id, limit: 1 })
+        .catch(() => undefined);
+      const entity = page?.entities[0];
+      return entity?.id === id && entity.metadata.symbolicId === symbol
+        ? entity
+        : undefined;
+    }),
   );
+  if (targeted.every((entity) => entity !== undefined)) return targeted;
+  const found = await discoverGalleryEntities();
+  return symbols.map((symbol) => found.get(symbol));
+}
+
+/** The named entity's cached ID, unverified; discovered when unknown. */
+async function cachedGalleryEntityId(
+  symbol: string,
+): Promise<bigint | undefined> {
+  const known = knownGalleryEntities().get(symbol);
+  if (known !== undefined) return known;
+  return (await discoverGalleryEntities()).get(symbol)?.id;
+}
+
+/** The named entity's current ID through a targeted read; undefined when absent. */
+export async function galleryEntityId(
+  symbol: string,
+): Promise<bigint | undefined> {
+  return (await galleryEntities([symbol]))[0]?.id;
+}
+
+/** The GUI demo entity and its effective Surface through a targeted read. */
+async function galleryGuiEntity() {
+  const client = requireCanvas().client as SurfaceWorldClient;
+  const [entity] = await galleryEntities(["gui-demo"]);
   if (!entity) throw new Error("Missing gallery GUI demo");
+  return { entity, surface: guiDemoSurface(client, entity) };
+}
+
+function guiDemoSurface(client: SurfaceWorldClient, entity: EntitySnapshot) {
   const surface = entity.effective.find(
     ({ component }) => component === client.components.Surface!.id,
   );
   if (!surface) throw new Error("Missing effective GUI demo Surface");
-  const semantic = await client.semanticSnapshot({
-    entity: entity.id,
-    maxDepth: 32,
-    limit: 256,
-  });
-  const detailed = await client.inspectGui({
-    entity: entity.id,
-    maxDepth: 32,
-    limit: 256,
-  });
+  return surface;
+}
+
+/**
+ * Semantic and detailed GUI snapshots of the demo. They name the GuiRoot
+ * entity by its cached ID without reading the entity itself; a stale ID from
+ * a replaced World is rediscovered once.
+ */
+async function galleryGuiContext(flush = true, completeInspection = false) {
+  const handle = requireCanvas();
+  if (flush) await handle.flush();
+  const client = handle.client as GuiWorldClient & SurfaceWorldClient;
+  const snapshots = async (entity: bigint) =>
+    Promise.all([
+      client.semanticSnapshot({ entity, maxDepth: 32, limit: 256 }),
+      client.inspectGui({ entity, maxDepth: 32, limit: 256 }),
+    ]);
+  let entity = await cachedGalleryEntityId("gui-demo");
+  if (entity === undefined) throw new Error("Missing gallery GUI demo");
+  let result: Awaited<ReturnType<typeof snapshots>> | undefined;
+  let failure: unknown;
+  try {
+    result = await snapshots(entity);
+  } catch (error) {
+    failure = error;
+  }
+  if (!result || result[0].nodes.length === 0) {
+    // Failed or empty: confirm the cached ID still names the demo.
+    const current = await galleryEntityId("gui-demo");
+    if (current === undefined) throw new Error("Missing gallery GUI demo");
+    if (current !== entity) {
+      entity = current;
+      result = await snapshots(entity);
+    }
+  }
+  if (!result) throw failure;
+  const [semantic, detailed] = result;
   if (completeInspection) {
     // Decorative strips can exceed one inspection page. Fetch incomplete
     // subtrees through the public bounded query, retaining every icon and shape.
@@ -110,7 +213,7 @@ async function galleryGuiContext(flush = true, completeInspection = false) {
         : incomplete.id;
       queried.add(nodeId);
       const subtree = await client.inspectGui({
-        entity: entity.id,
+        entity,
         nodeId,
         maxDepth: 32,
         limit: 256,
@@ -121,13 +224,13 @@ async function galleryGuiContext(flush = true, completeInspection = false) {
     }
     detailed.nodes = [...nodes.values()];
   }
-  return { handle, client, inspection, entity, surface, semantic, detailed };
+  return { handle, client, semantic, detailed };
 }
 
 /** Public GUI observations plus proof that GuiRoot is the sole Surface producer. */
 export async function galleryGuiState(flush = true) {
-  const { client, entity, surface, semantic, detailed } =
-    await galleryGuiContext(flush, true);
+  const { client, semantic, detailed } = await galleryGuiContext(flush, true);
+  const { entity, surface } = await galleryGuiEntity();
   const bytes = surface.fields.items;
   if (!(bytes instanceof Uint8Array))
     throw new Error("GUI demo Surface items are not encoded bytes");
@@ -148,12 +251,14 @@ async function pointsForNode(
   node: GuiSemanticNode,
   fractions: readonly (readonly [number, number])[],
 ) {
-  const { surface } = await galleryGuiContext();
+  await requireCanvas().flush();
+  const { entity, camera, surface } = await galleryGuiPlacement();
   const width = Number(surface.fields.width);
   const height = Number(surface.fields.height);
   const [x, y, nodeWidth, nodeHeight] = node.bounds;
-  const points = await projectGalleryPoints(
-    "gui-demo",
+  const points = projectSnapshotPoints(
+    entity,
+    camera,
     fractions.map(([fractionX, fractionY]) => {
       const logicalX = x + nodeWidth * fractionX;
       const logicalY = y + nodeHeight * fractionY;
@@ -235,11 +340,13 @@ export async function sampleGalleryGuiCapture(
   label: string,
   logicalPoints: readonly (readonly [number, number])[],
 ) {
-  const { surface } = await galleryGuiContext();
+  await requireCanvas().flush();
+  const { entity, camera, surface } = await galleryGuiPlacement();
   const width = Number(surface.fields.width);
   const height = Number(surface.fields.height);
-  const projected = await projectGalleryPoints(
-    "gui-demo",
+  const projected = projectSnapshotPoints(
+    entity,
+    camera,
     logicalPoints.map(([x, y]) => [x - width / 2, height / 2 - y, 0]),
   );
   const frame = requireCapture(label);
@@ -268,21 +375,14 @@ export async function galleryGuiRegionStats(
   label: string,
   rects: Readonly<Record<string, readonly [number, number, number, number]>>,
 ): Promise<Record<string, GalleryGuiRegionStats>> {
-  const handle = requireCanvas();
-  const client = handle.client as SurfaceWorldClient;
-  const inspection = await client.inspect();
-  const surface = inspection.entities
-    .find(({ metadata }) => metadata.symbolicId === "gui-demo")
-    ?.effective.find(
-      ({ component }) => component === client.components.Surface!.id,
-    );
-  if (!surface) throw new Error("Missing effective GUI demo Surface");
+  const { entity, camera, surface } = await galleryGuiPlacement();
   const width = Number(surface.fields.width);
   const height = Number(surface.fields.height);
   const frame = requireCapture(label);
   const names = Object.keys(rects);
-  const projected = await projectGalleryPoints(
-    "gui-demo",
+  const projected = projectSnapshotPoints(
+    entity,
+    camera,
     names.flatMap((name) => {
       const [minX, minY, maxX, maxY] = rects[name]!;
       return [
@@ -382,7 +482,9 @@ export async function overrideGalleryGuiTransform(
   const previous = galleryGuiTransformOwner;
   if (previous && !replace)
     throw new Error("A GUI placement override is already attached");
-  const { handle, client } = await galleryGuiContext();
+  const handle = requireCanvas();
+  await handle.flush();
+  const client = handle.client;
   const component = client.components.Transform!;
   const owner = { kind: "alias", alias: 1 } as const;
   galleryGuiTransformOwner = undefined;
@@ -444,12 +546,10 @@ export async function faceGalleryGuiToCamera(
   distance?: number,
   replace = false,
 ): Promise<void> {
-  const { handle, client, inspection, entity, surface } =
-    await galleryGuiContext();
-  const camera = inspection.entities.find(
-    ({ metadata }) => metadata.symbolicId === "gallery-camera",
-  );
-  if (!camera) throw new Error("Missing gallery camera");
+  const handle = requireCanvas();
+  await handle.flush();
+  const client = handle.client;
+  const { entity, camera, surface } = await galleryGuiPlacement();
   const fields = (owner: typeof camera, name: string) =>
     owner.effective.find(
       ({ component }) => component === client.components[name]!.id,
@@ -651,16 +751,31 @@ export async function projectGalleryPoints(
   symbol: string,
   offsets: number[][],
 ) {
-  const handle = requireCanvas();
-  await handle.flush();
-  const inspection = await handle.client.inspect();
-  const entity = inspection.entities.find(
-    (entity) => entity.metadata.symbolicId === symbol,
-  );
-  const camera = inspection.entities.find(
-    (entity) => entity.metadata.symbolicId === "gallery-camera",
-  );
+  await requireCanvas().flush();
+  const [entity, camera] = await galleryEntities([symbol, "gallery-camera"]);
   if (!entity || !camera) throw new Error(`Missing gallery object ${symbol}`);
+  return projectSnapshotPoints(entity, camera, offsets);
+}
+
+/** The GUI demo, its Surface and the gallery camera, read together. */
+async function galleryGuiPlacement() {
+  const client = requireCanvas().client as SurfaceWorldClient;
+  const [entity, camera] = await galleryEntities([
+    "gui-demo",
+    "gallery-camera",
+  ]);
+  if (!entity) throw new Error("Missing gallery GUI demo");
+  if (!camera) throw new Error("Missing gallery camera");
+  return { entity, camera, surface: guiDemoSurface(client, entity) };
+}
+
+/** Project object-space offsets through inspected entity and camera fields. */
+function projectSnapshotPoints(
+  entity: EntitySnapshot,
+  camera: EntitySnapshot,
+  offsets: number[][],
+) {
+  const handle = requireCanvas();
   const fields = (entity: typeof camera, name: string) =>
     entity.effective.find(
       (entry) => entry.component === handle.client.components[name]!.id,
@@ -710,9 +825,15 @@ export async function projectGalleryPoints(
 
 /** Wait for browser input batching, then use real inspection as an ingress barrier. */
 export async function settleGalleryInput() {
-  await nextFrame(10_000);
-  await nextFrame(10_000);
+  await awaitGalleryIngress();
   return requireCanvas().client.inspect();
+}
+
+/** The same ingress barrier, answered by the World summary instead of a full inspection. */
+export async function awaitGalleryIngress(): Promise<void> {
+  await nextFrame(10_000);
+  await nextFrame(10_000);
+  await requireCanvas().client.inspectPage();
 }
 
 let heldReply:
@@ -1036,8 +1157,9 @@ export async function captureUnflushedViewer(label: string) {
   const handle = requireCanvas();
   const presentation = handle.client.presentation;
   if (!presentation) throw new Error("The gallery renderer is unavailable");
-  const inspection = await handle.client.inspect();
-  const frame = await presentation.capture(inspection.tick);
+  // The World summary names the current tick without inspecting every entity.
+  const { tick } = await handle.client.inspectPage();
+  const frame = await presentation.capture(tick);
   captures.set(label, { ...frame, pixels: frame.pixels.slice(0) });
   const { pixels: _pixels, ...metadata } = frame;
   return { label, frame: metadata, summary: summarizeImage(frame) };

@@ -8,15 +8,8 @@
 //! orthographic camera keeps the projected panel size fixed while its distance
 //! selects the cache band, so cached and direct captures compare pixel for
 //! pixel: 80 screen pixels per metre, a 4 x 2 metre panel over rows 40..200.
-//!
-//! Until core populates the prepared cache inputs (ipp-s1ge.1), the runner
-//! derives them for the panel itself and presents through the hidden
-//! `RenderService::render_with_surface_items` harness entry: the policy from
-//! the authored component, paint and resource revisions from changes of the
-//! prepared primitives and their resource keys, and interaction priority from
-//! the input it sends. Once core supplies a policy the World's own items are
-//! rendered unchanged. If RenderService reports no cache records at all the
-//! section verifies the direct baselines, reports `cache inactive` and passes.
+//! The panel opts in through its `SurfaceCache` component; the World's own
+//! prepared policy, revisions and interaction priority drive every decision.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -41,7 +34,7 @@ mod scenario {
         GlesRenderDevice, RenderService, RenderStats, SurfaceCacheDiagnostic,
         SurfaceCachePresentation,
     };
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use std::mem::offset_of;
     use std::path::Path;
 
@@ -99,49 +92,6 @@ mod scenario {
         evidence: &'a Path,
         payloads: BTreeMap<String, Vec<u8>>,
         report: String,
-        inputs: PanelInputs,
-        /// Failed assertions recorded so later lifecycle steps still run.
-        findings: Vec<String>,
-    }
-
-    /// Prepared cache inputs the runner derives for the panel while core
-    /// leaves them unpopulated (ipp-s1ge.1), with the same meaning: the
-    /// revisions never repeat and exclude placement.
-    #[derive(Default)]
-    struct PanelInputs {
-        opted_in: bool,
-        interaction: bool,
-        paint_revision: u64,
-        resource_revision: u64,
-        paint: Option<(Vec<ipp_core::SurfaceRenderPrimitive>, [f32; 2])>,
-        resources: BTreeSet<ipp_core::services::asset_management::AssetKey>,
-        /// Whether the last frame used core's own prepared inputs.
-        from_core: bool,
-    }
-
-    fn resource_keys(
-        item: &ipp_core::SurfaceRenderItem,
-    ) -> BTreeSet<ipp_core::services::asset_management::AssetKey> {
-        item.primitives
-            .iter()
-            .filter_map(|primitive| match primitive {
-                ipp_core::SurfaceRenderPrimitive::Glyphs {
-                    font,
-                    ..
-                } => Some(font.key),
-                ipp_core::SurfaceRenderPrimitive::Drawing {
-                    drawing,
-                    ..
-                } => Some(drawing.key),
-                ipp_core::SurfaceRenderPrimitive::Bitmap {
-                    bitmap,
-                    ..
-                } => Some(bitmap.key),
-                ipp_core::SurfaceRenderPrimitive::Box {
-                    ..
-                } => None,
-            })
-            .collect()
     }
 
     fn source(kind: ipp_core::services::asset_management::AssetTypeId, name: &str) -> AssetSource {
@@ -333,8 +283,6 @@ mod scenario {
                 evidence,
                 payloads,
                 report: String::new(),
-                inputs: PanelInputs::default(),
-                findings: Vec::new(),
             };
 
             // Opaque backdrop behind the panel, never opted in.
@@ -630,7 +578,6 @@ mod scenario {
 
         fn opt_in(&mut self, enabled: bool) -> Result<()> {
             let panel = self.panel;
-            self.inputs.opted_in = enabled;
             self.batch(vec![if enabled {
                 Command::InsertComponentValue {
                     entity: EntityRef::Handle(panel),
@@ -645,10 +592,6 @@ mod scenario {
         }
 
         fn input(&mut self, command: GuiInputCommand) -> Result<()> {
-            self.inputs.interaction = matches!(
-                command,
-                GuiInputCommand::PointerMove { .. } | GuiInputCommand::Focus { .. }
-            );
             self.host
                 .world_mut(self.world)
                 .unwrap()
@@ -693,41 +636,52 @@ mod scenario {
                     .as_ref()
                     .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
             }
-            let panel = self.panel;
-            let mut items = world.surface_render_items().to_vec();
-            let inputs = &mut self.inputs;
-            let mut override_panel = false;
-            if let Some(item) = items.iter_mut().find(|item| item.entity == panel) {
-                inputs.from_core = item.cache.is_some();
-                if !inputs.from_core {
-                    let paint = (item.primitives.clone(), item.clip_size);
-                    if inputs.paint.as_ref() != Some(&paint) {
-                        inputs.paint_revision += 1;
-                        inputs.paint = Some(paint);
-                    }
-                    let resources = resource_keys(item);
-                    if resources != inputs.resources || inputs.resource_revision == 0 {
-                        inputs.resource_revision += 1;
-                        inputs.resources = resources;
-                    }
-                    item.cache = inputs
-                        .opted_in
-                        .then(|| ipp_core::SurfaceCachePolicy::new(&POLICY))
-                        .transpose()
-                        .map_err(|error| format!("invalid policy: {error:?}"))?;
-                    item.paint_revision = inputs.paint_revision;
-                    item.resource_revision = inputs.resource_revision;
-                    item.interaction = inputs.interaction;
-                    override_panel = true;
+            Ok(self.renderer.render(&mut world, WIDTH, HEIGHT)?)
+        }
+
+        /// Present until the panel's presentation satisfies `done`: routed GUI
+        /// input reaches interaction priority at a following update boundary.
+        fn frame_until(
+            &mut self,
+            label: &str,
+            done: impl Fn(SurfaceCachePresentation) -> bool,
+        ) -> Result<RenderStats> {
+            for _ in 0..4 {
+                let stats = self.frame(DT)?;
+                if done(self.record()?.presentation) {
+                    return Ok(stats);
+                }
+                if stats.surface_cache_repaints != 0 {
+                    return Err(format!("{label}: repainted while input was routed").into());
                 }
             }
-            let stats = if override_panel {
-                self.renderer
-                    .render_with_surface_items(&mut world, WIDTH, HEIGHT, &items)?
-            } else {
-                self.renderer.render(&mut world, WIDTH, HEIGHT)?
-            };
-            Ok(stats)
+            Err(format!("{label}: presentation never changed: {:?}", self.record()?).into())
+        }
+
+        /// The panel's prepared paint and resource revisions.
+        fn revisions(&mut self) -> Option<(u64, u64)> {
+            let panel = self.panel;
+            self.host
+                .world_mut(self.world)
+                .unwrap()
+                .surface_render_items()
+                .iter()
+                .find(|item| item.entity == panel)
+                .map(|item| (item.paint_revision, item.resource_revision))
+        }
+
+        /// Whether every source has its data and GPU data resident.
+        fn resident(&mut self, sources: &[AssetSource]) -> bool {
+            let world = self.host.world_mut(self.world).unwrap();
+            sources.iter().all(|source| {
+                world
+                    .asset_resources()
+                    .find(source)
+                    .and_then(|key| world.asset_resources().get(key))
+                    .is_some_and(|resource| {
+                        resource.data().is_some() && resource.graphics_ready() == Some(true)
+                    })
+            })
         }
 
         /// Present until every asset is ready and a frame uploads nothing.
@@ -735,17 +689,7 @@ mod scenario {
             let mut last = RenderStats::default();
             for _ in 0..256 {
                 last = self.present(DT)?;
-                let world = self.host.world_mut(self.world).unwrap();
-                let ready = sources.iter().all(|source| {
-                    world
-                        .asset_resources()
-                        .find(source)
-                        .and_then(|key| world.asset_resources().get(key))
-                        .is_some_and(|resource| {
-                            resource.data().is_some() && resource.graphics_ready() == Some(true)
-                        })
-                });
-                if ready
+                if self.resident(sources)
                     && last.uploaded_bytes == 0
                     && last.failed_draw_calls == 0
                     && last.draw_calls > 0
@@ -897,8 +841,7 @@ mod scenario {
             Ok(())
         }
 
-        /// Direct baselines that hold with or without the cache, then the full
-        /// cache lifecycle once RenderService reports cache records.
+        /// Direct baselines with an absent policy, then the full cache lifecycle.
         pub(super) fn run(mut self, rebuild: impl Fn() -> Result<GlesRenderDevice>) -> Result<()> {
             // Absent policy: no records and zero cache work, at any distance.
             let mut direct = BTreeMap::new();
@@ -942,16 +885,6 @@ mod scenario {
             self.opt_in(true)?;
             self.camera_distance(NEAR)?;
             let stats = self.frame(DT)?;
-            if self.diagnostics().is_empty() && stats.surface_cache_direct == 0 {
-                self.note(
-                    "cache inactive: RenderService reported no cache records; direct baselines verified, cache assertions skipped".into(),
-                );
-                let pixels = self.capture("inactive-opted-in")?;
-                if max_difference(&direct["near"], &pixels) != 0 {
-                    return Err("opting in changed direct presentation".into());
-                }
-                return self.finish();
-            }
             self.expect("near", &stats, SurfaceCachePresentation::Near, 0, 0)?;
             let near = self.capture("cache-near")?;
             if max_difference(&direct["near"], &near) != 0 {
@@ -1090,21 +1023,7 @@ mod scenario {
                 GuiRoot::part_property_name(GuiNodeId(8), "icon", "asset").unwrap(),
                 DynamicValue::Asset(replacement.clone()),
             )])?;
-            let revision = |scene: &mut Self| {
-                if scene.inputs.from_core {
-                    let panel = scene.panel;
-                    scene
-                        .host
-                        .world_mut(scene.world)
-                        .unwrap()
-                        .surface_render_items()
-                        .iter()
-                        .find(|item| item.entity == panel)
-                        .map(|item| item.resource_revision)
-                } else {
-                    Some(scene.inputs.resource_revision)
-                }
-            };
+            let revision = |scene: &mut Self| scene.revisions().map(|(_, resource)| resource);
             let before = revision(&mut self);
             let mut observed = false;
             for _ in 0..64 {
@@ -1170,15 +1089,22 @@ mod scenario {
             for (label, press, release) in [
                 (
                     "hover",
+                    // The "Go" button (node 10) spans panel metres x 2.1..2.8,
+                    // y 1.5..1.85; its centre in normalized viewport coordinates.
                     GuiInputCommand::PointerMove {
                         pointer: 1,
                         panel: None,
-                        position: [0.5, 0.5],
+                        position: [2.45 / 4.0, (0.5 + 1.675) / 3.0],
                         blockers: Vec::new(),
                         panel_distance: None,
                     },
-                    GuiInputCommand::PointerCancel {
+                    // Leaving every panel ends hover; cancelling only ends a press.
+                    GuiInputCommand::PointerMove {
                         pointer: 1,
+                        panel: None,
+                        position: [0.02, 0.02],
+                        blockers: Vec::new(),
+                        panel_distance: None,
                     },
                 ),
                 (
@@ -1190,7 +1116,9 @@ mod scenario {
                 ),
             ] {
                 self.input(press)?;
-                let stats = self.frame(DT)?;
+                let stats = self.frame_until(label, |presentation| {
+                    presentation == SurfaceCachePresentation::Interaction
+                })?;
                 self.expect(label, &stats, SurfaceCachePresentation::Interaction, 0, 0)?;
                 let promoted = self.capture(&format!("cache-{label}"))?;
                 let reference = self.direct_reference(&format!("direct-{label}"), BAND1)?;
@@ -1198,7 +1126,9 @@ mod scenario {
                     return Err(format!("{label} promotion differs from direct").into());
                 }
                 self.input(release)?;
-                let stats = self.frame(DT)?;
+                let stats = self.frame_until(label, |presentation| {
+                    presentation != SurfaceCachePresentation::Interaction
+                })?;
                 let record = self.record()?;
                 if record.presentation.is_direct()
                     && record.presentation != SurfaceCachePresentation::Near
@@ -1262,38 +1192,82 @@ mod scenario {
             self.frame(DT)?;
             let before_recovery = self.capture("cache-before-recovery")?;
 
-            // Device replacement drops every image; the next frame repaints the same pixels.
+            // Device replacement drops every image and every GPU resource. The
+            // first repaint runs before the Host has re-uploaded the panel's
+            // resources and skips what is missing; the frame on which they are
+            // resident again repaints regardless of the refresh interval, with
+            // unchanged paint and resource revisions.
+            let revisions = self.revisions();
             self.renderer.replace_device(&mut self.host, rebuild()?)?;
-            // Resources reload through the Host; an image painted while one was
-            // missing retries at the band cadence, so wait past one interval.
-            let stats = self.settle(&[
+            let sources = [
                 source(FONT_TYPE, "shure-tech-mono.ippf"),
                 source(DRAWING_TYPE, "panel-replacement.ippd"),
                 source(TEXTURE_TYPE, "badge.ippt"),
-            ])?;
-            for _ in 0..12 {
-                self.frame(DT)?;
+            ];
+            let mut timeline = Vec::new();
+            let mut settled = None;
+            for index in 0..256 {
+                let stats = self.present(DT)?;
+                let resident = self.resident(&sources);
+                timeline.push((index, resident, stats.surface_cache_repaints));
+                if resident
+                    && stats.uploaded_bytes == 0
+                    && stats.failed_draw_calls == 0
+                    && stats.draw_calls > 0
+                {
+                    settled = Some(stats);
+                    break;
+                }
             }
-            if self.frame(DT)?.surface_cache_entries != 1 {
+            self.note(format!(
+                "recovery timeline (frame, resident, repaints): {timeline:?}"
+            ));
+            let stats = settled.ok_or("recovery did not settle")?;
+            let first_resident = timeline
+                .iter()
+                .find(|(_, resident, _)| *resident)
+                .map(|(index, ..)| *index)
+                .ok_or("resources never became resident")?;
+            let repainted_first = timeline[0].2 == 1;
+            let repainted_on_arrival = timeline[first_resident].2 == 1;
+            if !repainted_first || (first_resident > 0 && !repainted_on_arrival) {
+                return Err(format!(
+                    "recovery must repaint at once and again when resources are resident: {timeline:?}"
+                )
+                .into());
+            }
+            if self.revisions() != revisions {
+                return Err("device replacement changed the prepared revisions".into());
+            }
+            if stats.surface_cache_entries != 1 {
                 return Err(
                     format!("cache did not recover after device replacement: {stats:?}").into(),
                 );
             }
+            let record = self.record()?;
+            if record.presentation != SurfaceCachePresentation::Reused {
+                return Err(format!("recovered image not reused: {record:?}").into());
+            }
             let after_recovery = self.capture("cache-recovered")?;
             let difference = max_difference(&before_recovery, &after_recovery);
-            self.note(format!("recovery max difference {difference}"));
+            self.note(format!(
+                "recovery: first resident frame {first_resident}, max difference {difference}"
+            ));
             if difference > RECOVERY_MAX {
-                let reference = self.direct_reference("direct-recovered", BAND1)?;
-                let direct = max_difference(&before_recovery, &reference);
-                let record = self.record()?;
-                let finding = format!(
-                    "recovery changed cached pixels by {difference} while direct presentation differs by {direct}: the image repainted before the drawing's GPU data returned was kept as complete ({record:?})"
-                );
-                self.note(format!("FINDING: {finding}"));
-                self.findings.push(finding);
-                self.camera_distance(BAND1)?;
-                self.frame(DT)?;
+                return Err(format!(
+                    "recovery changed cached pixels by {difference} (record {record:?})"
+                )
+                .into());
             }
+            let reference = self.direct_reference("direct-recovered", BAND1)?;
+            self.compare(
+                "recovered-vs-direct",
+                &reference,
+                &after_recovery,
+                MATCHED_MEAN,
+                true,
+            )?;
+            self.frame(DT)?;
 
             // Lifetimes: policy removal, re-add, entity deletion and forget_world.
             self.opt_in(false)?;
@@ -1319,19 +1293,9 @@ mod scenario {
             if !self.diagnostics().is_empty() {
                 return Err("forget_world kept records".into());
             }
-            let source = if self.inputs.from_core {
-                "core-prepared inputs"
-            } else {
-                "runner-derived inputs through render_with_surface_items (ipp-s1ge.1 pending)"
-            };
-            if !self.findings.is_empty() {
-                self.finish()?;
-                return Err(format!("Surface cache findings: {:?}", self.findings).into());
-            }
-
-            self.note(format!(
-                "cache active with {source}: all service assertions passed"
-            ));
+            self.note(
+                "cache active with core-prepared inputs: all service assertions passed".into(),
+            );
             self.finish()
         }
     }

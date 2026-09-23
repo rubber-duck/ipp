@@ -87,8 +87,12 @@ pub struct DeviceState {
     pub surface_path_draws: Cell<u32>,
     #[cfg(feature = "gui")]
     pub glyph_batch_draws: Cell<u32>,
+    /// Retained GUI box batch draws.
+    #[cfg(feature = "gui")]
+    pub gui_batch_draws: Cell<u32>,
     /// Ordered Surface work: `B`/`E` begin and end a cache target, `C` composites,
-    /// `P` draws paths, `G` analytic glyphs, `T` atlas text, `F` begins the frame.
+    /// `P` draws paths, `G` analytic glyphs, `T` atlas text, `X` GUI boxes,
+    /// `F` begins the frame.
     #[cfg(feature = "surfaces")]
     pub surface_events: RefCell<String>,
 }
@@ -421,6 +425,33 @@ impl RenderDevice for TestDevice {
     }
 
     #[cfg(feature = "gui")]
+    fn create_gui_batch(&mut self, _: &[ipp_render_gl::GuiBoxVertex]) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn update_gui_batch(
+        &mut self,
+        _: &mut (),
+        _: &[ipp_render_gl::GuiBoxVertex],
+    ) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    fn draw_gui_batch(
+        &mut self,
+        _: &(),
+        _: &(),
+        _: &[f32; 16],
+        _: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        self.0.gui_batch_draws.set(self.0.gui_batch_draws.get() + 1);
+        self.0.surface_events.borrow_mut().push('X');
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
     fn create_glyph_batch(&mut self, _: &[ipp_render_gl::GlyphVertex]) -> Result<(), RenderError> {
         self.0
             .glyph_batch_uploads
@@ -612,6 +643,21 @@ pub fn triangle_contour(bytes: &mut Vec<u8>) {
             bytes.extend(value.to_le_bytes());
         }
     }
+}
+
+/// An IPPD drawing of one opaque white triangle layer over the unit square.
+#[cfg(feature = "surfaces")]
+pub fn surface_drawing() -> Vec<u8> {
+    let mut bytes = b"IPPD".to_vec();
+    bytes.extend(1_u32.to_le_bytes());
+    for value in [0.0_f32, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.01] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend([255, 255, 255, 255, 0, 0, 0, 0]);
+    bytes.extend(1_u32.to_le_bytes());
+    triangle_contour(&mut bytes);
+    bytes
 }
 
 #[cfg(feature = "surfaces")]

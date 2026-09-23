@@ -327,20 +327,6 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
 }
 
 #[cfg(feature = "surfaces")]
-fn surface_drawing() -> Vec<u8> {
-    let mut bytes = b"IPPD".to_vec();
-    bytes.extend(1_u32.to_le_bytes());
-    for value in [0.0_f32, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.01] {
-        bytes.extend(value.to_le_bytes());
-    }
-    bytes.extend(1_u32.to_le_bytes());
-    bytes.extend([255, 255, 255, 255, 0, 0, 0, 0]);
-    bytes.extend(1_u32.to_le_bytes());
-    triangle_contour(&mut bytes);
-    bytes
-}
-
-#[cfg(feature = "surfaces")]
 #[test]
 fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
     use ipp_core::services::asset_management::{

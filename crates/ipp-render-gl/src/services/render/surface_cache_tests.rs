@@ -64,8 +64,17 @@ fn input(index: u64, distance: f32, paint: u64, resource: u64) -> SurfaceCacheIn
         paint_revision: paint,
         resource_revision: resource,
         interaction: false,
+        missing_resident: false,
         visible: true,
         distance,
+    }
+}
+
+/// A resource key for incomplete-repaint tests.
+fn key(slot: u32) -> AssetKey {
+    AssetKey {
+        slot,
+        generation: 1,
     }
 }
 
@@ -95,7 +104,7 @@ impl Store {
         for input in inputs {
             match self.cache.action(world, input.entity) {
                 Some(SurfaceCacheAction::Repaint) => {
-                    self.cache.repainted(world, input.entity, time, true);
+                    self.cache.repainted(world, input.entity, time, &[], false);
                     self.cache.presented(world, input.entity, time);
                 }
                 Some(SurfaceCacheAction::Reuse) => {
@@ -148,6 +157,9 @@ fn cache_size_preserves_aspect_within_the_limit() {
     assert_eq!(cache_size([0.0, 1.0], 100.0, 2048), None);
     assert_eq!(cache_size([f32::NAN, 1.0], 100.0, 2048), None);
     assert_eq!(cache_size([1.0, 1.0], 100.0, 0), None);
+    // `2.4_f32 * 80` exceeds 192 by representation error only.
+    assert_eq!(cache_size([3.8, 2.4], 80.0, 2048), Some([304, 192]));
+    assert_eq!(cache_size([1.0, 0.5], 100.3, 2048), Some([101, 51]));
 }
 
 #[test]
@@ -254,22 +266,62 @@ fn resource_revisions_bypass_the_refresh_interval() {
 }
 
 #[test]
-fn incomplete_images_retry_at_the_band_cadence() {
+fn incomplete_images_repaint_when_a_missing_resource_becomes_resident() {
     let mut store = Store::new();
     let inputs = [input(1, 5.0, 1, 1)];
     store
         .cache
         .plan(WORLD, 0.0, 4096, &inputs, &mut store.targets)
         .unwrap();
-    store.cache.repainted(WORLD, entity(1), 0.0, false);
+    store
+        .cache
+        .repainted(WORLD, entity(1), 0.0, &[key(7), key(9)], false);
+    store.cache.presented(WORLD, entity(1), 0.0);
+    store
+        .cache
+        .finish_frame(WORLD, 0.0, true, &mut store.targets);
+    assert_eq!(store.cache.missing(WORLD, entity(1)), &[key(7), key(9)]);
+
+    // While the resources are missing the image matches direct presentation:
+    // it is reused past any number of refresh intervals.
+    for time in [0.05, 0.1, 0.5, 3.0] {
+        assert_eq!(store.frame(time, &inputs), counts(0, 1, 0, 0, 0));
+    }
+
+    // The first frame that reports one resident repaints without waiting for
+    // the interval, and the complete image is then reused.
+    let arrived = [SurfaceCacheInput {
+        missing_resident: true,
+        ..inputs[0]
+    }];
+    assert_eq!(store.frame(3.01, &arrived), counts(1, 0, 0, 0, 0));
+    assert!(store.cache.missing(WORLD, entity(1)).is_empty());
+    assert_eq!(store.frame(3.02, &inputs).reuses, 1);
+}
+
+#[test]
+fn incomplete_images_keep_coalescing_paint_edits() {
+    let mut store = Store::new();
+    let inputs = [input(1, 5.0, 1, 1)];
+    store
+        .cache
+        .plan(WORLD, 0.0, 4096, &inputs, &mut store.targets)
+        .unwrap();
+    store
+        .cache
+        .repainted(WORLD, entity(1), 0.0, &[key(7)], false);
     store.cache.presented(WORLD, entity(1), 0.0);
     store
         .cache
         .finish_frame(WORLD, 0.0, true, &mut store.targets);
 
-    assert_eq!(store.frame(0.05, &inputs).reuses, 1);
-    assert_eq!(store.frame(0.1, &inputs).repaints, 1);
-    assert_eq!(store.frame(0.3, &inputs).reuses, 1);
+    // A paint edit still waits for the refresh interval.
+    let edited = [input(1, 5.0, 2, 1)];
+    assert_eq!(store.frame(0.05, &edited).reuses, 1);
+    assert_eq!(store.frame(0.1, &edited).repaints, 1);
+
+    // That repaint drew everything, so nothing is missing any more.
+    assert!(store.cache.missing(WORLD, entity(1)).is_empty());
 }
 
 #[test]
@@ -615,4 +667,24 @@ fn device_limits_cap_the_image_size() {
     // Larger device limits still stop at the service maximum.
     store.frame(0.1, &[large]);
     assert_eq!(store.diagnostic(1).size, [2048, 1024]);
+}
+
+#[test]
+fn refined_images_repaint_on_the_next_frame_until_refinement_ends() {
+    let mut store = Store::new();
+    let inputs = [input(1, 5.0, 1, 1)];
+    store
+        .cache
+        .plan(WORLD, 0.0, 4096, &inputs, &mut store.targets)
+        .unwrap();
+    store.cache.repainted(WORLD, entity(1), 0.0, &[], true);
+    store.cache.presented(WORLD, entity(1), 0.0);
+    store
+        .cache
+        .finish_frame(WORLD, 0.0, true, &mut store.targets);
+
+    // Even with a frozen clock the next frame repaints; the helper's repaint
+    // completes the refinement, after which the image is reused.
+    assert_eq!(store.frame(0.0, &inputs), counts(1, 0, 0, 0, 0));
+    assert_eq!(store.frame(0.0, &inputs), counts(0, 1, 0, 0, 0));
 }

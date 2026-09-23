@@ -707,6 +707,8 @@ pub struct GlyphFrameWork {
     pub populates: u32,
     /// Recoverable allocation or rasterization failures.
     pub failures: u32,
+    /// Missing entries left for a later frame by the per-frame population bound.
+    capped: u32,
 }
 
 impl GlyphFrameWork {
@@ -717,6 +719,7 @@ impl GlyphFrameWork {
         self.misses = 0;
         self.populates = 0;
         self.failures = 0;
+        self.capped = 0;
     }
 
     /// Record a missing entry; queue it within the per-frame budget unless it backs off.
@@ -726,9 +729,21 @@ impl GlyphFrameWork {
         }
 
         self.misses += 1;
-        if self.queue.len() < MAX_POPULATES_PER_FRAME && !atlas.population_deferred(&key) {
-            self.queue.push(key);
+        if atlas.population_deferred(&key) {
+            return;
         }
+
+        if self.queue.len() < MAX_POPULATES_PER_FRAME {
+            self.queue.push(key);
+        } else {
+            self.capped += 1;
+        }
+    }
+
+    /// Whether the per-frame bound left missing entries that a following
+    /// frame will populate; entries backing off after failures do not count.
+    pub fn population_capped(&self) -> bool {
+        self.capped > 0
     }
 
     /// Take the population queue, in the order its runs published their demand.

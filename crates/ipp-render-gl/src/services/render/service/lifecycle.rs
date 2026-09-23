@@ -29,6 +29,10 @@ impl<D: RenderDevice> RenderService<D> {
             surface_cache: Default::default(),
             #[cfg(feature = "surfaces")]
             surface_cache_inputs: Vec::new(),
+            #[cfg(feature = "surfaces")]
+            surface_missing: Vec::new(),
+            #[cfg(feature = "gui")]
+            surface_analytic_text: false,
             #[cfg(feature = "gui")]
             surface_box_program: None,
             #[cfg(feature = "gui")]

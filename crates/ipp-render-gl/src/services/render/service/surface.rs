@@ -46,6 +46,10 @@ impl<D: RenderDevice> RenderService<D> {
     /// projection. Antialiasing and glyph coverage size from the device's
     /// current Surface viewport: the host target in the main pass, the image
     /// during a cache repaint.
+    ///
+    /// Primitives whose resource or GPU data is not resident are skipped and
+    /// their resources listed in `surface_missing`, which this call resets
+    /// together with `surface_analytic_text`.
     pub(super) fn draw_surface_primitives(
         &mut self,
         world: &WorldContext<'_>,
@@ -54,6 +58,14 @@ impl<D: RenderDevice> RenderService<D> {
         stats: &mut RenderStats,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
+        use ipp_core::services::asset_management::Asset as _;
+
+        self.surface_missing.clear();
+        #[cfg(feature = "gui")]
+        {
+            self.surface_analytic_text = false;
+        }
+
         #[cfg(feature = "gui")]
         let mut current_box_batch: Option<(
             ipp_core::systems::surface::SurfaceClipRect,
@@ -147,6 +159,7 @@ impl<D: RenderDevice> RenderService<D> {
                         })
                     else {
                         stats.failed_draw_calls += 1;
+                        self.surface_missing.push(font.key);
                         continue;
                     };
 
@@ -164,10 +177,17 @@ impl<D: RenderDevice> RenderService<D> {
                         if self.draw_glyphs_via_atlas(world.id(), &run, mvp, stats)? {
                             continue;
                         }
+
+                        self.surface_analytic_text = true;
                     }
 
                     let unit = *font_size / data.font.units_per_em() as f32;
                     let Some(path) = data.path.as_ref() else {
+                        // A font without curves has no path; one whose GPU
+                        // data was released is not resident yet.
+                        if data.graphics_ready() == Some(false) {
+                            self.surface_missing.push(font.key);
+                        }
                         continue;
                     };
                     instances.clear();
@@ -243,6 +263,7 @@ impl<D: RenderDevice> RenderService<D> {
                         })
                     else {
                         stats.failed_draw_calls += 1;
+                        self.surface_missing.push(drawing.key);
                         continue;
                     };
                     let placement = [
@@ -252,6 +273,9 @@ impl<D: RenderDevice> RenderService<D> {
                         style.scale[1],
                     ];
                     let Some(path) = data.path.as_ref() else {
+                        if data.graphics_ready() == Some(false) {
+                            self.surface_missing.push(drawing.key);
+                        }
                         continue;
                     };
                     for (i, (layer, &range)) in
@@ -303,6 +327,7 @@ impl<D: RenderDevice> RenderService<D> {
                         .and_then(|data| data.gpu.as_ref())
                     else {
                         stats.failed_draw_calls += 1;
+                        self.surface_missing.push(bitmap.key);
                         continue;
                     };
                     if self.surface_bitmap_program.is_none() {

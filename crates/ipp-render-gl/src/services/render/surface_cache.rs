@@ -25,10 +25,21 @@
 //! 2. Interaction, the direct band, a device limit of zero, a zero budget, an
 //!    allocation back-off or an unusable content size present directly.
 //! 3. Otherwise the Surface is cached. It repaints when it has no image, its
-//!    resolution changed, its resource revision changed, or its image is out
-//!    of date and either was not presented cached by the previous frame or the
-//!    band's refresh interval has elapsed since the last paint. Everything else
+//!    resolution changed, its resource revision changed, a resource its last
+//!    repaint had to skip is now resident, or its image is out of date and
+//!    either was not presented cached by the previous frame or the band's
+//!    refresh interval has elapsed since the last paint. Everything else
 //!    reuses the image, so paint edits coalesce until the next refresh.
+//!
+//! A repaint that skips a primitive because its resource or GPU data is not
+//! resident (after context recovery, or while it is still loading) leaves the
+//! image incomplete and records the missing resources. Direct presentation
+//! skips the same primitives, so the image stays current until one of them
+//! becomes resident; the first frame that sees it resident repaints regardless
+//! of the refresh interval. Analytic glyph fallback draws, so it is complete;
+//! when the glyph atlas deferred entries past its per-frame population bound,
+//! the image is refined on the next frame instead, until its text samples the
+//! atlas as direct presentation does.
 //!
 //! Resolution is the band's texel density times the content size, scaled
 //! uniformly to fit `min(device limit, SURFACE_CACHE_MAX_DIMENSION)`. The
@@ -50,7 +61,7 @@
 //! every entry; the next frame repaints from current evaluated inputs.
 
 use super::RenderError;
-use ipp_core::{EntityId, SurfaceCachePolicy, WorldId};
+use ipp_core::{EntityId, SurfaceCachePolicy, WorldId, services::asset_management::AssetKey};
 use std::collections::BTreeMap;
 
 /// Default context-wide byte budget for resident Surface cache images.
@@ -156,6 +167,8 @@ pub(crate) struct SurfaceCacheInput {
     pub resource_revision: u64,
     /// Live GUI interaction on the Surface's root.
     pub interaction: bool,
+    /// A resource the image's last repaint skipped is resident now.
+    pub missing_resident: bool,
     /// Inside the camera frustum this frame.
     pub visible: bool,
     /// Camera-to-anchor distance in metres.
@@ -190,8 +203,10 @@ pub(crate) struct SurfaceCacheFrameCounts {
 struct SurfaceCachePaint {
     paint_revision: u64,
     resource_revision: u64,
-    /// No primitive was skipped for a missing resource.
+    /// No primitive was skipped for a missing resource or missing GPU data.
     complete: bool,
+    /// Text was drawn analytically while atlas population was deferred.
+    refine: bool,
 }
 
 struct SurfaceCacheImage<T> {
@@ -210,6 +225,8 @@ struct SurfaceCacheEntry<T> {
     image: Option<SurfaceCacheImage<T>>,
     /// `None` until a repaint of the current image storage completes.
     painted: Option<SurfaceCachePaint>,
+    /// Resources the last repaint skipped because they were not resident.
+    missing: Vec<AssetKey>,
     painted_at: f64,
     /// World time of the last cached presentation, for idle release.
     cached_at: f64,
@@ -236,6 +253,7 @@ impl<T> SurfaceCacheEntry<T> {
             band,
             image: None,
             painted: None,
+            missing: Vec::new(),
             painted_at: 0.0,
             cached_at: 0.0,
             used: 0,
@@ -405,9 +423,13 @@ impl<T> SurfaceTextureCache<T> {
             _ if resized => true,
             None => true,
             Some(painted) if painted.resource_revision != input.resource_revision => true,
-            Some(painted) if painted.paint_revision == input.paint_revision && painted.complete => {
-                false
-            }
+            // A skipped resource arrived, or deferred glyphs are being populated:
+            // repaint now, whatever the cadence.
+            Some(painted) if !painted.complete && input.missing_resident => true,
+            Some(painted) if painted.refine => true,
+            // Up to date. An incomplete image matches direct presentation, which
+            // skips the same primitives, until a missing resource arrives.
+            Some(painted) if painted.paint_revision == input.paint_revision => false,
             // Out-of-date content may stay on screen only while it was on screen.
             Some(_) if !shown => true,
             Some(_) => {
@@ -601,14 +623,17 @@ impl<T> SurfaceTextureCache<T> {
             .map(|image| (&image.target, image.size))
     }
 
-    /// Record a completed repaint; `complete` is false when a primitive was
-    /// skipped for a missing resource, which retries at the band cadence.
+    /// Record a completed repaint. `missing` lists the resources whose
+    /// primitives were skipped because they were not resident; the image is
+    /// repainted as soon as a plan reports one of them resident. `refine`
+    /// repaints it on the next planned frame.
     pub(crate) fn repainted(
         &mut self,
         world: WorldId,
         entity: EntityId,
         time: f64,
-        complete: bool,
+        missing: &[AssetKey],
+        refine: bool,
     ) {
         let Some(entry) = self.entries.get_mut(&(world, entity)) else {
             return;
@@ -617,11 +642,25 @@ impl<T> SurfaceTextureCache<T> {
         entry.painted = Some(SurfaceCachePaint {
             paint_revision: entry.revisions.0,
             resource_revision: entry.revisions.1,
-            complete,
+            complete: missing.is_empty(),
+            refine,
         });
+        entry.missing.clear();
+        entry.missing.extend_from_slice(missing);
+        entry.missing.sort_unstable();
+        entry.missing.dedup();
         entry.painted_at = time;
         entry.repaints = entry.repaints.saturating_add(1);
         self.counts.repaints += 1;
+    }
+
+    /// Resources the Surface's current image skipped; empty for a complete
+    /// image or no image. The caller reports their residency in the next plan.
+    pub(crate) fn missing(&self, world: WorldId, entity: EntityId) -> &[AssetKey] {
+        match self.entries.get(&(world, entity)) {
+            Some(entry) if entry.painted.is_some_and(|painted| !painted.complete) => &entry.missing,
+            _ => &[],
+        }
     }
 
     /// Record a composite: the image is on screen for the stale-image rule and
@@ -794,6 +833,11 @@ fn image_bytes(size: [u32; 2]) -> usize {
     4 * size[0] as usize * size[1] as usize
 }
 
+/// Texels within this fraction of a whole count round down to it, so a size and
+/// density whose product is whole in decimal (2.4 m at 80 texels per metre) is
+/// not enlarged by the `f32` representation error of its factors.
+const SURFACE_CACHE_SIZE_TOLERANCE: f64 = 1e-4;
+
 /// Image size for a content rectangle at a texel density, scaled uniformly to
 /// fit `limit`; `None` for an empty or non-finite rectangle.
 pub(crate) fn cache_size(
@@ -808,7 +852,11 @@ pub(crate) fn cache_size(
     }
 
     let scale = (f64::from(limit) / width.max(height)).min(1.0);
-    let axis = |texels: f64| (texels * scale).ceil().clamp(1.0, f64::from(limit)) as u32;
+    let axis = |texels: f64| {
+        (texels * scale - SURFACE_CACHE_SIZE_TOLERANCE)
+            .ceil()
+            .clamp(1.0, f64::from(limit)) as u32
+    };
     Some([axis(width), axis(height)])
 }
 

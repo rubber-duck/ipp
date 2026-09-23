@@ -9,15 +9,30 @@
 //! glyph-atlas runs, curve drawings and bitmaps) with a content-space
 //! projection into its image, whose size the device uses for antialiasing. In
 //! the main pass, cached Surfaces composite their image at their painter-order
-//! slot with the current placement. The store and its policy are documented
-//! beside it in `render/surface_cache.rs`.
+//! slot with the current placement. A repaint that skips primitives whose
+//! resources are not resident records them, and each plan reports whether one
+//! of them is resident now, so an incomplete image repaints as soon as it can
+//! be completed. A repaint that drew text analytically while the glyph atlas
+//! population bound deferred entries repaints on the next frame, until its
+//! text uses the atlas like direct presentation. The store and its policy are
+//! documented beside it in `render/surface_cache.rs`.
 
 use super::super::surface_cache::{
     SurfaceCacheAction, SurfaceCacheDiagnostic, SurfaceCacheInput, SurfaceCacheTargets,
 };
 use super::{RenderError, RenderService, RenderStats};
 use crate::RenderDevice;
+use ipp_core::services::asset_management::AssetKey;
 use ipp_core::{SurfaceRenderItem, WorldContext, systems::camera};
+
+/// Whether a Surface resource has its data and, where it owns any, its GPU data.
+fn surface_resource_resident(world: &WorldContext<'_>, key: AssetKey) -> bool {
+    world
+        .asset_resources()
+        .get(key)
+        .and_then(|resource| resource.data())
+        .is_some_and(|data| data.graphics_ready() != Some(false))
+}
 
 /// Adapts a device to the cache store's image operations.
 pub(super) struct DeviceCacheTargets<'a, D>(pub(super) &'a mut D);
@@ -169,6 +184,11 @@ impl<D: RenderDevice> RenderService<D> {
                     interaction: item.interaction,
                     #[cfg(not(feature = "gui"))]
                     interaction: false,
+                    missing_resident: self
+                        .surface_cache
+                        .missing(world.id(), item.entity)
+                        .iter()
+                        .any(|&key| surface_resource_resident(world, key)),
                     visible: world.geometry_visible(item.entity, &frustum),
                     distance,
                 });
@@ -231,7 +251,7 @@ impl<D: RenderDevice> RenderService<D> {
                 continue;
             }
 
-            let skipped = stats.failed_draw_calls;
+            self.surface_missing.clear();
             // Device order: double-sided state, begin, draw, and always end.
             let prepared = self
                 .prepare_surface_program()
@@ -265,9 +285,20 @@ impl<D: RenderDevice> RenderService<D> {
             };
             match outcome {
                 Ok(()) => {
-                    let complete = stats.failed_draw_calls == skipped;
-                    self.surface_cache
-                        .repainted(world_id, item.entity, time, complete);
+                    // Skipped primitives leave the image incomplete until their
+                    // resources are resident. Analytic text drawn while atlas
+                    // population was deferred is refined on the next frame.
+                    #[cfg(feature = "gui")]
+                    let refine = self.surface_analytic_text && self.glyph_frame.population_capped();
+                    #[cfg(not(feature = "gui"))]
+                    let refine = false;
+                    self.surface_cache.repainted(
+                        world_id,
+                        item.entity,
+                        time,
+                        &self.surface_missing,
+                        refine,
+                    );
                 }
                 Err(error) => {
                     let mut device = self.device.borrow_mut();

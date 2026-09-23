@@ -16,39 +16,6 @@ impl<D: RenderDevice> RenderService<D> {
         width: u32,
         height: u32,
     ) -> Result<RenderStats, RenderError> {
-        self.render_frame(
-            world,
-            width,
-            height,
-            #[cfg(feature = "surfaces")]
-            None,
-        )
-    }
-
-    /// Render like [`Self::render`], presenting `surfaces` in place of the World's
-    /// prepared Surface inputs.
-    ///
-    /// Harness entry for renderer tests that need prepared fields core does not
-    /// yet populate. Items must describe live Surface entities of this World.
-    #[doc(hidden)]
-    #[cfg(feature = "surfaces")]
-    pub fn render_with_surface_items(
-        &mut self,
-        world: &mut WorldContext<'_>,
-        width: u32,
-        height: u32,
-        surfaces: &[ipp_core::SurfaceRenderItem],
-    ) -> Result<RenderStats, RenderError> {
-        self.render_frame(world, width, height, Some(surfaces))
-    }
-
-    fn render_frame(
-        &mut self,
-        world: &mut WorldContext<'_>,
-        width: u32,
-        height: u32,
-        #[cfg(feature = "surfaces")] surfaces: Option<&[ipp_core::SurfaceRenderItem]>,
-    ) -> Result<RenderStats, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(209, "gl.render");
 
@@ -64,7 +31,7 @@ impl<D: RenderDevice> RenderService<D> {
             (!ipp_core::render_buffer_reuse_enabled()).then(|| world.render_items().to_vec());
         let items = snapshot.as_deref().unwrap_or_else(|| world.render_items());
         #[cfg(feature = "surfaces")]
-        let surface_items = surfaces.unwrap_or_else(|| world.surface_render_items());
+        let surface_items = world.surface_render_items();
         self.debug.retain(world.debug_render_items());
 
         // One preparation serves glyph demand and drawing: `None` without a selected

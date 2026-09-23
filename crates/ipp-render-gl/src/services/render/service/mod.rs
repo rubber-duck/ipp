@@ -201,6 +201,14 @@ pub struct RenderService<D: RenderDevice> {
     /// Reused per-frame cache planning inputs.
     #[cfg(feature = "surfaces")]
     surface_cache_inputs: Vec<super::surface_cache::SurfaceCacheInput>,
+    /// Resources whose primitives the last Surface submission skipped because
+    /// they were not resident; a cache repaint records them as incomplete.
+    #[cfg(feature = "surfaces")]
+    surface_missing: Vec<ipp_core::services::asset_management::AssetKey>,
+    /// The last Surface submission drew a text run analytically because its
+    /// atlas entries were not all resident.
+    #[cfg(feature = "gui")]
+    surface_analytic_text: bool,
     #[cfg(feature = "gui")]
     surface_box_program: Option<D::Program>,
     #[cfg(feature = "gui")]

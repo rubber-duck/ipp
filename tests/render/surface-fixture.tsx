@@ -26,6 +26,7 @@ import {
 import { compareGlyph } from "./surface-glyph-oracle.js";
 import type {
   FrameCapture,
+  GlyphAtlasLimits,
   PickingWorldClient,
   RenderWorldClient,
   WorldPersistenceHostClient,
@@ -246,6 +247,11 @@ export async function workload(
 /** Sizes of the application's printable and unseen glyph sets. */
 export function glyphSets() {
   return { printable: workloadGlyphs.length, unseen: unseenGlyphs.length };
+}
+
+/** Bound the renderer's shared glyph atlas through the presentation channel. */
+export function glyphAtlasLimits(limits: GlyphAtlasLimits) {
+  client.presentation!.setGlyphAtlasLimits(limits);
 }
 
 export async function clearWorkload(viewport?: {

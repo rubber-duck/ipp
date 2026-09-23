@@ -1,6 +1,7 @@
 import { isAssetSourceResponse } from "./asset-sources.js";
 import { validateOptions, type Client, type ConnectOptions } from "./client.js";
 import type { MessageTransport, TransportEvents } from "./transport.js";
+import type { GlyphAtlasLimits, Presentation } from "./presentation.js";
 import {
   HostWireReader,
   HostWireWriter,
@@ -332,7 +333,11 @@ export abstract class HostClientBase<T extends Client> {
             this.requireAttachment(attachment);
             presentation.restoreContext();
           },
-        },
+          setGlyphAtlasLimits: (limits: GlyphAtlasLimits) => {
+            this.requireAttachment(attachment);
+            presentation.setGlyphAtlasLimits(limits);
+          },
+        } satisfies Presentation,
       });
     attachment.client = this.createWorldClient(
       transport,

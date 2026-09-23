@@ -12,12 +12,25 @@ export interface FrameCapture {
   backend: Record<string, unknown>;
 }
 
+/**
+ * Bounds of the renderer's shared glyph atlas on one graphics context. Limits
+ * survive context loss and apply at the renderer's next glyph demand publication.
+ */
+export interface GlyphAtlasLimits {
+  /** Resident page budget, at least one; allocation beyond it reclaims pages. */
+  maxPages: number;
+  /** Demand publications a page without demand stays resident before it retires. */
+  idlePagePublications: number;
+}
+
 /** Optional presentation controls of a host with an attached canvas. */
 export interface ClientPresentation {
   capture(afterTick?: bigint): Promise<FrameCapture>;
   resize(width: number, height: number): void;
   loseContext(): void;
   restoreContext(): void;
+  /** Requires a GUI render build; others fail the presentation. */
+  setGlyphAtlasLimits(limits: GlyphAtlasLimits): void;
 }
 
 export interface Presentation {
@@ -29,6 +42,7 @@ export interface Presentation {
   resize(width: number, height: number): void;
   loseContext(): void;
   restoreContext(): void;
+  setGlyphAtlasLimits(limits: GlyphAtlasLimits): void;
 }
 
 export const MAX_CAPTURE_DIMENSION = 2_048;
@@ -42,6 +56,22 @@ export function validateViewport(width: number, height: number): void {
   ) {
     throw new RangeError(
       `Viewport dimensions must be integers in 1..=${MAX_CAPTURE_DIMENSION}`,
+    );
+  }
+}
+
+export function validateGlyphAtlasLimits(limits: GlyphAtlasLimits): void {
+  const { maxPages, idlePagePublications } = limits;
+  if (
+    !Number.isInteger(maxPages) ||
+    maxPages < 1 ||
+    maxPages > 0xffff_ffff ||
+    !Number.isInteger(idlePagePublications) ||
+    idlePagePublications < 0 ||
+    idlePagePublications > 0xffff_ffff
+  ) {
+    throw new RangeError(
+      "Glyph atlas limits must be integers: maxPages in 1..=2^32-1 and idlePagePublications in 0..=2^32-1",
     );
   }
 }
@@ -109,6 +139,15 @@ export class PortPresentation implements Presentation {
 
   restoreContext(): void {
     this.send({ type: "context-restore" });
+  }
+
+  setGlyphAtlasLimits(limits: GlyphAtlasLimits): void {
+    validateGlyphAtlasLimits(limits);
+    this.send({
+      type: "glyph-atlas-limits",
+      maxPages: limits.maxPages,
+      idlePagePublications: limits.idlePagePublications,
+    });
   }
 
   receive(data: Record<string, unknown>): boolean {

@@ -35,6 +35,7 @@ export const RETAINED_COUNTERS = [
   "glyphMisses",
   "glyphPopulates",
   "glyphPopulationFailures",
+  "glyphPageRetirements",
   "glyphPages",
   "glyphResidentBytes",
   "totalGuiRebuilds",
@@ -42,13 +43,17 @@ export const RETAINED_COUNTERS = [
   "totalGlyphMisses",
   "totalGlyphPopulates",
   "totalGlyphPopulationFailures",
+  "totalGlyphPageRetirements",
 ] as const;
 
-// HOOK(ipp-9nx.61.7): this base has no configurable atlas budget; the renderer
-// keeps at most MAX_ATLAS_PAGES (four 512x512 pages). When render settings
-// expose a page budget or idle-frame knob, configure it before the atlas phase,
-// assert against the configured value, and assert its eviction counter.
-const ATLAS_PAGE_BUDGET = 4;
+/**
+ * Glyph atlas bounds for the atlas phase and the rest of the run. One unseen
+ * window fits in two 512x512 pages, so three pages hold it while the sliding
+ * windows exceed the budget. Idle expiry never elapses and some World always
+ * demands glyphs, so every page retired after the first window is pressure
+ * eviction.
+ */
+const ATLAS_LIMITS = { maxPages: 3, idlePagePublications: 0xffff_ffff };
 
 /** Terminal text pixels, as classified by the fixture's coverage count. */
 const isText = (r: number, g: number, b: number) =>
@@ -344,11 +349,14 @@ export async function exerciseRetainedGui(
     populates: number | null;
     misses: number | null;
     failures: number | null;
+    retirements: number | null;
     pages: number | null;
     attempts: number;
   }[] = [];
   let maximumPages = 0;
   let before = smaller;
+  // Only GUI render builds own a glyph atlas; the budget applies at the next publication.
+  if (retained) await call("glyphAtlasLimits", [ATLAS_LIMITS]);
   const atlasStep = async (label: string, sequence: number) => {
     await measure(label, "workload", { ...atlas, sequence });
     const { frame, attempts } = await settle(label);
@@ -360,6 +368,9 @@ export async function exerciseRetainedGui(
       failures: retained
         ? since(frame, before, "totalGlyphPopulationFailures")
         : null,
+      retirements: retained
+        ? since(frame, before, "totalGlyphPageRetirements")
+        : null,
       pages: retained ? number(frame, "glyphPages") : null,
       attempts,
     };
@@ -368,8 +379,8 @@ export async function exerciseRetainedGui(
     if (retained) {
       maximumPages = Math.max(maximumPages, step.pages!);
       assert.ok(
-        step.pages! <= ATLAS_PAGE_BUDGET,
-        `${label}: ${step.pages} pages exceed the budget`,
+        step.pages! <= ATLAS_LIMITS.maxPages,
+        `${label}: ${step.pages} pages exceed the configured budget`,
       );
     }
     return step;
@@ -397,8 +408,16 @@ export async function exerciseRetainedGui(
   // populates once while resident, so repopulating the first window proves its
   // entries were evicted during the run.
   const evicted = await atlasStep("atlas-return", 0);
-  if (retained)
+  if (retained) {
     assert.ok(evicted.populates! > 0, "the first unseen window was evicted");
+    const pressure = atlasSteps
+      .slice(1)
+      .reduce((total, step) => total + step.retirements!, 0);
+    assert.ok(
+      pressure > 0,
+      `atlas pressure must retire pages within the budget: ${JSON.stringify(atlasSteps)}`,
+    );
+  }
   const repopulated = compareFrames(
     driver.pixels("atlas-0"),
     driver.pixels("atlas-return"),
@@ -431,7 +450,7 @@ export async function exerciseRetainedGui(
     atlas: {
       rows: atlas.rows,
       columns: atlas.columns,
-      pageBudget: ATLAS_PAGE_BUDGET,
+      pageBudget: ATLAS_LIMITS.maxPages,
       maximumPages: retained ? maximumPages : null,
       steps: atlasSteps,
     },

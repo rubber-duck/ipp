@@ -1,5 +1,5 @@
-import { validateViewport } from "./presentation.js";
-import type { FrameCapture } from "./presentation.js";
+import { validateGlyphAtlasLimits, validateViewport } from "./presentation.js";
+import type { FrameCapture, GlyphAtlasLimits } from "./presentation.js";
 import { DiagnosticLogger, type LogLevel } from "./logging.js";
 
 /** Imported only by a worker initialized with an OffscreenCanvas. */
@@ -70,6 +70,12 @@ export class RenderWorkerService {
   private runtime: RenderHostExports | undefined;
   /** Absent for builds without GUI rendering: those counters are unavailable, not zero. */
   private retainedStatistics: RetainedGuiStatistics | undefined;
+  /** Present exactly when the runtime renders GUI content through a glyph atlas. */
+  private glyphAtlasLimitsExport:
+    | ((maxPages: number, idlePagePublications: number) => number)
+    | undefined;
+  /** Latest requested atlas bounds, applied again for a later World session. */
+  private glyphAtlasLimits: GlyphAtlasLimits | undefined;
   private readonly retainedTotals: Record<string, number> = {};
   private session = 0n;
   private generation = 0;
@@ -163,11 +169,43 @@ export class RenderWorkerService {
               candidate[name] as () => number,
             ]),
           ) as RetainedGuiStatistics);
+    const limits = candidate.ipp_render_set_glyph_atlas_limits;
+    if ((typeof limits === "function") !== (present.length !== 0))
+      throw new Error(
+        "WASM runtime glyph atlas limits differ from its retained GUI statistics",
+      );
+    this.glyphAtlasLimitsExport =
+      typeof limits === "function"
+        ? (limits as (maxPages: number, idlePagePublications: number) => number)
+        : undefined;
     this.runtime = exports as RenderHostExports;
     this.session = session;
     this.observedRenderTick = 0n;
     this.device.setMemory(this.runtime.memory);
+    this.applyGlyphAtlasLimits();
     if (!this.device.isContextLost()) this.attach();
+  }
+
+  /** The renderer keeps limits through context loss; a later session receives them again. */
+  private applyGlyphAtlasLimits(): void {
+    const limits = this.glyphAtlasLimits;
+    if (!limits || !this.runtime) return;
+    if (!this.glyphAtlasLimitsExport)
+      throw new Error(
+        "WASM runtime has no glyph atlas; select a GUI render build",
+      );
+    if (
+      this.glyphAtlasLimitsExport(
+        limits.maxPages,
+        limits.idlePagePublications,
+      ) !== 1
+    )
+      throw new Error("Rust renderer rejected the glyph atlas limits");
+    this.logger.log("debug", "renderer.glyph_atlas_limits", () => ({
+      session: this.session,
+      maxPages: limits.maxPages,
+      idlePagePublications: limits.idlePagePublications,
+    }));
   }
 
   private attach(): void {
@@ -355,6 +393,16 @@ export class RenderWorkerService {
         width: data.width as number,
         height: data.height as number,
       }));
+      return true;
+    }
+    if (data.type === "glyph-atlas-limits") {
+      const limits = {
+        maxPages: data.maxPages as number,
+        idlePagePublications: data.idlePagePublications as number,
+      };
+      validateGlyphAtlasLimits(limits);
+      this.glyphAtlasLimits = limits;
+      this.applyGlyphAtlasLimits();
       return true;
     }
     if (data.type === "context-loss") {

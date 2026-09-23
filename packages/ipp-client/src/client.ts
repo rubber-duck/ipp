@@ -445,6 +445,7 @@ export abstract class ClientBase implements Client {
       resize: (width, height) => host.resize(width, height),
       loseContext: () => host.loseContext(),
       restoreContext: () => host.restoreContext(),
+      setGlyphAtlasLimits: (limits) => host.setGlyphAtlasLimits(limits),
     };
   }
 

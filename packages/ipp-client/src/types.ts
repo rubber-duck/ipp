@@ -464,7 +464,11 @@ export interface Response {
   body: ResponseBody;
 }
 
-export type { FrameCapture, ClientPresentation } from "./presentation.js";
+export type {
+  FrameCapture,
+  ClientPresentation,
+  GlyphAtlasLimits,
+} from "./presentation.js";
 
 /** World-local controller state, observed at the inspection/event tick. */
 export interface AnimationControllerState {

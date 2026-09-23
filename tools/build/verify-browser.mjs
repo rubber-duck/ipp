@@ -315,11 +315,16 @@ const reports = [];
     rendering && gui,
     "GUI batch imports differ from selected capability",
   );
-  assert.equal(
-    typeof runtime.ipp_render_glyph_population_failures === "function",
-    rendering && gui,
-    "retained GUI diagnostics differ from selected capability",
-  );
+  for (const name of [
+    "ipp_render_glyph_population_failures",
+    "ipp_render_glyph_page_retirements",
+    "ipp_render_set_glyph_atlas_limits",
+  ])
+    assert.equal(
+      typeof runtime[name] === "function",
+      rendering && gui,
+      `retained GUI export ${name} differs from selected capability`,
+    );
   assert.equal(
     glImports.some((entry) => entry.name === "set_skin_palette"),
     rendering && skeletalAnimation,

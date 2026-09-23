@@ -28,15 +28,20 @@ pub(crate) struct GuiSliderRail {
 }
 
 impl GuiSliderRail {
-    /// Filled track from the first thumb center to the committed center.
+    /// Filled track from the rail's left edge to the committed thumb center.
+    ///
+    /// The track spans the whole control rectangle, so the fill starts where
+    /// the track starts rather than at the first thumb center; at the minimum
+    /// value it still reaches under half the thumb.
     pub(crate) fn fill_rect(self, fraction: f32, height: f32) -> Option<[f32; 4]> {
         if !fraction.is_finite() || !height.is_finite() || height <= 0.0 {
             return None;
         }
+        let half_thumb = self.thumb_edge * 0.5;
         Some([
-            self.center_min,
+            self.center_min - half_thumb,
             self.top + (self.height - height) * 0.5,
-            fraction.clamp(0.0, 1.0) * (self.center_max - self.center_min),
+            half_thumb + fraction.clamp(0.0, 1.0) * (self.center_max - self.center_min),
             height,
         ])
     }

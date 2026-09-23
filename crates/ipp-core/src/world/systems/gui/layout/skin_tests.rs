@@ -1135,8 +1135,14 @@ fn slider_fill_uses_committed_value_and_stable_skin_identity() {
             &MapResolver::empty(),
         )
     };
+    // The [0, 0, 10, 5] rail has a 3.75 thumb whose centre travels between
+    // 1.875 and 8.125; the fill starts at the rail's left edge and ends under
+    // the thumb centre.
+    let thumb_edge = 5.0 * 0.75;
+    let (center_min, center_max) = (thumb_edge * 0.5, 10.0 - thumb_edge * 0.5);
     let mut identity = None;
-    for (value, width) in [(0.0, 0.0), (5.0, 3.125), (10.0, 6.25)] {
+    for value in [0.0, 5.0, 10.0] {
+        let width = center_min + value / 10.0 * (center_max - center_min);
         let painted = paint(value);
         assert_eq!(painted.len(), 3);
         let SurfaceRenderPrimitive::Box {
@@ -1147,7 +1153,7 @@ fn slider_fill_uses_committed_value_and_stable_skin_identity() {
         else {
             panic!("slider fill must be a box")
         };
-        assert_eq!(style.position, [1.875, 1.875]);
+        assert_eq!(style.position, [0.0, 1.875]);
         assert_eq!(*size, [width, 1.25]);
         assert_eq!(style.color, [0.2, 0.9, 0.8, 1.0]);
         identity.get_or_insert(style.identity);

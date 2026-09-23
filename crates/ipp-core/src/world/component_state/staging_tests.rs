@@ -469,3 +469,316 @@ fn ordered_writes_publish_one_update_per_operation_that_changes_the_value() {
     assert_eq!(updates, expected, "{events:?}");
     assert_eq!(updates, events.len(), "{events:?}");
 }
+
+mod rows {
+    //! The same staging contracts for schema-row properties, addressed by
+    //! their field offsets on the test-only rows component.
+
+    use super::*;
+    use crate::components::rows::Rows;
+    use crate::components::schema::FieldValue as SchemaValue;
+    use crate::components::{RowsFixture, RowsFixtureItem};
+
+    const WEIGHT: u32 = 0;
+    const MARK: u32 = 8;
+
+    fn offset(slot: u32, property: u32) -> u32 {
+        Rows::<RowsFixtureItem>::offset(0, slot, property).unwrap()
+    }
+
+    fn write(entity: EntityId, offset: u32, value: FieldValue) -> Command {
+        Command::SetField {
+            entity: EntityRef::Handle(entity),
+            component: ComponentValue::ROWS_FIXTURE,
+            field: FieldWrite {
+                offset,
+                value,
+            },
+        }
+    }
+
+    fn weight(entity: EntityId, slot: u32, value: f32) -> Command {
+        write(
+            entity,
+            offset(slot, WEIGHT),
+            FieldValue::Dynamic(DynamicValue::F32(value)),
+        )
+    }
+
+    /// A World holding one committed rows component with `slots` item rows,
+    /// each with a present optional `mark`.
+    fn rows_world(slots: u32) -> (HostRuntime, WorldId, EntityId) {
+        let mut fixture = RowsFixture::default();
+        for slot in 0..slots {
+            fixture
+                .items
+                .insert(
+                    slot,
+                    RowsFixtureItem {
+                        mark: Some(1.0),
+                        ..RowsFixtureItem::default()
+                    },
+                )
+                .unwrap();
+        }
+        let mut host = HostRuntime::new();
+        let world = host.create_world(WorldLimits::default()).unwrap();
+        let outcome = run(
+            &mut host,
+            world,
+            vec![
+                Command::Create {
+                    alias: 1,
+                    metadata: EntityMetadata {
+                        symbolic_id: Some("rows".into()),
+                        classes: vec![],
+                    },
+                },
+                Command::InsertComponentValue {
+                    entity: EntityRef::Alias(1),
+                    value: ComponentValue::RowsFixture(fixture),
+                },
+            ],
+        );
+        let entity = outcome.result.unwrap()[0].1;
+        (host, world, entity)
+    }
+
+    fn fixture(
+        host: &mut HostRuntime,
+        world: WorldId,
+        entity: EntityId,
+        base: bool,
+    ) -> RowsFixture {
+        let snapshot = host.world_mut(world).unwrap().inspect(entity).unwrap();
+        let values = if base {
+            snapshot.base
+        } else {
+            snapshot.effective
+        };
+        values
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::RowsFixture(value) => Some(value),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn field(
+        host: &mut HostRuntime,
+        world: WorldId,
+        entity: EntityId,
+        offset: u32,
+    ) -> [SchemaValue; 2] {
+        [true, false].map(|base| {
+            ComponentValue::RowsFixture(fixture(host, world, entity, base))
+                .field(offset)
+                .unwrap()
+        })
+    }
+
+    #[test]
+    fn batched_row_property_writes_copy_the_component_independently_of_their_count() {
+        let mut copies = Vec::new();
+        for count in [16, 512] {
+            let (mut host, world, entity) = rows_world(512);
+            let writes = (0..count)
+                .map(|slot| weight(entity, slot, slot as f32))
+                .collect();
+            RowsFixture::take_clone_count();
+            assert!(run(&mut host, world, writes).result.is_ok());
+            copies.push(RowsFixture::take_clone_count());
+
+            let effective = fixture(&mut host, world, entity, false);
+            assert_eq!(
+                effective.items.get(count - 1).unwrap().weight,
+                (count - 1) as f32
+            );
+        }
+        assert_eq!(
+            copies[0], copies[1],
+            "a batch copies its staged component a fixed number of times, not once per row write"
+        );
+    }
+
+    #[test]
+    fn overlay_layering_over_rows_in_one_batch_matches_separate_batches() {
+        let overlay = |slot, value: f32| Command::UpdateComponentStateOverlay {
+            owner: StateOverlayRef::Alias(1),
+            overlay: StateOverlayRef::Alias(3),
+            fields: vec![FieldWrite {
+                offset: offset(slot, WEIGHT),
+                value: FieldValue::Dynamic(DynamicValue::F32(value)),
+            }],
+            clear: vec![],
+        };
+        let operations = |entity| {
+            let mut operations = attach_overlay();
+            let Command::AttachEntityOverlayBinding {
+                symbolic_id,
+                ..
+            } = &mut operations[1]
+            else {
+                unreachable!()
+            };
+            *symbolic_id = "rows".into();
+            let Command::AttachComponentStateOverlay {
+                component,
+                ..
+            } = &mut operations[2]
+            else {
+                unreachable!()
+            };
+            *component = ComponentValue::ROWS_FIXTURE;
+            operations.push(overlay(1, 5.0));
+            operations.push(weight(entity, 1, 2.0));
+            operations.push(weight(entity, 2, 3.0));
+            operations.push(write(entity, offset(2, MARK), FieldValue::Unset));
+            operations
+        };
+
+        let (mut joined, joined_world, joined_entity) = rows_world(4);
+        let outcome = run(&mut joined, joined_world, operations(joined_entity));
+        assert!(outcome.result.is_ok(), "{outcome:?}");
+        let owner = StateOverlayRef::Handle(outcome.state_overlays[0].id);
+
+        let (mut split, split_world, split_entity) = rows_world(4);
+        let all = operations(split_entity);
+        let (attachment, writes) = all.split_at(4);
+        assert!(
+            run(&mut split, split_world, attachment.to_vec())
+                .result
+                .is_ok()
+        );
+        for command in writes {
+            assert!(
+                run(&mut split, split_world, vec![command.clone()])
+                    .result
+                    .is_ok()
+            );
+        }
+
+        for base in [false, true] {
+            assert_eq!(
+                fixture(&mut joined, joined_world, joined_entity, base),
+                fixture(&mut split, split_world, split_entity, base)
+            );
+        }
+        let effective = fixture(&mut joined, joined_world, joined_entity, false);
+        assert_eq!(effective.items.get(1).unwrap().weight, 5.0);
+        assert_eq!(effective.items.get(2).unwrap().weight, 3.0);
+        assert_eq!(effective.items.get(2).unwrap().mark, None);
+        let base = fixture(&mut joined, joined_world, joined_entity, true);
+        assert_eq!(base.items.get(1).unwrap().weight, 2.0);
+
+        assert!(
+            run(
+                &mut joined,
+                joined_world,
+                vec![Command::ReleaseStateOverlayOwner {
+                    owner,
+                }],
+            )
+            .result
+            .is_ok()
+        );
+        let released = fixture(&mut joined, joined_world, joined_entity, false);
+        assert_eq!(released.items.get(1).unwrap().weight, 2.0);
+        assert_eq!(
+            released,
+            fixture(&mut joined, joined_world, joined_entity, true)
+        );
+    }
+
+    #[test]
+    fn clearing_an_optional_row_property_is_an_observed_update_that_can_be_undone() {
+        let (mut host, world, entity) = rows_world(2);
+        host.world_mut(world)
+            .unwrap()
+            .enqueue_system_command(
+                LifecyclePublisherSystem::ID,
+                SESSION,
+                LifecyclePublisherCommand::Subscribe {
+                    subscription: 1,
+                    filter: LifecycleFilter {
+                        entities: false,
+                        assets: false,
+                        entity: Some(entity),
+                        component: Some(ComponentValue::ROWS_FIXTURE),
+                        ..Default::default()
+                    },
+                },
+            )
+            .unwrap();
+        host.world_mut(world).unwrap().step(0.0).unwrap();
+
+        let mark = offset(1, MARK);
+        let present = SchemaValue::Dynamic(DynamicValue::F32(1.0));
+        let operations = vec![
+            write(entity, mark, FieldValue::Unset),
+            write(entity, mark, FieldValue::Unset),
+            write(entity, mark, FieldValue::Dynamic(DynamicValue::F32(1.0))),
+            write(entity, mark, FieldValue::Unset),
+        ];
+        let expected = [true, false, true, true]
+            .into_iter()
+            .filter(|changed| *changed)
+            .count();
+        assert!(run(&mut host, world, operations).result.is_ok());
+        assert_eq!(
+            field(&mut host, world, entity, mark),
+            [SchemaValue::Unset, SchemaValue::Unset]
+        );
+
+        let updates = host
+            .world_mut(world)
+            .unwrap()
+            .drain_system_events::<LifecyclePublisherOutput>(LifecyclePublisherSystem::ID, SESSION)
+            .into_iter()
+            .flat_map(|output| match output {
+                LifecyclePublisherOutput::Events(events) => events,
+                LifecyclePublisherOutput::Overflow {
+                    ..
+                } => panic!("bounded fixture overflowed"),
+            })
+            .filter(|event| {
+                matches!(
+                    event.observation,
+                    LifecycleObservation::Component {
+                        kind: ComponentLifecycleKind::Updated,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(updates, expected);
+
+        // A required property cannot be cleared, and the rejected write keeps
+        // the earlier value; a dead slot rejects both clearing and writing.
+        let outcome = run(
+            &mut host,
+            world,
+            vec![
+                write(entity, mark, FieldValue::Dynamic(DynamicValue::F32(1.0))),
+                write(entity, offset(1, WEIGHT), FieldValue::Unset),
+            ],
+        );
+        assert_eq!(outcome.result.unwrap_err().operation, Some(1));
+        assert_eq!(
+            field(&mut host, world, entity, mark),
+            [present.clone(), present]
+        );
+        for value in [
+            FieldValue::Unset,
+            FieldValue::Dynamic(DynamicValue::F32(1.0)),
+        ] {
+            let outcome = run(
+                &mut host,
+                world,
+                vec![write(entity, offset(5, MARK), value)],
+            );
+            assert!(outcome.result.is_err());
+        }
+    }
+}

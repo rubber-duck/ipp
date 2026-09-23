@@ -155,7 +155,7 @@ impl AnimationController {
             return;
         }
         // Whole-value staging must remain coherent within its target component.
-        // Discrete single-property patches cannot overwrite other numeric lanes.
+        // Discrete single-property patches cannot overwrite other numeric properties.
         for (&key, indices) in &self.driver_targets {
             for &index in indices {
                 let exclusive = owners.get(&key).is_some_and(|owners| owners.len() == 1)
@@ -190,7 +190,7 @@ impl AnimationController {
             }
         }
 
-        // Every lane replaces its destination without reading the prior sample.
+        // Every binding replaces its destination without reading the prior sample.
         // Other controllers on the component may need its underlying inputs;
         // membership changes invalidate readiness before this proof is reused.
         self.retain_numeric = !self.drivers.is_empty()

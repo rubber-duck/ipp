@@ -20,7 +20,7 @@ use crate::components::schema::ComponentLifecycle;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum TransitionLaneKey {
+enum TransitionChannelKey {
     Property(super::driver::AnimationTargetIdentity),
     #[cfg(feature = "skeletal-animation")]
     Joint {
@@ -38,18 +38,18 @@ enum TransitionOutput {
 }
 
 #[derive(Clone, Debug)]
-enum TransitionLaneValue {
+enum TransitionChannelValue {
     Property(AnimationValue),
     #[cfg(feature = "skeletal-animation")]
     Joint(Transform),
 }
 
 #[derive(Debug)]
-struct TransitionLane {
-    key: TransitionLaneKey,
-    baseline: TransitionLaneValue,
-    source: TransitionLaneValue,
-    destination: TransitionLaneValue,
+struct TransitionChannel {
+    key: TransitionChannelKey,
+    baseline: TransitionChannelValue,
+    source: TransitionChannelValue,
+    destination: TransitionChannelValue,
     output: TransitionOutput,
 }
 
@@ -57,12 +57,12 @@ struct TransitionLane {
 enum TransitionOperation {
     Property {
         driver: usize,
-        lane: usize,
+        channel: usize,
     },
     #[cfg(feature = "skeletal-animation")]
     Pose {
         driver: usize,
-        lanes: Vec<usize>,
+        channels: Vec<usize>,
         current: Vec<Transform>,
         output: Vec<Transform>,
     },
@@ -71,7 +71,7 @@ enum TransitionOperation {
 /// Mutation-boundary program; frame evaluation only copies retained values and samples tracks.
 #[derive(Debug)]
 pub(super) struct AnimationTransitionProgram {
-    lanes: Vec<TransitionLane>,
+    channels: Vec<TransitionChannel>,
     source_operations: Vec<TransitionOperation>,
     destination_operations: Vec<TransitionOperation>,
     numeric_targets: Vec<(EntityId, u16)>,
@@ -88,16 +88,16 @@ impl AnimationTransitionProgram {
             driver.bind_transition_output(storage);
         }
         let mut keys = BTreeMap::new();
-        collect_lanes(&source.drivers, &mut keys)?;
+        collect_channels(&source.drivers, &mut keys)?;
         let key_indices: BTreeMap<_, _> = keys
             .keys()
             .cloned()
             .enumerate()
             .map(|(index, key)| (key, index))
             .collect();
-        let lanes = keys
+        let channels = keys
             .into_iter()
-            .map(|(key, (baseline, output))| TransitionLane {
+            .map(|(key, (baseline, output))| TransitionChannel {
                 key,
                 source: baseline.clone(),
                 destination: baseline.clone(),
@@ -109,11 +109,11 @@ impl AnimationTransitionProgram {
         let mut numeric_targets: Vec<_> = key_indices
             .keys()
             .filter_map(|key| match key {
-                TransitionLaneKey::Property(identity) => {
+                TransitionChannelKey::Property(identity) => {
                     Some((identity.entity, identity.property.component()))
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     ..
                 } => None,
             })
@@ -121,7 +121,7 @@ impl AnimationTransitionProgram {
         numeric_targets.sort_unstable();
         numeric_targets.dedup();
         Ok(Self {
-            lanes,
+            channels,
             source_operations,
             destination_operations: Vec::new(),
             numeric_targets,
@@ -133,11 +133,11 @@ impl AnimationTransitionProgram {
         values: &[super::system_state::AnimationRuntimeFrozenTransitionValue],
         storage: &ComponentStorage,
     ) -> Result<Self, ErrorReason> {
-        let mut lanes = Vec::with_capacity(values.len());
+        let mut channels = Vec::with_capacity(values.len());
         for value in values {
             let key = frozen_key(value)?;
             let output = match &key {
-                TransitionLaneKey::Property(identity) => TransitionOutput::Value(
+                TransitionChannelKey::Property(identity) => TransitionOutput::Value(
                     super::driver::bind_frozen_transition_output(
                         identity.clone(),
                         &value.value,
@@ -146,25 +146,25 @@ impl AnimationTransitionProgram {
                     .ok_or(ErrorReason::InvalidField)?,
                 ),
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     entity,
                     joint,
                     ..
                 } => TransitionOutput::Joint(*entity, *joint),
             };
-            lanes.push(TransitionLane {
+            channels.push(TransitionChannel {
                 key,
-                source: lane_value(&value.value)?,
-                destination: lane_value(&value.value)?,
-                baseline: lane_value(&value.baseline)?,
+                source: channel_value(&value.value)?,
+                destination: channel_value(&value.value)?,
+                baseline: channel_value(&value.baseline)?,
                 output,
             });
         }
-        lanes.sort_by(|a, b| a.key.cmp(&b.key));
+        channels.sort_by(|a, b| a.key.cmp(&b.key));
         let mut numeric_targets = frozen_numeric_targets(values);
         numeric_targets.sort_unstable();
         Ok(Self {
-            lanes,
+            channels,
             source_operations: Vec::new(),
             destination_operations: Vec::new(),
             numeric_targets,
@@ -191,20 +191,20 @@ impl AnimationTransitionProgram {
         }
 
         let mut keys =
-            BTreeMap::<TransitionLaneKey, (TransitionLaneValue, TransitionOutput)>::new();
+            BTreeMap::<TransitionChannelKey, (TransitionChannelValue, TransitionOutput)>::new();
         if let Some(source) = source.as_deref() {
-            collect_lanes(&source.drivers, &mut keys)?;
+            collect_channels(&source.drivers, &mut keys)?;
         }
-        collect_lanes(&destination.drivers, &mut keys)?;
+        collect_channels(&destination.drivers, &mut keys)?;
         let key_indices: BTreeMap<_, _> = keys
             .keys()
             .cloned()
             .enumerate()
             .map(|(index, key)| (key, index))
             .collect();
-        let lanes = keys
+        let channels = keys
             .into_iter()
-            .map(|(key, (baseline, output))| TransitionLane {
+            .map(|(key, (baseline, output))| TransitionChannel {
                 key,
                 source: baseline.clone(),
                 destination: baseline.clone(),
@@ -219,11 +219,11 @@ impl AnimationTransitionProgram {
         let mut numeric_targets: Vec<_> = key_indices
             .keys()
             .filter_map(|key| match key {
-                TransitionLaneKey::Property(identity) => {
+                TransitionChannelKey::Property(identity) => {
                     Some((identity.entity, identity.property.component()))
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     ..
                 } => None,
             })
@@ -231,7 +231,7 @@ impl AnimationTransitionProgram {
         numeric_targets.sort_unstable();
         numeric_targets.dedup();
         Ok(Self {
-            lanes,
+            channels,
             source_operations,
             destination_operations,
             numeric_targets,
@@ -252,21 +252,21 @@ impl AnimationTransitionProgram {
             let key = match &value.property {
                 #[cfg(feature = "skeletal-animation")]
                 AnimationTrackTarget::Joints(joints) if joints.len() == 1 => {
-                    TransitionLaneKey::Joint {
+                    TransitionChannelKey::Joint {
                         entity: value.target,
                         incarnation: value.incarnation,
                         joint: joints[0],
                     }
                 }
-                _ => TransitionLaneKey::Property(super::driver::AnimationTargetIdentity {
+                _ => TransitionChannelKey::Property(super::driver::AnimationTargetIdentity {
                     entity: value.target,
                     incarnation: value.incarnation,
                     property: value.property.clone(),
                 }),
             };
-            if !program.lanes.iter().any(|lane| lane.key == key) {
+            if !program.channels.iter().any(|channel| channel.key == key) {
                 let output = match &key {
-                    TransitionLaneKey::Property(identity) => TransitionOutput::Value(
+                    TransitionChannelKey::Property(identity) => TransitionOutput::Value(
                         super::driver::bind_frozen_transition_output(
                             identity.clone(),
                             &value.baseline,
@@ -275,45 +275,45 @@ impl AnimationTransitionProgram {
                         .ok_or(ErrorReason::InvalidField)?,
                     ),
                     #[cfg(feature = "skeletal-animation")]
-                    TransitionLaneKey::Joint {
+                    TransitionChannelKey::Joint {
                         entity,
                         joint,
                         ..
                     } => TransitionOutput::Joint(*entity, *joint),
                 };
-                program.lanes.push(TransitionLane {
+                program.channels.push(TransitionChannel {
                     key: key.clone(),
-                    source: lane_value(&value.value)?,
-                    destination: lane_value(&value.baseline)?,
-                    baseline: lane_value(&value.baseline)?,
+                    source: channel_value(&value.value)?,
+                    destination: channel_value(&value.baseline)?,
+                    baseline: channel_value(&value.baseline)?,
                     output,
                 });
             }
-            let lane = program
-                .lanes
+            let channel = program
+                .channels
                 .iter_mut()
-                .find(|lane| lane.key == key)
-                .expect("frozen transition lane inserted");
-            lane.baseline = lane_value(&value.baseline)?;
-            lane.source = lane_value(&value.value)?;
+                .find(|channel| channel.key == key)
+                .expect("frozen transition channel inserted");
+            channel.baseline = channel_value(&value.baseline)?;
+            channel.source = channel_value(&value.value)?;
         }
-        program.lanes.sort_by(|a, b| a.key.cmp(&b.key));
+        program.channels.sort_by(|a, b| a.key.cmp(&b.key));
         let key_indices: BTreeMap<_, _> = program
-            .lanes
+            .channels
             .iter()
             .enumerate()
-            .map(|(index, lane)| (lane.key.clone(), index))
+            .map(|(index, channel)| (channel.key.clone(), index))
             .collect();
         program.destination_operations = operations(&destination.drivers, &key_indices);
         program.numeric_targets = program
-            .lanes
+            .channels
             .iter()
-            .filter_map(|lane| match &lane.key {
-                TransitionLaneKey::Property(identity) => {
+            .filter_map(|channel| match &channel.key {
+                TransitionChannelKey::Property(identity) => {
                     Some((identity.entity, identity.property.component()))
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     ..
                 } => None,
             })
@@ -334,13 +334,13 @@ impl AnimationTransitionProgram {
         }
         validate_drivers(&destination.drivers)?;
         let mut additions = BTreeMap::new();
-        collect_lanes(&destination.drivers, &mut additions)?;
+        collect_channels(&destination.drivers, &mut additions)?;
         for (key, (baseline, output)) in additions {
-            if let Some(lane) = self.lanes.iter_mut().find(|lane| lane.key == key) {
-                lane.destination = baseline;
-                lane.output = output;
+            if let Some(channel) = self.channels.iter_mut().find(|channel| channel.key == key) {
+                channel.destination = baseline;
+                channel.output = output;
             } else {
-                self.lanes.push(TransitionLane {
+                self.channels.push(TransitionChannel {
                     key,
                     source: baseline.clone(),
                     destination: baseline.clone(),
@@ -349,35 +349,35 @@ impl AnimationTransitionProgram {
                 });
             }
         }
-        self.lanes.sort_by(|a, b| a.key.cmp(&b.key));
+        self.channels.sort_by(|a, b| a.key.cmp(&b.key));
         let key_indices: BTreeMap<_, _> = self
-            .lanes
+            .channels
             .iter()
             .enumerate()
-            .map(|(index, lane)| (lane.key.clone(), index))
+            .map(|(index, channel)| (channel.key.clone(), index))
             .collect();
         self.source_operations.clear();
         self.destination_operations = operations(&destination.drivers, &key_indices);
         self.frozen_source = true;
         for value in frozen {
             let key = frozen_key(value)?;
-            let lane = self
-                .lanes
+            let channel = self
+                .channels
                 .iter_mut()
-                .find(|lane| lane.key == key)
+                .find(|channel| channel.key == key)
                 .ok_or(ErrorReason::InvalidField)?;
-            lane.baseline = lane_value(&value.baseline)?;
-            lane.source = lane_value(&value.value)?;
+            channel.baseline = channel_value(&value.baseline)?;
+            channel.source = channel_value(&value.value)?;
         }
         self.numeric_targets = self
-            .lanes
+            .channels
             .iter()
-            .filter_map(|lane| match &lane.key {
-                TransitionLaneKey::Property(identity) => {
+            .filter_map(|channel| match &channel.key {
+                TransitionChannelKey::Property(identity) => {
                     Some((identity.entity, identity.property.component()))
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     ..
                 } => None,
             })
@@ -390,17 +390,17 @@ impl AnimationTransitionProgram {
     pub(super) fn freeze(
         &self,
     ) -> Result<Vec<super::system_state::AnimationRuntimeFrozenTransitionValue>, ErrorReason> {
-        self.lanes
+        self.channels
             .iter()
-            .map(|lane| {
-                let (target, incarnation, property) = match &lane.key {
-                    TransitionLaneKey::Property(identity) => (
+            .map(|channel| {
+                let (target, incarnation, property) = match &channel.key {
+                    TransitionChannelKey::Property(identity) => (
                         identity.entity,
                         identity.incarnation,
                         identity.property.clone(),
                     ),
                     #[cfg(feature = "skeletal-animation")]
-                    TransitionLaneKey::Joint {
+                    TransitionChannelKey::Joint {
                         entity,
                         incarnation,
                         joint,
@@ -414,8 +414,8 @@ impl AnimationTransitionProgram {
                     target,
                     incarnation,
                     property,
-                    value: lane_animation_value(&lane.destination),
-                    baseline: lane_animation_value(&lane.baseline),
+                    value: channel_animation_value(&channel.destination),
+                    baseline: channel_animation_value(&channel.baseline),
                 })
             })
             .collect()
@@ -424,17 +424,17 @@ impl AnimationTransitionProgram {
     pub(super) fn persistent_frozen_values(
         &self,
     ) -> Vec<super::system_state::AnimationRuntimeFrozenTransitionValue> {
-        self.lanes
+        self.channels
             .iter()
-            .map(|lane| {
-                let (target, incarnation, property) = match &lane.key {
-                    TransitionLaneKey::Property(identity) => (
+            .map(|channel| {
+                let (target, incarnation, property) = match &channel.key {
+                    TransitionChannelKey::Property(identity) => (
                         identity.entity,
                         identity.incarnation,
                         identity.property.clone(),
                     ),
                     #[cfg(feature = "skeletal-animation")]
-                    TransitionLaneKey::Joint {
+                    TransitionChannelKey::Joint {
                         entity,
                         incarnation,
                         joint,
@@ -448,8 +448,8 @@ impl AnimationTransitionProgram {
                     target,
                     incarnation,
                     property,
-                    value: lane_animation_value(&lane.source),
-                    baseline: lane_animation_value(&lane.baseline),
+                    value: channel_animation_value(&channel.source),
+                    baseline: channel_animation_value(&channel.baseline),
                 }
             })
             .collect()
@@ -462,16 +462,16 @@ impl AnimationTransitionProgram {
         progress: f64,
         storage: &mut ComponentStorage,
     ) -> Result<(), ErrorReason> {
-        for lane in &mut self.lanes {
+        for channel in &mut self.channels {
             if !self.frozen_source {
-                lane.source = lane.baseline.clone();
+                channel.source = channel.baseline.clone();
             }
-            lane.destination = lane.baseline.clone();
+            channel.destination = channel.baseline.clone();
         }
         if let Some(source) = source_controller {
             evaluate_operations(
                 &mut self.source_operations,
-                &mut self.lanes,
+                &mut self.channels,
                 &source.drivers,
                 source.snapshot.time,
                 true,
@@ -479,50 +479,50 @@ impl AnimationTransitionProgram {
         }
         evaluate_operations(
             &mut self.destination_operations,
-            &mut self.lanes,
+            &mut self.channels,
             &destination.drivers,
             destination.snapshot.time,
             false,
         )?;
-        for lane in &mut self.lanes {
-            lane.destination = match (&lane.source, &lane.destination) {
+        for channel in &mut self.channels {
+            channel.destination = match (&channel.source, &channel.destination) {
                 (
-                    TransitionLaneValue::Property(source_value),
-                    TransitionLaneValue::Property(destination_value),
-                ) => TransitionLaneValue::Property(source_mix(
+                    TransitionChannelValue::Property(source_value),
+                    TransitionChannelValue::Property(destination_value),
+                ) => TransitionChannelValue::Property(source_mix(
                     source_value,
                     destination_value,
                     progress,
                 )),
                 #[cfg(feature = "skeletal-animation")]
                 (
-                    TransitionLaneValue::Joint(source_value),
-                    TransitionLaneValue::Joint(destination_value),
-                ) => TransitionLaneValue::Joint(super::pose::mix_joint(
+                    TransitionChannelValue::Joint(source_value),
+                    TransitionChannelValue::Joint(destination_value),
+                ) => TransitionChannelValue::Joint(super::pose::mix_joint(
                     source_value,
                     destination_value,
                     progress,
                 )),
                 _ => return Err(ErrorReason::InvalidField),
             };
-            match (&lane.destination, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+            match (&channel.destination, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.validate(value)?;
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(_, _)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(_, _)) => {
                     value.validate()?;
                 }
                 _ => return Err(ErrorReason::InvalidField),
             }
         }
-        for lane in &self.lanes {
-            match (&lane.destination, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+        for channel in &self.channels {
+            match (&channel.destination, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.write(storage, value.clone())?
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
                     let pose = storage
                         .skeleton_mut(entity.index() as usize)
                         .and_then(|skeleton| skeleton.runtime.pose.as_mut())
@@ -543,12 +543,12 @@ impl AnimationTransitionProgram {
         &mut self,
         source: &AnimationController,
     ) -> Result<(), ErrorReason> {
-        for lane in &mut self.lanes {
-            lane.source = lane.baseline.clone();
+        for channel in &mut self.channels {
+            channel.source = channel.baseline.clone();
         }
         evaluate_operations(
             &mut self.source_operations,
-            &mut self.lanes,
+            &mut self.channels,
             &source.drivers,
             source.snapshot.time,
             true,
@@ -556,15 +556,15 @@ impl AnimationTransitionProgram {
         Ok(())
     }
 
-    /// Check that every held source lane can be published to its output.
+    /// Check that every held source channel can be published to its output.
     pub(super) fn validate_source_hold(&self) -> Result<(), ErrorReason> {
-        for lane in &self.lanes {
-            match (&lane.source, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+        for channel in &self.channels {
+            match (&channel.source, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.validate(value)?;
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(_, _)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(_, _)) => {
                     value.validate()?;
                 }
                 _ => return Err(ErrorReason::InvalidField),
@@ -578,13 +578,13 @@ impl AnimationTransitionProgram {
         storage: &mut ComponentStorage,
     ) -> Result<(), ErrorReason> {
         self.validate_source_hold()?;
-        for lane in &self.lanes {
-            match (&lane.source, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+        for channel in &self.channels {
+            match (&channel.source, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.write(storage, value.clone())?;
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
                     let pose = storage
                         .skeleton_mut(entity.index() as usize)
                         .and_then(|skeleton| skeleton.runtime.pose.as_mut())
@@ -605,25 +605,25 @@ impl AnimationTransitionProgram {
         &self,
         storage: &mut ComponentStorage,
     ) -> Result<(), ErrorReason> {
-        for lane in &self.lanes {
-            match (&lane.destination, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+        for channel in &self.channels {
+            match (&channel.destination, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.validate(value)?;
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(_, _)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(_, _)) => {
                     value.validate()?;
                 }
                 _ => return Err(ErrorReason::InvalidField),
             }
         }
-        for lane in &self.lanes {
-            match (&lane.destination, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+        for channel in &self.channels {
+            match (&channel.destination, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.write(storage, value.clone())?;
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
                     let pose = storage
                         .skeleton_mut(entity.index() as usize)
                         .and_then(|skeleton| skeleton.runtime.pose.as_mut())
@@ -645,12 +645,12 @@ impl AnimationTransitionProgram {
     }
 
     pub(super) fn target_keys(&self) -> impl Iterator<Item = (EntityId, u16)> + '_ {
-        self.lanes.iter().map(|lane| match &lane.key {
-            TransitionLaneKey::Property(identity) => {
+        self.channels.iter().map(|channel| match &channel.key {
+            TransitionChannelKey::Property(identity) => {
                 (identity.entity, identity.property.component())
             }
             #[cfg(feature = "skeletal-animation")]
-            TransitionLaneKey::Joint {
+            TransitionChannelKey::Joint {
                 entity,
                 ..
             } => (*entity, ComponentValue::SKELETON),
@@ -662,13 +662,13 @@ impl AnimationTransitionProgram {
         staged: &crate::world::WorldMutationState,
         storage: &ComponentStorage,
     ) -> bool {
-        self.lanes.iter().any(|lane| {
-            let alive = match &lane.key {
-                TransitionLaneKey::Property(identity) => {
+        self.channels.iter().any(|channel| {
+            let alive = match &channel.key {
+                TransitionChannelKey::Property(identity) => {
                     transition_property_alive(identity, staged, storage)
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     entity,
                     incarnation,
                     ..
@@ -678,12 +678,12 @@ impl AnimationTransitionProgram {
                     .and_then(|record| record.input(ComponentValue::SKELETON))
                     .is_some_and(|input| input.incarnation == *incarnation),
             };
-            let key = match &lane.key {
-                TransitionLaneKey::Property(identity) => {
+            let key = match &channel.key {
+                TransitionChannelKey::Property(identity) => {
                     (identity.entity, identity.property.component())
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     entity,
                     ..
                 } => (*entity, ComponentValue::SKELETON),
@@ -697,13 +697,13 @@ impl AnimationTransitionProgram {
         storage: &mut ComponentStorage,
         state: &crate::world::WorldEntityState,
     ) -> Result<(), ErrorReason> {
-        for lane in &self.lanes {
-            let alive = match &lane.key {
-                TransitionLaneKey::Property(identity) => {
+        for channel in &self.channels {
+            let alive = match &channel.key {
+                TransitionChannelKey::Property(identity) => {
                     transition_property_alive(identity, state, storage)
                 }
                 #[cfg(feature = "skeletal-animation")]
-                TransitionLaneKey::Joint {
+                TransitionChannelKey::Joint {
                     entity,
                     incarnation,
                     ..
@@ -716,12 +716,12 @@ impl AnimationTransitionProgram {
             if !alive {
                 continue;
             }
-            match (&lane.baseline, &lane.output) {
-                (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
+            match (&channel.baseline, &channel.output) {
+                (TransitionChannelValue::Property(value), TransitionOutput::Value(output)) => {
                     output.write(storage, value.clone())?;
                 }
                 #[cfg(feature = "skeletal-animation")]
-                (TransitionLaneValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
+                (TransitionChannelValue::Joint(value), TransitionOutput::Joint(entity, joint)) => {
                     let pose = storage
                         .skeleton_mut(entity.index() as usize)
                         .and_then(|skeleton| skeleton.runtime.pose.as_mut())
@@ -748,9 +748,9 @@ impl AnimationTransitionProgram {
             collect_originals(&source.drivers, &mut originals);
         }
         collect_originals(&destination.drivers, &mut originals);
-        for lane in &mut self.lanes {
-            if let Some(value) = originals.get(&lane.key) {
-                lane.baseline = value.clone();
+        for channel in &mut self.channels {
+            if let Some(value) = originals.get(&channel.key) {
+                channel.baseline = value.clone();
             }
         }
     }
@@ -763,13 +763,13 @@ impl AnimationTransitionProgram {
             .iter()
             .filter_map(|value| {
                 frozen_key(value)
-                    .and_then(|key| Ok((key, lane_value(&value.baseline)?)))
+                    .and_then(|key| Ok((key, channel_value(&value.baseline)?)))
                     .ok()
             })
             .collect();
-        for lane in &mut self.lanes {
-            if let Some(value) = baselines.get(&lane.key) {
-                lane.baseline = value.clone();
+        for channel in &mut self.channels {
+            if let Some(value) = baselines.get(&channel.key) {
+                channel.baseline = value.clone();
             }
         }
     }
@@ -786,15 +786,13 @@ fn transition_property_alive(
         .and_then(|record| record.input(identity.property.component()))
         .is_some_and(|input| input.incarnation == identity.incarnation)
         && identity.property.indices().iter().all(|offset| {
-            !crate::components::dynamic_properties::is_dynamic_field(*offset)
-                || state
-                    .input_field(
-                        storage,
-                        identity.entity,
-                        identity.property.component(),
-                        *offset,
-                    )
-                    .is_some()
+            !super::binding::removable_field(*offset)
+                || super::binding::present_field(state.input_field(
+                    storage,
+                    identity.entity,
+                    identity.property.component(),
+                    *offset,
+                ))
         })
 }
 
@@ -866,7 +864,7 @@ pub(super) fn frozen_numeric_targets(
 
 fn collect_originals(
     drivers: &[Box<dyn AnimationDriverBinding>],
-    originals: &mut BTreeMap<TransitionLaneKey, TransitionLaneValue>,
+    originals: &mut BTreeMap<TransitionChannelKey, TransitionChannelValue>,
 ) {
     for driver in drivers {
         #[cfg(feature = "skeletal-animation")]
@@ -875,47 +873,47 @@ fn collect_originals(
         {
             for (&joint, value) in joints.iter().zip(values) {
                 originals
-                    .entry(TransitionLaneKey::Joint {
+                    .entry(TransitionChannelKey::Joint {
                         entity: driver.identity().entity,
                         incarnation: driver.identity().incarnation,
                         joint,
                     })
-                    .or_insert(TransitionLaneValue::Joint(value));
+                    .or_insert(TransitionChannelValue::Joint(value));
             }
             continue;
         }
         originals
-            .entry(TransitionLaneKey::Property(driver.identity().clone()))
-            .or_insert_with(|| TransitionLaneValue::Property(driver.original()));
+            .entry(TransitionChannelKey::Property(driver.identity().clone()))
+            .or_insert_with(|| TransitionChannelValue::Property(driver.original()));
     }
 }
 
-fn lane_value(value: &AnimationValue) -> Result<TransitionLaneValue, ErrorReason> {
+fn channel_value(value: &AnimationValue) -> Result<TransitionChannelValue, ErrorReason> {
     #[cfg(feature = "skeletal-animation")]
     if let AnimationValue::Pose(values) = value {
         let [value] = values.as_slice() else {
             return Err(ErrorReason::InvalidField);
         };
-        return Ok(TransitionLaneValue::Joint(*value));
+        return Ok(TransitionChannelValue::Joint(*value));
     }
-    Ok(TransitionLaneValue::Property(value.clone()))
+    Ok(TransitionChannelValue::Property(value.clone()))
 }
 
 fn frozen_key(
     value: &super::system_state::AnimationRuntimeFrozenTransitionValue,
-) -> Result<TransitionLaneKey, ErrorReason> {
+) -> Result<TransitionChannelKey, ErrorReason> {
     #[cfg(feature = "skeletal-animation")]
     if let AnimationTrackTarget::Joints(joints) = &value.property {
         let [joint] = joints.as_slice() else {
             return Err(ErrorReason::InvalidField);
         };
-        return Ok(TransitionLaneKey::Joint {
+        return Ok(TransitionChannelKey::Joint {
             entity: value.target,
             incarnation: value.incarnation,
             joint: *joint,
         });
     }
-    Ok(TransitionLaneKey::Property(
+    Ok(TransitionChannelKey::Property(
         super::driver::AnimationTargetIdentity {
             entity: value.target,
             incarnation: value.incarnation,
@@ -924,11 +922,11 @@ fn frozen_key(
     ))
 }
 
-fn lane_animation_value(value: &TransitionLaneValue) -> AnimationValue {
+fn channel_animation_value(value: &TransitionChannelValue) -> AnimationValue {
     match value {
-        TransitionLaneValue::Property(value) => value.clone(),
+        TransitionChannelValue::Property(value) => value.clone(),
         #[cfg(feature = "skeletal-animation")]
-        TransitionLaneValue::Joint(value) => AnimationValue::Pose(vec![*value]),
+        TransitionChannelValue::Joint(value) => AnimationValue::Pose(vec![*value]),
     }
 }
 
@@ -958,9 +956,9 @@ fn validate_drivers(drivers: &[Box<dyn AnimationDriverBinding>]) -> Result<(), E
     Ok(())
 }
 
-fn collect_lanes(
+fn collect_channels(
     drivers: &[Box<dyn AnimationDriverBinding>],
-    lanes: &mut BTreeMap<TransitionLaneKey, (TransitionLaneValue, TransitionOutput)>,
+    channels: &mut BTreeMap<TransitionChannelKey, (TransitionChannelValue, TransitionOutput)>,
 ) -> Result<(), ErrorReason> {
     for driver in drivers {
         #[cfg(feature = "skeletal-animation")]
@@ -969,14 +967,14 @@ fn collect_lanes(
                 return Err(ErrorReason::InvalidField);
             };
             for (&joint, value) in joints.iter().zip(values) {
-                lanes
-                    .entry(TransitionLaneKey::Joint {
+                channels
+                    .entry(TransitionChannelKey::Joint {
                         entity: driver.identity().entity,
                         incarnation: driver.identity().incarnation,
                         joint,
                     })
                     .or_insert((
-                        TransitionLaneValue::Joint(value),
+                        TransitionChannelValue::Joint(value),
                         TransitionOutput::Joint(driver.identity().entity, joint),
                     ));
             }
@@ -985,10 +983,10 @@ fn collect_lanes(
         let output = driver
             .transition_output()
             .ok_or(ErrorReason::InvalidField)?;
-        lanes
-            .entry(TransitionLaneKey::Property(driver.identity().clone()))
+        channels
+            .entry(TransitionChannelKey::Property(driver.identity().clone()))
             .or_insert((
-                TransitionLaneValue::Property(driver.original()),
+                TransitionChannelValue::Property(driver.original()),
                 TransitionOutput::Value(output),
             ));
     }
@@ -997,7 +995,7 @@ fn collect_lanes(
 
 fn operations(
     drivers: &[Box<dyn AnimationDriverBinding>],
-    lanes: &BTreeMap<TransitionLaneKey, usize>,
+    channels: &BTreeMap<TransitionChannelKey, usize>,
 ) -> Vec<TransitionOperation> {
     drivers
         .iter()
@@ -1008,7 +1006,7 @@ fn operations(
                 let indices: Vec<_> = joints
                     .iter()
                     .map(|&joint| {
-                        lanes[&TransitionLaneKey::Joint {
+                        channels[&TransitionChannelKey::Joint {
                             entity: driver.identity().entity,
                             incarnation: driver.identity().incarnation,
                             joint,
@@ -1019,12 +1017,12 @@ fn operations(
                     driver: driver_index,
                     current: vec![Transform::default(); indices.len()],
                     output: vec![Transform::default(); indices.len()],
-                    lanes: indices,
+                    channels: indices,
                 };
             }
             TransitionOperation::Property {
                 driver: driver_index,
-                lane: lanes[&TransitionLaneKey::Property(driver.identity().clone())],
+                channel: channels[&TransitionChannelKey::Property(driver.identity().clone())],
             }
         })
         .collect()
@@ -1032,7 +1030,7 @@ fn operations(
 
 fn evaluate_operations(
     operations: &mut [TransitionOperation],
-    lanes: &mut [TransitionLane],
+    channels: &mut [TransitionChannel],
     drivers: &[Box<dyn AnimationDriverBinding>],
     time: f64,
     source_side: bool,
@@ -1041,39 +1039,39 @@ fn evaluate_operations(
         match operation {
             TransitionOperation::Property {
                 driver,
-                lane,
+                channel,
             } => {
                 let current = if source_side {
-                    &lanes[*lane].source
+                    &channels[*channel].source
                 } else {
-                    &lanes[*lane].destination
+                    &channels[*channel].destination
                 };
-                let TransitionLaneValue::Property(current) = current else {
+                let TransitionChannelValue::Property(current) = current else {
                     return Err(ErrorReason::InvalidField);
                 };
-                let value = TransitionLaneValue::Property(
+                let value = TransitionChannelValue::Property(
                     drivers[*driver].sample_bound(time, current.clone())?,
                 );
                 if source_side {
-                    lanes[*lane].source = value;
+                    channels[*channel].source = value;
                 } else {
-                    lanes[*lane].destination = value;
+                    channels[*channel].destination = value;
                 }
             }
             #[cfg(feature = "skeletal-animation")]
             TransitionOperation::Pose {
                 driver,
-                lanes: indices,
+                channels: indices,
                 current,
                 output,
             } => {
-                for (&lane, current) in indices.iter().zip(current.iter_mut()) {
+                for (&channel, current) in indices.iter().zip(current.iter_mut()) {
                     let value = if source_side {
-                        &lanes[lane].source
+                        &channels[channel].source
                     } else {
-                        &lanes[lane].destination
+                        &channels[channel].destination
                     };
-                    let TransitionLaneValue::Joint(value) = value else {
+                    let TransitionChannelValue::Joint(value) = value else {
                         return Err(ErrorReason::InvalidField);
                     };
                     *current = *value;
@@ -1086,11 +1084,11 @@ fn evaluate_operations(
                     current,
                     output,
                 )?;
-                for (&lane, &value) in indices.iter().zip(output.iter()) {
+                for (&channel, &value) in indices.iter().zip(output.iter()) {
                     if source_side {
-                        lanes[lane].source = TransitionLaneValue::Joint(value);
+                        channels[channel].source = TransitionChannelValue::Joint(value);
                     } else {
-                        lanes[lane].destination = TransitionLaneValue::Joint(value);
+                        channels[channel].destination = TransitionChannelValue::Joint(value);
                     }
                 }
             }

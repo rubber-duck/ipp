@@ -235,6 +235,19 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let storage_cell_visits = entries.iter().map(|e| {
+        let Entry {
+            attrs,
+            name: component,
+            id,
+        } = e;
+        let field = snake_case(component);
+        quote! {
+            #(#attrs)*
+            #id => self.#field.bound_ptr(index).map(|cell| visitor.visit(cell)),
+        }
+    });
+
     let storage_get = entries.iter().map(|e| {
         let Entry {
             attrs,
@@ -472,6 +485,14 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let animatable_fields = entries.iter().map(|e| {
+        let Entry { attrs, name, id } = e;
+        quote! {
+            #(#attrs)*
+            #id => <crate::components::#name as ::ipp_core::components::schema::ComponentLifecycle>::animatable_field(offset),
+        }
+    });
+
     let lifecycle_field_validation = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
@@ -640,6 +661,19 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
                 match component { #(#storage_numeric_writes)* _ => Err(crate::ErrorReason::InvalidField) }
             }
 
+            /// Hand one occupied stable cell to a visitor generic over its
+            /// component type, so compiled bindings can use the derived field
+            /// accessors without a hand-written arm per component.
+            #[allow(dead_code)] // Only compiled property consumers bind cells.
+            pub(crate) fn visit_cell<V: crate::components::registry::ComponentCellVisitor>(
+                &self,
+                component: u16,
+                index: usize,
+                visitor: V,
+            ) -> Option<V::Output> {
+                match component { #(#storage_cell_visits)* _ => None }
+            }
+
             pub(crate) fn get(&self, component: u16, index: usize) -> Option<#name> {
                 match component {
                     #(#storage_get)*
@@ -735,6 +769,11 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
             /// Resolve optional entity references using the component's lifecycle policy.
             pub(crate) fn accepts_null_entity(id: u16, offset: u32) -> bool {
                 match id { #(#null_entity)* _ => false }
+            }
+
+            /// Whether animation of any kind may target this exposed field.
+            pub(crate) fn animatable_field(id: u16, offset: u32) -> bool {
+                match id { #(#animatable_fields)* _ => false }
             }
 
             /// Run typed field-local lifecycle validation after replacement.

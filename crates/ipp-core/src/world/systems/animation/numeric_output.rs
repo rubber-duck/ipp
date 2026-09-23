@@ -1,5 +1,5 @@
 //! Bound publication for numeric operators that require a combined output guard.
-//! Copy values and independent lanes may be staged, but publication never enters
+//! Copy values and independent numeric fields may be staged, but publication never enters
 //! generic mutation, preparation or lifecycle hooks or copies resource ownership.
 
 use crate::{
@@ -134,7 +134,7 @@ impl AnimationNumericOutput {
         let fields = || properties.iter().filter(|((target, _), _)| *target == key);
         macro_rules! write_numeric_fields {
             ($binding:expr) => {{
-                // Guard the complete sampled patch before publishing any lane.
+                // Guard the complete sampled patch before publishing any field.
                 // Resource fields and private evaluation buffers remain untouched.
                 for ((_, offset), value) in fields() {
                     let range = super::numeric_fields::range(key.1, *offset)
@@ -218,12 +218,27 @@ impl AnimationNumericOutput {
             }
             #[cfg(feature = "gui")]
             Self::GuiRoot(binding) => {
+                // Node properties are rows: guard every written row property
+                // (animatable, present, in range) before publishing any, then
+                // write through the derived field path, which resolves the row
+                // at write time. Named part properties stay dynamic.
                 let component = binding.get_mut(storage);
                 for ((_, offset), value) in fields() {
-                    component
-                        .properties
-                        .set_field(*offset, value.clone())
-                        .map_err(|_| ErrorReason::InvalidField)?;
+                    if crate::components::rows::row_region(*offset).is_some() {
+                        component.validate_numeric_properties(&[(*offset, value.clone())])?;
+                    }
+                }
+                for ((_, offset), value) in fields() {
+                    if crate::components::dynamic_properties::is_dynamic_field(*offset) {
+                        component
+                            .properties
+                            .set_field(*offset, value.clone())
+                            .map_err(|_| ErrorReason::InvalidField)?;
+                    } else {
+                        component
+                            .set_field(*offset, value.clone())
+                            .map_err(|_| ErrorReason::InvalidField)?;
+                    }
                 }
             }
             _ => unreachable!("bound patch output"),

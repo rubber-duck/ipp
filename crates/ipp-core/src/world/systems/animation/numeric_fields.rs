@@ -1,4 +1,4 @@
-//! Independent numeric lanes on components which also own resources or relations.
+//! Independent numeric fields on components which also own resources or relations.
 
 use crate::{ComponentValue, components::*};
 use std::mem::offset_of;
@@ -29,7 +29,7 @@ impl AnimationNumericRange {
     }
 }
 
-/// These lanes cannot change a resource, relation, descriptor or simulation epoch.
+/// These fields cannot change a resource, relation, descriptor or simulation epoch.
 /// Coupled values and resource selections must use their owning operator instead.
 pub(super) fn range(component: u16, offset: u32) -> Option<AnimationNumericRange> {
     use AnimationNumericRange::*;

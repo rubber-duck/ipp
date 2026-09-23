@@ -9,6 +9,21 @@ use crate::{
 };
 use std::collections::{BTreeSet, HashMap};
 
+/// Whether an offset names a property that may depart within a component
+/// incarnation: a dynamic property (removal) or a row property (row removal,
+/// or clearing an optional property). Its bindings check presence, not only
+/// the incarnation.
+pub(super) fn removable_field(offset: u32) -> bool {
+    crate::components::dynamic_properties::is_dynamic_field(offset)
+        || crate::components::rows::row_region(offset).is_some()
+}
+
+/// A removable property is live while it reads a present value; an absent
+/// optional row property reads `Unset` and a dead slot reads nothing.
+pub(super) fn present_field(value: Option<crate::components::schema::FieldValue>) -> bool {
+    value.is_some_and(|value| !matches!(value, crate::components::schema::FieldValue::Unset))
+}
+
 impl<'a> AnimationReadAccess<'a> {
     pub(super) fn asset_resources(
         &self,
@@ -187,6 +202,23 @@ impl<'a> AnimationReadAccess<'a> {
                     driver.property.component(),
                 )
                 .ok_or(ErrorReason::MissingComponent)?;
+            // Every offset must be a field the component lets animation write,
+            // on the numeric and the general path alike, and a row-region offset
+            // must address a row property of one of its rows fields.
+            if let Some(property) = driver.property.property()
+                && property.offsets.iter().any(|offset| {
+                    !ComponentValue::animatable_field(property.component, *offset)
+                        || crate::components::rows::row_region(*offset).is_some()
+                            && ComponentValue::validate_field(
+                                property.component,
+                                *offset,
+                                crate::components::schema::FieldKind::Dynamic,
+                            )
+                            .is_err()
+                })
+            {
+                return Err(ErrorReason::InvalidField);
+            }
             let current = match self.read_animation_target(&driver.property, &value) {
                 Ok(value) => Some(value),
                 #[cfg(feature = "skeletal-animation")]
@@ -237,27 +269,25 @@ impl<'a> AnimationReadAccess<'a> {
     ) -> bool {
         if crate::allocation_optimizations_enabled()
             && let [offset] = identity.property.indices()
-            && crate::components::dynamic_properties::is_dynamic_field(*offset)
+            && removable_field(*offset)
         {
             return state
                 .entities
                 .get(&identity.entity)
                 .and_then(|record| record.input(identity.property.component()))
                 .is_some_and(|input| input.incarnation == identity.incarnation)
-                && state
-                    .input_field(
-                        &self.world.components,
-                        identity.entity,
-                        identity.property.component(),
-                        *offset,
-                    )
-                    .is_some();
+                && present_field(state.input_field(
+                    &self.world.components,
+                    identity.entity,
+                    identity.property.component(),
+                    *offset,
+                ));
         }
         if identity
             .property
             .indices()
             .iter()
-            .any(|key| crate::components::dynamic_properties::is_dynamic_field(*key))
+            .any(|key| removable_field(*key))
             && !state
                 .input_value(
                     &self.world.components,
@@ -289,7 +319,7 @@ impl<'a> AnimationReadAccess<'a> {
                 .property
                 .indices()
                 .iter()
-                .any(|offset| crate::components::dynamic_properties::is_dynamic_field(*offset))
+                .any(|offset| removable_field(*offset))
         {
             let identity = driver.identity();
             let Some(value) = state.input_value(
@@ -617,14 +647,18 @@ impl<'a> AnimationReadAccess<'a> {
     }
 
     /// Fixed public fields cannot change type or disappear within an incarnation.
-    /// Dynamic fields and joint bindings still require their full lifetime checks.
+    /// Dynamic fields, row properties and joint bindings still require their
+    /// full lifetime checks.
     pub(super) fn unchanged_static_target(
         &self,
         key: (EntityId, u16),
         staged: &WorldMutationState,
     ) -> bool {
+        // Dynamic properties and rows may depart within an incarnation. Every
+        // rows-capable component addresses region zero's first property.
         if !crate::animation_update_reuse_enabled()
             || ComponentValue::supports_dynamic_properties(key.1)
+            || ComponentValue::has_field(key.1, crate::components::rows::row_region_base(0))
         {
             return false;
         }

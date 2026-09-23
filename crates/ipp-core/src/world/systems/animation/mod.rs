@@ -11,6 +11,7 @@ mod numeric_binding;
 mod numeric_fields;
 mod numeric_output;
 mod persistence;
+mod row_property_destination;
 mod transition;
 mod update;
 mod world_api;

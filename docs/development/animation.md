@@ -20,7 +20,7 @@ flowchart LR
 
 - `AnimationTrack<T>` stores contiguous typed keys/Bézier handles. Track indices survive decode/reload; clips own no targets/clocks.
 - IPPA source hints describe static offsets, dynamic property names or joint ordinals, not bindings. Drivers supply source/variant/track/entity/exact coverage; repeated hints may target different entities.
-- Static properties select one field or a complete Transform quaternion. Named dynamic properties bind through validated component property identities. Use matching generated descriptors; native/WASM offsets may differ.
+- Static properties select one field or a complete Transform quaternion. Named dynamic properties bind through validated component property identities. Row properties bind by their generated row offset (slot and property); removing the row or clearing an optional property drops only that driver, and components may keep row properties from animation entirely (GUI committed control values). Use matching generated descriptors; native/WASM offsets may differ.
 
 One clock driving two existing Scalar entities:
 

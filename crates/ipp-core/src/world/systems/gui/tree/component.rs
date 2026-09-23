@@ -624,20 +624,40 @@ impl ComponentLifecycle for GuiRoot {
         &[crate::ComponentValue::SURFACE]
     }
 
+    // Track B (ipp-63be.3): animation, numeric animation and evaluated writes
+    // address node properties by row offset. Named part properties stay dynamic
+    // until they move to rows.
+    fn animatable_field(offset: u32) -> bool {
+        crate::components::rows::row_region(offset).is_none() || Self::numeric_animatable(offset)
+    }
+
     fn supports_numeric_property(offset: u32) -> bool {
-        crate::components::dynamic_properties::is_dynamic_field(offset)
-            && offset != crate::components::dynamic_properties::DYNAMIC_METADATA
+        Self::numeric_animatable(offset)
+            || (crate::components::dynamic_properties::is_dynamic_field(offset)
+                && offset != crate::components::dynamic_properties::DYNAMIC_METADATA)
     }
 
     fn validate_numeric_properties(
         &self,
         fields: &[(u32, crate::components::schema::FieldValue)],
     ) -> Result<(), ErrorReason> {
-        // Numeric writes cannot change structure, so only the written lanes need checks.
+        use crate::components::schema::{FieldValue, SchemaComponent};
+
+        // Numeric writes cannot change structure, so only the written properties
+        // need checks: a row property must be animatable, present and in range.
         for (offset, field) in fields {
-            let crate::components::schema::FieldValue::Dynamic(value) = field else {
+            let FieldValue::Dynamic(value) = field else {
                 return Err(ErrorReason::InvalidField);
             };
+            if Self::node_property(*offset).is_some() {
+                if !Self::numeric_animatable(*offset)
+                    || !matches!(self.field(*offset), Ok(FieldValue::Dynamic(_)))
+                {
+                    return Err(ErrorReason::InvalidField);
+                }
+                Self::validate_node_property(*offset, value)?;
+                continue;
+            }
             if value.kind() == crate::DynamicPropertyKind::Asset
                 || self
                     .properties

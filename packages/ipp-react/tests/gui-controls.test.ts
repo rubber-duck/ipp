@@ -384,6 +384,45 @@ test("transition declarations author the rendering contract", () => {
   assert.throws(() => validateGuiTheme(transition(0xffff_fffe)), /u32::MAX-2/);
 });
 
+test("switch knob alignment authors an animated align_x lane", () => {
+  const knob = (alignX: number, time: number) => ({
+    alignX,
+    transition: {
+      motion: { kind: 10, source: "asset://motion" },
+      duration: 0.2,
+      time,
+    },
+  });
+  const properties = guiThemeProperties(3, {
+    parts: {
+      icon: {
+        base: { color: [1, 1, 1, 1], opacity: 1, scale: [1, 1], alignX: -1 },
+        checked: knob(1, 0.5),
+        unchecked: knob(-1, 0),
+      },
+    },
+  });
+  assert.deepEqual(properties.node_3_part_icon_align_x, {
+    kind: "f32",
+    value: -1,
+  });
+  assert.deepEqual(properties.node_3_part_icon_pressed_checked_align_x, {
+    kind: "f32",
+    value: 1,
+  });
+  assert.deepEqual(properties.node_3_part_icon_idle_unchecked_align_x, {
+    kind: "f32",
+    value: -1,
+  });
+  assert.throws(
+    () =>
+      validateGuiTheme({
+        parts: { icon: { checked: { alignX: Number.NaN } } },
+      }),
+    /alignX must be a finite number/,
+  );
+});
+
 test("theme fonts enter measured node style and label assets reject", () => {
   const font = { kind: 11, source: "asset://font", variant: 2 };
   assert.deepEqual(

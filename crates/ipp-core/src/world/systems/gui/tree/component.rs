@@ -31,7 +31,7 @@ const GUI_NODE_PROPERTIES: [(&str, Kind); 19] = [
 
 /// Named skin-part lanes and their exact storage types.
 /// Ordered by descending suffix length so longer composite suffixes match first.
-pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 22] = [
+pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 23] = [
     ("gradient_color0", Kind::Vec4),
     ("gradient_color1", Kind::Vec4),
     ("gradient_radius", Kind::F32),
@@ -47,6 +47,7 @@ pub(crate) const GUI_PART_PROPERTIES: [(&str, Kind); 22] = [
     ("fill_mode", Kind::F32),
     ("duration", Kind::F32),
     ("opacity", Kind::F32),
+    ("align_x", Kind::F32),
     ("easing", Kind::F32),
     ("motion", Kind::Asset),
     ("color", Kind::Vec4),

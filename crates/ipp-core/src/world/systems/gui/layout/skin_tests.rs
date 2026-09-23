@@ -538,6 +538,7 @@ fn ready_asset_replaces_drawing_while_missing_retains_prior() {
         color: None,
         opacity: None,
         scale: None,
+        align_x: None,
         asset: Some(asset_source("new-draw")),
         corner_radius: None,
         border_width: None,
@@ -600,6 +601,7 @@ fn glyph_fonts_never_remeasure_for_skins() {
         color: None,
         opacity: None,
         scale: None,
+        align_x: None,
         asset: Some(asset_source("other-font")),
         corner_radius: None,
         border_width: None,
@@ -1037,6 +1039,121 @@ fn checkbox_indicator_follows_committed_value_with_stable_part_identity() {
 }
 
 #[test]
+fn checkbox_indicator_alignment_travels_between_end_cells_and_scales_about_its_centre() {
+    let checkbox = |checked, rect| {
+        let mut node = evaluated_node(
+            1,
+            GuiEvaluatedContent::Checkbox {
+                checked,
+                revision: 2,
+            },
+        );
+        node.rect = rect;
+        node.background = None;
+        node
+    };
+    let indicator = |root: &GuiRoot, checked, rect| {
+        let painted = skinned_primitives_for_view(
+            &test_view(vec![checkbox(checked, rect)]),
+            root,
+            &GuiSkinCursors::default(),
+            &MapResolver::empty(),
+        );
+        assert_eq!(painted.len(), 2);
+        let SurfaceRenderPrimitive::Box {
+            style,
+            size,
+            ..
+        } = &painted[1]
+        else {
+            panic!("checkbox indicator must be a box")
+        };
+        (style.position, style.scale, *size)
+    };
+    let wide = [0.0, 0.0, 10.0, 5.0];
+    let mut root = GuiRoot::default();
+    set_part_color(&mut root, 1, "background", [0.1, 0.2, 0.7, 1.0]);
+    set_part_color(&mut root, 1, "icon", [0.9, 0.8, 0.2, 1.0]);
+
+    // Without the lane the 2.5 indicator stays centred in the 10 x 5 rect.
+    assert_eq!(
+        indicator(&root, true, wide),
+        ([3.75, 1.25], [1.0, 1.0], [2.5, 2.5])
+    );
+
+    // Centre x = h/2 + (t + 1)/2 * (w - h): 2.5 at -1, 5 at 0 and 7.5 at +1,
+    // so each end keeps the indicator centred in a 5 x 5 end cell.
+    set_part_lane(
+        &mut root,
+        1,
+        "icon_idle_unchecked",
+        "align_x",
+        DynamicValue::F32(-1.0),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "icon_idle_checked",
+        "align_x",
+        DynamicValue::F32(1.0),
+    );
+    assert_eq!(indicator(&root, false, wide).0, [1.25, 1.25]);
+    assert_eq!(indicator(&root, true, wide).0, [6.25, 1.25]);
+    set_part_lane(&mut root, 1, "icon", "align_x", DynamicValue::F32(0.0));
+    set_part_lane(
+        &mut root,
+        1,
+        "icon_idle_checked",
+        "align_x",
+        DynamicValue::F32(0.0),
+    );
+    assert_eq!(indicator(&root, true, wide).0, [3.75, 1.25]);
+
+    // Values beyond the ends clamp to them.
+    set_part_lane(
+        &mut root,
+        1,
+        "icon_idle_checked",
+        "align_x",
+        DynamicValue::F32(4.0),
+    );
+    set_part_lane(
+        &mut root,
+        1,
+        "icon_idle_unchecked",
+        "align_x",
+        DynamicValue::F32(-4.0),
+    );
+    assert_eq!(indicator(&root, true, wide).0, [6.25, 1.25]);
+    assert_eq!(indicator(&root, false, wide).0, [1.25, 1.25]);
+
+    // Scale 0.8 paints a 2 x 2 knob about the same 7.5 x 2.5 centre.
+    set_part_lane(
+        &mut root,
+        1,
+        "icon",
+        "scale",
+        DynamicValue::Vec2([0.8, 0.8]),
+    );
+    let (position, scale, size) = indicator(&root, true, wide);
+    assert_eq!(scale, [0.8, 0.8]);
+    assert_eq!(size, [2.5, 2.5]);
+    assert!((position[0] - 6.5).abs() < 1.0e-6 && (position[1] - 1.5).abs() < 1.0e-6);
+
+    // A control no wider than tall has no horizontal travel.
+    set_part_lane(
+        &mut root,
+        1,
+        "icon",
+        "scale",
+        DynamicValue::Vec2([1.0, 1.0]),
+    );
+    let tall = [0.0, 0.0, 4.0, 6.0];
+    assert_eq!(indicator(&root, true, tall).0, [1.0, 2.0]);
+    assert_eq!(indicator(&root, false, tall).0, [1.0, 2.0]);
+}
+
+#[test]
 fn slider_thumb_tracks_committed_ratio_without_changing_identity() {
     let slider = |value| {
         let mut node = evaluated_node(
@@ -1345,6 +1462,7 @@ fn drawing_and_bitmap_parts_reject_incompatible_skin_asset_kinds() {
         color: None,
         opacity: None,
         scale: None,
+        align_x: None,
         asset: Some(asset),
         corner_radius: None,
         border_width: None,
@@ -1488,8 +1606,10 @@ fn synthesized_drawing_fits_decoded_nonunit_nonzero_view_box_and_composes_scale(
         style.position[0] + view_box[2] * style.scale[0],
         style.position[1] + view_box[3] * style.scale[1],
     ];
-    assert_eq!(rendered_min, [3.75, 1.25]);
-    assert_eq!(rendered_max, [8.75, 2.5]);
+    // The 2.5 indicator centred at [5, 2.5] scales about that centre to a
+    // 5 x 1.25 extent, and the drawing's view box fills exactly that extent.
+    assert_eq!(rendered_min, [2.5, 1.875]);
+    assert_eq!(rendered_max, [7.5, 3.125]);
 }
 
 #[test]

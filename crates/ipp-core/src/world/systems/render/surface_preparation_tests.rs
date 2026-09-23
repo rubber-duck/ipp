@@ -851,6 +851,7 @@ fn skin_controller_description_has_exactly_three_consecutive_drivers() {
         duration_secs: 1.0,
         easing: AnimationTransitionEasing::Linear,
         base_track: 4_294_967_040,
+        animates_align: false,
         sample_time: 0.0,
     };
 
@@ -1046,6 +1047,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
         duration_secs: 1.0,
         easing: AnimationTransitionEasing::Linear,
         base_track: 0,
+        animates_align: false,
         sample_time: 1.0,
     };
     let to = crate::systems::gui::GuiPartMotion {
@@ -1061,6 +1063,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
             color: [0.25, 0.25, 0.25, 1.0],
             opacity: 1.0,
             scale: [1.0, 1.0],
+            align_x: None,
         },
         transition: AnimationControllerTransition {
             description: skin_controller_description(panel, primitive, &to),
@@ -1072,6 +1075,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
             color: [0.0, 1.0, 0.0, 1.0],
             opacity: 1.0,
             scale: [1.0, 1.0],
+            align_x: None,
         },
     };
 

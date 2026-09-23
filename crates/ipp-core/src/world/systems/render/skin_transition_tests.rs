@@ -637,3 +637,163 @@ fn skin_transition_reconciles_and_repaints_on_every_animated_frame_only() {
         "settled frames still reconcile: {reconciled:?}"
     );
 }
+
+/// Painted checkbox indicator centre of node 2 in logical units.
+fn indicator_centre_x(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) -> f32 {
+    let units = host
+        .world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap()
+        .units_per_metre;
+    host.world_mut(world)
+        .unwrap()
+        .with_system::<RenderSystem, _>(RenderSystem::ID, |system, _| {
+            system
+                .state
+                .surface_items
+                .iter()
+                .find(|item| item.entity == panel)
+                .unwrap()
+                .primitives
+                .iter()
+                .find_map(|primitive| match primitive {
+                    SurfaceRenderPrimitive::Box {
+                        style,
+                        size,
+                        ..
+                    } if matches!(
+                        style.identity,
+                        SurfacePrimitiveIdentity::Gui(crate::systems::surface::GuiPrimitiveId {
+                            node: GuiNodeId(2),
+                            part: GuiPrimitivePart::Icon,
+                            ..
+                        })
+                    ) =>
+                    {
+                        Some((style.position[0] + size[0] * style.scale[0] * 0.5) * units)
+                    }
+                    _ => None,
+                })
+                .expect("checkbox indicator is painted")
+        })
+        .unwrap()
+}
+
+#[test]
+fn switch_knob_alignment_glides_between_unchecked_and_checked_ends() {
+    // One clip samples the knob at its unchecked (-1) and checked (+1) ends;
+    // colour, opacity and scale stay constant so only alignment moves.
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    let source = skin_motion_source("switch-knob");
+    // Sample times are exact in the f32 time lane.
+    let ends = [(0.0, -1.0), (0.5, 1.0)];
+    let track = |lane: &str, value: &dyn Fn(f32) -> DynamicValue| AnimationTrack {
+        target: AnimationTrackTarget::DynamicProperty {
+            component: ComponentValue::GUI_ROOT,
+            name: GuiRoot::part_property_name(GuiNodeId(2), "icon", lane).unwrap(),
+        },
+        keys: ends
+            .iter()
+            .map(|&(time, align)| AnimationKeyframe {
+                time,
+                value: AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
+                    value(align),
+                )),
+                interpolation: if time < 0.5 {
+                    AnimationInterpolation::Linear
+                } else {
+                    AnimationInterpolation::Step
+                },
+            })
+            .collect(),
+    };
+    let clip = AnimationClip::new(
+        0.5,
+        vec![
+            track("color", &|_| DynamicValue::Vec4(WHITE)),
+            track("opacity", &|_| DynamicValue::F32(1.0)),
+            track("scale", &|_| DynamicValue::Vec2([1.0, 1.0])),
+            track("align_x", &|align| DynamicValue::F32(align)),
+        ],
+    )
+    .unwrap();
+
+    let mut root = GuiRoot::default();
+    part_color(&mut root, 2, "icon", WHITE);
+    part_f32(&mut root, 2, "icon", "opacity", 1.0);
+    part_vec2(&mut root, 2, "icon", "scale", [1.0, 1.0]);
+    part_f32(&mut root, 2, "icon", "align_x", -1.0);
+    for state in ["idle", "hovered", "pressed", "disabled"] {
+        for (variant, (time, align)) in ["unchecked", "checked"].into_iter().zip(ends) {
+            let part = format!("icon_{state}_{variant}");
+            part_color(&mut root, 2, &part, WHITE);
+            part_f32(&mut root, 2, &part, "opacity", 1.0);
+            part_f32(&mut root, 2, &part, "align_x", align);
+            part_motion(&mut root, 2, &part, source.clone());
+            part_f32(&mut root, 2, &part, "duration", 0.2);
+            part_f32(&mut root, 2, &part, "easing", 0.0);
+            part_f32(&mut root, 2, &part, "track", 0.0);
+            part_f32(&mut root, 2, &part, "time", time as f32);
+        }
+    }
+    let (mut host, world, panel) = skin_panel_with_root(root);
+    host.asset_resources_mut()
+        .register_client_source(world, source, clip.encode())
+        .unwrap();
+    for _ in 0..32 {
+        host.progress_assets();
+        host.world_mut(world).unwrap().step(0.0).unwrap();
+    }
+
+    // The 2 x 1 checkbox travels its 0.5 knob between the centres of its
+    // left and right 1 x 1 cells.
+    let view = host
+        .world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap();
+    let rect = view
+        .nodes
+        .iter()
+        .find(|node| node.node == GuiNodeId(2))
+        .unwrap()
+        .rect;
+    let (left, right) = (rect[0] + rect[3] * 0.5, rect[0] + rect[2] - rect[3] * 0.5);
+    assert!((indicator_centre_x(&mut host, world, panel) - left).abs() <= 1.0e-4);
+
+    let mut owner = background_skin_owner(&mut host, world, panel);
+    owner.primitive.part = GuiPrimitivePart::Icon;
+    let at = node_centre(&mut host, world, panel, GuiNodeId(2));
+    {
+        let mut context = host.world_mut(world).unwrap();
+        context
+            .enqueue_gui_input_command(SESSION, pointer_down(9, at))
+            .unwrap();
+        context
+            .enqueue_gui_input_command(SESSION, pointer_up(9, at))
+            .unwrap();
+    }
+    let mut painted = Vec::new();
+    for _ in 0..30 {
+        host.world_mut(world).unwrap().step(FRAME).unwrap();
+        assert_eq!(skin_controller_refused(&mut host, world, owner), None);
+        painted.push(indicator_centre_x(&mut host, world, panel));
+    }
+
+    // The knob passes through intermediate positions without moving back,
+    // then rests on the checked end.
+    let between = painted
+        .iter()
+        .filter(|x| **x > left + 0.05 && **x < right - 0.05)
+        .count();
+    assert!(between >= 6, "knob jumped: {painted:?}");
+    assert!(
+        painted.windows(2).all(|pair| pair[1] >= pair[0] - 1.0e-5),
+        "knob moved backwards: {painted:?}"
+    );
+    assert!(
+        (painted.last().unwrap() - right).abs() <= 1.0e-4,
+        "{painted:?}"
+    );
+}

@@ -359,7 +359,7 @@ impl RenderSystem {
                     presentation.last_painted = desired.clone();
                     if let Some(to) = motion.as_ref()
                         && skin_numeric_base_complete(authored_root, id.node, id.part)
-                        && let Some(sample) = skin_animation_sample(&desired)
+                        && let Some(sample) = skin_animation_sample(&desired, to)
                         && next_request != 0
                     {
                         presentation.pending = Some(GuiSkinPendingTransition {
@@ -376,8 +376,9 @@ impl RenderSystem {
                 } else if appearance_changed {
                     if let Some((from, to)) = presentation.motion.as_ref().zip(motion.as_ref())
                         && skin_numeric_base_complete(authored_root, id.node, id.part)
-                        && let Some(source_sample) = skin_animation_sample(&presentation.desired)
-                        && skin_animation_sample(&desired).is_some()
+                        && let Some(source_sample) =
+                            skin_animation_sample(&presentation.desired, from)
+                        && skin_animation_sample(&desired, to).is_some()
                     {
                         if next_request != 0 {
                             presentation.pending = Some(GuiSkinPendingTransition {
@@ -400,7 +401,8 @@ impl RenderSystem {
                 } else if motion_changed && (presentation.pending.is_some() || owned.is_some()) {
                     if let Some(source) = presentation.motion.as_ref()
                         && motion.is_some()
-                        && let Some(source_sample) = skin_animation_sample(&presentation.desired)
+                        && let Some(source_sample) =
+                            skin_animation_sample(&presentation.desired, source)
                         && next_request != 0
                     {
                         presentation.pending = Some(GuiSkinPendingTransition {
@@ -427,7 +429,7 @@ impl RenderSystem {
                         presentation.pending = None;
                     } else if let Some(to) = presentation.motion.as_ref()
                         && let Some(destination_sample) =
-                            skin_animation_sample(&presentation.desired)
+                            skin_animation_sample(&presentation.desired, to)
                     {
                         self.pending_skin_animation_commands.push(
                             AnimationInternalCommand::EnsureSkinTransition {
@@ -503,11 +505,17 @@ pub(super) fn skin_numeric_base_complete(
 #[cfg(all(feature = "surfaces", feature = "gui"))]
 pub(super) fn skin_animation_sample(
     appearance: &crate::systems::gui::GuiSkinnedAppearance,
+    motion: &crate::systems::gui::GuiPartMotion,
 ) -> Option<crate::systems::animation::GuiSkinAnimationSample> {
     Some(crate::systems::animation::GuiSkinAnimationSample {
         color: appearance.color?,
         opacity: appearance.opacity?,
         scale: appearance.scale?,
+        align_x: if motion.animates_align {
+            Some(appearance.align_x?)
+        } else {
+            None
+        },
     })
 }
 
@@ -521,24 +529,21 @@ pub(super) fn skin_controller_description(
         AnimationControllerDescription, AnimationDriverDescription, AnimationTrackTarget,
     };
 
-    let tracks = [
-        motion.base_track,
-        motion
-            .base_track
-            .checked_add(1)
-            .expect("resolved GUI skin motion has three tracks"),
-        motion
-            .base_track
-            .checked_add(2)
-            .expect("resolved GUI skin motion has three tracks"),
-    ];
-    let drivers = ["color", "opacity", "scale"]
-        .into_iter()
-        .zip(tracks)
-        .map(|(lane, track)| AnimationDriverDescription {
+    let lanes: &[&str] = if motion.animates_align {
+        &["color", "opacity", "scale", "align_x"]
+    } else {
+        &["color", "opacity", "scale"]
+    };
+    let drivers = lanes
+        .iter()
+        .zip(0u32..)
+        .map(|(lane, offset)| AnimationDriverDescription {
             source: motion.source.uri.clone(),
             variant: motion.source.variant,
-            track,
+            track: motion
+                .base_track
+                .checked_add(offset)
+                .expect("resolved GUI skin motion fits every animated track"),
             target: entity,
             property: AnimationTrackTarget::DynamicProperty {
                 component: crate::ComponentValue::GUI_ROOT,

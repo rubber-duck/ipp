@@ -29,6 +29,27 @@ const SPAN_WIDE = 2.0;
 
 type Color = readonly [number, number, number, number];
 
+/** SCAN switch knob. The runtime's checkbox indicator is half the 0.48 m
+ * track height; scale 1.5 paints a 0.36 m knob that keeps a 0.06 m inset
+ * inside the track at either end. Alignment slides it between the end
+ * cells, and each palette's skin motion clip samples both ends at `time` so
+ * the knob glides through the skin transition. The times are exact in the
+ * runtime's f32 time lane, so the last one never passes the clip end. */
+export const SWITCH_KNOB = {
+  scale: 1.5,
+  radius: 0.18,
+  unchecked: { alignX: -1, time: 0.625 },
+  checked: { alignX: 1, time: 0.75 },
+} as const;
+
+/** Knob fill inside its primary ring: hollow over the dark track while
+ * off, and an opaque shell disc that stands out from the lit track while on. */
+export function switchKnobColor(palette: Palette, checked: boolean): Color {
+  return checked
+    ? [palette.shell[0], palette.shell[1], palette.shell[2], 1]
+    : [0, 0, 0, 0];
+}
+
 function dim(color: Color, factor: number): Color {
   return [color[0] * factor, color[1] * factor, color[2] * factor, color[3]];
 }
@@ -423,8 +444,23 @@ function Scan({
   waveform: WaveformRefs;
 }) {
   const capsule = [0.24, 0.24] as const;
-  const theme = useMemo<GuiControlTheme>(
-    () => ({
+  const theme = useMemo<GuiControlTheme>(() => {
+    const knob = (checked: boolean) => {
+      const end = checked ? SWITCH_KNOB.checked : SWITCH_KNOB.unchecked;
+      return {
+        color: switchKnobColor(palette, checked),
+        opacity: 1,
+        alignX: end.alignX,
+        transition: {
+          motion: scene.motions![scene.skin],
+          duration: 0.16,
+          easing: "smoothstep" as const,
+          track: 0,
+          time: end.time,
+        },
+      };
+    };
+    return {
       font: scene.font,
       parts: {
         background: {
@@ -473,13 +509,19 @@ function Scan({
           },
         },
         icon: {
+          // Base lanes are the animated knob's resting values; each variant
+          // selects its end and clip sample.
           base: {
-            cornerRadius: [0.12, 0.12],
+            color: switchKnobColor(palette, false),
+            opacity: 1,
+            alignX: SWITCH_KNOB.unchecked.alignX,
+            scale: [SWITCH_KNOB.scale, SWITCH_KNOB.scale],
+            cornerRadius: [SWITCH_KNOB.radius, SWITCH_KNOB.radius],
             borderWidth: 0.014,
             borderColor: palette.primary,
           },
-          checked: { color: palette.primary, opacity: 1 },
-          unchecked: { color: [0, 0, 0, 0], opacity: 1 },
+          checked: knob(true),
+          unchecked: knob(false),
         },
         focusRing: {
           base: {
@@ -490,9 +532,8 @@ function Scan({
           },
         },
       },
-    }),
-    [scene.font, palette],
-  );
+    };
+  }, [scene.font, scene.motions, scene.skin, palette]);
   return (
     <Frame width={CONTENT_WIDTH} height={0.66} palette={palette}>
       <Row width={6.8} height={0.66} padding={[0, 0.2, 0, 0.2]}>

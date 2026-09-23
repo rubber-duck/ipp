@@ -41,6 +41,8 @@ import {
   ProjectorDashboard,
   SURFACE_WIDTH,
   SURFACE_HEIGHT,
+  SWITCH_KNOB,
+  switchKnobColor,
   type Palette,
 } from "./dashboard.js";
 import {
@@ -154,7 +156,7 @@ function errorMessage(failure: unknown): string {
 
 function dynamicTrack(
   component: number,
-  lane: "color" | "opacity" | "scale",
+  lane: "color" | "opacity" | "scale" | "align_x",
   values: readonly (readonly [number, unknown])[],
 ): AnimationTrack {
   return {
@@ -186,8 +188,11 @@ function dynamicTrack(
   };
 }
 
-/** Complete color/opacity/scale samples for every interaction destination. */
+/** Complete color/opacity/scale samples for every interaction destination,
+ * then the SCAN switch knob's two ends, which also animate alignment. Other
+ * controls hold alignment at 0 and never sample the knob times. */
 function skinMotion(component: number, palette: Palette): AnimationClipSource {
+  const knob = [SWITCH_KNOB.scale, SWITCH_KNOB.scale] as const;
   const samples = [
     { time: 0, color: palette.button, opacity: 1, scale: [1, 1] as const },
     {
@@ -220,9 +225,23 @@ function skinMotion(component: number, palette: Palette): AnimationClipSource {
       opacity: 0.8,
       scale: [1, 1] as const,
     },
+    {
+      time: SWITCH_KNOB.unchecked.time,
+      color: switchKnobColor(palette, false),
+      opacity: 1,
+      scale: knob,
+      alignX: SWITCH_KNOB.unchecked.alignX,
+    },
+    {
+      time: SWITCH_KNOB.checked.time,
+      color: switchKnobColor(palette, true),
+      opacity: 1,
+      scale: knob,
+      alignX: SWITCH_KNOB.checked.alignX,
+    },
   ] as const;
   return {
-    duration: 0.5,
+    duration: SWITCH_KNOB.checked.time,
     tracks: [
       dynamicTrack(
         component,
@@ -238,6 +257,14 @@ function skinMotion(component: number, palette: Palette): AnimationClipSource {
         component,
         "scale",
         samples.map(({ time, scale }) => [time, scale] as const),
+      ),
+      dynamicTrack(
+        component,
+        "align_x",
+        samples.map(
+          (sample) =>
+            [sample.time, "alignX" in sample ? sample.alignX : 0] as const,
+        ),
       ),
     ],
   };

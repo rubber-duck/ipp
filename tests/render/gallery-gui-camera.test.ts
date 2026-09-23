@@ -387,11 +387,12 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       // animated values before admitting it. Neither may repaint or
       // re-upload panels the drag did not touch: per frame, rebuilds stay
       // within the slider's own background, fill and focus-ring boxes, and
-      // uploads beyond the idle baseline come only from rebuilt boxes.
-      // Measured on SwiftShader (ipp-9nx.61.20): 1.6-1.8 rebuilds per drag
-      // frame at about 800 bytes each, unchanged by the ingress restore.
+      // uploads beyond the idle baseline come only from rebuilt batches: a
+      // box rewrites six 152-byte vertices and the value label rewrites its
+      // glyph batch, six such vertices per glyph. Measured on SwiftShader
+      // (ipp-rm0k.25): 1.7 rebuilds per drag frame at about 1.8 kB each.
       const sliderBoxes = 3;
-      const maxBoxUploadBytes = 1024;
+      const maxBoxUploadBytes = 4096;
       const idleUploadPerTick =
         (idleEnd.uploaded - idleStart.uploaded) /
         (idleEnd.tick - idleStart.tick);

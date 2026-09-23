@@ -2,13 +2,15 @@
 //! accounting and page retirement, and retained text batch caching.
 
 use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use super::super::gui_batch::{GuiBatchRenderCache, GuiVertex};
 use super::super::retained_surfaces::SurfacePaint;
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
-    GlyphPopulationBudget, GlyphVertex, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME,
-    POPULATE_RETRY_TICKS, RESOLUTION_BANDS, TextRun, select_resolution_band,
+    GlyphPopulationBudget, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME, POPULATE_RETRY_TICKS,
+    RESOLUTION_BANDS, TextRun, select_resolution_band,
 };
 use crate::{RenderDevice, RenderError, RenderStats};
 use ipp_core::services::asset_management::AssetKey;
@@ -16,10 +18,13 @@ use ipp_core::systems::surface::{SurfaceGlyph, SurfacePrimitiveIdentity, Surface
 
 #[derive(Default)]
 struct MockAtlasDevice {
+    /// `(id, capacity)` of every GUI storage allocation.
     created_batches: Vec<(usize, usize)>,
-    updated_batches: Vec<(usize, usize)>,
+    /// `(id, first, len)` of every GUI storage write.
+    writes: Vec<(usize, usize, usize)>,
     deleted_batches: Vec<usize>,
-    draws: Vec<(usize, [f32; 4])>,
+    /// `(id, first, count)` of every GUI draw.
+    draws: Vec<(usize, usize, usize)>,
     created_pages: Vec<u32>,
     deleted_pages: Vec<u32>,
     sampled_pages: Vec<u32>,
@@ -29,7 +34,6 @@ struct MockAtlasDevice {
 #[derive(Clone, Debug, PartialEq)]
 struct MockBatch {
     id: usize,
-    vertex_count: usize,
 }
 
 impl RenderDevice for MockAtlasDevice {
@@ -42,7 +46,6 @@ impl RenderDevice for MockAtlasDevice {
     #[cfg(feature = "shadows")]
     type ShadowMap = u32;
     type GuiBatch = MockBatch;
-    type GlyphBatch = MockBatch;
     type GlyphAtlasPage = u32;
 
     fn set_lighting(
@@ -164,43 +167,40 @@ impl RenderDevice for MockAtlasDevice {
 
     fn delete_program(&mut self, _program: Self::Program) {}
 
-    fn create_glyph_batch(
-        &mut self,
-        vertices: &[GlyphVertex],
-    ) -> Result<Self::GlyphBatch, RenderError> {
+    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         self.next_id += 1;
         let id = self.next_id;
-        self.created_batches.push((id, vertices.len()));
+        self.created_batches.push((id, capacity));
         Ok(MockBatch {
             id,
-            vertex_count: vertices.len(),
         })
     }
 
-    fn update_glyph_batch(
+    fn write_gui_batch(
         &mut self,
-        batch: &mut Self::GlyphBatch,
-        vertices: &[GlyphVertex],
+        batch: &mut Self::GuiBatch,
+        first: usize,
+        vertices: &[GuiVertex],
     ) -> Result<(), RenderError> {
-        batch.vertex_count = vertices.len();
-        self.updated_batches.push((batch.id, vertices.len()));
+        self.writes.push((batch.id, first, vertices.len()));
         Ok(())
     }
 
-    fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
+    fn delete_gui_batch(&mut self, batch: Self::GuiBatch) {
         self.deleted_batches.push(batch.id);
     }
 
-    fn draw_glyph_batch(
+    fn draw_gui_batch(
         &mut self,
         _program: &Self::Program,
-        batch: &Self::GlyphBatch,
-        atlas: &Self::Texture,
+        batch: &Self::GuiBatch,
+        atlas: Option<&Self::Texture>,
         _mvp: &[f32; 16],
-        clip: &[f32; 4],
+        first: usize,
+        count: usize,
     ) -> Result<(), RenderError> {
-        self.draws.push((batch.id, *clip));
-        self.sampled_pages.push(*atlas);
+        self.draws.push((batch.id, first, count));
+        self.sampled_pages.extend(atlas);
         Ok(())
     }
 
@@ -297,16 +297,18 @@ fn text_run<'a>(
     }
 }
 
-/// One World's retained text runs and per-frame glyph work.
+/// One World's retained text runs, their GUI storage and per-frame glyph work.
 struct TestWorld {
-    cache: GlyphBatchRenderCache<MockAtlasDevice>,
+    cache: GlyphBatchRenderCache,
+    gui: GuiBatchRenderCache<MockAtlasDevice>,
     work: GlyphFrameWork,
 }
 
 impl TestWorld {
     fn new(device: &Rc<RefCell<MockAtlasDevice>>) -> Self {
         Self {
-            cache: GlyphBatchRenderCache::new(device.clone()),
+            cache: GlyphBatchRenderCache::new(),
+            gui: GuiBatchRenderCache::new(device.clone()),
             work: GlyphFrameWork::default(),
         }
     }
@@ -352,13 +354,48 @@ impl TestWorld {
         populated
     }
 
+    /// Draw one run as the only GUI work of a Surface of its own, so each run keeps
+    /// separate storage.
     fn draw(&mut self, atlas: &Atlas, run: &TextRun<'_>) -> (bool, RenderStats) {
         let mut stats = RenderStats::default();
-        let drawn = self
-            .cache
-            .draw_text_run(&1, atlas, run, &[1.0; 16], &mut stats)
+        if !self.cache.prepare_text_run(atlas, run, &mut stats) {
+            return (false, stats);
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (run.entity, run.style.identity).hash(&mut hasher);
+        self.gui
+            .begin_surface(ipp_core::EntityId::from_bits(hasher.finish()));
+        let identity = run.style.identity;
+        self.gui
+            .push_glyphs(self.cache.run_pieces(run.entity, identity));
+        let cache = &self.cache;
+        self.gui
+            .commit_surface(
+                |identity, batch| cache.batch_vertices(run.entity, identity, batch),
+                &mut stats,
+            )
             .unwrap();
-        (drawn, stats)
+        let pieces = self.gui.piece_count();
+        self.gui
+            .draw_pieces(
+                &1,
+                0..pieces,
+                |page| atlas.page_texture(page),
+                &[1.0; 16],
+                &mut stats,
+            )
+            .unwrap();
+        (true, stats)
+    }
+
+    /// Vertex counts of a run's retained batches.
+    fn batch_lengths(&self, run: &TextRun<'_>) -> Vec<usize> {
+        self.cache.surfaces[&run.entity].runs[&run.style.identity]
+            .batches
+            .iter()
+            .map(|batch| batch.vertices.len())
+            .collect()
     }
 }
 
@@ -531,7 +568,10 @@ fn warm_runs_reuse_demand_and_batches_without_rebuilding_keys() {
     let (drawn, cold) = world.draw(&atlas, &run);
     assert!(drawn);
     assert_eq!((cold.gui_rebuilds, cold.gui_batches), (1, 1));
-    assert_eq!(cold.uploaded_bytes, 3 * 6 * 32);
+    assert_eq!(
+        cold.uploaded_bytes,
+        (3 * 6 * std::mem::size_of::<GuiVertex>()) as u32
+    );
 
     let record = &world.cache.surfaces[&run.entity].runs[&style.identity];
     let keys = record.keys.as_ptr();
@@ -549,7 +589,7 @@ fn warm_runs_reuse_demand_and_batches_without_rebuilding_keys() {
     assert_eq!(warm.uploaded_bytes, 0);
     assert_eq!(warm.gui_batches, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert!(device.borrow().updated_batches.is_empty());
+    assert_eq!(device.borrow().writes.len(), 1);
 }
 
 #[test]
@@ -567,7 +607,7 @@ fn text_edits_rebuild_the_run_and_update_its_demand() {
     world.populate(&mut atlas, 20);
     world.draw(&atlas, &text_run(42, &style, &before));
 
-    // Appending a glyph misses once, then replaces the batch storage.
+    // Appending a glyph misses once, then rewrites the batch in its storage.
     let edited = text_run(42, &style, &after);
     world.publish(&mut atlas, &[(edited, BAND_32_HEIGHT)], &[]);
     assert_eq!(world.work.misses, 1);
@@ -580,8 +620,8 @@ fn text_edits_rebuild_the_run_and_update_its_demand() {
     assert!(drawn);
     assert_eq!(stats.gui_rebuilds, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(device.borrow().updated_batches.len(), 1);
-    assert_eq!(device.borrow().updated_batches[0].1, 12);
+    assert_eq!(device.borrow().writes.len(), 2);
+    assert_eq!(device.borrow().writes[1].2, 12);
     assert_eq!(atlas.demand.get(&key(20, 32)), Some(&1));
 }
 
@@ -602,12 +642,12 @@ fn whitespace_glyphs_need_no_entries_and_emit_no_quads() {
     assert!(world.draw(&atlas, &run).0);
 
     // Only 2 visible glyphs emitted quads (2 * 6 = 12 vertices).
-    assert_eq!(device.borrow().created_batches[0].1, 12);
+    assert_eq!(device.borrow().writes[0].2, 12);
 }
 
 #[test]
 fn runs_leaving_a_shown_surface_release_demand_and_batches() {
-    let (device, mut atlas, mut world) = setup();
+    let (_, mut atlas, mut world) = setup();
     let [first, second] = [style(1), style(2)];
     let glyphs_a = glyphs(&[1]);
     let glyphs_b = glyphs(&[2]);
@@ -622,18 +662,19 @@ fn runs_leaving_a_shown_surface_release_demand_and_batches() {
     world.populate(&mut atlas, 20);
     world.draw(&atlas, &run_a);
     world.draw(&atlas, &run_b);
-    assert_eq!(
-        world.cache.resident_bytes(),
-        2 * 6 * std::mem::size_of::<GlyphVertex>()
-    );
+    let runs = |world: &TestWorld| {
+        world
+            .cache
+            .surfaces
+            .get(&run_a.entity)
+            .map_or(0, |surface| surface.runs.len())
+    };
+    assert_eq!(runs(&world), 2);
 
     // The Surface stays visible without its second run.
     world.publish(&mut atlas, &[(run_a, BAND_32_HEIGHT)], &[]);
-    assert_eq!(
-        world.cache.resident_bytes(),
-        6 * std::mem::size_of::<GlyphVertex>()
-    );
-    assert_eq!(device.borrow().deleted_batches.len(), 1);
+    assert_eq!(runs(&world), 1);
+    assert_eq!(world.batch_lengths(&run_a), [6]);
     assert!(!atlas.demand.contains_key(&key(2, 32)));
     assert!(
         atlas.get(&key(2, 32)).is_some(),
@@ -642,7 +683,7 @@ fn runs_leaving_a_shown_surface_release_demand_and_batches() {
 
     // A destroyed Surface releases the rest; with no demand left, the atlas empties.
     world.publish(&mut atlas, &[], &[]);
-    assert_eq!(world.cache.resident_bytes(), 0);
+    assert_eq!(runs(&world), 0);
     assert_eq!(atlas.page_count(), 0);
     assert_eq!(atlas.take_retired_pages(), 1);
 }
@@ -702,7 +743,7 @@ fn band_oscillation_neither_repopulates_nor_retires_pages() {
         );
     }
     assert_eq!(device.borrow().created_batches.len(), uploads);
-    assert!(device.borrow().updated_batches.is_empty());
+    assert_eq!(device.borrow().writes.len(), 1);
 
     // A real zoom changes bands once; returning finds the idle entries still resident.
     world.publish(&mut atlas, &[(run, 40.0)], &[]);
@@ -840,7 +881,8 @@ fn a_retired_page_rebuilds_its_runs_after_repopulation_and_only_then() {
     world.publish(&mut atlas, &shown, &[]);
     let (_, a_stats) = world.draw(&atlas, &run_a);
     assert_eq!((a_stats.gui_rebuilds, a_stats.uploaded_bytes), (0, 0));
-    assert_eq!(device.borrow().updated_batches.len(), 1);
+    // Cold writes of A and B, then A's single rebuild.
+    assert_eq!(device.borrow().writes.len(), 3);
 }
 
 #[test]
@@ -941,7 +983,7 @@ fn demand_is_shared_across_worlds_until_the_last_world_releases_it() {
     second.cache.release_demand(&mut atlas);
     atlas.release_if_unused();
     assert_eq!(atlas.resident_bytes(), 0);
-    assert_eq!(device.borrow().deleted_batches.len(), 1);
+    assert!(second.cache.surfaces.is_empty());
 }
 
 #[test]
@@ -966,7 +1008,11 @@ fn page_interleaved_runs_draw_once_per_page() {
     let (_, warm) = world.draw(&atlas, &run);
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 2));
     drop(world);
-    assert_eq!(device.borrow().deleted_batches.len(), 2);
+    assert_eq!(
+        device.borrow().deleted_batches.len(),
+        1,
+        "the run's storage"
+    );
     drop(atlas);
     assert_eq!(device.borrow().deleted_pages.len(), 2);
 }
@@ -995,15 +1041,7 @@ fn overlapping_glyphs_of_different_colours_keep_painter_order_across_pages() {
         [pages[0], pages[1], pages[0]],
         "the third glyph paints over the second"
     );
-    assert_eq!(
-        device
-            .borrow()
-            .created_batches
-            .iter()
-            .map(|(_, vertices)| *vertices)
-            .collect::<Vec<_>>(),
-        [6, 12, 6]
-    );
+    assert_eq!(world.batch_lengths(&run), [6, 12, 6]);
 }
 
 #[test]
@@ -1036,14 +1074,11 @@ fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() 
     assert!(
         device
             .borrow()
-            .created_batches
+            .writes
             .iter()
-            .all(|(_, vertices)| *vertices <= 256 * 6)
+            .all(|&(_, _, vertices)| vertices <= 256 * 6)
     );
-    assert_eq!(
-        world.cache.resident_bytes(),
-        600 * 6 * std::mem::size_of::<GlyphVertex>()
-    );
+    assert_eq!(world.batch_lengths(&run).iter().sum::<usize>(), 600 * 6);
 }
 
 #[test]
@@ -1282,6 +1317,8 @@ fn context_loss_keeps_slots_and_bands_for_identical_recovered_coverage() {
     let before = *atlas.get(&key(1, 24)).unwrap();
     let deleted_batches = device.borrow().deleted_batches.len();
 
+    // Context loss releases GUI storage and keeps the runs' bands and demand.
+    world.gui.clear();
     world.cache.release_context();
     atlas.release_context();
     assert_eq!(atlas.page_count(), 0);

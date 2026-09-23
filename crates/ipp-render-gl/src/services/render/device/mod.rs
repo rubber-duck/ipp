@@ -69,9 +69,7 @@ pub(super) fn pack_surface_instances(
 }
 
 #[cfg(feature = "gui")]
-pub use super::glyph_atlas::GlyphVertex;
-#[cfg(feature = "gui")]
-pub use super::gui_batch::GuiBoxVertex;
+pub use super::gui_batch::GuiVertex;
 
 #[cfg(feature = "surfaces")]
 pub(super) fn surface_instances_exact(instances: &[SurfacePathInstance]) -> bool {
@@ -179,13 +177,10 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "shadows")]
     type ShadowMap;
 
-    /// Context-owned retained GUI batch buffer and allocation metadata.
+    /// Context-owned retained GUI vertex storage of one Surface: boxes and glyph
+    /// quads in the [`GuiVertex`] layout.
     #[cfg(feature = "gui")]
     type GuiBatch;
-
-    /// Context-owned retained glyph batch buffer and allocation metadata.
-    #[cfg(feature = "gui")]
-    type GlyphBatch;
 
     /// Context-owned glyph atlas page texture and framebuffer target.
     #[cfg(feature = "gui")]
@@ -486,89 +481,47 @@ pub trait RenderDevice: 'static {
     #[cfg(feature = "surfaces")]
     fn delete_surface_cache_target(&mut self, _target: Self::SurfaceCacheTarget) {}
 
-    /// Allocate and upload a retained non-indexed GUI triangle batch.
+    /// Allocate retained GUI vertex storage for `capacity` vertices, all zero.
     #[cfg(feature = "gui")]
-    fn create_gui_batch(
-        &mut self,
-        _vertices: &[GuiBoxVertex],
-    ) -> Result<Self::GuiBatch, RenderError> {
+    fn create_gui_batch(&mut self, _capacity: usize) -> Result<Self::GuiBatch, RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
 
-    /// Replace complete batch contents through GPU storage replacement.
+    /// Write `vertices` into the storage starting at vertex `first`.
     ///
-    /// Queued draws keep the previous storage, though allocation may still stall.
-    /// On failure the contents are unknown and callers release the batch. GL
-    /// errors surface here only in exhaustive mode, otherwise at this frame's end.
+    /// Queued draws keep reading the previous contents; GL may copy or wait to
+    /// provide that. On failure the contents are unknown and callers release the
+    /// storage. GL errors surface here only in exhaustive mode, otherwise at this
+    /// frame's end.
     #[cfg(feature = "gui")]
-    fn update_gui_batch(
+    fn write_gui_batch(
         &mut self,
         _batch: &mut Self::GuiBatch,
-        _vertices: &[GuiBoxVertex],
+        _first: usize,
+        _vertices: &[GuiVertex],
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
 
-    /// Release one context-owned GUI batch allocation.
+    /// Release one context-owned GUI storage allocation.
     #[cfg(feature = "gui")]
     fn delete_gui_batch(&mut self, _batch: Self::GuiBatch) {}
 
-    /// Draw one retained GUI triangle batch in painter order with clipping.
+    /// Draw `count` vertices from vertex `first` of retained GUI storage as triangles
+    /// in painter order, each clipped by its own rectangle. `atlas` is bound for
+    /// ranges containing glyph quads.
     #[cfg(feature = "gui")]
+    #[allow(clippy::too_many_arguments)]
     fn draw_gui_batch(
         &mut self,
         _program: &Self::Program,
         _batch: &Self::GuiBatch,
+        _atlas: Option<&Self::Texture>,
         _mvp: &[f32; 16],
-        _clip: &[f32; 4],
+        _first: usize,
+        _count: usize,
     ) -> Result<(), RenderError> {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
-    }
-
-    /// Allocate and upload a retained glyph quad batch.
-    #[cfg(feature = "gui")]
-    fn create_glyph_batch(
-        &mut self,
-        _vertices: &[GlyphVertex],
-    ) -> Result<Self::GlyphBatch, RenderError> {
-        Err(RenderError::RenderDevice(
-            "glyph batches unavailable".into(),
-        ))
-    }
-
-    /// Replace complete batch contents through GPU storage replacement.
-    ///
-    /// Queued draws keep the previous storage, though allocation may still stall.
-    /// On failure the contents are unknown and callers release the batch. GL
-    /// errors surface here only in exhaustive mode, otherwise at this frame's end.
-    #[cfg(feature = "gui")]
-    fn update_glyph_batch(
-        &mut self,
-        _batch: &mut Self::GlyphBatch,
-        _vertices: &[GlyphVertex],
-    ) -> Result<(), RenderError> {
-        Err(RenderError::RenderDevice(
-            "glyph batches unavailable".into(),
-        ))
-    }
-
-    /// Release one context-owned glyph batch allocation.
-    #[cfg(feature = "gui")]
-    fn delete_glyph_batch(&mut self, _batch: Self::GlyphBatch) {}
-
-    /// Draw one retained glyph batch in painter order with atlas sampling and clipping.
-    #[cfg(feature = "gui")]
-    fn draw_glyph_batch(
-        &mut self,
-        _program: &Self::Program,
-        _batch: &Self::GlyphBatch,
-        _atlas: &Self::Texture,
-        _mvp: &[f32; 16],
-        _clip: &[f32; 4],
-    ) -> Result<(), RenderError> {
-        Err(RenderError::RenderDevice(
-            "glyph batches unavailable".into(),
-        ))
     }
 
     /// Allocate a single-channel R8 coverage page texture, cleared to zero, with

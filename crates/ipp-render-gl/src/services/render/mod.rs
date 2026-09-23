@@ -44,6 +44,8 @@ mod template;
 pub mod glyph_atlas;
 #[cfg(feature = "gui")]
 pub mod gui_batch;
+#[cfg(feature = "gui")]
+mod gui_storage;
 #[cfg(feature = "surfaces")]
 pub mod retained_surfaces;
 
@@ -53,9 +55,9 @@ pub use device::SurfacePathDescriptor;
 pub use device::SurfacePathInstance;
 pub use device::{PlatformRenderDevice, RenderDevice};
 #[cfg(feature = "gui")]
-pub use glyph_atlas::{GlyphAtlasLimits, GlyphVertex};
+pub use glyph_atlas::GlyphAtlasLimits;
 #[cfg(feature = "gui")]
-pub use gui_batch::GuiBoxVertex;
+pub use gui_batch::GuiVertex;
 
 #[cfg(target_arch = "wasm32")]
 pub use device::WebGlRenderDevice;

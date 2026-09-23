@@ -806,7 +806,7 @@ fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
 
     let cold = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
     assert_eq!((cold.glyph_populates, cold.gui_batches), (1, 1), "{cold:?}");
-    let uploads = state.glyph_batch_uploads.get();
+    let uploads = state.gui_batch_writes.get();
     let populations = state.atlas_populations.get();
 
     // Behind the camera for one frame: nothing is submitted and nothing is released.
@@ -828,7 +828,7 @@ fn culled_text_surface_reuses_retained_glyphs_when_visible_again() {
     assert_eq!(visible.gui_allocations, 0);
     assert_eq!(visible.glyph_misses, 0);
     assert_eq!(visible.glyph_populates, 0);
-    assert_eq!(state.glyph_batch_uploads.get(), uploads);
+    assert_eq!(state.gui_batch_writes.get(), uploads);
     assert_eq!(state.atlas_populations.get(), populations);
 }
 
@@ -1023,20 +1023,20 @@ fn context_loss_during_glyph_population_reaches_recovery_and_repopulates() {
 
 #[cfg(feature = "gui")]
 #[test]
-fn context_loss_during_glyph_batch_upload_reaches_recovery() {
+fn context_loss_during_gui_storage_write_reaches_recovery() {
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) = text_surface_scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
 
     state
-        .fail_glyph_batch
+        .fail_gui_batch_write
         .replace(Some(RenderError::ContextLost));
     let error = render_frame(&mut renderer, &mut world, 100, 100).unwrap_err();
     assert_eq!(error, RenderError::ContextLost.to_string());
     assert_eq!(state.analytic_glyph_draws.get(), 0);
     drop(world);
 
-    state.fail_glyph_batch.replace(None);
+    state.fail_gui_batch_write.replace(None);
     recover_context(&mut renderer, &mut host, world_id, &surface_font());
     let mut world = host.world_mut(world_id).unwrap();
     let recovered = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
@@ -1045,7 +1045,11 @@ fn context_loss_during_glyph_batch_upload_reaches_recovery() {
         (1, 1),
         "{recovered:?}"
     );
-    assert_eq!(recovered.gui_resident_bytes, 6 * 32);
+    // One glyph quad, the room its slot reserves to grow and room for appended work.
+    assert_eq!(
+        recovered.gui_resident_bytes as usize,
+        (6 + 24 + 12) * std::mem::size_of::<ipp_render_gl::GuiVertex>()
+    );
     let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));
 }

@@ -17,7 +17,7 @@ Glyph population is bounded per frame by time rather than a fixed count. Each fr
 
 Before the atlas phase the scenario lowers the glyph atlas budget through the presentation channel (`setGlyphAtlasLimits`) and disables idle expiry. Pages retired while the windows slide are therefore pressure evictions: the scenario keeps every step within the configured budget and requires a positive accumulated `glyphPageRetirements` count. Pages still release when no World demands any glyph, so the cleared frame holds no atlas bytes.
 
-Analytic builds lack the retained counters and report them unavailable, never as zero. The GUI counter `guiResidentBytes` is the combined GPU storage of retained box and glyph batches; `glyphResidentBytes` counts atlas pages separately, at one byte per texel of single-channel coverage. Vertex layouts are defined by `GlyphVertex` in [the glyph atlas](../../crates/ipp-render-gl/src/services/render/glyph_atlas.rs) and `GuiBoxVertex` in [the retained batch implementation](../../crates/ipp-render-gl/src/services/render/gui_batch.rs).
+Analytic builds lack the retained counters and report them unavailable, never as zero. The GUI counter `guiResidentBytes` is the per-Surface GPU storage holding retained box and glyph batches, including the room each slot reserves to grow; `glyphResidentBytes` counts atlas pages separately, at one byte per texel of single-channel coverage. Boxes and glyph quads share the `GuiVertex` layout defined in [the retained batch implementation](../../crates/ipp-render-gl/src/services/render/gui_batch.rs).
 
 ## Whole-Surface cache mode
 

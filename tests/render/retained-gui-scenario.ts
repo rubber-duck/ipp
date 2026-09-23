@@ -749,7 +749,10 @@ async function exercisePresentedWorldSwitch(
   await call("guiPanel", [{ ...panel, variant: "mixed" }]);
   const first = stats((await settle("world-a-mixed")).frame);
   assert.ok(
-    first.guiResidentBytes > alone.guiResidentBytes && first.glyphPages > 0,
+    // Text joins the panel's per-Surface storage, which may already hold room for it.
+    first.guiBatches > alone.guiBatches &&
+      first.guiResidentBytes >= alone.guiResidentBytes &&
+      first.glyphPages > 0,
     `World A must hold shape and glyph batches: ${JSON.stringify({ alone, first })}`,
   );
 
@@ -768,7 +771,7 @@ async function exercisePresentedWorldSwitch(
   let second = stats(await driver.capture("world-b-empty", true));
   let attempts = 1;
   while (
-    (second.guiResidentBytes !== alone.guiResidentBytes ||
+    (second.guiResidentBytes > alone.guiResidentBytes ||
       second.glyphPages !== 0 ||
       second.glyphResidentBytes !== 0) &&
     attempts < 120
@@ -777,9 +780,13 @@ async function exercisePresentedWorldSwitch(
     attempts++;
   }
   // Only World B's identical panel stays resident, and no World demands glyphs.
-  assert.deepEqual(
-    [second.guiResidentBytes, second.glyphPages, second.glyphResidentBytes],
-    [alone.guiResidentBytes, 0, 0],
+  // Storage keeps room its history needed, so World A's panel storage may exceed
+  // a fresh one; retaining it beside World B's would exceed it.
+  assert.ok(
+    second.guiResidentBytes > 0 &&
+      second.guiResidentBytes <= alone.guiResidentBytes &&
+      second.glyphPages === 0 &&
+      second.glyphResidentBytes === 0,
     `World A's render caches outlived its presentation: ${JSON.stringify({ alone, first, second, attempts })}`,
   );
   assert.ok(

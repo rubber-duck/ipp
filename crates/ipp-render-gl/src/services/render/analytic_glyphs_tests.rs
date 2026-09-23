@@ -36,8 +36,6 @@ impl RenderDevice for MockDevice {
     #[cfg(feature = "gui")]
     type GuiBatch = ();
     #[cfg(feature = "gui")]
-    type GlyphBatch = ();
-    #[cfg(feature = "gui")]
     type GlyphAtlasPage = ();
 
     #[cfg(feature = "gui")]

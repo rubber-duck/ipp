@@ -27,9 +27,6 @@ impl RenderDevice for GlesRenderDevice {
     type GuiBatch = super::GlesGuiBatch;
 
     #[cfg(feature = "gui")]
-    type GlyphBatch = super::GlesGlyphBatch;
-
-    #[cfg(feature = "gui")]
     type GlyphAtlasPage = super::GlesGlyphAtlasPage;
 
     fn set_lighting(
@@ -261,20 +258,18 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     #[cfg(feature = "gui")]
-    fn create_gui_batch(
-        &mut self,
-        vertices: &[super::GuiBoxVertex],
-    ) -> Result<Self::GuiBatch, RenderError> {
-        self.create_gui_batch(vertices)
+    fn create_gui_batch(&mut self, capacity: usize) -> Result<Self::GuiBatch, RenderError> {
+        self.create_gui_batch(capacity)
     }
 
     #[cfg(feature = "gui")]
-    fn update_gui_batch(
+    fn write_gui_batch(
         &mut self,
         batch: &mut Self::GuiBatch,
-        vertices: &[super::GuiBoxVertex],
+        first: usize,
+        vertices: &[super::GuiVertex],
     ) -> Result<(), RenderError> {
-        self.update_gui_batch(batch, vertices)
+        self.write_gui_batch(batch, first, vertices)
     }
 
     #[cfg(feature = "gui")]
@@ -287,44 +282,12 @@ impl RenderDevice for GlesRenderDevice {
         &mut self,
         program: &Self::Program,
         batch: &Self::GuiBatch,
+        atlas: Option<&Self::Texture>,
         mvp: &[f32; 16],
-        clip: &[f32; 4],
+        first: usize,
+        count: usize,
     ) -> Result<(), RenderError> {
-        self.draw_gui_batch(program, batch, mvp, clip)
-    }
-
-    #[cfg(feature = "gui")]
-    fn create_glyph_batch(
-        &mut self,
-        vertices: &[super::GlyphVertex],
-    ) -> Result<Self::GlyphBatch, RenderError> {
-        self.create_glyph_batch(vertices)
-    }
-
-    #[cfg(feature = "gui")]
-    fn update_glyph_batch(
-        &mut self,
-        batch: &mut Self::GlyphBatch,
-        vertices: &[super::GlyphVertex],
-    ) -> Result<(), RenderError> {
-        self.update_glyph_batch(batch, vertices)
-    }
-
-    #[cfg(feature = "gui")]
-    fn delete_glyph_batch(&mut self, batch: Self::GlyphBatch) {
-        self.delete_glyph_batch(batch);
-    }
-
-    #[cfg(feature = "gui")]
-    fn draw_glyph_batch(
-        &mut self,
-        program: &Self::Program,
-        batch: &Self::GlyphBatch,
-        atlas: &Self::Texture,
-        mvp: &[f32; 16],
-        clip: &[f32; 4],
-    ) -> Result<(), RenderError> {
-        self.draw_glyph_batch(program, batch, atlas, mvp, clip)
+        self.draw_gui_batch(program, batch, atlas, mvp, first, count)
     }
 
     #[cfg(feature = "gui")]

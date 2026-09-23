@@ -81,7 +81,7 @@ impl ProbeBox {
         &self,
         fill: GuiShapeFill,
         glow: Option<&GuiShapeGlow>,
-    ) -> Vec<ipp_render_gl::GuiBoxVertex> {
+    ) -> Vec<ipp_render_gl::GuiVertex> {
         let style = SurfacePrimitiveStyle {
             identity: SurfacePrimitiveIdentity::Authored(SurfaceItemId(0)),
             position: [self.placement[0], self.placement[1]],
@@ -98,12 +98,35 @@ impl ProbeBox {
             &self.border_color,
             &fill,
             glow,
+            ROOT,
         )
     }
 
-    fn vertices(&self) -> Vec<ipp_render_gl::GuiBoxVertex> {
+    fn vertices(&self) -> Vec<ipp_render_gl::GuiVertex> {
         self.vertices_with(GuiShapeFill::Solid(self.fill), None)
     }
+}
+
+/// Upload `vertices`, each clipped by `clip`, into new retained GUI storage.
+#[cfg(target_os = "linux")]
+fn upload<D: ipp_render_gl::RenderDevice>(
+    device: &mut D,
+    vertices: &[ipp_render_gl::GuiVertex],
+    clip: &[f32; 4],
+) -> Result<D::GuiBatch, Box<dyn std::error::Error>> {
+    let clipped: Vec<_> = vertices
+        .iter()
+        .map(|vertex| ipp_render_gl::GuiVertex {
+            clip: *clip,
+            ..*vertex
+        })
+        .collect();
+    let mut batch = device.create_gui_batch(clipped.len())?;
+    if let Err(error) = device.write_gui_batch(&mut batch, 0, &clipped) {
+        device.delete_gui_batch(batch);
+        return Err(error.into());
+    }
+    Ok(batch)
 }
 
 /// Draw `vertices` as one retained batch: allocate, draw once and release.
@@ -111,14 +134,27 @@ impl ProbeBox {
 fn draw_batch<D: ipp_render_gl::RenderDevice>(
     device: &mut D,
     program: &D::Program,
-    vertices: &[ipp_render_gl::GuiBoxVertex],
+    vertices: &[ipp_render_gl::GuiVertex],
     mvp: &[f32; 16],
     clip: &[f32; 4],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let batch = device.create_gui_batch(vertices)?;
-    let drawn = device.draw_gui_batch(program, &batch, mvp, clip);
+    let batch = upload(device, vertices, clip)?;
+    let drawn = device.draw_gui_batch(program, &batch, None, mvp, 0, vertices.len());
     device.delete_gui_batch(batch);
     Ok(drawn?)
+}
+
+/// Atlas glyph quad corner in the shared GUI vertex layout, clipped by `ROOT`.
+#[cfg(target_os = "linux")]
+fn glyph_vertex(position: [f32; 2], uv: [f32; 2], color: [f32; 4]) -> ipp_render_gl::GuiVertex {
+    ipp_render_gl::GuiVertex {
+        position,
+        color0: color,
+        gradient_coords: [uv[0], uv[1], 0.0, 0.0],
+        material_params: [ipp_render_gl::gui_batch::GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
+        clip: ROOT,
+        ..ipp_render_gl::GuiVertex::EMPTY
+    }
 }
 
 /// The filled/rounded/bordered reference boxes, shared by the initial capture
@@ -343,8 +379,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_str!("../src/services/render/shaders/surface_bitmap.frag"),
     )?;
     let box_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_box.vert"),
-        include_str!("../src/services/render/shaders/surface_box.frag"),
+        include_str!("../src/services/render/shaders/surface_gui.vert"),
+        include_str!("../src/services/render/shaders/surface_gui.frag"),
     )?;
 
     // Unit-square contour used as scrolled curves, text-proxy glyphs and
@@ -750,8 +786,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(device);
     let mut device = context.device()?;
     let box_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_box.vert"),
-        include_str!("../src/services/render/shaders/surface_box.frag"),
+        include_str!("../src/services/render/shaders/surface_gui.vert"),
+        include_str!("../src/services/render/shaders/surface_gui.frag"),
     )?;
     draw_boxes(&mut device, &box_program)?;
     let recovered = capture(&mut device, "boxes-recovered")?;
@@ -785,6 +821,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &linear_fill,
         None,
+        ROOT,
     ));
 
     let radial_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
@@ -811,6 +848,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &radial_fill,
         None,
+        ROOT,
     ));
 
     let glow_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
@@ -837,6 +875,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &ipp_core::systems::surface::GuiShapeFill::Solid([0.0, 1.0, 1.0, 1.0]),
         Some(&glow),
+        ROOT,
     ));
 
     let border_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
@@ -857,6 +896,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0, 0.5, 0.0, 1.0],
         &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
         None,
+        ROOT,
     );
     assert_eq!(
         border_verts.len(),
@@ -879,13 +919,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0, 0.5, 0.0, 1.0],
         &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
         Some(&glow),
+        ROOT,
     );
     assert_eq!(hollow_vertices.len(), 6);
     batch_vertices.extend_from_slice(&hollow_vertices);
 
-    let batch = device.create_gui_batch(&batch_vertices)?;
+    let batch = upload(&mut device, &batch_vertices, &ROOT)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_gui_batch(&box_program, &batch, &MVP, &ROOT)?;
+    device.draw_gui_batch(&box_program, &batch, None, &MVP, 0, batch_vertices.len())?;
     let materials_frame = capture(&mut device, "boxes-materials")?;
     check(
         &materials_frame,
@@ -954,6 +995,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[0.0; 4],
         &ipp_core::systems::surface::GuiShapeFill::Solid([1.0; 4]),
         Some(&glow),
+        ROOT,
     );
     let outline_style = ipp_core::systems::surface::SurfacePrimitiveStyle {
         position: [2.0, 0.5],
@@ -967,10 +1009,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0; 4],
         &ipp_core::systems::surface::GuiShapeFill::Solid([0.0; 4]),
         Some(&glow),
+        ROOT,
     );
-    let sharp_batch = device.create_gui_batch(&[rail, outline].concat())?;
+    let sharp_vertices = [rail, outline].concat();
+    let sharp_batch = upload(&mut device, &sharp_vertices, &ROOT)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_gui_batch(&box_program, &sharp_batch, &MVP, &ROOT)?;
+    device.draw_gui_batch(
+        &box_program,
+        &sharp_batch,
+        None,
+        &MVP,
+        0,
+        sharp_vertices.len(),
+    )?;
     let sharp = capture(&mut device, "boxes-sharp-edges-and-glow")?;
     check(&sharp, 80, 40, [255; 4], 4, "one-pixel rail stays opaque")?;
     check(
@@ -1200,7 +1251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stays within a few pixels of the box silhouette instead of stretching toward
     // the camera, and the visible sliver keeps continuous coverage.
     let footprint_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_box.vert"),
+        include_str!("../src/services/render/shaders/surface_gui.vert"),
         FOOTPRINT_FRAGMENT,
     )?;
     let grazing_fill = ProbeBox {
@@ -1309,8 +1360,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let text_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_text.vert"),
-        include_str!("../src/services/render/shaders/surface_text.frag"),
+        include_str!("../src/services/render/shaders/surface_gui.vert"),
+        include_str!("../src/services/render/shaders/surface_gui.frag"),
     )?;
     let page = device.create_glyph_atlas_page(512, 512)?;
 
@@ -1357,32 +1408,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let u1 = 31.0 / 512.0;
     let v1 = 1.0 - 31.0 / 512.0;
     let cyan = [0.0, 1.0, 1.0, 1.0];
-    let tl = ipp_render_gl::GlyphVertex {
-        position: [1.0, 1.0],
-        uv: [u0, v0],
-        color: cyan,
-    };
-    let bl = ipp_render_gl::GlyphVertex {
-        position: [1.0, 2.0],
-        uv: [u0, v1],
-        color: cyan,
-    };
-    let br = ipp_render_gl::GlyphVertex {
-        position: [2.0, 2.0],
-        uv: [u1, v1],
-        color: cyan,
-    };
-    let tr = ipp_render_gl::GlyphVertex {
-        position: [2.0, 1.0],
-        uv: [u1, v0],
-        color: cyan,
-    };
+    let tl = glyph_vertex([1.0, 1.0], [u0, v0], cyan);
+    let bl = glyph_vertex([1.0, 2.0], [u0, v1], cyan);
+    let br = glyph_vertex([2.0, 2.0], [u1, v1], cyan);
+    let tr = glyph_vertex([2.0, 1.0], [u1, v0], cyan);
     let glyph_vertices = [tl, bl, br, tl, br, tr];
-    let mut glyph_batch = device.create_glyph_batch(&glyph_vertices)?;
+    let mut glyph_batch = upload(&mut device, &glyph_vertices, &ROOT)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     let atlas_tex = *ipp_render_gl::GlesRenderDevice::glyph_atlas_texture(&page);
-    device.draw_glyph_batch(&text_program, &glyph_batch, &atlas_tex, &MVP, &ROOT)?;
+    device.draw_gui_batch(&text_program, &glyph_batch, Some(&atlas_tex), &MVP, 0, 6)?;
     let text_batch_frame = capture(&mut device, "glyph-batch")?;
     check(
         &text_batch_frame,
@@ -1393,33 +1428,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "retained glyph batch quad cyan tint",
     )?;
 
-    // Replace GPU storage with yellow tint
+    // Rewrite the stored quad with a yellow tint
     let yellow = [1.0, 1.0, 0.0, 1.0];
-    let tl_y = ipp_render_gl::GlyphVertex {
-        position: [1.0, 1.0],
-        uv: [u0, v0],
-        color: yellow,
-    };
-    let bl_y = ipp_render_gl::GlyphVertex {
-        position: [1.0, 2.0],
-        uv: [u0, v1],
-        color: yellow,
-    };
-    let br_y = ipp_render_gl::GlyphVertex {
-        position: [2.0, 2.0],
-        uv: [u1, v1],
-        color: yellow,
-    };
-    let tr_y = ipp_render_gl::GlyphVertex {
-        position: [2.0, 1.0],
-        uv: [u1, v0],
-        color: yellow,
-    };
+    let tl_y = glyph_vertex([1.0, 1.0], [u0, v0], yellow);
+    let bl_y = glyph_vertex([1.0, 2.0], [u0, v1], yellow);
+    let br_y = glyph_vertex([2.0, 2.0], [u1, v1], yellow);
+    let tr_y = glyph_vertex([2.0, 1.0], [u1, v0], yellow);
     let updated_vertices = [tl_y, bl_y, br_y, tl_y, br_y, tr_y];
-    device.update_glyph_batch(&mut glyph_batch, &updated_vertices)?;
+    device.write_gui_batch(&mut glyph_batch, 0, &updated_vertices)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_glyph_batch(&text_program, &glyph_batch, &atlas_tex, &MVP, &ROOT)?;
+    device.draw_gui_batch(&text_program, &glyph_batch, Some(&atlas_tex), &MVP, 0, 6)?;
     let updated_batch_frame = capture(&mut device, "glyph-batch-updated")?;
     check(
         &updated_batch_frame,
@@ -1429,6 +1448,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         8,
         "retained glyph batch updated yellow tint",
     )?;
+
+    // One draw of boxes and glyphs whose vertices carry different clips: the box
+    // keeps only its left part and the glyph quad only its lower half.
+    let clipped_box = ProbeBox {
+        placement: [2.25, 0.25, 1.5, 1.0],
+        fill: [1.0, 0.0, 0.0, 1.0],
+        border_color: [1.0; 4],
+        corner: [0.0, 0.0],
+        border: 0.0,
+    };
+    let box_clip = [2.25, 0.0, 3.0, 3.0];
+    let glyph_clip = [0.0, 1.5, 4.0, 3.0];
+    let mixed_vertices: Vec<_> = clipped_box
+        .vertices()
+        .into_iter()
+        .map(|vertex| ipp_render_gl::GuiVertex {
+            clip: box_clip,
+            ..vertex
+        })
+        .chain(
+            glyph_vertices
+                .iter()
+                .map(|vertex| ipp_render_gl::GuiVertex {
+                    clip: glyph_clip,
+                    ..*vertex
+                }),
+        )
+        .collect();
+    let mut mixed_batch = device.create_gui_batch(mixed_vertices.len())?;
+    device.write_gui_batch(&mut mixed_batch, 0, &mixed_vertices)?;
+    device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+    device.draw_gui_batch(
+        &box_program,
+        &mixed_batch,
+        Some(&atlas_tex),
+        &MVP,
+        0,
+        mixed_vertices.len(),
+    )?;
+    let mixed = capture(&mut device, "mixed-clips-one-draw")?;
+    device.delete_gui_batch(mixed_batch);
+    for (x, y, expected, label) in [
+        (208, 60, [255, 0, 0, 255], "box inside its clip"),
+        (272, 60, [0, 0, 0, 255], "box beyond its clip"),
+        (120, 140, [0, 255, 255, 255], "glyph inside its clip"),
+        (120, 100, [0, 0, 0, 255], "glyph beyond its clip"),
+    ] {
+        check(&mixed, x, y, expected, 8, label)?;
+    }
 
     // Perspective retained batches: an oblique Surface whose clip w varies across it
     // draws a filled rounded box, a sparse hollow border and an atlas glyph quad.
@@ -1463,8 +1531,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let outline_vertices = outline.vertices();
     assert_eq!(outline_vertices.len(), 24);
-    let perspective_boxes =
-        device.create_gui_batch(&[filled.vertices(), outline_vertices].concat())?;
 
     let glyph_rectangle = [0.6, 1.8, 1.0, 0.8];
     let [left, top, right, bottom] = [
@@ -1473,28 +1539,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glyph_rectangle[0] + glyph_rectangle[2],
         glyph_rectangle[1] + glyph_rectangle[3],
     ];
-    let glyph_corner = |position: [f32; 2], uv: [f32; 2]| ipp_render_gl::GlyphVertex {
-        position,
-        uv,
-        color: cyan,
-    };
+    let glyph_corner = |position: [f32; 2], uv: [f32; 2]| glyph_vertex(position, uv, cyan);
     let [glyph_tl, glyph_bl, glyph_br, glyph_tr] = [
         glyph_corner([left, top], [u0, v0]),
         glyph_corner([left, bottom], [u0, v1]),
         glyph_corner([right, bottom], [u1, v1]),
         glyph_corner([right, top], [u1, v0]),
     ];
-    let perspective_glyphs =
-        device.create_glyph_batch(&[glyph_tl, glyph_bl, glyph_br, glyph_tl, glyph_br, glyph_tr])?;
+    // Boxes and the glyph quad share one storage and draw as one range.
+    let perspective_vertices = [
+        filled.vertices(),
+        outline_vertices,
+        vec![glyph_tl, glyph_bl, glyph_br, glyph_tl, glyph_br, glyph_tr],
+    ]
+    .concat();
+    let perspective_batch = upload(&mut device, &perspective_vertices, &ROOT)?;
 
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
-    device.draw_gui_batch(&box_program, &perspective_boxes, &oblique, &ROOT)?;
-    device.draw_glyph_batch(
-        &text_program,
-        &perspective_glyphs,
-        &atlas_tex,
+    device.draw_gui_batch(
+        &box_program,
+        &perspective_batch,
+        Some(&atlas_tex),
         &oblique,
-        &ROOT,
+        0,
+        perspective_vertices.len(),
     )?;
     let perspective = capture(&mut device, "retained-perspective")?;
 
@@ -1568,10 +1636,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
     }
-    device.delete_gui_batch(perspective_boxes);
-    device.delete_glyph_batch(perspective_glyphs);
+    device.delete_gui_batch(perspective_batch);
 
-    device.delete_glyph_batch(glyph_batch);
+    device.delete_gui_batch(glyph_batch);
     device.delete_glyph_atlas_page(page);
     device.delete_program(text_program);
     device.delete_surface_path(square);

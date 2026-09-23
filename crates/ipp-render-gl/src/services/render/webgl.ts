@@ -42,12 +42,11 @@ type WebGlRenderProgram = {
   poseWeight?: WebGLUniformLocation | null;
 };
 
-/** Retained GUI or glyph vertices laid out by a Rust-owned attribute table. */
+/** Retained GUI vertex storage laid out by a Rust-owned attribute table. */
 type WebGlRetainedBatch = {
   vao: WebGLVertexArrayObject;
   vbo: WebGLBuffer;
   stride: number;
-  count: number;
   bytes: number;
 };
 
@@ -243,9 +242,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       >()
     : undefined;
   const guiBatches = IPP_GUI
-    ? new Map<number, WebGlRetainedBatch>()
-    : undefined;
-  const glyphBatches = IPP_GUI
     ? new Map<number, WebGlRetainedBatch>()
     : undefined;
   const glyphAtlasPages = IPP_GUI
@@ -660,34 +656,29 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   }
 
   /**
-   * Upload retained vertices described by a Rust-owned `#[repr(C)]` layout table:
-   * stride, attribute count, then location, components and offset per attribute.
+   * Allocate zeroed retained vertex storage described by a Rust-owned `#[repr(C)]`
+   * layout table: stride, attribute count, then location, components and offset per
+   * attribute.
    */
   const createRetainedBatch = IPP_GUI
-    ? (
-        batches: Map<number, WebGlRetainedBatch>,
-        vertexPointer: number,
-        byteLength: number,
-        layoutPointer: number,
-        kind: string,
-      ): number => {
+    ? (byteLength: number, layoutPointer: number): number => {
         const header = words(layoutPointer, 2);
         const stride = header[0]!;
         const attributeCount = header[1]!;
         const attributes = words(layoutPointer + 8, attributeCount * 3);
         if (stride === 0 || stride % 4 !== 0 || byteLength % stride !== 0)
-          throw new Error(`${kind} batch length does not match its layout`);
-        const vertexData = floats(vertexPointer, byteLength / 4);
+          throw new Error("GUI batch length does not match its layout");
         const vao = gl.createVertexArray();
         const vbo = gl.createBuffer();
         if (!vao || !vbo) {
           if (vao) gl.deleteVertexArray(vao);
           if (vbo) gl.deleteBuffer(vbo);
-          throw new Error(`${kind} batch allocation failed`);
+          throw new Error("GUI batch allocation failed");
         }
         bindVertexArray(vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+        // WebGL initializes new buffer storage to zero: degenerate vertices.
+        gl.bufferData(gl.ARRAY_BUFFER, byteLength, gl.DYNAMIC_DRAW);
         for (let index = 0; index < attributeCount; index++) {
           const location = attributes[index * 3]!;
           gl.enableVertexAttribArray(location);
@@ -711,38 +702,33 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           throw error;
         }
         const handle = id();
-        batches.set(handle, {
-          vao,
-          vbo,
-          stride,
-          count: byteLength / stride,
-          bytes: byteLength,
-        });
+        guiBatches!.set(handle, { vao, vbo, stride, bytes: byteLength });
         return handle;
       }
     : undefined;
 
-  /** Replace a retained batch's complete store with vertices of its layout. */
-  const updateRetainedBatch = IPP_GUI
+  /** Write whole vertices into retained storage at a vertex-aligned byte offset. */
+  const writeRetainedBatch = IPP_GUI
     ? (
         batch: WebGlRetainedBatch | undefined,
+        byteOffset: number,
         vertexPointer: number,
         byteLength: number,
-        kind: string,
       ): void => {
-        if (!batch) throw new Error(`Stale ${kind} batch handle`);
-        if (byteLength % batch.stride !== 0)
-          throw new Error(`${kind} batch length does not match its layout`);
+        if (!batch) throw new Error("Stale GUI batch handle");
+        if (
+          byteOffset % batch.stride !== 0 ||
+          byteLength % batch.stride !== 0 ||
+          byteOffset + byteLength > batch.bytes
+        )
+          throw new Error("GUI batch write does not match its storage");
         const vertexData = floats(vertexPointer, byteLength / 4);
-        // Replace the complete store; GL preserves any previous storage needed
-        // by queued draws. The driver may still stall to allocate.
+        // GL keeps the previous contents for queued draws that read them.
         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+        gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, vertexData);
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
         // Outside exhaustive mode the device checks this frame's end instead.
         checkDraw();
-        batch.count = byteLength / batch.stride;
-        batch.bytes = byteLength;
       }
     : undefined;
 
@@ -909,7 +895,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     }
     if (IPP_GUI) {
       guiBatches!.clear();
-      glyphBatches!.clear();
       glyphAtlasPages!.clear();
       glyphAtlasTarget = undefined;
     }
@@ -945,7 +930,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     }
     if (IPP_GUI) {
       guiBatches!.clear();
-      glyphBatches!.clear();
       glyphAtlasPages!.clear();
       glyphAtlasTarget = undefined;
     }
@@ -2035,32 +2019,23 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     // GUI boxes, retained batches and glyph atlases; omitted from non-GUI bridges.
     ...(IPP_GUI
       ? {
-          create_gui_batch(
-            vertexPointer: number,
-            byteLength: number,
-            layoutPointer: number,
-          ): number {
+          create_gui_batch(byteLength: number, layoutPointer: number): number {
             return status(() =>
-              createRetainedBatch!(
-                guiBatches!,
-                vertexPointer >>> 0,
-                byteLength >>> 0,
-                layoutPointer >>> 0,
-                "GUI",
-              ),
+              createRetainedBatch!(byteLength >>> 0, layoutPointer >>> 0),
             );
           },
-          update_gui_batch(
+          write_gui_batch(
             batchHandle: number,
+            byteOffset: number,
             vertexPointer: number,
             byteLength: number,
           ): number {
             return status(() => {
-              updateRetainedBatch!(
+              writeRetainedBatch!(
                 guiBatches!.get(batchHandle >>> 0),
+                byteOffset >>> 0,
                 vertexPointer >>> 0,
                 byteLength >>> 0,
-                "GUI",
               );
               return 1;
             });
@@ -2076,14 +2051,25 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           draw_gui_batch(
             programHandle: number,
             batchHandle: number,
+            atlasHandle: number,
             mvpPointer: number,
-            clipPointer: number,
+            first: number,
+            count: number,
           ): number {
             return status(() => {
               const program = programs.get(programHandle >>> 0);
               if (!program) throw new Error("Stale GUI batch program handle");
               const batch = guiBatches!.get(batchHandle >>> 0);
               if (!batch) throw new Error("Stale GUI batch handle");
+              first >>>= 0;
+              count >>>= 0;
+              if ((first + count) * batch.stride > batch.bytes)
+                throw new Error("GUI batch draw exceeds its storage");
+              let atlas: WebGLTexture | undefined;
+              if (atlasHandle >>> 0 !== 0) {
+                atlas = textures.get(atlasHandle >>> 0);
+                if (!atlas) throw new Error("Stale glyph atlas texture handle");
+              }
               if (blendMode !== 2) {
                 gl.enable(gl.BLEND);
                 gl.blendEquation(gl.FUNC_ADD);
@@ -2107,94 +2093,15 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                 0,
                 0,
               );
-              programVec4At(
-                program,
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-              );
-              bindVertexArray(batch.vao);
-              gl.drawArrays(gl.TRIANGLES, 0, batch.count);
-              checkDraw();
-              return 1;
-            });
-          },
-          create_glyph_batch(
-            vertexPointer: number,
-            byteLength: number,
-            layoutPointer: number,
-          ): number {
-            return status(() =>
-              createRetainedBatch!(
-                glyphBatches!,
-                vertexPointer >>> 0,
-                byteLength >>> 0,
-                layoutPointer >>> 0,
-                "Glyph",
-              ),
-            );
-          },
-          update_glyph_batch(
-            batchHandle: number,
-            vertexPointer: number,
-            byteLength: number,
-          ): number {
-            return status(() => {
-              updateRetainedBatch!(
-                glyphBatches!.get(batchHandle >>> 0),
-                vertexPointer >>> 0,
-                byteLength >>> 0,
-                "glyph",
-              );
-              return 1;
-            });
-          },
-          delete_glyph_batch(batchHandle: number): void {
-            const batch = glyphBatches!.get(batchHandle >>> 0);
-            if (batch) {
-              glyphBatches!.delete(batchHandle >>> 0);
-              gl.deleteVertexArray(batch.vao);
-              gl.deleteBuffer(batch.vbo);
-            }
-          },
-          draw_glyph_batch(
-            programHandle: number,
-            batchHandle: number,
-            atlasHandle: number,
-            mvpPointer: number,
-            clipPointer: number,
-          ): number {
-            return status(() => {
-              const program = programs.get(programHandle >>> 0);
-              if (!program) throw new Error("Stale glyph batch program handle");
-              const batch = glyphBatches!.get(batchHandle >>> 0);
-              if (!batch) throw new Error("Stale glyph batch handle");
-              const atlas = textures.get(atlasHandle >>> 0);
-              if (!atlas) throw new Error("Stale glyph atlas texture handle");
-              if (blendMode !== 2) {
-                gl.enable(gl.BLEND);
-                gl.blendEquation(gl.FUNC_ADD);
-                gl.blendFuncSeparate(
-                  gl.SRC_ALPHA,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                  gl.ONE,
-                  gl.ONE_MINUS_SRC_ALPHA,
-                );
-                setDepthMask(false);
-                blendMode = 2;
-              }
-              useProgram(program.object);
-              programMatrixAt(program, program.mvp, mvpPointer >>> 0);
-              programVec4At(
-                program,
-                parameterLocation(program, "u_clip"),
-                clipPointer >>> 0,
-              );
               programInt(program, parameterLocation(program, "u_atlas"), 0);
-              // Unit 0 keeps the atlas until the next draw that samples it.
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, atlas);
+              // A glyph range binds its atlas, which unit 0 keeps until the next draw
+              // that samples it; box-only ranges never sample unit 0.
+              if (atlas) {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, atlas);
+              }
               bindVertexArray(batch.vao);
-              gl.drawArrays(gl.TRIANGLES, 0, batch.count);
+              gl.drawArrays(gl.TRIANGLES, first, count);
               checkDraw();
               return 1;
             });
@@ -2954,10 +2861,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           }
         if (IPP_SHADOWS) shadows!.clear();
         if (IPP_GUI) {
-          for (const batch of [
-            ...guiBatches!.values(),
-            ...glyphBatches!.values(),
-          ]) {
+          for (const batch of guiBatches!.values()) {
             gl.deleteVertexArray(batch.vao);
             gl.deleteBuffer(batch.vbo);
           }
@@ -2991,7 +2895,6 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       }
       if (IPP_GUI) {
         guiBatches!.clear();
-        glyphBatches!.clear();
         glyphAtlasPages!.clear();
         glyphAtlasTarget = undefined;
       }

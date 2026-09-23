@@ -27,6 +27,8 @@ use ipp_core::systems::surface::{
     SurfaceClipRect, SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
 };
 
+use super::gui_batch::{GUI_FILL_GLYPH, GuiVertex};
+use super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
 use super::retained_surfaces::SurfacePaint;
 use crate::{RenderDevice, RenderError, RenderStats};
 
@@ -191,21 +193,6 @@ pub fn glyph_intersects_clip(
     ];
     x0.max(x1) > clip[0] && x0.min(x1) < clip[2] && y0.max(y1) > clip[1] && y0.min(y1) < clip[3]
 }
-
-/// One vertex in a retained glyph quad batch (32 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GlyphVertex {
-    /// Placed position in Surface content metres `[x, y]`.
-    pub position: [f32; 2],
-    /// Normalized atlas UV coordinates `[u, v]`.
-    pub uv: [f32; 2],
-    /// Straight linear RGBA color tint.
-    pub color: [f32; 4],
-}
-
-// GLES attribute strides and the WebGL bridge read exactly this many bytes per vertex.
-const _: () = assert!(std::mem::size_of::<GlyphVertex>() == 32);
 
 /// Delay before a glyph whose population failed may be attempted again.
 #[derive(Clone, Copy, Debug, Default)]
@@ -915,16 +902,16 @@ impl TextRun<'_> {
     }
 }
 
-/// Retained GPU batch holding text glyph triangle geometry from one atlas page.
-struct RetainedGlyphBatch<D: RenderDevice> {
-    gpu: D::GlyphBatch,
+/// Retained glyph quads of one text run sampling one atlas page, in painter order.
+struct RetainedGlyphBatch {
+    vertices: Vec<GuiVertex>,
     page_index: usize,
-    bytes: usize,
-    vertex_count: usize,
+    /// Cache-unique identity of this content, changed by every rebuild.
+    revision: u64,
 }
 
 /// One text run's band, published demand and retained batches.
-struct RetainedGlyphRun<D: RenderDevice> {
+struct RetainedGlyphRun {
     band: Option<u16>,
     demand_hash: Option<u64>,
     geometry_hash: u64,
@@ -938,86 +925,64 @@ struct RetainedGlyphRun<D: RenderDevice> {
     seen: u64,
     /// Geometry hash the batches were built from.
     built_hash: Option<u64>,
-    batches: Vec<RetainedGlyphBatch<D>>,
+    batches: Vec<RetainedGlyphBatch>,
 }
 
 /// Text runs of one Surface.
-struct RetainedGlyphSurface<D: RenderDevice> {
-    runs: BTreeMap<SurfacePrimitiveIdentity, RetainedGlyphRun<D>>,
+struct RetainedGlyphSurface {
+    runs: BTreeMap<SurfacePrimitiveIdentity, RetainedGlyphRun>,
     /// Publication that last showed or kept this Surface.
     seen: u64,
     /// Runs shown by publication `seen`; `None` keeps every run of a culled Surface.
     shown: Option<usize>,
 }
 
-/// Renderer-owned retained text runs of one World: bands, atlas demand and GPU batches.
-pub struct GlyphBatchRenderCache<D: RenderDevice> {
-    device: Rc<RefCell<D>>,
-    surfaces: BTreeMap<ipp_core::EntityId, RetainedGlyphSurface<D>>,
+/// Renderer-owned retained text runs of one World: bands, atlas demand and the glyph
+/// quads their Surfaces' [GUI storage](super::gui_storage) draws.
+#[derive(Default)]
+pub struct GlyphBatchRenderCache {
+    surfaces: BTreeMap<ipp_core::EntityId, RetainedGlyphSurface>,
     publication: u64,
-    /// Sum of `bytes` over every retained batch.
-    resident: usize,
+    /// Last batch revision handed out.
+    revision: u64,
     scratch_keys: Vec<GlyphKey>,
 }
 
-impl<D: RenderDevice> GlyphBatchRenderCache<D> {
+impl GlyphBatchRenderCache {
     /// Create a new empty text batch render cache.
-    pub fn new(device: Rc<RefCell<D>>) -> Self {
-        Self {
-            device,
-            surfaces: BTreeMap::new(),
-            publication: 0,
-            resident: 0,
-            scratch_keys: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Release every retained GPU text batch; demand belongs to the atlas.
+    /// Release every retained text run; demand belongs to the atlas.
     pub fn clear(&mut self) {
-        let mut device = self.device.borrow_mut();
-        for (_, surface) in std::mem::take(&mut self.surfaces) {
-            for (_, run) in surface.runs {
-                for batch in run.batches {
-                    device.delete_glyph_batch(batch.gpu);
-                }
-            }
-        }
-        self.resident = 0;
+        self.surfaces.clear();
     }
 
-    /// Release retained batches before the graphics context goes away.
+    /// Discard retained quads before the graphics context goes away.
     ///
     /// Bands and published demand survive, so recovered runs keep their presentation
     /// quality and rebuild from entries repopulated into their original slots.
     pub fn release_context(&mut self) {
-        let mut device = self.device.borrow_mut();
         for run in self
             .surfaces
             .values_mut()
             .flat_map(|surface| surface.runs.values_mut())
         {
-            for batch in run.batches.drain(..) {
-                device.delete_glyph_batch(batch.gpu);
-            }
+            run.batches.clear();
             run.built_hash = None;
             run.resident = None;
         }
-        self.resident = 0;
     }
 
-    /// Release this World's demand from the atlas and every retained batch.
-    pub fn release_demand(&mut self, atlas: &mut GlyphAtlas<D>) {
+    /// Release this World's demand from the atlas and every retained run.
+    pub fn release_demand<D: RenderDevice>(&mut self, atlas: &mut GlyphAtlas<D>) {
         for surface in self.surfaces.values() {
             for run in surface.runs.values() {
                 atlas.release(&run.keys);
             }
         }
         self.clear();
-    }
-
-    /// Total resident bytes occupied by retained text run GPU batches.
-    pub fn resident_bytes(&self) -> usize {
-        self.resident
     }
 
     /// Start publishing this World's demand for one frame.
@@ -1039,7 +1004,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     /// no entry. Unchanged runs only hash their inputs, and not even that when the
     /// Surface's reusable `paint` revision and the band match their last hashes.
     #[allow(clippy::too_many_arguments)]
-    pub fn publish_run(
+    pub fn publish_run<D: RenderDevice>(
         &mut self,
         atlas: &mut GlyphAtlas<D>,
         run: &TextRun<'_>,
@@ -1130,14 +1095,12 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
     ///
     /// Surfaces this publication neither showed nor kept were destroyed or lost their
     /// text. A shown Surface releases the runs it no longer contains.
-    pub fn end_publication(&mut self, atlas: &mut GlyphAtlas<D>) {
+    pub fn end_publication<D: RenderDevice>(&mut self, atlas: &mut GlyphAtlas<D>) {
         let publication = self.publication;
-        let mut device = self.device.borrow_mut();
-        let resident = &mut self.resident;
         self.surfaces.retain(|_, surface| {
             if surface.seen != publication {
-                for (_, run) in std::mem::take(&mut surface.runs) {
-                    *resident -= release_run(atlas, &mut device, run);
+                for run in surface.runs.values() {
+                    atlas.release(&run.keys);
                 }
                 return false;
             }
@@ -1151,8 +1114,7 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                         return true;
                     }
 
-                    *resident -=
-                        release_run(atlas, &mut device, std::mem::replace(run, empty_run()));
+                    atlas.release(&run.keys);
                     false
                 });
             }
@@ -1160,34 +1122,32 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
         });
     }
 
-    /// Draw one published run from retained batches.
+    /// Prepare one published run's retained batches for drawing.
     ///
     /// Batches rebuild after an edit or after a page they sample retires. Returns
-    /// `false` without drawing when the run has no band or a demanded entry is not
-    /// resident; the caller then draws analytic glyphs.
-    pub fn draw_text_run(
+    /// `false` when the run has no band or a demanded entry is not resident; the caller
+    /// then draws analytic glyphs.
+    pub fn prepare_text_run<D: RenderDevice>(
         &mut self,
-        program: &D::Program,
         atlas: &GlyphAtlas<D>,
         run: &TextRun<'_>,
-        mvp: &[f32; 16],
         stats: &mut RenderStats,
-    ) -> Result<bool, RenderError> {
+    ) -> bool {
         let Some(record) = self
             .surfaces
             .get_mut(&run.entity)
             .and_then(|surface| surface.runs.get_mut(&run.style.identity))
         else {
-            return Ok(false);
+            return false;
         };
         let Some(band) = record.band else {
-            return Ok(false);
+            return false;
         };
 
         let generation = atlas.residency_generation();
         if record.resident != Some(generation) {
             if !record.keys.iter().all(|key| atlas.get(key).is_some()) {
-                return Ok(false);
+                return false;
             }
             record.resident = Some(generation);
         }
@@ -1198,31 +1158,53 @@ impl<D: RenderDevice> GlyphBatchRenderCache<D> {
                 .iter()
                 .all(|batch| atlas.has_page(batch.page_index));
         if !reusable {
-            let before: usize = record.batches.iter().map(|batch| batch.bytes).sum();
-            let rebuilt = rebuild_batches(&self.device, atlas, record, run, band, stats);
-            let after: usize = record.batches.iter().map(|batch| batch.bytes).sum();
-            self.resident = self.resident - before + after;
-            rebuilt?;
+            rebuild_batches(atlas, record, run, band, &mut self.revision, stats);
         }
 
-        for batch in &record.batches {
-            let texture = atlas
-                .page_texture(batch.page_index)
-                .ok_or_else(|| RenderError::RenderDevice("atlas page texture missing".into()))?;
-            self.device
-                .borrow_mut()
-                .draw_glyph_batch(program, &batch.gpu, texture, mvp, &run.clip)?;
-            stats.draw_calls += 1;
-            stats.triangles += (batch.vertex_count / 3) as u32;
-            stats.gui_batches += 1;
-        }
+        true
+    }
 
-        Ok(true)
+    /// Retained batches of a prepared run as GUI storage pieces, in painter order.
+    pub(crate) fn run_pieces(
+        &self,
+        entity: ipp_core::EntityId,
+        identity: SurfacePrimitiveIdentity,
+    ) -> impl Iterator<Item = GuiPiece> + '_ {
+        self.run(entity, identity)
+            .into_iter()
+            .flat_map(|run| run.batches.iter().enumerate())
+            .map(move |(index, batch)| GuiPiece {
+                key: GuiPieceKey::Glyphs(identity, index as u32),
+                hash: batch.revision,
+                len: batch.vertices.len(),
+                page: Some(batch.page_index),
+                source: GuiPieceSource::Glyphs(identity, index as u32),
+            })
+    }
+
+    /// Vertices of retained batch `index` of a run; empty when it does not exist.
+    pub fn batch_vertices(
+        &self,
+        entity: ipp_core::EntityId,
+        identity: SurfacePrimitiveIdentity,
+        index: u32,
+    ) -> &[GuiVertex] {
+        self.run(entity, identity)
+            .and_then(|run| run.batches.get(index as usize))
+            .map_or(&[], |batch| &batch.vertices)
+    }
+
+    fn run(
+        &self,
+        entity: ipp_core::EntityId,
+        identity: SurfacePrimitiveIdentity,
+    ) -> Option<&RetainedGlyphRun> {
+        self.surfaces.get(&entity)?.runs.get(&identity)
     }
 }
 
 /// A run before its first publication.
-fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
+fn empty_run() -> RetainedGlyphRun {
     RetainedGlyphRun {
         band: None,
         demand_hash: None,
@@ -1236,26 +1218,10 @@ fn empty_run<D: RenderDevice>() -> RetainedGlyphRun<D> {
     }
 }
 
-/// Release a run's demand and batches, returning the batch bytes released.
-fn release_run<D: RenderDevice>(
-    atlas: &mut GlyphAtlas<D>,
-    device: &mut D,
-    run: RetainedGlyphRun<D>,
-) -> usize {
-    atlas.release(&run.keys);
-    let mut bytes = 0;
-    for batch in run.batches {
-        bytes += batch.bytes;
-        device.delete_glyph_batch(batch.gpu);
-    }
-
-    bytes
-}
-
 /// Glyph quads of one atlas page, in the order they paint.
 struct PageBucket {
     page_index: usize,
-    vertices: Vec<GlyphVertex>,
+    vertices: Vec<GuiVertex>,
     /// Quad bounds and colours, kept only when the run mixes colours.
     quads: Vec<([f32; 4], [f32; 4])>,
 }
@@ -1266,13 +1232,13 @@ struct PageBucket {
 /// of another colour. Same-colour coverage composites identically in either order, so a
 /// run of one colour needs one batch per page however its pages interleave.
 fn rebuild_batches<D: RenderDevice>(
-    device: &Rc<RefCell<D>>,
     atlas: &GlyphAtlas<D>,
-    record: &mut RetainedGlyphRun<D>,
+    record: &mut RetainedGlyphRun,
     run: &TextRun<'_>,
     band: u16,
+    revision: &mut u64,
     stats: &mut RenderStats,
-) -> Result<(), RenderError> {
+) {
     let style = run.style;
     let unit = run.font_size / run.units_per_em as f32;
     let uniform = run
@@ -1348,10 +1314,14 @@ fn rebuild_batches<D: RenderDevice>(
         };
 
         let [u0, v0, u1, v1] = entry.uv;
-        let vertex = |position, uv| GlyphVertex {
+        let clip = run.clip;
+        let vertex = |position, [u, v]: [f32; 2]| GuiVertex {
             position,
-            uv,
-            color,
+            color0: color,
+            gradient_coords: [u, v, 0.0, 0.0],
+            material_params: [GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
+            clip,
+            ..GuiVertex::EMPTY
         };
         let tl = vertex([x0, y0], [u0, v0]);
         let bl = vertex([x0, y1], [u0, v1]);
@@ -1365,80 +1335,21 @@ fn rebuild_batches<D: RenderDevice>(
         }
     }
 
-    // Reuse retained storage in order; release what the new geometry no longer needs.
-    let mut previous = std::mem::take(&mut record.batches).into_iter();
-    record.built_hash = None;
-    let mut failure = None;
-
+    record.batches.clear();
     for bucket in buckets {
-        let bytes = std::mem::size_of_val(bucket.vertices.as_slice());
-        let reused = previous.next();
-        let result = match reused {
-            Some(mut batch) => {
-                let updated = device
-                    .borrow_mut()
-                    .update_glyph_batch(&mut batch.gpu, &bucket.vertices);
-                match updated {
-                    Ok(()) => Ok(batch),
-                    Err(error) => Err((error, Some(batch))),
-                }
-            }
-            None => device
-                .borrow_mut()
-                .create_glyph_batch(&bucket.vertices)
-                .map(|gpu| RetainedGlyphBatch {
-                    gpu,
-                    page_index: bucket.page_index,
-                    bytes,
-                    vertex_count: 0,
-                })
-                .map_err(|error| (error, None)),
-        };
-
-        // A failed replacement leaves its storage unknown: release that batch too.
-        let mut batch = match result {
-            Ok(batch) => batch,
-            Err((error, batch)) => {
-                if let Some(batch) = batch {
-                    device.borrow_mut().delete_glyph_batch(batch.gpu);
-                }
-                failure = Some(error);
-                break;
-            }
-        };
-
-        batch.page_index = bucket.page_index;
-        batch.bytes = bytes;
-        batch.vertex_count = bucket.vertices.len();
-        record.batches.push(batch);
-
-        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
+        *revision += 1;
+        record.batches.push(RetainedGlyphBatch {
+            vertices: bucket.vertices,
+            page_index: bucket.page_index,
+            revision: *revision,
+        });
         stats.gui_rebuilds += 1;
-        stats.gui_allocations += 1;
-    }
-
-    for batch in previous {
-        device.borrow_mut().delete_glyph_batch(batch.gpu);
-    }
-
-    if let Some(error) = failure {
-        for batch in record.batches.drain(..) {
-            device.borrow_mut().delete_glyph_batch(batch.gpu);
-        }
-        return Err(error);
     }
 
     record.built_hash = Some(record.geometry_hash);
-    Ok(())
 }
 
 impl<D: RenderDevice> Drop for GlyphAtlas<D> {
-    fn drop(&mut self) {
-        self.clear();
-    }
-}
-
-impl<D: RenderDevice> Drop for GlyphBatchRenderCache<D> {
     fn drop(&mut self) {
         self.clear();
     }

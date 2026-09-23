@@ -13,6 +13,7 @@ DATA = Path(__file__).parent
 PROFILES = json.loads((DATA / "profiles.json").read_text())
 SUITES = json.loads((DATA / "suites.json").read_text())
 TEST_INPUTS = json.loads((DATA / "test-inputs.json").read_text())
+GLES_CHECKS = json.loads((DATA / "gles.json").read_text())
 CI_PROFILES = ("repository", "native", "integration")
 
 
@@ -286,7 +287,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
                 tuple(inputs["requirements"]),
             )
 
-    for record in json.loads((DATA / "gles.json").read_text()):
+    for record in GLES_CHECKS:
         add(
             Task(
                 record["id"],

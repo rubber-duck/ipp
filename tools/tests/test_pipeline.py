@@ -18,7 +18,14 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline.artifacts import source_identity, workspace_lock
-from pipeline.catalog import PROFILES, SUITES, catalog, regression_ids, suite_ids
+from pipeline.catalog import (
+    GLES_CHECKS,
+    PROFILES,
+    SUITES,
+    catalog,
+    regression_ids,
+    suite_ids,
+)
 from pipeline.cli import make_plan, parser
 from pipeline.environment import Requirement, probe
 from pipeline.model import ROOT, Plan, Task, select
@@ -307,6 +314,82 @@ class PlanningTests(unittest.TestCase):
                 ids
             )
         )
+
+    def test_files_without_area_rules_select_their_declared_coverage(self):
+        gallery = suite_ids(
+            [
+                "animation",
+                "cameras",
+                "render",
+                "lighting",
+                "gallery-particles",
+                "gallery-gui",
+                "gallery-gui-camera",
+                "gallery-platformer",
+            ]
+        )
+        for source, expected in (
+            ("crates/ipp-core/src/lib.rs", suite_ids(["contracts"])),
+            (
+                "crates/ipp-protocol/tests/manifest-client.mjs",
+                ["test:crates/ipp-protocol/tests/manifest-client.mjs"],
+            ),
+            (
+                "crates/ipp-protocol/tests/mesh-client.mjs",
+                ["test:crates/ipp-protocol/tests/mesh-client.mjs"],
+            ),
+            (
+                "crates/ipp-render-gl/examples/egl_gui_clips.rs",
+                ["check:gles-gui-clips"],
+            ),
+            (
+                "crates/ipp-render-gl/examples/egl_gui_layout.rs",
+                ["check:gles-gui-layout"],
+            ),
+            (
+                "crates/ipp-render-gl/tests/mesh_residency.rs",
+                suite_ids(["render-residency"]),
+            ),
+            ("tests/render/viewer-browser-helper.ts", gallery),
+            ("tests/render/gallery-driver.ts", gallery),
+            ("tests/render/texture-fixture.tsx", suite_ids(["textures"])),
+            (
+                "tools/build_gallery_gui_assets.py",
+                suite_ids(["gallery-site", "gallery-gui", "gallery-gui-camera"]),
+            ),
+            (
+                "crates/ipp-core/src/world/systems/animation/update.rs",
+                suite_ids(["animation"]),
+            ),
+            (
+                "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs",
+                suite_ids(["gui"]),
+            ),
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(set(expected).issubset(ids), sorted(ids))
+
+    def test_gles_examples_select_only_the_checks_that_run_them(self):
+        ids, _ = affected(["crates/ipp-render-gl/examples/egl_gui_clips.rs"], [])
+        self.assertEqual(
+            [id_ for id_ in ids if id_.startswith("check:gles-")],
+            ["check:gles-gui-clips"],
+        )
+        ids, _ = affected(["crates/ipp-render-gl/examples/egl_smoke.rs"], [])
+        self.assertEqual(
+            {id_ for id_ in ids if id_.startswith("check:gles-")},
+            {"check:gles-spatial", "check:gles-textures", "check:gles-lighting"},
+        )
+
+    def test_catalog_rejects_invalid_gles_source_roots(self):
+        for root in ("../outside.rs", "crates/ipp-render-gl/examples/missing.rs"):
+            with (
+                self.subTest(root=root),
+                patch.dict(GLES_CHECKS[0], sourceRoots=[root]),
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid source root"):
+                    validate_catalog()
 
     def test_file_source_roots_match_one_path(self):
         with self.assertRaisesRegex(ValueError, "--suite"):

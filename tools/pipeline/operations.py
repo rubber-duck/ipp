@@ -9,7 +9,15 @@ import subprocess
 import sys
 
 from .builds import build, verify_browser_identities
-from .catalog import CI_PROFILES, PROFILES, SUITES, TEST_INPUTS, catalog, regression_ids
+from .catalog import (
+    CI_PROFILES,
+    GLES_CHECKS,
+    PROFILES,
+    SUITES,
+    TEST_INPUTS,
+    catalog,
+    regression_ids,
+)
 from .environment import development_python
 from .model import ROOT, select
 from .processes import node, run
@@ -109,8 +117,12 @@ def validate_catalog() -> None:
         raise ValueError(
             f"Suite inputs differ from declared files: {sorted(set(TEST_INPUTS) ^ declared)}"
         )
-    for name, suite in SUITES.items():
-        for root in suite.get("sourceRoots", []):
+    owners = [
+        (f"Suite {name}", suite.get("sourceRoots", []))
+        for name, suite in SUITES.items()
+    ] + [(record["id"], record.get("sourceRoots", [])) for record in GLES_CHECKS]
+    for owner, roots in owners:
+        for root in roots:
             # A trailing slash owns a directory; otherwise the root is one file.
             if (
                 not isinstance(root, str)
@@ -122,7 +134,8 @@ def validate_catalog() -> None:
                     else (ROOT / root).is_file()
                 )
             ):
-                raise ValueError(f"Suite {name} has invalid source root: {root!r}")
+                raise ValueError(f"{owner} has invalid source root: {root!r}")
+    for name, suite in SUITES.items():
         for path in suite.get("files", []):
             source = path.removeprefix("dist/")
             source = (

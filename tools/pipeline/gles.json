@@ -16,7 +16,10 @@
       "@egl",
       "target/integration-artifacts/particles/gles"
     ],
-    "dependencies": []
+    "dependencies": [],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_particles.rs"
+    ]
   },
   {
     "id": "check:gles-spatial",
@@ -36,6 +39,9 @@
     ],
     "dependencies": [
       "build:gallery"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_smoke.rs"
     ]
   },
   {
@@ -59,6 +65,9 @@
     "dependencies": [
       "build:textures",
       "build:shapes"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_smoke.rs"
     ]
   },
   {
@@ -84,6 +93,9 @@
     "dependencies": [
       "build:textures",
       "build:shapes"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_smoke.rs"
     ]
   },
   {
@@ -106,6 +118,9 @@
     ],
     "dependencies": [
       "build:gallery"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_custom_materials.rs"
     ]
   },
   {
@@ -128,6 +143,9 @@
     ],
     "dependencies": [
       "build:skinning-fixtures"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_skinning.rs"
     ]
   },
   {
@@ -150,6 +168,9 @@
     ],
     "dependencies": [
       "build:skinning-fixtures"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_skinning.rs"
     ]
   },
   {
@@ -172,6 +193,9 @@
     ],
     "dependencies": [
       "build:mesh-pose-fixtures"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_mesh_poses.rs"
     ]
   },
   {
@@ -194,6 +218,9 @@
     ],
     "dependencies": [
       "build:mesh-pose-fixtures"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_mesh_poses.rs"
     ]
   },
   {
@@ -217,6 +244,9 @@
     ],
     "dependencies": [
       "build:surface-assets"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_surfaces.rs"
     ]
   },
   {
@@ -236,7 +266,10 @@
       "@egl",
       "target/integration-artifacts/gui-clips/gles"
     ],
-    "dependencies": []
+    "dependencies": [],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_gui_clips.rs"
+    ]
   },
   {
     "id": "check:gles-gui-layout",
@@ -259,6 +292,9 @@
     ],
     "dependencies": [
       "build:surface-assets"
+    ],
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_gui_layout.rs"
     ]
   }
 ]

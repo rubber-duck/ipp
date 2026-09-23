@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from .catalog import SUITES, suite_ids
+from .catalog import GLES_CHECKS, SUITES, suite_ids
 from .model import ROOT
 
 
@@ -65,6 +65,20 @@ def affected(
         ]
         if owners:
             ids.extend(suite_ids(owners))
+        # Native GLES checks declare the example sources they run.
+        checks = [
+            record["id"]
+            for record in GLES_CHECKS
+            if any(owns(root, path) for root in record.get("sourceRoots", []))
+        ]
+        ids.extend(checks)
+        # A declared test file selects itself, whatever its naming.
+        declared = f"dist/{path[:-3]}.js" if path.endswith(".ts") else path
+        tests = [
+            declared for suite in SUITES.values() if declared in suite.get("files", [])
+        ]
+        ids.extend(f"test:{test}" for test in dict.fromkeys(tests))
+        owned = bool(owners or checks or tests)
         if path.startswith(("tools/pipeline/", "tools/tests/", ".github/")) or path in (
             "tools/ipp.py",
             "mypy.ini",
@@ -77,10 +91,7 @@ def affected(
         elif path.startswith("packages/ipp-client/"):
             ids.extend(suite_ids(["client", "native", "browser"]))
         elif path.endswith(".test.ts") or path.endswith(".test.mjs"):
-            compiled = f"dist/{path[:-3]}.js" if path.endswith(".ts") else path
-            if any(compiled in suite.get("files", []) for suite in SUITES.values()):
-                ids.append(f"test:{compiled}")
-            elif not owners:
+            if not owned:
                 uncertain.append(path)
         elif path in (
             "package.json",
@@ -93,7 +104,7 @@ def affected(
             ids.extend(suite_ids(["runner"]))
         elif path.startswith(("tools/check_", "tools/repository_structure")):
             ids.append("check:repository")
-        elif not owners:
+        elif not owned:
             uncertain.append(path)
     if uncertain and not explicit_suites:
         raise ValueError(

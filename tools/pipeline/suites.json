@@ -3,7 +3,8 @@
     "description": "Published gallery files render through HTTP, worker/WASM and WebGL at root and project URLs",
     "sourceRoots": [
       "examples/world-gallery/",
-      "tools/build/"
+      "tools/build/",
+      "tools/build_gallery_gui_assets.py"
     ],
     "commands": [
       {
@@ -247,6 +248,9 @@
   },
   "contracts": {
     "description": "Executed native/WASM contracts and reproducible generation",
+    "sourceRoots": [
+      "crates/ipp-core/src/lib.rs"
+    ],
     "commands": []
   },
   "filesystem": {
@@ -296,11 +300,44 @@
   },
   "animation": {
     "description": "Property playback and gallery skeleton poses through transports and completed WebGL frames",
+    "sourceRoots": [
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts",
+      "crates/ipp-core/src/world/systems/animation/",
+      "crates/ipp-core/tests/animation.rs",
+      "crates/ipp-core/tests/animation_transitions.rs",
+      "crates/ipp-core/tests/animation_transition_lifecycle.rs",
+      "crates/ipp-core/tests/reversible_animation.rs"
+    ],
     "files": [
       "dist/tests/integration/world-host.test.js",
       "dist/tests/browser/world-host.test.js",
       "dist/tests/render/animation.test.js",
       "dist/tests/render/gallery-animation.test.js"
+    ],
+    "commands": [
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "animation",
+          "--test",
+          "animation_transitions",
+          "--test",
+          "animation_transition_lifecycle",
+          "--test",
+          "reversible_animation",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
     ]
   },
   "hierarchy": {
@@ -312,6 +349,10 @@
   },
   "cameras": {
     "description": "Camera/picking scenarios and completed WebGL frame assertions",
+    "sourceRoots": [
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts"
+    ],
     "files": [
       "dist/tests/integration/world-host.test.js",
       "dist/tests/browser/world-host.test.js",
@@ -348,7 +389,9 @@
   "render": {
     "description": "Resources, gallery controls and actual WebGL frames",
     "sourceRoots": [
-      "crates/ipp-wasm/src/services/"
+      "crates/ipp-wasm/src/services/",
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts"
     ],
     "files": [
       "dist/tests/render/render.test.js",
@@ -365,6 +408,10 @@
   },
   "lighting": {
     "description": "Direct lights, smooth normals, spot shadows and context recovery",
+    "sourceRoots": [
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts"
+    ],
     "files": [
       "dist/tests/render/lighting.test.js"
     ]
@@ -408,6 +455,10 @@
   },
   "gallery-particles": {
     "description": "Interactive particle gallery controls, rendering and cleanup",
+    "sourceRoots": [
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts"
+    ],
     "files": [
       "dist/tests/render/gallery-particles.test.js"
     ]
@@ -418,7 +469,10 @@
       "examples/world-gallery/worlds/gui/",
       "packages/ipp-react/src/gui/theme.ts",
       "packages/ipp-client/tools/assemble.mjs",
-      "tools/build/verify-browser.mjs"
+      "tools/build/verify-browser.mjs",
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts",
+      "tools/build_gallery_gui_assets.py"
     ],
     "files": [
       "dist/tests/render/gallery-gui.test.js"
@@ -427,7 +481,10 @@
   "gallery-gui-camera": {
     "description": "Runtime-routed Surface GUI and background camera gestures",
     "sourceRoots": [
-      "examples/world-gallery/worlds/gui/"
+      "examples/world-gallery/worlds/gui/",
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts",
+      "tools/build_gallery_gui_assets.py"
     ],
     "files": [
       "dist/tests/render/gallery-gui-camera.test.js"
@@ -435,6 +492,10 @@
   },
   "gallery-platformer": {
     "description": "Imported platformer locomotion, smooth turning with a forward gait, following camera, lighting and lifecycle cleanup",
+    "sourceRoots": [
+      "tests/render/viewer-browser-helper.ts",
+      "tests/render/gallery-driver.ts"
+    ],
     "files": [
       "dist/tests/render/gallery-platformer.test.js"
     ]
@@ -459,6 +520,9 @@
   },
   "textures": {
     "description": "Streaming textures, optional attributes and context recovery",
+    "sourceRoots": [
+      "tests/render/texture-fixture.tsx"
+    ],
     "files": [
       "dist/tests/render/texture.test.js"
     ]
@@ -604,6 +668,26 @@
         ]
       },
       {
+        "name": "core-lib",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui",
+          "--lib",
+          "--locked",
+          "--",
+          "world::systems::gui::",
+          "world::systems::render::"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
         "name": "protocol",
         "command": [
           "cargo",
@@ -631,7 +715,9 @@
       "packages/ipp-react/src/",
       "tests/react/",
       "tests/integration/",
-      "tests/browser/"
+      "tests/browser/",
+      "crates/ipp-core/src/world/systems/render/gui_presentation.rs",
+      "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs"
     ]
   },
   "retained-gui": {
@@ -658,6 +744,32 @@
     ],
     "files": [
       "dist/tests/render/retained-gui.test.js"
+    ]
+  },
+  "render-residency": {
+    "description": "Renderer residency, upload failures, glyph atlas population and recovery through failure-injecting GL devices",
+    "sourceRoots": [
+      "crates/ipp-render-gl/tests/mesh_residency.rs"
+    ],
+    "commands": [
+      {
+        "name": "gl",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-render-gl",
+          "--features",
+          "gui,shadows",
+          "--test",
+          "mesh_residency",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
     ]
   }
 }

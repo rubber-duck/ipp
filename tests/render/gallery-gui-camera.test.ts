@@ -33,12 +33,12 @@ const environment = {
 const CACHE_DIRECT_DISTANCE = 20;
 const CACHE_TEXELS_PER_METRE = 80;
 
-/** Cache image size in a band; Surface sizes are f32 fields. */
+/** Cache image size in a band; Surface sizes are f32 fields, rounded up with the renderer's 1e-4 texel tolerance. */
 function expectedCacheSize(band: number): readonly [number, number] {
   const density = CACHE_TEXELS_PER_METRE / 2 ** (band - 1);
   return [
-    Math.ceil(Math.fround(7.4) * density),
-    Math.ceil(Math.fround(4.8) * density),
+    Math.ceil(Math.fround(7.4) * density - 1e-4),
+    Math.ceil(Math.fround(4.8) * density - 1e-4),
   ];
 }
 

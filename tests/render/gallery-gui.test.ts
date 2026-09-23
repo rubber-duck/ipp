@@ -2241,13 +2241,14 @@ const CACHE_HYSTERESIS = 0.1;
 
 /**
  * Cache image size in a band: content metres times the band's halved density,
- * rounded up. Surface sizes are f32 fields, so 7.4 m reads as 7.40000010 m.
+ * rounded up. Surface sizes are f32 fields, so 7.4 m reads as 7.40000010 m;
+ * like the renderer, a 1e-4 texel tolerance keeps that error from adding a texel.
  */
 function expectedCacheSize(band: number): readonly [number, number] {
   const density = CACHE_TEXELS_PER_METRE / 2 ** (band - 1);
   return [
-    Math.ceil(Math.fround(7.4) * density),
-    Math.ceil(Math.fround(4.8) * density),
+    Math.ceil(Math.fround(7.4) * density - 1e-4),
+    Math.ceil(Math.fround(4.8) * density - 1e-4),
   ];
 }
 

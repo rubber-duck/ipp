@@ -71,7 +71,7 @@ export type GuiSurfaceCacheMode = "automatic" | "cached" | "direct";
  * Whole-Surface cache policy for the GUI panel. The authored camera sits
  * about 16.7 m from the panel centre, so it presents directly; dollying out
  * past 22 m (the 20 m boundary plus hysteresis) caches the panel. 80 texels
- * per content metre (about 593x385 texels, 0.87 MiB) roughly matches the on-screen
+ * per content metre (about 592x384 texels, 0.87 MiB) roughly matches the on-screen
  * density of a 720-pixel-high canvas at that boundary, and each further
  * distance doubling halves density and refresh. 30 Hz keeps the scanning
  * trace smooth at a distance while bounding repaints.

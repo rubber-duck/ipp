@@ -1,5 +1,12 @@
 /** A scene declaration; any Host may supply its generated client and immutable assets. */
-import { Entity, Surface, Transform, type SurfaceItemProps } from "@ipp/react";
+import {
+  Entity,
+  Surface,
+  SurfaceCache,
+  Transform,
+  type SurfaceCacheProps,
+  type SurfaceItemProps,
+} from "@ipp/react";
 import type { ClientAssetSource } from "@ipp/client";
 
 export interface TerminalAssets {
@@ -70,11 +77,14 @@ export function Terminal({
   text,
   angle = 0,
   items,
+  cache,
 }: {
   assets: TerminalAssets;
   text?: string;
   angle?: number;
   items?: readonly SurfaceItemProps[];
+  /** Opt the terminal into distance-based texture caching; direct when absent. */
+  cache?: SurfaceCacheProps | undefined;
 }) {
   return (
     <Entity id="surface-terminal">
@@ -85,6 +95,7 @@ export function Terminal({
         height={2.4}
         items={items ?? terminalItems(assets, text)}
       />
+      {cache ? <SurfaceCache bound={false} {...cache} /> : null}
     </Entity>
   );
 }

@@ -407,6 +407,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
     gl.depthMask(false);
+    // Draws before the next begin_frame, such as Surface cache repaints,
+    // must reapply their blending.
+    blendMode = undefined;
     useProgram(target.program);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindSampler(0, null);
@@ -1763,6 +1766,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.disable(gl.SCISSOR_TEST);
               gl.disable(gl.STENCIL_TEST);
               gl.depthMask(false);
+              // Repaints run outside begin_frame: every draw reapplies its blending.
+              blendMode = undefined;
               gl.clearColor(0, 0, 0, 0);
               gl.clear(gl.COLOR_BUFFER_BIT);
               try {
@@ -2188,8 +2193,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       flen: number,
     ): number {
       return status(() => {
+        // Depth bits describe the bound framebuffer. Surface cache targets and
+        // glyph atlas pages have no depth, and programs may be created lazily
+        // while one is bound during a repaint.
+        const offscreen =
+          (IPP_SURFACES && surfaceCacheTarget !== undefined) ||
+          (IPP_GUI && glyphAtlasTarget !== undefined);
         if (
-          gl.getParameter(gl.DEPTH_BITS) < 16 ||
+          (!offscreen && gl.getParameter(gl.DEPTH_BITS) < 16) ||
           gl.getParameter(gl.MAX_VERTEX_ATTRIBS) <
             (IPP_PARTICLES
               ? 14

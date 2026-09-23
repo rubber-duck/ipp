@@ -13,13 +13,9 @@ test("opted-in Surfaces reuse bounded cache images and fall back to current dire
     await context.test(`${build}: WebGL cache target bridge`, () => {
       if (!report.bridge) throw new Error("The bridge probe did not report");
     });
-    await context.test(`${build}: cached presentation lifecycle`, (subtest) => {
-      // Visible, never passing: no opted-in Surface reported a cache record,
-      // because core does not yet prepare the SurfaceCache policy (ipp-s1ge.1).
-      if (report.status === "inactive")
-        subtest.skip(
-          "PENDING ipp-s1ge.1: opted-in Surfaces report no cache records until core prepares the SurfaceCache policy",
-        );
+    await context.test(`${build}: cached presentation lifecycle`, () => {
+      if (report.status !== "active")
+        throw new Error("The cache lifecycle did not run");
     });
   }
 });

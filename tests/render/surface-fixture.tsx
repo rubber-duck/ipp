@@ -8,6 +8,7 @@ import {
   type SurfaceCacheProps,
 } from "@ipp/react";
 import {
+  Checkbox,
   Drawing,
   GuiRoot,
   Padding,
@@ -35,6 +36,7 @@ import type {
   WorldPersistenceHostClient,
 } from "@ipp/client";
 import type { SurfaceItemProps } from "@ipp/react";
+import type { ReactNode } from "react";
 import {
   Terminal,
   terminalItems,
@@ -68,6 +70,30 @@ const frames = new Map<string, FrameCapture>();
 const ORTHO_HEIGHT = 3;
 const references = new Map<string, HTMLCanvasElement>();
 const failures: unknown[] = [];
+
+/** Authored SurfaceCache policies of cache scenario Surfaces, by symbolic id. */
+const cachePolicies = new Map<string, SurfaceCachePolicy>();
+
+/** The latest cache-aware scene, rebuilt when a policy changes. */
+let cacheScene: (() => ReactNode) | null = null;
+
+/** Present a scene that declares no cache policies. */
+function present(scene: ReactNode) {
+  cacheScene = null;
+  return root.render(scene);
+}
+
+/** Present a scene whose Surfaces declare their current `cachePolicies`. */
+function presentCached(scene: () => ReactNode) {
+  cacheScene = scene;
+  return root.render(scene());
+}
+
+/** The React SurfaceCache declaration of one scenario Surface, if any. */
+function cacheDeclaration(symbolicId: string) {
+  const policy = cachePolicies.get(symbolicId);
+  return policy ? <SurfaceCache bound={false} {...policy} /> : null;
+}
 
 export async function initialize(config: {
   generatedModuleUrl: string;
@@ -143,7 +169,7 @@ export async function initialize(config: {
     ]),
   );
   root = createRoot(client);
-  await root.render(<Terminal assets={assets} />);
+  await present(<Terminal assets={assets} />);
   await waitSurfaceAssets(
     client,
     Object.values(assets).map((asset) => asset.source),
@@ -231,7 +257,12 @@ export async function workload(
   },
 ) {
   client.presentation!.resize(config.width ?? 640, config.height ?? 480);
-  await root.render(
+  for (const id of [...cachePolicies.keys()])
+    if (id.startsWith("workload-")) cachePolicies.delete(id);
+  if (config.cache)
+    for (let index = 0; index < (config.panels ?? 1); index++)
+      cachePolicies.set(`workload-${index}`, config.cache);
+  await presentCached(() =>
     Array.from({ length: config.panels ?? 1 }, (_, index) => (
       <Entity key={index} id={`workload-${index}`}>
         <Transform
@@ -250,12 +281,10 @@ export async function workload(
             unseenGlyphs,
           })}
         />
+        {cacheDeclaration(`workload-${index}`)}
       </Entity>
     )),
   );
-  if (config.cache)
-    for (let index = 0; index < (config.panels ?? 1); index++)
-      await setSurfaceCache(`workload-${index}`, config.cache);
 }
 
 /** Sizes of the application's printable and unseen glyph sets. */
@@ -273,7 +302,7 @@ export async function clearWorkload(viewport?: {
   height: number;
 }) {
   if (viewport) client.presentation!.resize(viewport.width, viewport.height);
-  await root.render(null);
+  await present(null);
 }
 
 type Color = readonly [number, number, number, number];
@@ -281,10 +310,13 @@ const PANEL_COLOR: Color = [0.02, 0.03, 0.05, 1];
 /**
  * A GUI panel on the same camera, viewport and DPR as the terminal workload.
  * `mixed` combines a gradient shape with glow, atlas glyphs and a curve drawing;
- * `filled` and `sparse` differ only in the shape's interior fill.
+ * `filled` and `sparse` differ only in the shape's interior fill. `control`
+ * places a checkbox before the shape, under {@link CONTROL_POINT}, for pointer
+ * interaction.
  */
 export async function guiPanel(config: {
   variant: "mixed" | "mixed-without-glow" | "filled" | "sparse" | "empty";
+  control?: boolean;
   /** Shape size, border and corner radius in Surface metres. */
   shape: {
     width: number;
@@ -332,14 +364,16 @@ export async function guiPanel(config: {
   };
   const fill: Color =
     variant === "sparse" ? [0, 0, 0, 0] : [0.85, 0.25, 0.08, 1];
-  await root.render(
+  await presentCached(() => (
     <Entity key="gui" id="retained-gui-panel">
       <Transform bound={false} ry={config.angle ?? 0} />
       <Surface bound={false} width={3.8} height={2.4} />
+      {cacheDeclaration("retained-gui-panel")}
       <GuiRoot>
         <Stack width={3.8} height={2.4} backgroundColor={PANEL_COLOR}>
           <Padding padding={[0.6, 0, 0, 0.3]}>
             <Row>
+              {config.control ? <Checkbox width={0.5} height={1.2} /> : null}
               {variant === "empty" ? (
                 <Stack width={shape.width} height={shape.height} />
               ) : (
@@ -376,8 +410,8 @@ export async function guiPanel(config: {
           </Padding>
         </Stack>
       </GuiRoot>
-    </Entity>,
-  );
+    </Entity>
+  ));
   // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
   return { pixelsPerMetre: height / ORTHO_HEIGHT };
 }
@@ -428,6 +462,7 @@ export async function presentSecondWorld(
       ),
     );
   root = createRoot(client);
+  cachePolicies.clear();
   return guiPanel(panel);
 }
 
@@ -531,7 +566,7 @@ export async function glyphProbe(
       })),
     ),
   );
-  await root.render(
+  await present(
     <Terminal
       assets={assets}
       angle={angle}
@@ -563,7 +598,7 @@ export async function glyphProbe(
 
 export async function changeView(angle: number, width = 320, height = 240) {
   client.presentation!.resize(width, height);
-  await root.render(<Terminal assets={assets} angle={angle} />);
+  await present(<Terminal assets={assets} angle={angle} />);
   return (await surfaceSnapshot(client, terminal)).collection.items.map(
     (item) => item.id,
   );
@@ -603,15 +638,15 @@ export async function keyedLifecycle() {
   const items = terminalItems(assets);
   // Adjacent foreground items do not overlap; changing their order must retain identities.
   [items[4], items[5]] = [items[5]!, items[4]!];
-  await root.render(<Terminal assets={assets} items={items} />);
+  await present(<Terminal assets={assets} items={items} />);
   const reordered = (
     await surfaceSnapshot(client, terminal)
   ).collection.items.map((item) => item.id);
   const cursor = items.splice(3, 1)[0]!;
-  await root.render(<Terminal assets={assets} items={items} />);
+  await present(<Terminal assets={assets} items={items} />);
   const removed = await surfaceSnapshot(client, terminal);
   items.splice(3, 0, cursor);
-  await root.render(<Terminal assets={assets} items={items} />);
+  await present(<Terminal assets={assets} items={items} />);
   const restored = await surfaceSnapshot(client, terminal);
   return {
     reordered,
@@ -688,7 +723,7 @@ export async function paintOrder(reverse: boolean, angle = 0) {
     scale: [0.5, 0.5],
     color: [1, 0, 0, 1],
   });
-  await root.render(<Terminal assets={assets} items={items} angle={angle} />);
+  await present(<Terminal assets={assets} items={items} angle={angle} />);
 }
 
 /** Compare a rear capture with the independently expected horizontal reflection. */
@@ -748,7 +783,7 @@ export async function orientationProbe(redY: number, label: string) {
     scale,
     color,
   });
-  await root.render(
+  await present(
     <Terminal
       assets={assets}
       items={[
@@ -819,7 +854,7 @@ export async function pendingFont() {
   const pending = clientAssetSource(client.session, 17, 9000n);
   const items = terminalItems(assets);
   items[2] = { ...items[2]!, asset: pending };
-  await root.render(<Terminal assets={assets} items={items} />);
+  await present(<Terminal assets={assets} items={items} />);
 }
 
 export async function provideFont() {
@@ -868,7 +903,7 @@ export async function loadPendingSurfaceAssetsAcrossContextLoss() {
   const items = terminalItems(assets);
   items[0] = { ...items[0]!, asset: drawing };
   items[2] = { ...items[2]!, asset: font };
-  await root.render(<Terminal assets={assets} items={items} />);
+  await present(<Terminal assets={assets} items={items} />);
   const before = await client.presentation!.capture();
   client.presentation!.loseContext();
   await new Promise<void>((resolve) =>
@@ -937,6 +972,8 @@ export function captureDataUrl(label: string) {
 }
 
 export async function close() {
+  cachePolicies.clear();
+  cacheScene = null;
   await root?.unmount();
   await host?.close();
   frames.clear();
@@ -949,9 +986,6 @@ export interface SurfaceCachePolicy {
   max_refresh_hz: number;
 }
 
-/** Policies this fixture inserted, by generational entity identity. */
-const cachedSurfaces = new Map<bigint, string>();
-
 async function entityBySymbol(symbolicId: string) {
   const entity = (await client.inspect()).entities.find(
     (candidate) => candidate.metadata.symbolicId === symbolicId,
@@ -961,46 +995,19 @@ async function entityBySymbol(symbolicId: string) {
 }
 
 /**
- * Opt a Surface into whole-Surface caching, replace its policy, or with `null`
- * return it to direct presentation. React has no SurfaceCache declaration yet
- * (ipp-s1ge.1), so this writes the generated component through World batches.
+ * Opt a Surface of the current cache scenario into whole-Surface caching,
+ * replace its policy, or with `null` return it to direct presentation, by
+ * re-rendering the scene with its React SurfaceCache declaration.
  */
 export async function setSurfaceCache(
   symbolicId: string,
   policy: SurfaceCachePolicy | null,
 ) {
-  const entity = await entityBySymbol(symbolicId);
-  const reference = { kind: "handle", id: entity } as const;
-  const authored = policy ? JSON.stringify(policy) : undefined;
-  if (cachedSurfaces.get(entity) === authored) return String(entity);
-  const component = client.components.SurfaceCache;
-  if (!component) throw new Error("Target does not expose SurfaceCache");
-  successfulBatch(
-    await client.batch([
-      ...(cachedSurfaces.has(entity)
-        ? [
-            {
-              kind: "removeComponent" as const,
-              entity: reference,
-              component: component.id,
-            },
-          ]
-        : []),
-      ...(policy
-        ? [
-            {
-              kind: "insertComponent" as const,
-              entity: reference,
-              component: component.id,
-              fields: componentFields(client, "SurfaceCache", { ...policy }),
-            },
-          ]
-        : []),
-    ]),
-  );
-  if (authored) cachedSurfaces.set(entity, authored);
-  else cachedSurfaces.delete(entity);
-  return String(entity);
+  if (!cacheScene) throw new Error("No cache-aware scene is presented");
+  if (policy) cachePolicies.set(symbolicId, { ...policy });
+  else cachePolicies.delete(symbolicId);
+  await root.render(cacheScene());
+  return String(await entityBySymbol(symbolicId));
 }
 
 /** Generational identity of a named entity, as decimal text. */
@@ -1049,21 +1056,37 @@ export async function cacheTerminal(config: {
       ...items[2]!,
       asset: clientAssetSource(client.session, 17, 9000n),
     };
-  await root.render(
-    <Terminal assets={assets} items={items} angle={config.angle ?? 0} />,
-  );
+  await presentCached(() => (
+    <Terminal
+      assets={assets}
+      items={items}
+      angle={config.angle ?? 0}
+      cache={cachePolicies.get("surface-terminal")}
+    />
+  ));
 }
 
-/** Hover the centre of the presented GUI panel through production GUI input, or leave it. */
+/**
+ * Normalized viewport point over the `control` checkbox of an unrotated
+ * {@link guiPanel}: the 3.8 x 2.4 m panel spans 16..624 x 48..432 pixels of the
+ * 640 x 480 view at 160 px/m, and the checkbox follows the padding over panel
+ * metres x 0.3..0.8 and y 0.6..1.8.
+ */
+const CONTROL_POINT = [(16 + 0.55 * 160) / 640, (48 + 1.2 * 160) / 480];
+
+/**
+ * Hover the `control` checkbox of the presented GUI panel through production
+ * GUI input, or move the pointer off every panel.
+ */
 export async function hoverPanel(active: boolean) {
   const gui = client as unknown as {
     submitGuiInput(input: Record<string, unknown>): Promise<unknown>;
   };
-  return gui.submitGuiInput(
-    active
-      ? { kind: "pointerMove", pointer: 1, position: [0.5, 0.5] }
-      : { kind: "pointerCancel", pointer: 1 },
-  );
+  return gui.submitGuiInput({
+    kind: "pointerMove",
+    pointer: 1,
+    position: active ? CONTROL_POINT : [0.01, 0.01],
+  });
 }
 
 /** Bound resident cache image bytes on this graphics context. */

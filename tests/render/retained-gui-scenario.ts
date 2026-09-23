@@ -115,6 +115,8 @@ export async function exerciseRetainedGui(
     height: 480,
     ...cache,
   };
+  // Atlas pressure needs glyph bands at the 1280 x 960 screen density, so these
+  // steps present directly; a cached image rasterizes at its policy density.
   const atlas = {
     rows: 8,
     columns: 24,
@@ -122,7 +124,6 @@ export async function exerciseRetainedGui(
     cursor: true,
     width: 1280,
     height: 960,
-    ...cache,
   };
   const samples: {
     label: string;

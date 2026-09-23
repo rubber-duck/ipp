@@ -87,6 +87,13 @@ export const CACHE_TOLERANCE = {
   meanChannelDifference: 2,
 } as const;
 
+/**
+ * Pixels `[x0, y0, x1, y1]` where the translucent cursor (content x
+ * 0.3..2.1 m, y 0.85..1.35 m) overlaps the terminal text, inside the terminal
+ * at 80 px/m over pixels 8..312 x 24..216.
+ */
+const TRANSLUCENT_OVERLAP = [40, 96, 168, 128] as const;
+
 /** Band 2 halves the density; only resampled edges may differ, loosely. */
 export const REDUCED_TOLERANCE = { meanChannelDifference: 16 } as const;
 
@@ -160,6 +167,38 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     );
     return difference;
   };
+
+  const matchedRegion = (
+    expected: string,
+    actual: string,
+    [x0, y0, x1, y1]: readonly [number, number, number, number],
+  ) => {
+    const crop = (frame: RgbaFrame): RgbaFrame => {
+      const width = x1 - x0;
+      const pixels = new Uint8Array(width * (y1 - y0) * 4);
+      for (let y = y0; y < y1; y++)
+        pixels.set(
+          frame.pixels.subarray(
+            (y * frame.width + x0) * 4,
+            (y * frame.width + x1) * 4,
+          ),
+          (y - y0) * width * 4,
+        );
+      return { width, height: y1 - y0, pixels };
+    };
+    const difference = compareFrames(
+      crop(driver.pixels(expected)),
+      crop(driver.pixels(actual)),
+      CACHE_TOLERANCE.maxChannelDifference,
+    );
+    assert.ok(
+      difference.maxChannelDifference <= CACHE_TOLERANCE.maxChannelDifference &&
+        difference.meanChannelDifference <=
+          CACHE_TOLERANCE.meanChannelDifference,
+      `${actual} differs from direct ${expected} in ${JSON.stringify([x0, y0, x1, y1])}: ${JSON.stringify(difference)}`,
+    );
+    return difference;
+  };
   const comparisons: Record<string, FrameDifference> = {};
 
   // Device-level bridge oracle against the shipped WebGL bridge (ipp-s1ge.2.2).
@@ -181,9 +220,7 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     if (label !== "near") identical("direct-near", `direct-${label}`);
   }
 
-  // Opt in while near. Until core prepares the SurfaceCache policy
-  // (ipp-s1ge.1) opted-in Surfaces report no records; the caller reports that
-  // as a visible pending skip.
+  // Opt in while near: a record in the near band and unchanged direct pixels.
   await call("cameraDistance", [DISTANCE.near]);
   const terminal = await call<string>("setSurfaceCache", [
     "surface-terminal",
@@ -194,10 +231,7 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
   let near = await capture("cache-near");
   for (let attempt = 0; attempt < 4 && !record(near); attempt++)
     near = await capture("cache-near", true);
-  if (!record(near) && counter(near, "surfaceCacheDirect") === 0) {
-    identical("direct-near", "cache-near");
-    return { status: "inactive" as const, bridge, comparisons };
-  }
+  assert.ok(record(near), "the opted-in terminal reports a cache record");
   assert.equal(record(near)?.mode, "near");
   assert.equal(counter(near, "surfaceCacheDirect"), 1);
   assert.equal(counter(near, "surfaceCacheEntries"), 0);
@@ -334,6 +368,9 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     `resource arrival waited for the refresh interval: ${JSON.stringify(arrival.record)}`,
   );
   await direct("direct-arrival", DISTANCE.band1);
+  // GUI builds populate at most 32 new atlas glyphs per frame; the image drawn
+  // analytically on arrival is refined on the following frames until its text
+  // samples the atlas like direct presentation.
   comparisons.arrival = matched("direct-arrival", "cache-arrival");
 
   // Continuous edits at the ordinary cap: no starvation and no excess.
@@ -411,6 +448,13 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
   await until("cache-translucent", (current) => current.mode === "reused");
   await direct("direct-translucent", DISTANCE.band1);
   comparisons.translucent = matched("direct-translucent", "cache-translucent");
+  // The repaint follows presented frames, whose final pass leaves blending
+  // disabled: the half-opaque cursor over the text must still blend.
+  comparisons.translucentOverlap = matchedRegion(
+    "direct-translucent",
+    "cache-translucent",
+    TRANSLUCENT_OVERLAP,
+  );
   await call("cacheTerminal", [{ translucent: true, angle: Math.PI }]);
   await until("cache-rear", (current) => current.mode === "reused");
   await direct("direct-rear", DISTANCE.band1);
@@ -513,6 +557,25 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     status: "active" as const,
     bridge,
     comparisons,
+    records: {
+      band1: cold.record,
+      band2: band2.record,
+      coalesced: coalesced.record,
+      arrival: arrival.record,
+      fallback: fallback.record,
+      recovered: recovered.record,
+    },
+    counters: {
+      warm: Object.fromEntries(
+        SURFACE_CACHE_COUNTERS.map((key) => [key, counter(warm, key)]),
+      ),
+      recovered: Object.fromEntries(
+        SURFACE_CACHE_COUNTERS.map((key) => [
+          key,
+          counter(recovered.frame, key),
+        ]),
+      ),
+    },
     continuous: { repaints: continuous, elapsedMs: elapsed, cap },
     mirror,
     gui,
@@ -529,6 +592,7 @@ async function exerciseCachedGui(
   await call("guiPanel", [
     {
       variant: "mixed",
+      control: true,
       shape: { width: 1.6, height: 1.2, borderWidth: 0.06, cornerRadius: 0.12 },
     },
   ]);

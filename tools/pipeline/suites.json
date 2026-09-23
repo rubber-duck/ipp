@@ -307,7 +307,11 @@
       "crates/ipp-core/tests/animation.rs",
       "crates/ipp-core/tests/animation_transitions.rs",
       "crates/ipp-core/tests/animation_transition_lifecycle.rs",
-      "crates/ipp-core/tests/reversible_animation.rs"
+      "crates/ipp-core/tests/reversible_animation.rs",
+      "crates/ipp-core/src/world/mod.rs",
+      "crates/ipp-core/src/world/mutation.rs",
+      "crates/ipp-core/src/world/runtime.rs",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/integration/world-host.test.js",
@@ -351,7 +355,8 @@
     "description": "Camera/picking scenarios and completed WebGL frame assertions",
     "sourceRoots": [
       "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts"
+      "tests/render/gallery-driver.ts",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/integration/world-host.test.js",
@@ -391,7 +396,8 @@
     "sourceRoots": [
       "crates/ipp-wasm/src/services/",
       "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts"
+      "tests/render/gallery-driver.ts",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/render/render.test.js",
@@ -410,7 +416,8 @@
     "description": "Direct lights, smooth normals, spot shadows and context recovery",
     "sourceRoots": [
       "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts"
+      "tests/render/gallery-driver.ts",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/render/lighting.test.js"
@@ -457,7 +464,8 @@
     "description": "Interactive particle gallery controls, rendering and cleanup",
     "sourceRoots": [
       "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts"
+      "tests/render/gallery-driver.ts",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/render/gallery-particles.test.js"
@@ -472,7 +480,8 @@
       "tools/build/verify-browser.mjs",
       "tests/render/viewer-browser-helper.ts",
       "tests/render/gallery-driver.ts",
-      "tools/build_gallery_gui_assets.py"
+      "tools/build_gallery_gui_assets.py",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/render/gallery-gui.test.js"
@@ -484,7 +493,8 @@
       "examples/world-gallery/worlds/gui/",
       "tests/render/viewer-browser-helper.ts",
       "tests/render/gallery-driver.ts",
-      "tools/build_gallery_gui_assets.py"
+      "tools/build_gallery_gui_assets.py",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/render/gallery-gui-camera.test.js"
@@ -494,7 +504,8 @@
     "description": "Imported platformer locomotion, smooth turning with a forward gait, following camera, lighting and lifecycle cleanup",
     "sourceRoots": [
       "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts"
+      "tests/render/gallery-driver.ts",
+      "tests/render/gallery-server.ts"
     ],
     "files": [
       "dist/tests/render/gallery-platformer.test.js"
@@ -535,6 +546,11 @@
   },
   "command-streaming": {
     "description": "Bounded command storage, Host batch isolation and real native/worker streaming scenarios",
+    "sourceRoots": [
+      "crates/ipp-core/src/world/mod.rs",
+      "crates/ipp-core/src/world/mutation.rs",
+      "crates/ipp-core/src/world/runtime.rs"
+    ],
     "commands": [
       {
         "name": "host",
@@ -717,7 +733,10 @@
       "tests/integration/",
       "tests/browser/",
       "crates/ipp-core/src/world/systems/render/gui_presentation.rs",
-      "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs"
+      "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs",
+      "crates/ipp-core/src/world/mod.rs",
+      "crates/ipp-core/src/world/mutation.rs",
+      "crates/ipp-core/src/world/runtime.rs"
     ]
   },
   "retained-gui": {

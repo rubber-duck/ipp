@@ -352,6 +352,11 @@ class PlanningTests(unittest.TestCase):
             ),
             ("tests/render/viewer-browser-helper.ts", gallery),
             ("tests/render/gallery-driver.ts", gallery),
+            ("tests/render/gallery-server.ts", gallery),
+            (
+                "crates/ipp-core/src/world/mutation.rs",
+                suite_ids(["command-streaming", "animation", "gui"]),
+            ),
             ("tests/render/texture-fixture.tsx", suite_ids(["textures"])),
             (
                 "tools/build_gallery_gui_assets.py",

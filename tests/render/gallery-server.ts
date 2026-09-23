@@ -7,6 +7,7 @@ import {
 } from "node:http";
 import { createInterface } from "node:readline";
 import type { BrowserEnvironmentContext } from "../browser/environment.js";
+import { ownProcess } from "../integration/owned-processes.js";
 
 export interface GalleryResponseOverride {
   readonly status: number;
@@ -37,6 +38,7 @@ export async function startGalleryServer(
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  ownProcess(child);
   const exited = new Promise<void>((done) => {
     child.once("close", (code, signal) => {
       void environment.evidence.record("gallery_server_exit", { code, signal });

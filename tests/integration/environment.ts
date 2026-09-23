@@ -9,6 +9,7 @@ import { Transform } from "node:stream";
 import { finished } from "node:stream/promises";
 import type { HarnessDriver, HarnessDriverFactory } from "./driver.js";
 import { EvidenceRecorder } from "./evidence.js";
+import { ownProcess } from "./owned-processes.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 5_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 5_000;
@@ -150,6 +151,8 @@ class NativeServerEnvironment {
       windowsHide: true,
     });
     this.#child = child;
+    // stop() is the normal owner; this covers an interrupted test process.
+    ownProcess(child);
     child.once("exit", (code, exitSignal) => {
       this.#exit = { code, signal: exitSignal };
     });

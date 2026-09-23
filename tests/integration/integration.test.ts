@@ -1,8 +1,10 @@
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline";
 import test from "node:test";
 import type { NativeServerConfiguration } from "./environment.js";
 import { HarnessRunError, runNativeScenario } from "./environment.js";
@@ -262,6 +264,73 @@ test("harness preserves logs when the real host fails before readiness", {
   );
   assert.match(events, /"exit":\{"code":1,"signal":null\}/);
 });
+
+// A test process interrupted mid-scenario exits without reaching the
+// environment's cleanup; its exit hooks must still stop the real host.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  test(`harness stops the real host when its test process receives ${signal}`, {
+    timeout: 15_000,
+  }, async () => {
+    const environment = new URL("./environment.js", import.meta.url).href;
+    const owner = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { runNativeEnvironment } from ${JSON.stringify(environment)};
+          const configuration = JSON.parse(process.env.IPP_HARNESS_CONFIGURATION);
+          await runNativeEnvironment(
+            "interrupted host owner",
+            configuration,
+            new AbortController().signal,
+            async (context) => {
+              process.stdout.write(JSON.stringify({ url: context.url }) + "\\n");
+              await new Promise(() => setInterval(() => {}, 1000));
+            },
+          );
+        `,
+      ],
+      {
+        cwd: workspace,
+        env: {
+          ...process.env,
+          IPP_HARNESS_CONFIGURATION: JSON.stringify(configuration),
+        },
+        stdio: ["ignore", "pipe", "inherit"],
+      },
+    );
+    const exited = new Promise<NodeJS.Signals | null>((resolvePromise) =>
+      owner.once("exit", (_code, exitSignal) => resolvePromise(exitSignal)),
+    );
+    try {
+      const lines = createInterface({ input: owner.stdout });
+      let endpoint = "";
+      for await (const line of lines) {
+        endpoint = (JSON.parse(line) as { url: string }).url;
+        break;
+      }
+      assert.notEqual(endpoint, "", "owner exited before its host was ready");
+      owner.kill(signal);
+      // The default action still terminates the interrupted owner.
+      assert.equal(await exited, signal);
+      // SIGKILL delivery to the host is asynchronous; allow it to land.
+      const deadline = performance.now() + 2_000;
+      for (;;) {
+        try {
+          await assertListenerClosed(endpoint);
+          break;
+        } catch (error) {
+          if (performance.now() > deadline) throw error;
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+        }
+      }
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null)
+        owner.kill("SIGKILL");
+    }
+  });
+}
 
 async function assertListenerClosed(endpoint: string): Promise<void> {
   const url = new URL(endpoint);

@@ -296,6 +296,16 @@ function Span({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
   );
 }
 
+/** Gain track size and its contained thumb travel. The core sizes the slider
+ * thumb edge at 0.75 of the control height, and the thumb centre travels
+ * from half an edge in from each end; value v sits at
+ * `GAIN_THUMB_HALF + v * GAIN_TRAVEL`. */
+const GAIN_WIDTH = 5.1;
+const GAIN_HEIGHT = 0.36;
+const GAIN_THUMB_HALF = (0.75 * GAIN_HEIGHT) / 2;
+const GAIN_TRAVEL = GAIN_WIDTH - 2 * GAIN_THUMB_HALF;
+const GAIN_TICK_WIDTH = 0.012;
+
 function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
   const theme = useMemo<GuiControlTheme>(
     () => ({
@@ -315,8 +325,10 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
             cornerRadius: [0.04, 0.04] as const,
             gradient: {
               kind: "linear" as const,
+              // Stops are in the fill's local metres from its left edge;
+              // the fill reaches the value-1 thumb centre at full gain.
               start: [0, 0] as const,
-              end: [1, 0] as const,
+              end: [GAIN_WIDTH - GAIN_THUMB_HALF, 0] as const,
               color0: palette.secondary,
               color1: palette.primary,
             },
@@ -372,11 +384,11 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
             size={0.28}
             color={palette.primary}
           />
-          <Stack width={5.1} height={0.36}>
+          <Stack width={GAIN_WIDTH} height={GAIN_HEIGHT}>
             <Slider
               key="signal-gain"
-              width={5.1}
-              height={0.36}
+              width={GAIN_WIDTH}
+              height={GAIN_HEIGHT}
               value={0.64}
               min={0}
               max={1}
@@ -386,12 +398,17 @@ function Gain({ scene, palette }: { scene: GuiSceneState; palette: Palette }) {
               onScalarCommit={(event) => scene.setGain(event.value)}
             />
           </Stack>
-          <Stack width={5.1} height={0.1} enabled={false}>
+          {/* Tick i marks the thumb centre at gain i/24. */}
+          <Stack width={GAIN_WIDTH} height={0.1} enabled={false}>
             {Array.from({ length: 25 }, (_, index) => (
               <Shape
                 key={index}
-                x={0.03 + index * 0.21}
-                width={0.012}
+                x={
+                  GAIN_THUMB_HALF +
+                  (index / 24) * GAIN_TRAVEL -
+                  GAIN_TICK_WIDTH / 2
+                }
+                width={GAIN_TICK_WIDTH}
                 height={index % 4 === 0 ? 0.09 : 0.045}
                 material={{ color: palette.muted }}
               />
@@ -558,7 +575,7 @@ function PulseAndSkins({
           height={PULSE_HEIGHT}
           font={scene.font}
           glyph={GUI_ICONS.pulse}
-          size={0.45}
+          fontSize={0.56}
           color={palette.primary}
         />
       </Stack>
@@ -595,7 +612,7 @@ function PulseAndSkins({
               height={0.38}
               font={scene.font}
               glyph={GUI_ICONS[skin]}
-              size={0.17}
+              fontSize={0.22}
               color={palette.secondary}
             />
           </Stack>
@@ -712,8 +729,8 @@ export function ProjectorDashboard({
             height={0.57}
             alignX={-1}
             font={scene.font}
-            glyph={GUI_ICONS.cube}
-            size={0.36}
+            glyph={GUI_ICONS.dashboard}
+            fontSize={0.48}
             color={palette.secondary}
           />
           <Label
@@ -747,7 +764,7 @@ export function ProjectorDashboard({
             alignX={1}
             font={scene.font}
             glyph={GUI_ICONS.signal}
-            size={0.3}
+            fontSize={0.44}
             color={palette.primary}
           />
         </Row>

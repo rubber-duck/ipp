@@ -12,7 +12,7 @@ import type { ClientAssetSource } from "@ipp/client";
 type Color = readonly [number, number, number, number];
 
 export const GUI_ICONS = {
-  cube: "", // nf-fa-cube
+  dashboard: "", // nf-cod-dashboard
   signal: "", // nf-fa-signal
   pulse: "", // nf-cod-pulse
   aurora: "", // nf-fa-snowflake_o
@@ -52,24 +52,29 @@ export function Shape({
   );
 }
 
+/**
+ * A glyph measured at its intrinsic line box: its advance wide and one line
+ * tall. The Nerd Font centres each icon's ink in that box, so an enclosing
+ * Align centres the ink itself. Choose `fontSize` by ink width: every icon
+ * advance is 0.54 em, and the 1.127 em line must fit the cell height, or
+ * Align clamps the box and pins it to the top.
+ */
 export function Icon({
   font,
   glyph,
-  size,
+  fontSize,
   color,
 }: {
   font: ClientAssetSource;
   glyph: string;
-  size: number;
+  fontSize: number;
   color: Color;
 }) {
   return (
     <Text
       text={glyph}
       asset={font}
-      width={size}
-      height={size}
-      fontSize={size}
+      fontSize={fontSize}
       color={color}
       enabled={false}
     />
@@ -79,7 +84,7 @@ export function Icon({
 /**
  * A glyph in a fixed, non-interactive cell. The Padding cell carries no align
  * lanes, so its parent Stack, Row or Column places it at the start; the Align
- * filling the cell positions the glyph, centred by default.
+ * filling the cell positions the glyph's intrinsic box, centred by default.
  */
 export function IconCell({
   width,
@@ -92,7 +97,7 @@ export function IconCell({
   alignX?: number;
   font: ClientAssetSource;
   glyph: string;
-  size: number;
+  fontSize: number;
   color: Color;
 }) {
   return (

@@ -446,6 +446,7 @@ export abstract class ClientBase implements Client {
       loseContext: () => host.loseContext(),
       restoreContext: () => host.restoreContext(),
       setGlyphAtlasLimits: (limits) => host.setGlyphAtlasLimits(limits),
+      setSurfaceCacheBudget: (bytes) => host.setSurfaceCacheBudget(bytes),
     };
   }
 

@@ -168,13 +168,21 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
                 node(),
                 "dist/tests/performance/retained-gui.js",
                 str(args.frames),
-                args.output or "target/performance/retained-gui",
+                args.output
+                or (
+                    "target/performance/retained-gui-surface-cache"
+                    if args.surface_cache
+                    else "target/performance/retained-gui"
+                ),
+                *(["--surface-cache"] if args.surface_cache else []),
             ),
             () if args.reuse_build else dependencies,
             ("node", "npm", "browser"),
             timeout=7200,
         )
         return ["benchmark:retained-gui"]
+    if getattr(args, "surface_cache", False):
+        raise ValueError("--surface-cache applies to --scene retained-gui")
     args.preset = args.preset or "smoke"
     args.group = 64 if args.group is None else args.group
     if args.frames < 1 or args.group < 1:

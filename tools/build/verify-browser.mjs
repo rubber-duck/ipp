@@ -12,6 +12,22 @@ import { artifact, bundleBrowser } from "./helpers.mjs";
 import { instantiate } from "./wasm.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
+/**
+ * Whether RenderService calls the whole-Surface cache device methods, so the
+ * final runtime imports the cache bridge and embeds surface_cache.frag. Set
+ * when the ipp-s1ge.2.3 service cache is integrated.
+ */
+const SURFACE_CACHE_LINKED = false;
+/** WebGL bridge imports of whole-Surface cache targets. */
+const SURFACE_CACHE_BRIDGE_IMPORTS = [
+  "surface_cache_limit",
+  "create_surface_cache_target",
+  "resize_surface_cache_target",
+  "begin_surface_cache_target",
+  "end_surface_cache_target",
+  "draw_surface_cache",
+  "delete_surface_cache_target",
+];
 const request = JSON.parse(await readFile(process.argv[2], "utf8"));
 const { configuration, features, builtins, directory } = request;
 const reports = [];
@@ -134,13 +150,7 @@ const reports = [];
       "Surface bridge dispatch differs from selected capability",
     );
     for (const name of [
-      "surface_cache_limit",
-      "create_surface_cache_target",
-      "resize_surface_cache_target",
-      "begin_surface_cache_target",
-      "end_surface_cache_target",
-      "draw_surface_cache",
-      "delete_surface_cache_target",
+      ...SURFACE_CACHE_BRIDGE_IMPORTS,
       "surfaceCacheTargetsLive",
     ])
       assert.equal(
@@ -341,9 +351,6 @@ const reports = [];
       rendering && gui,
       `retained GUI export ${name} differs from selected capability`,
     );
-  // The cache imports and the surface_cache.frag marker join these checks once
-  // RenderService composites cached Surfaces (ipp-s1ge.2.3); until then the
-  // linker drops the unreferenced imports and shader.
   for (const name of [
     "ipp_render_surface_cache_repaints",
     "ipp_render_surface_cache_reuses",
@@ -354,12 +361,28 @@ const reports = [];
     "ipp_render_surface_cache_resident_bytes",
     "ipp_render_surface_cache_records_ptr",
     "ipp_render_surface_cache_records_len",
+    "ipp_render_set_surface_cache_budget",
   ])
     assert.equal(
       typeof runtime[name] === "function",
       rendering && surfaces,
       `Surface cache export ${name} differs from selected capability`,
     );
+  // The linker keeps the cache bridge imports and the composite shader only
+  // once RenderService repaints and composites cached Surfaces (ipp-s1ge.2.3).
+  if (SURFACE_CACHE_LINKED) {
+    for (const name of SURFACE_CACHE_BRIDGE_IMPORTS)
+      assert.equal(
+        glImports.some((entry) => entry.name === name),
+        rendering && surfaces,
+        `Surface cache import ${name} differs from selected capability`,
+      );
+    assert.equal(
+      runtimeBytes.includes(Buffer.from("u_surface_cache")),
+      rendering && surfaces,
+      "surface_cache.frag inclusion differs from selected capability",
+    );
+  }
   assert.equal(
     glImports.some((entry) => entry.name === "set_skin_palette"),
     rendering && skeletalAnimation,

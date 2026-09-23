@@ -177,6 +177,11 @@ def parser() -> argparse.ArgumentParser:
         "compare-culling",
     ):
         benchmarking.add_argument(f"--{flag}", action="store_true")
+    benchmarking.add_argument(
+        "--surface-cache",
+        action="store_true",
+        help="opt the retained-gui terminal panels into whole-Surface caching",
+    )
     measuring = commands.add_parser(
         "measure", help="record explicit artifact sizes and hashes"
     )

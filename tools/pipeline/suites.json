@@ -765,6 +765,29 @@
       "dist/tests/render/retained-gui.test.js"
     ]
   },
+  "surface-cache": {
+    "description": "Whole-Surface cache targets through the shipped WebGL bridge, and cached versus direct presentation, work counters and lifecycle through worker/WASM/WebGL",
+    "sourceRoots": [
+      "crates/ipp-render-gl/src/services/render/",
+      "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-core/src/world/systems/render/",
+      "packages/ipp-client/src/",
+      "tests/browser/",
+      "examples/surface-terminal/",
+      "crates/ipp-wasm/src/services/render.rs",
+      "packages/ipp-client/tools/assemble.mjs",
+      "tools/build/verify-browser.mjs",
+      "tests/render/retained-gui-images.ts",
+      "tests/render/retained-gui-scenario.ts",
+      "tests/render/surface-cache-bridge.ts",
+      "tests/render/surface-cache-environment.ts",
+      "tests/render/surface-cache-scenario.ts",
+      "tests/render/surface-fixture.tsx"
+    ],
+    "files": [
+      "dist/tests/render/surface-cache.test.js"
+    ]
+  },
   "render-residency": {
     "description": "Renderer residency, upload failures, glyph atlas population and recovery through failure-injecting GL devices",
     "sourceRoots": [

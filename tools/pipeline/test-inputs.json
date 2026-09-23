@@ -857,5 +857,18 @@
       "npm",
       "browser"
     ]
+  },
+  "dist/tests/render/surface-cache.test.js": {
+    "builds": [
+      "typescript",
+      "surface-fixtures",
+      "browser:render-surfaces",
+      "browser:headless-gui"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
   }
 }

@@ -74,6 +74,11 @@ export interface ClientPresentation {
   restoreContext(): void;
   /** Requires a GUI render build; others fail the presentation. */
   setGlyphAtlasLimits(limits: GlyphAtlasLimits): void;
+  /**
+   * Bound resident whole-Surface cache image bytes on this graphics context;
+   * zero disables caching. Requires a render build with Surfaces.
+   */
+  setSurfaceCacheBudget(bytes: number): void;
 }
 
 export interface Presentation {
@@ -86,6 +91,7 @@ export interface Presentation {
   loseContext(): void;
   restoreContext(): void;
   setGlyphAtlasLimits(limits: GlyphAtlasLimits): void;
+  setSurfaceCacheBudget(bytes: number): void;
 }
 
 export const MAX_CAPTURE_DIMENSION = 2_048;
@@ -117,6 +123,13 @@ export function validateGlyphAtlasLimits(limits: GlyphAtlasLimits): void {
       "Glyph atlas limits must be integers: maxPages in 1..=2^32-1 and idlePagePublications in 0..=2^32-1",
     );
   }
+}
+
+export function validateSurfaceCacheBudget(bytes: number): void {
+  if (!Number.isInteger(bytes) || bytes < 0 || bytes > 0xffff_ffff)
+    throw new RangeError(
+      "Surface cache budget must be an integer in 0..=2^32-1",
+    );
 }
 
 interface CaptureWaiter {
@@ -191,6 +204,11 @@ export class PortPresentation implements Presentation {
       maxPages: limits.maxPages,
       idlePagePublications: limits.idlePagePublications,
     });
+  }
+
+  setSurfaceCacheBudget(bytes: number): void {
+    validateSurfaceCacheBudget(bytes);
+    this.send({ type: "surface-cache-budget", bytes });
   }
 
   receive(data: Record<string, unknown>): boolean {

@@ -195,7 +195,11 @@ impl GuiControls {
         &self,
         nodes: &GuiNodes,
     ) -> Result<(), FieldError> {
+        let mut with_records = 0;
         for node in nodes.as_slice() {
+            if self.values.contains_key(&node.id) {
+                with_records += 1;
+            }
             match self.values.get(&node.id) {
                 Some(entry) => {
                     let text_input = matches!(node.data, GuiNodeData::TextInput { .. });
@@ -212,7 +216,9 @@ impl GuiControls {
                 None => {}
             }
         }
-        if self.values.keys().all(|id| nodes.node(*id).is_some()) {
+        // Node identities are unique, so records beyond the matched ones
+        // belong to absent nodes.
+        if with_records == self.values.len() {
             Ok(())
         } else {
             Err(FieldError::WrongType)

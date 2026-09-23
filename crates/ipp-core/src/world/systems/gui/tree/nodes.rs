@@ -373,15 +373,31 @@ impl GuiNodes {
         }
 
         let root_id = self.root_node.ok_or(FieldError::WrongType)?;
-        let mut ids = std::collections::BTreeSet::new();
+        // One sorted identity index keeps the reciprocal-link checks
+        // O(n log n) without per-node allocation.
+        let mut index: Vec<(GuiNodeId, usize)> = self
+            .values
+            .iter()
+            .enumerate()
+            .map(|(position, node)| (node.id, position))
+            .collect();
+        index.sort_unstable_by_key(|&(id, _)| id);
+        if index.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(FieldError::WrongType);
+        }
+        let position = |id: GuiNodeId| {
+            index
+                .binary_search_by_key(&id, |&(id, _)| id)
+                .map(|found| index[found].1)
+                .ok()
+        };
         for node in &self.values {
-            if node.id.0 == 0 || node.id.0 >= self.next_id || !ids.insert(node.id) {
+            if node.id.0 == 0 || node.id.0 >= self.next_id {
                 return Err(FieldError::WrongType);
             }
             validate_node_data(&node.data)?;
         }
-
-        if !ids.contains(&root_id) {
+        if position(root_id).is_none() {
             return Err(FieldError::WrongType);
         }
 
@@ -394,46 +410,38 @@ impl GuiNodes {
                 let Some(parent_id) = node.parent else {
                     return Err(FieldError::WrongType);
                 };
-                if parent_id == node.id || !ids.contains(&parent_id) {
+                let parent = position(parent_id).ok_or(FieldError::WrongType)?;
+                if parent_id == node.id || !self.values[parent].children.contains(&node.id) {
                     return Err(FieldError::WrongType);
                 }
             }
 
-            let mut child_set = std::collections::BTreeSet::new();
             for &child_id in &node.children {
-                if !child_set.insert(child_id) || child_id == node.id || !ids.contains(&child_id) {
-                    return Err(FieldError::WrongType);
-                }
-                let child_node = self.node(child_id).ok_or(FieldError::WrongType)?;
-                if child_node.parent != Some(node.id) {
-                    return Err(FieldError::WrongType);
-                }
-            }
-
-            if let Some(parent_id) = node.parent {
-                let parent_node = self.node(parent_id).ok_or(FieldError::WrongType)?;
-                if !parent_node.children.contains(&node.id) {
+                let child = position(child_id).ok_or(FieldError::WrongType)?;
+                if child_id == node.id || self.values[child].parent != Some(node.id) {
                     return Err(FieldError::WrongType);
                 }
             }
         }
 
-        // Cycle and reachability check: BFS from root_id must reach every node exactly once
-        let mut visited = std::collections::BTreeSet::new();
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(root_id);
-        visited.insert(root_id);
-        while let Some(curr) = queue.pop_front() {
-            let curr_node = self.node(curr).ok_or(FieldError::WrongType)?;
-            for &child in &curr_node.children {
-                if !visited.insert(child) {
+        // Cycle and reachability check: a walk from the root must reach every
+        // node exactly once, which also rejects duplicate children.
+        let mut visited = vec![false; self.values.len()];
+        let mut reached = 1;
+        let mut stack = vec![position(root_id).ok_or(FieldError::WrongType)?];
+        visited[stack[0]] = true;
+        while let Some(current) = stack.pop() {
+            for &child in &self.values[current].children {
+                let child = position(child).ok_or(FieldError::WrongType)?;
+                if std::mem::replace(&mut visited[child], true) {
                     return Err(FieldError::WrongType);
                 }
-                queue.push_back(child);
+                reached += 1;
+                stack.push(child);
             }
         }
 
-        if visited.len() != self.values.len() {
+        if reached != self.values.len() {
             return Err(FieldError::WrongType);
         }
 

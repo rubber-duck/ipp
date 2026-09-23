@@ -247,9 +247,7 @@ impl RenderDevice for TestDevice {
     #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
-        _: &[f32; 4],
-        _: &[[f32; 8]],
-        _: &[[u32; 2]],
+        _: &ipp_render_gl::SurfacePathTexels,
     ) -> Result<(), RenderError> {
         self.0
             .surface_path_attempts

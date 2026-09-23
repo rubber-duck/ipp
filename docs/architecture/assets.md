@@ -44,7 +44,7 @@ Authored/generated immutable [bounding and picking definitions](rendering.md#bou
 
 ## Surface resources
 
-The optional Surface capability consumes immutable font and drawing assets with shared quadratic contour data. Fonts preserve glyph identities and headless layout metrics; drawings preserve ordered painted paths and fill rules. Conversion owns source-format interpretation and approximation, while the renderer owns acceleration structures, curve textures and device-specific packing. Bitmap resources preserve colour and coverage alpha independently, with explicit colour conversion under the rendering contract.
+The optional Surface capability consumes immutable font and drawing assets with shared quadratic contour data. Fonts preserve glyph identities and headless layout metrics; drawings preserve ordered painted paths and fill rules. Conversion owns source-format interpretation and approximation, while the renderer owns acceleration structures, curve textures and device-specific packing. Curve textures keep contour coordinates exact, using the narrowest [fixed-point texel format](../../crates/ipp-render-gl/src/services/render/surface_path.rs) that represents them. Bitmap resources preserve colour and coverage alpha independently, with explicit colour conversion under the rendering contract.
 
 [GUI text and skins](gui.md#text-and-skins) consume these same resources and ordinary animation clips. GUI adds no separate loading or asset-identity system; font measurement remains headless, and skin values stay independent of immutable resource content.
 

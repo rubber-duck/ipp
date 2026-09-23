@@ -127,11 +127,9 @@ impl RenderDevice for GlesRenderDevice {
     #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
-        bounds: &[f32; 4],
-        segments: &[[f32; 8]],
-        bands: &[[u32; 2]],
+        texels: &crate::SurfacePathTexels,
     ) -> Result<Self::SurfacePath, RenderError> {
-        self.create_surface_path(bounds, segments, bands)
+        self.create_surface_path(texels)
     }
 
     #[cfg(feature = "surfaces")]

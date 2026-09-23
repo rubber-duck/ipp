@@ -56,6 +56,10 @@ pub use device::{PlatformRenderDevice, RenderDevice};
 pub use glyph_atlas::{GlyphAtlasLimits, GlyphVertex};
 #[cfg(feature = "gui")]
 pub use gui_batch::GuiBoxVertex;
+#[cfg(feature = "surfaces")]
+pub use surface_path::{
+    SurfaceBandTexels, SurfaceCurveTexels, SurfacePathAtlas, SurfacePathTexels, pack_surface_paths,
+};
 
 #[cfg(target_arch = "wasm32")]
 pub use device::WebGlRenderDevice;

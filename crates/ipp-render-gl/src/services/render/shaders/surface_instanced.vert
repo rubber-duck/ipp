@@ -11,6 +11,7 @@ out vec2 v_surface_position;
 out vec4 v_color;
 flat out vec4 v_bounds;
 flat out int v_band_offset;
+flat out int v_curve_start;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(1 - ((gl_VertexID >> 1) & 1)));
     vec2 path = mix(i_bounds.xy, i_bounds.zw, corner);
@@ -31,5 +32,6 @@ void main() {
     v_color = i_color;
     v_bounds = i_bounds;
     v_band_offset = int(i_descriptor.z);
+    v_curve_start = int(i_descriptor.x);
     gl_Position = u_mvp * vec4(surface, 0.0, 1.0);
 }

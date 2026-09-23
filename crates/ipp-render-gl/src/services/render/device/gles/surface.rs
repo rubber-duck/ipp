@@ -6,8 +6,29 @@ use super::super::retained_vertices::{
 use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
 use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
 use crate::RenderError;
-#[cfg(feature = "gui")]
-use std::ptr;
+use crate::services::render::surface_path::{
+    BAND_HEADER_TEXELS, SurfaceBandTexels, SurfaceCurveTexels, SurfacePathTexels,
+};
+use std::{ffi::c_void, ptr};
+
+/// Texture format and borrowed data of one packed path texel upload.
+struct TexelUpload {
+    pointer: *const c_void,
+    texel_bytes: usize,
+    internal_format: i32,
+    format: u32,
+    kind: u32,
+}
+
+/// Width and rows for `texels` texels in a texture no larger than `limit` on
+/// either side, balancing rows so padding stays below one texel per row.
+fn texel_rows(texels: usize, limit: usize) -> Option<(usize, usize)> {
+    if texels == 0 || limit == 0 {
+        return None;
+    }
+    let rows = texels.div_ceil(limit);
+    (rows <= limit).then(|| (texels.div_ceil(rows), rows))
+}
 
 impl GlesRenderDevice {
     pub(super) fn surface_location(
@@ -50,46 +71,64 @@ impl GlesRenderDevice {
 
     pub(super) fn create_surface_path(
         &mut self,
-        _bounds: &[f32; 4],
-        segments: &[[f32; 8]],
-        bands: &[[u32; 2]],
+        texels: &SurfacePathTexels,
     ) -> Result<GlesSurfacePath, RenderError> {
-        if segments.is_empty() {
+        let limit = self.max_texture_size as usize;
+        let curve_count = texels.curves.len();
+        let band_count = texels.bands.len();
+        let (Some((width, height)), Some((band_width, band_height))) = (
+            texel_rows(curve_count, limit),
+            texel_rows(band_count, limit),
+        ) else {
             return Err(RenderError::RenderDevice(
                 "surface path exceeds device limits".into(),
             ));
-        }
-        let texels = segments.len().saturating_mul(2);
-        let width = texels.min(self.max_texture_size as usize & !1).max(2);
-        let height = texels.div_ceil(width);
-        if height > self.max_texture_size as usize {
-            return Err(RenderError::RenderDevice(
-                "surface path exceeds device limits".into(),
-            ));
-        }
-        let mut upload = vec![0.0f32; width * height * 4];
-        upload[..segments.len() * 8].copy_from_slice(segments.as_flattened());
-        let band_texels = bands.len();
-        let band_width = band_texels.min(self.max_texture_size as usize).max(1);
-        let band_height = band_texels.div_ceil(band_width);
-        if bands.is_empty() || band_height > self.max_texture_size as usize {
-            return Err(RenderError::RenderDevice(
-                "surface bands exceed device limits".into(),
-            ));
-        }
-        let mut band_upload = vec![[0u32; 2]; band_width * band_height];
-        band_upload[..bands.len()].copy_from_slice(bands);
+        };
         let mut path = GlesSurfacePath {
             texture: 0,
             band_texture: 0,
             vao: 0,
-            segment_count: segments.len() as i32,
+            curve_texels: curve_count as u32,
+            curve_scale: texels.curve_scale,
             texture_width: width as i32,
-            band_count: bands.len() as u32,
+            band_count: band_count as u32,
             band_width: band_width as i32,
         };
-        // SAFETY: GL writes exclusive names and synchronously copies the packed
-        // immutable f32 slice. No CPU pointer survives texture upload.
+        let curves = match &texels.curves {
+            SurfaceCurveTexels::Int16(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 8,
+                internal_format: 0x8D88, // RGBA16I
+                format: 0x8D99,          // RGBA_INTEGER
+                kind: 0x1402,            // SHORT
+            },
+            SurfaceCurveTexels::Int32(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 16,
+                internal_format: 0x8D82, // RGBA32I
+                format: 0x8D99,          // RGBA_INTEGER
+                kind: 0x1404,            // INT
+            },
+        };
+        let bands = match &texels.bands {
+            SurfaceBandTexels::Uint16(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 2,
+                internal_format: 0x8234, // R16UI
+                format: 0x8D94,          // RED_INTEGER
+                kind: 0x1403,            // UNSIGNED_SHORT
+            },
+            SurfaceBandTexels::Uint32(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 4,
+                internal_format: 0x8236, // R32UI
+                format: 0x8D94,          // RED_INTEGER
+                kind: 0x1405,            // UNSIGNED_INT
+            },
+        };
+
+        // SAFETY: GL writes exclusive names and synchronously copies from the
+        // borrowed texel slices, which outlive the calls. No CPU pointer survives.
         unsafe {
             (self.gl.gen_textures)(1, &mut path.texture);
             (self.gl.gen_textures)(1, &mut path.band_texture);
@@ -101,40 +140,12 @@ impl GlesRenderDevice {
                 ));
             }
             (self.gl.active_texture)(0x84C0);
-            (self.gl.bind_texture)(0x0DE1, path.texture);
             (self.gl.bind_buffer)(0x88EC, 0);
             (self.gl.pixel_store)(0x0CF5, 1);
-            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F);
-            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F);
-            (self.gl.tex_image)(
-                0x0DE1,
-                0,
-                0x8814,
-                width as i32,
-                height as i32,
-                0,
-                0x1908,
-                0x1406,
-                upload.as_ptr().cast(),
-            );
+            (self.gl.bind_texture)(0x0DE1, path.texture);
+            self.upload_path_texels(&curves, curve_count, width, height);
             (self.gl.bind_texture)(0x0DE1, path.band_texture);
-            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2600);
-            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F);
-            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F);
-            (self.gl.tex_image)(
-                0x0DE1,
-                0,
-                0x823C,
-                band_width as i32,
-                band_height as i32,
-                0,
-                0x8228,
-                0x1405,
-                band_upload.as_ptr().cast(),
-            );
+            self.upload_path_texels(&bands, band_count, band_width, band_height);
             (self.gl.bind_texture)(0x0DE1, 0);
         }
         if let Err(error) = self.check() {
@@ -142,6 +153,75 @@ impl GlesRenderDevice {
             return Err(error);
         }
         Ok(path)
+    }
+
+    /// Allocate the bound texture as `width` x `height` nearest-sampled texels and
+    /// copy `count` tightly packed texels into it in row order, leaving the unused
+    /// end of the last row undefined.
+    ///
+    /// # Safety
+    ///
+    /// The device context is current with the destination bound to `TEXTURE_2D`,
+    /// no pixel unpack buffer bound, an unpack alignment of one, and `upload`
+    /// pointing at `count` live texels.
+    unsafe fn upload_path_texels(
+        &self,
+        upload: &TexelUpload,
+        count: usize,
+        width: usize,
+        height: usize,
+    ) {
+        let full_rows = count / width;
+        let remainder = count % width;
+
+        // SAFETY: Upheld by the caller; each copy reads inside the `count` texels.
+        unsafe {
+            (self.gl.tex_parameter)(0x0DE1, 0x2801, 0x2600);
+            (self.gl.tex_parameter)(0x0DE1, 0x2800, 0x2600);
+            (self.gl.tex_parameter)(0x0DE1, 0x2802, 0x812F);
+            (self.gl.tex_parameter)(0x0DE1, 0x2803, 0x812F);
+            (self.gl.tex_image)(
+                0x0DE1,
+                0,
+                upload.internal_format,
+                width as i32,
+                height as i32,
+                0,
+                upload.format,
+                upload.kind,
+                ptr::null(),
+            );
+            if full_rows > 0 {
+                (self.gl.tex_sub_image)(
+                    0x0DE1,
+                    0,
+                    0,
+                    0,
+                    width as i32,
+                    full_rows as i32,
+                    upload.format,
+                    upload.kind,
+                    upload.pointer,
+                );
+            }
+            if remainder > 0 {
+                (self.gl.tex_sub_image)(
+                    0x0DE1,
+                    0,
+                    0,
+                    full_rows as i32,
+                    remainder as i32,
+                    1,
+                    upload.format,
+                    upload.kind,
+                    upload
+                        .pointer
+                        .cast::<u8>()
+                        .add(full_rows * width * upload.texel_bytes)
+                        .cast(),
+                );
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -159,8 +239,8 @@ impl GlesRenderDevice {
     ) -> Result<(), RenderError> {
         if descriptor.curve_range[1] == 0
             || descriptor.curve_range[0].saturating_add(descriptor.curve_range[1])
-                > path.segment_count as u32
-            || descriptor.band_offset.saturating_add(32) > path.band_count
+                > path.curve_texels
+            || descriptor.band_offset.saturating_add(BAND_HEADER_TEXELS) > path.band_count
         {
             return Err(RenderError::RenderDevice(
                 "invalid surface curve range".into(),
@@ -175,11 +255,7 @@ impl GlesRenderDevice {
         self.program_vec4(program, location(c"u_clip"), clip);
         self.program_vec4(program, location(c"u_color"), color);
         self.program_int(program, location(c"u_curves"), 0);
-        self.program_int(
-            program,
-            location(c"u_curve_count"),
-            descriptor.curve_range[1] as i32,
-        );
+        self.program_float(program, location(c"u_curve_scale"), path.curve_scale);
         self.program_int(program, location(c"u_fill_rule"), fill_rule as i32);
         self.program_int(
             program,
@@ -265,8 +341,12 @@ impl GlesRenderDevice {
             instance.descriptor.curve_range[1] == 0
                 || instance.descriptor.curve_range[0]
                     .saturating_add(instance.descriptor.curve_range[1])
-                    > path.segment_count as u32
-                || instance.descriptor.band_offset.saturating_add(32) > path.band_count
+                    > path.curve_texels
+                || instance
+                    .descriptor
+                    .band_offset
+                    .saturating_add(BAND_HEADER_TEXELS)
+                    > path.band_count
         }) {
             return Err(RenderError::RenderDevice(
                 "invalid surface instance range".into(),
@@ -406,6 +486,7 @@ impl GlesRenderDevice {
         self.program_mat4(program, program.mvp, mvp);
         self.program_vec4(program, location(c"u_clip"), clip);
         self.program_int(program, location(c"u_curves"), 0);
+        self.program_float(program, location(c"u_curve_scale"), path.curve_scale);
         self.program_int(program, location(c"u_curve_width"), path.texture_width);
         self.program_int(program, location(c"u_bands"), 1);
         self.program_int(program, location(c"u_band_width"), path.band_width);

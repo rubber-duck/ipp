@@ -145,11 +145,13 @@ unsafe extern "C" {
 
     #[cfg(feature = "surfaces")]
     fn create_surface_path(
-        bounds: *const f32,
-        segments: *const f32,
-        count: usize,
-        bands: *const u32,
+        curves: *const u8,
+        curve_count: usize,
+        curve_bits: u32,
+        curve_scale: f32,
+        bands: *const u8,
         band_count: usize,
+        band_bits: u32,
     ) -> u32;
 
     #[cfg(feature = "surfaces")]
@@ -558,19 +560,31 @@ impl RenderDevice for WebGlRenderDevice {
     #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
-        bounds: &[f32; 4],
-        segments: &[[f32; 8]],
-        bands: &[[u32; 2]],
+        texels: &crate::SurfacePathTexels,
     ) -> Result<u32, RenderError> {
-        // SAFETY: The bridge synchronously copies the fixed bounds and complete
-        // packed segment slice and retains no WASM memory views.
+        use crate::{SurfaceBandTexels, SurfaceCurveTexels};
+
+        let (curves, curve_bits): (*const u8, u32) = match &texels.curves {
+            SurfaceCurveTexels::Int16(values) => (values.as_ptr().cast(), 16),
+            SurfaceCurveTexels::Int32(values) => (values.as_ptr().cast(), 32),
+        };
+        let (bands, band_bits): (*const u8, u32) = match &texels.bands {
+            SurfaceBandTexels::Uint16(values) => (values.as_ptr().cast(), 16),
+            SurfaceBandTexels::Uint32(values) => (values.as_ptr().cast(), 32),
+        };
+
+        // SAFETY: The bridge synchronously copies both complete borrowed texel
+        // slices, whose lengths and widths are passed with them, and retains no
+        // WASM memory views.
         let path = unsafe {
             create_surface_path(
-                bounds.as_ptr(),
-                segments.as_ptr().cast(),
-                segments.len(),
-                bands.as_ptr().cast(),
-                bands.len(),
+                curves,
+                texels.curves.len(),
+                curve_bits,
+                texels.curve_scale,
+                bands,
+                texels.bands.len(),
+                band_bits,
             )
         };
         self.check(path)?;

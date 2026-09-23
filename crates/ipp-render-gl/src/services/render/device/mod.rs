@@ -9,9 +9,9 @@ use crate::RenderError;
 #[cfg(feature = "surfaces")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfacePathDescriptor {
-    /// First curve and curve count in the shared atlas.
+    /// First curve texel and texel count, including contour terminators, in the shared atlas.
     pub curve_range: [u32; 2],
-    /// First of 32 horizontal/vertical band headers.
+    /// First of the path's band header texels.
     pub band_offset: u32,
 }
 
@@ -299,14 +299,11 @@ pub trait RenderDevice: 'static {
         ))
     }
 
-    /// Upload renderer-packed quadratic path data. Each segment is
-    /// `[start.x,start.y,control.x,control.y]`, `[end.x,end.y,kind,0]`.
+    /// Upload the textures of a packed path atlas; see [`crate::pack_surface_paths`].
     #[cfg(feature = "surfaces")]
     fn create_surface_path(
         &mut self,
-        _bounds: &[f32; 4],
-        _segments: &[[f32; 8]],
-        _bands: &[[u32; 2]],
+        _texels: &super::surface_path::SurfacePathTexels,
     ) -> Result<Self::SurfacePath, RenderError> {
         Err(RenderError::RenderDevice(
             "surface paths unavailable".into(),

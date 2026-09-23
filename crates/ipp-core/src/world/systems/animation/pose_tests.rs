@@ -72,14 +72,14 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                     0,
                     ComponentValue::Skeleton(crate::components::Skeleton {
                         runtime: crate::systems::skeleton::SkeletonRuntimeState {
-                            pose: Some(crate::systems::skeleton::SkeletonPoseState {
+                            pose: Some(Box::new(crate::systems::skeleton::SkeletonPoseState {
                                 source,
                                 valid: true,
                                 local: vec![joint(6.0), joint(7.0), joint(8.0)].into_boxed_slice(),
                                 global: vec![[0.0; 16]; 3].into_boxed_slice(),
                                 evaluation: vec![Transform::default(); 3].into_boxed_slice(),
                                 sampled: vec![false; 3].into_boxed_slice(),
-                            }),
+                            })),
                         },
                         ..Default::default()
                     }),

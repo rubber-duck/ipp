@@ -361,10 +361,7 @@ impl<'a> AnimationReadAccess<'a> {
                     return false;
                 }
             }
-            return skeleton.joints.as_chunks::<44>().0.iter().all(|bytes| {
-                (crate::services::asset_management::skeleton::u32_at(bytes, 0) as usize)
-                    < asset.joints().len()
-            });
+            return skeleton.joint_overrides_fit(asset.joints().len());
         }
         true
     }
@@ -631,16 +628,11 @@ impl<'a> AnimationReadAccess<'a> {
                         .ok_or(ErrorReason::InvalidField)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                for (joint, transform) in
-                    crate::services::asset_management::skeleton::overrides(&skeleton.joints)?
-                {
-                    if joint >= asset.joints().len() {
-                        return Err(ErrorReason::InvalidValue);
-                    }
-                    if let Ok(index) = joints.binary_search(&(joint as u32)) {
-                        selected[index] = transform;
-                    }
-                }
+                skeleton.apply_selected_joint_overrides(
+                    asset.joints().len(),
+                    joints,
+                    &mut selected,
+                )?;
                 Ok(AnimationValue::Pose(selected))
             }
         }

@@ -592,13 +592,11 @@ export async function poseAndSkin(enabled: boolean) {
           client,
           "Skeleton",
           { kind: "alias", alias: 1 },
-          {
-            source: skeletonSource,
-            joints: contract.encodeJointOverrides([
-              { joint: 0, rotation: [0, 0, Math.sin(0.2), Math.cos(0.2)] },
-            ]),
-          },
+          { source: skeletonSource },
         ),
+        ...contract.Skeleton.patchJoints({ kind: "alias", alias: 1 }, 0, {
+          rotation: [0, 0, Math.sin(0.2), Math.cos(0.2)],
+        }),
       ]),
     );
     const skeleton = aliasId(result, 1);

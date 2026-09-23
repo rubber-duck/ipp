@@ -492,7 +492,7 @@ fn discrete_pose_inputs_rebase_unkeyed_locals_and_preserve_ordered_joint_samples
         close(local[0].x, expected_x);
         close(local[1].qz, std::f32::consts::FRAC_1_SQRT_2);
         assert_eq!(local.as_ptr(), address);
-        assert!(world.inspect(entity).unwrap().base.iter().any(|value| matches!(value, ComponentValue::Skeleton(value) if value.pose_source.is_empty() && value.joints.is_empty())));
+        assert!(world.inspect(entity).unwrap().base.iter().any(|value| matches!(value, ComponentValue::Skeleton(value) if value.pose_source.is_empty() && value.joints.iter().all(|(_, row)| row.is_empty()))));
     }
 }
 

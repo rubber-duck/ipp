@@ -2,7 +2,7 @@
 
 mod component;
 pub(crate) use component::SkeletonPoseState;
-pub use component::{Skeleton, SkeletonRuntimeState};
+pub use component::{JointOverrideRow, Skeleton, SkeletonRuntimeState};
 
 use crate::{ComponentValue, world::WorldMutationState};
 

@@ -32,7 +32,7 @@ pub use crate::systems::surface::{Surface, SurfaceCache};
 pub use crate::systems::gui::GuiRoot;
 
 #[cfg(feature = "skeletal-animation")]
-pub use crate::systems::skeleton::{Skeleton, SkeletonRuntimeState};
+pub use crate::systems::skeleton::{JointOverrideRow, Skeleton, SkeletonRuntimeState};
 
 #[cfg(feature = "skeletal-animation")]
 pub use crate::systems::skinning::{Skin, SkinRuntimeState};

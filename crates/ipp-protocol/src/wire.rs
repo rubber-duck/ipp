@@ -1162,11 +1162,6 @@ pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
         "mesh-skin-streams",
         "IPPM-v3;semantic4-format4=u8x4;semantic5-format5=f32x4;paired;indices=0..31;weights=finite-0..1-positive-sum-normalized;rigid-omits-streams",
     ),
-    #[cfg(feature = "skeletal-animation")]
-    (
-        "skeleton-overrides",
-        "ascending-unique-joint-u32,local-trs-f32x10;empty=source-pose-or-rest;max32;quaternion-xyzw-normalized;positive-scale",
-    ),
     ("endianness", "little"),
     ("bool", "u8;false=0;true=1;other-values-reject"),
     (

@@ -86,54 +86,6 @@ impl PoseAsset {
     }
 }
 
-/// Decode sparse per-instance overrides: ascending joint u32 and ten TRS f32.
-/// The empty byte string means no overrides; asset payloads have their own header.
-pub(crate) fn overrides(bytes: &[u8]) -> Result<Vec<(usize, Transform)>, ErrorReason> {
-    if !bytes.len().is_multiple_of(44) || bytes.len() / 44 > MAX_JOINTS {
-        return Err(ErrorReason::InvalidValue);
-    }
-    let mut result = Vec::with_capacity(bytes.len() / 44);
-    for bytes in bytes.as_chunks::<44>().0 {
-        let joint = u32_at(bytes, 0) as usize;
-        if joint >= MAX_JOINTS
-            || result
-                .last()
-                .is_some_and(|&(previous, _)| previous >= joint)
-        {
-            return Err(ErrorReason::InvalidValue);
-        }
-        result.push((
-            joint,
-            transform(&bytes[4..]).map_err(|_| ErrorReason::InvalidValue)?,
-        ));
-    }
-    Ok(result)
-}
-
-/// Validate once, then borrow sparse overrides without an evaluation allocation.
-pub(crate) fn override_iter(
-    bytes: &[u8],
-) -> Result<impl Iterator<Item = (usize, Transform)> + Clone + '_, ErrorReason> {
-    if !bytes.len().is_multiple_of(44) || bytes.len() / 44 > MAX_JOINTS {
-        return Err(ErrorReason::InvalidValue);
-    }
-    let mut previous = None;
-    for bytes in bytes.as_chunks::<44>().0 {
-        let joint = u32_at(bytes, 0) as usize;
-        if joint >= MAX_JOINTS || previous.is_some_and(|previous| previous >= joint) {
-            return Err(ErrorReason::InvalidValue);
-        }
-        transform(&bytes[4..]).map_err(|_| ErrorReason::InvalidValue)?;
-        previous = Some(joint);
-    }
-    Ok(bytes.as_chunks::<44>().0.iter().map(|bytes| {
-        (
-            u32_at(bytes, 0) as usize,
-            transform(&bytes[4..]).expect("validated immutable override"),
-        )
-    }))
-}
-
 pub(crate) fn header(bytes: &[u8], magic: &[u8; 4], stride: usize) -> Result<usize, ErrorReason> {
     if bytes.len() < 12 || &bytes[..4] != magic || u32_at(bytes, 4) != 1 {
         return Err(ErrorReason::InvalidAsset);

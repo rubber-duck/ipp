@@ -290,12 +290,7 @@ impl super::AnimationReadAccess<'_> {
         {
             return Err(ErrorReason::InvalidField);
         }
-        let overrides =
-            crate::services::asset_management::skeleton::override_iter(&skeleton.joints)?;
-        if overrides
-            .clone()
-            .any(|(joint, _)| joint >= asset.joints().len())
-        {
+        if !skeleton.joint_overrides_fit(asset.joints().len()) {
             return Err(ErrorReason::InvalidValue);
         }
         original.resize(joints.len(), Transform::default());
@@ -305,12 +300,7 @@ impl super::AnimationReadAccess<'_> {
                 |pose| pose.joints()[joint as usize],
             );
         }
-        for (joint, transform) in overrides {
-            if let Ok(index) = joints.binary_search(&(joint as u32)) {
-                original[index] = transform;
-            }
-        }
-        Ok(())
+        skeleton.apply_selected_joint_overrides(asset.joints().len(), joints, original)
     }
 }
 

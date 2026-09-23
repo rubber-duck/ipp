@@ -118,17 +118,34 @@ function stylePatch(
   return changed ? patch : undefined;
 }
 
-/** Desired child index among siblings in visit order. */
-function siblingIndex(
-  desired: readonly GuiDescribedNode[],
-  node: GuiDescribedNode,
-): number {
-  let index = 0;
-  for (const sibling of desired) {
-    if (sibling === node) return index;
-    if (sibling.parent === node.parent) index += 1;
+/**
+ * Positions (into `values`) of one longest strictly increasing subsequence,
+ * found in O(n log n) with patience sorting.
+ */
+function longestIncreasingRun(values: readonly number[]): Set<number> {
+  // tails[length - 1] is the position ending the best run of that length.
+  const tails: number[] = [];
+  const previous = new Array<number>(values.length);
+  for (let position = 0; position < values.length; position += 1) {
+    const value = values[position]!;
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (values[tails[middle]!]! < value) low = middle + 1;
+      else high = middle;
+    }
+    previous[position] = low > 0 ? tails[low - 1]! : -1;
+    tails[low] = position;
   }
-  return index;
+  const run = new Set<number>();
+  for (
+    let position = tails.length > 0 ? tails[tails.length - 1]! : -1;
+    position >= 0;
+    position = previous[position]!
+  )
+    run.add(position);
+  return run;
 }
 
 export function diffGuiTree(
@@ -166,54 +183,123 @@ export function diffGuiTree(
     handle: makeHandle(ack.nodeId, ack.lifetime),
   }));
 
+  // Desired children per parent, and each node's desired sibling position.
+  const desiredChildren = new Map<number | undefined, number[]>();
+  const desiredParent = new Map<number, number | undefined>();
+  const position = new Map<number, number>();
+  for (const node of desired) {
+    let list = desiredChildren.get(node.parent);
+    if (!list) desiredChildren.set(node.parent, (list = []));
+    position.set(node.identity, list.length);
+    desiredParent.set(node.identity, node.parent);
+    list.push(node.identity);
+  }
+
+  // Simulate the runtime's child lists after the removes, so every placement
+  // names the index it takes when applied: inserts and moves clamp their
+  // index to the list, and a move first detaches the node from its parent.
+  const current = new Map<number | undefined, number[]>();
+  for (const [identity, ack] of acked) {
+    if (removedIds.has(identity)) continue;
+    let list = current.get(ack.parent);
+    if (!list) current.set(ack.parent, (list = []));
+    list.push(identity);
+  }
+  const listOf = (parent: number | undefined): number[] => {
+    let list = current.get(parent);
+    if (!list) current.set(parent, (list = []));
+    return list;
+  };
+
+  // Stable children keep their place: one longest run of children staying
+  // under their parent that is already in desired relative order. A list
+  // whose acknowledged order is unknown (after recovery) has no stable
+  // children; every child is then placed after its placed predecessor, so the
+  // unknown remainder never determines an index.
+  const stable = new Set<number>();
+  for (const [parent, members] of current) {
+    // A single child has only one order.
+    const known =
+      members.length === 1
+        ? members
+        : order
+            .get(parent)
+            ?.filter(
+              (identity) =>
+                !removedIds.has(identity) &&
+                acked.get(identity)?.parent === parent,
+            );
+    if (!known || known.length !== members.length) continue;
+    current.set(parent, known);
+    const parentId = parent === undefined ? undefined : assigned.get(parent);
+    const staying = known.filter(
+      (identity) =>
+        desiredParent.has(identity) &&
+        desiredParent.get(identity) === parent &&
+        acked.get(identity)!.parentId === parentId,
+    );
+    const run = longestIncreasingRun(
+      staying.map((identity) => position.get(identity)!),
+    );
+    for (const index of run) stable.add(staying[index]!);
+  }
+
+  // Placed nodes appear in desired relative order within their simulated
+  // list. A placement just after the nearest placed desired predecessor, or
+  // first, preserves that order whatever order the placements happen in.
+  const placed = new Set(stable);
+  const placementIndex = (
+    parent: number | undefined,
+    identity: number,
+  ): number => {
+    const siblings = desiredChildren.get(parent)!;
+    const list = listOf(parent);
+    for (let index = position.get(identity)! - 1; index >= 0; index -= 1) {
+      const sibling = siblings[index]!;
+      if (placed.has(sibling)) return list.indexOf(sibling) + 1;
+    }
+    return 0;
+  };
   const inserts = desired
     .filter((node) => !acked.has(node.identity))
     .sort((a, b) => nodeIdOf(a.identity) - nodeIdOf(b.identity));
   for (const node of inserts) {
+    const index = placementIndex(node.parent, node.identity);
+    listOf(node.parent).splice(index, 0, node.identity);
+    placed.add(node.identity);
     edits.push({
       action: "insert",
       entity: 0n,
       rootIncarnation: 0n,
       id: nodeIdOf(node.identity),
       ...(node.parent === undefined ? {} : { parent: nodeIdOf(node.parent) }),
-      index: siblingIndex(desired, node),
+      index,
       content: node.content,
       style: node.style,
     });
   }
 
-  // Moves: reparented nodes, plus every persisting child of a parent whose
-  // order changed. Emitted in desired visit order so sequential absolute
-  // placements converge on the desired arrangement.
-  const reorderedParents = new Set<number | undefined>();
-  const desiredOrder = new Map<number | undefined, number[]>();
+  // Moves in desired visit order: reparented children and children outside
+  // the stable run go just after their nearest placed predecessor. Inserts
+  // and moves each keep the placed nodes in desired relative order, so the
+  // lists converge on the desired arrangement.
   for (const node of desired) {
-    if (acked.has(node.identity)) {
-      const list = desiredOrder.get(node.parent);
-      if (list) list.push(node.identity);
-      else desiredOrder.set(node.parent, [node.identity]);
-    }
-  }
-  for (const [parent, list] of desiredOrder) {
-    const previous = order.get(parent) ?? [];
-    const same =
-      previous.length === list.length &&
-      previous.every((identity, index) => identity === list[index]);
-    if (!same) reorderedParents.add(parent);
-  }
-  for (const node of desired) {
-    const ack = acked.get(node.identity);
-    if (!ack) continue;
+    const identity = node.identity;
+    const ack = acked.get(identity);
+    if (!ack || stable.has(identity)) continue;
+    const from = listOf(ack.parent);
+    from.splice(from.indexOf(identity), 1);
+    const index = placementIndex(node.parent, identity);
+    listOf(node.parent).splice(index, 0, identity);
+    placed.add(identity);
     const nextParentId =
       node.parent === undefined ? undefined : nodeIdOf(node.parent);
-    if (ack.parentId !== nextParentId || reorderedParents.has(node.parent)) {
-      edits.push({
-        action: "move",
-        handle: makeHandle(ack.nodeId, ack.lifetime),
-        ...(nextParentId === undefined ? {} : { parent: nextParentId }),
-        index: siblingIndex(desired, node),
-      });
-    }
+    edits.push({
+      action: "move",
+      handle: makeHandle(ack.nodeId, ack.lifetime),
+      ...(nextParentId === undefined ? {} : { parent: nextParentId }),
+      index,
+    });
   }
 
   for (const node of desired) {

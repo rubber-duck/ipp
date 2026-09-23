@@ -2402,3 +2402,318 @@ fn skin_property_edit_repaints_without_hover_or_layout_work() {
         .unwrap();
     assert_eq!(after, before);
 }
+
+/// One skin destination in a shared motion clip: time, colour, opacity, scale.
+type SkinMotionSample = (f64, [f32; 4], f32, [f32; 2]);
+
+/// One motion clip holding every destination at its own sample time, like
+/// the gallery skins: idle, hovered, pressed and disabled share the tracks
+/// that animate the idle `background` lanes.
+fn shared_skin_motion_clip(samples: &[SkinMotionSample]) -> AnimationClip {
+    let duration = samples.last().unwrap().0;
+    let track = |lane: &str, value: &dyn Fn(&SkinMotionSample) -> DynamicValue| AnimationTrack {
+        target: AnimationTrackTarget::DynamicProperty {
+            component: ComponentValue::GUI_ROOT,
+            name: GuiRoot::part_property_name(GuiNodeId(2), "background", lane).unwrap(),
+        },
+        keys: samples
+            .iter()
+            .map(|sample| AnimationKeyframe {
+                time: sample.0,
+                value: AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
+                    value(sample),
+                )),
+                interpolation: if sample.0 < duration {
+                    AnimationInterpolation::Linear
+                } else {
+                    AnimationInterpolation::Step
+                },
+            })
+            .collect(),
+    };
+
+    AnimationClip::new(
+        duration,
+        vec![
+            track("color", &|sample| DynamicValue::Vec4(sample.1)),
+            track("opacity", &|sample| DynamicValue::F32(sample.2)),
+            track("scale", &|sample| DynamicValue::Vec2(sample.3)),
+        ],
+    )
+    .unwrap()
+}
+
+fn set_node_enabled(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId, enabled: bool) {
+    let mut context = host.world_mut(world).unwrap();
+    let incarnation = context
+        .inspect_gui(panel, None, 1, 1)
+        .unwrap()
+        .root_incarnation;
+    context
+        .enqueue_gui_command(
+            SESSION,
+            GuiCommand::UpdateNode {
+                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                patch: GuiNodePatch {
+                    enabled: Some(enabled),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+}
+
+fn skin_controller_refused(
+    host: &mut HostRuntime,
+    world: WorldId,
+    owner: crate::systems::animation::GuiSkinAnimationOwner,
+) -> Option<(u64, crate::ErrorReason)> {
+    host.world_mut(world)
+        .unwrap()
+        .with_system::<crate::systems::animation::AnimationSystem, _>(
+            crate::systems::animation::AnimationSystem::ID,
+            |system, _| {
+                system.skin_controller_rejection(owner).or_else(|| {
+                    system
+                        .skin_controller(owner)
+                        .and_then(|(request, _, failure)| failure.map(|reason| (request, reason)))
+                })
+            },
+        )
+        .unwrap()
+}
+
+/// Base (authored) and effective idle `background` lanes of node 2.
+fn idle_background_lanes(
+    host: &mut HostRuntime,
+    world: WorldId,
+    panel: crate::EntityId,
+) -> [crate::systems::gui::GuiPartStyle; 2] {
+    let inspected = host.world_mut(world).unwrap().inspect(panel).unwrap();
+    let lanes = |values: Vec<ComponentValue>| {
+        let root = values
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::GuiRoot(root) => Some(root),
+                _ => None,
+            })
+            .unwrap();
+        crate::systems::gui::part_style(&root, GuiNodeId(2), "background")
+    };
+    [lanes(inspected.base), lanes(inspected.effective)]
+}
+
+/// How an unrelated edit reaches the GuiRoot while a skin transition runs.
+#[derive(Clone, Copy, Debug)]
+enum UnrelatedGuiEdit {
+    /// A GUI command queued for the frame's mutation boundary.
+    Queued,
+    /// A Host command chunk applied before the frame.
+    Streamed,
+    /// A routed click that commits another control's value at Accept.
+    Input,
+}
+
+/// Step one frame after an unrelated GUI edit, as React and input commit
+/// other nodes while a skin transition runs.
+fn step_with_unrelated_edit(
+    host: &mut HostRuntime,
+    world: WorldId,
+    panel: crate::EntityId,
+    frame: u32,
+    kind: UnrelatedGuiEdit,
+) {
+    if let UnrelatedGuiEdit::Input = kind {
+        let at = node_centre(host, world, panel, GuiNodeId(3));
+        let mut context = host.world_mut(world).unwrap();
+        if frame.is_multiple_of(4) {
+            context
+                .enqueue_gui_input_command(SESSION, pointer_down(9, at))
+                .unwrap();
+            context
+                .enqueue_gui_input_command(SESSION, pointer_up(9, at))
+                .unwrap();
+        }
+        context.step(1.0 / 60.0).unwrap();
+        return;
+    }
+
+    let mut context = host.world_mut(world).unwrap();
+    let incarnation = context
+        .inspect_gui(panel, None, 1, 1)
+        .unwrap()
+        .root_incarnation;
+    let edit = GuiCommand::UpdateNode {
+        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1), 1),
+        patch: GuiNodePatch {
+            opacity: Some(if frame.is_multiple_of(2) {
+                1.0
+            } else {
+                0.99
+            }),
+            ..Default::default()
+        },
+    };
+    if let UnrelatedGuiEdit::Queued = kind {
+        context.enqueue_gui_command(SESSION, edit).unwrap();
+    } else {
+        // Like the Host, defer the chunk while earlier ingress drains.
+        let mut deferred = 0;
+        while context.has_deferred_world_input() {
+            context.step(0.0).unwrap();
+            deferred += 1;
+            assert!(deferred < 4, "ingress did not drain");
+        }
+        let outcome = context
+            .apply_gui_command_chunk(SESSION, u64::from(frame) + 1, vec![edit])
+            .unwrap();
+        assert_eq!((outcome.applied, outcome.result), (1, Ok(())));
+        context.finish_command_stream();
+    }
+    context.step(1.0 / 60.0).unwrap();
+}
+
+#[test]
+fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
+    let idle = ([0.38, 0.85, 1.0, 0.9], 1.0, [1.0, 1.0]);
+    let disabled = ([0.2, 0.35, 0.42, 0.45], 0.45, [1.0, 1.0]);
+    let samples = [
+        (0.0, idle.0, idle.1, idle.2),
+        (0.1, [0.78, 0.96, 1.0, 1.0], 1.0, [1.025, 1.025]),
+        (0.2, [0.2, 0.65, 0.88, 0.9], 1.0, [0.985, 0.985]),
+        (0.3, disabled.0, disabled.1, disabled.2),
+        (0.4, [0.2, 0.8, 0.94, 1.0], 1.0, [1.0, 1.0]),
+    ];
+    let source = skin_motion_source("skin-shared");
+    let mut root = GuiRoot::default();
+    for (part, sample) in [
+        ("background", samples[0]),
+        ("background_hovered", samples[1]),
+        ("background_pressed", samples[2]),
+        ("background_disabled", samples[3]),
+    ] {
+        part_color(&mut root, 2, part, sample.1);
+        part_f32(&mut root, 2, part, "opacity", sample.2);
+        part_vec2(&mut root, 2, part, "scale", sample.3);
+        part_motion(&mut root, 2, part, source.clone());
+        part_f32(&mut root, 2, part, "duration", 0.2);
+        part_f32(&mut root, 2, part, "easing", 0.0);
+        part_f32(&mut root, 2, part, "track", 0.0);
+        // Lane times are f32 like React's authored lanes.
+        part_f32(&mut root, 2, part, "time", sample.0 as f32);
+    }
+    let (mut host, world, panel) = skin_panel_with_root(root);
+    host.asset_resources_mut()
+        .register_client_source(
+            world,
+            source.clone(),
+            shared_skin_motion_clip(&samples).encode(),
+        )
+        .unwrap();
+    for _ in 0..32 {
+        host.progress_assets();
+        host.world_mut(world).unwrap().step(0.0).unwrap();
+    }
+    // A second checkbox whose routed clicks commit unrelated control values.
+    {
+        let mut context = host.world_mut(world).unwrap();
+        let incarnation = context
+            .inspect_gui(panel, None, 1, 1)
+            .unwrap()
+            .root_incarnation;
+        context
+            .enqueue_gui_command(
+                SESSION,
+                GuiCommand::InsertNode {
+                    entity: panel,
+                    root_incarnation: incarnation,
+                    id: GuiNodeId(3),
+                    parent: Some(GuiNodeId(1)),
+                    index: 1,
+                    content: GuiNodeContent::Checkbox {
+                        checked: false,
+                    },
+                    style: GuiNodeStyle {
+                        width: Some(2.0),
+                        height: Some(1.0),
+                        ..Default::default()
+                    },
+                },
+            )
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    let owner = background_skin_owner(&mut host, world, panel);
+    assert_color_near(panel_box_color(&mut host, world, panel), idle.0);
+
+    // Every frame also edits the GuiRoot elsewhere. Queued edits share each
+    // transition request's mutation boundary; streamed edits and committed
+    // input stage the GuiRoot between frames while skin output is retained.
+    let mut frame = 0;
+    for (cycle, edits) in [
+        (0, UnrelatedGuiEdit::Queued),
+        (1, UnrelatedGuiEdit::Streamed),
+        (2, UnrelatedGuiEdit::Input),
+    ] {
+        // Idle -> disabled settles on the disabled sample.
+        set_node_enabled(&mut host, world, panel, false);
+        for _ in 0..24 {
+            step_with_unrelated_edit(&mut host, world, panel, frame, edits);
+            frame += 1;
+            assert_eq!(skin_controller_refused(&mut host, world, owner), None);
+        }
+        assert_color_near(panel_box_color(&mut host, world, panel), disabled.0);
+        let [base, effective] = idle_background_lanes(&mut host, world, panel);
+        assert!(
+            (effective.opacity.unwrap() - disabled.1).abs() <= 1.0e-5,
+            "cycle {cycle}"
+        );
+        assert_eq!(base.color, Some(idle.0), "cycle {cycle}");
+        assert_eq!(base.opacity, Some(idle.1), "cycle {cycle}");
+
+        // Disabled -> idle blends from the held disabled sample through
+        // intermediate values and restores the authored idle lanes.
+        set_node_enabled(&mut host, world, panel, true);
+        let mut blended = false;
+        for _ in 0..24 {
+            step_with_unrelated_edit(&mut host, world, panel, frame, edits);
+            frame += 1;
+            assert_eq!(skin_controller_refused(&mut host, world, owner), None);
+            let [base, _] = idle_background_lanes(&mut host, world, panel);
+            assert_eq!(base.color, Some(idle.0), "cycle {cycle}");
+            assert_eq!(base.opacity, Some(idle.1), "cycle {cycle}");
+            let paint = panel_box_color(&mut host, world, panel);
+            blended |=
+                paint
+                    .iter()
+                    .zip(disabled.0.iter().zip(idle.0))
+                    .all(|(value, (from, to))| {
+                        from == &to || (value - from).abs() > 0.02 && (value - to).abs() > 0.02
+                    });
+        }
+        assert!(blended, "cycle {cycle}: no intermediate transition paint");
+        assert_color_near(panel_box_color(&mut host, world, panel), idle.0);
+        let [base, effective] = idle_background_lanes(&mut host, world, panel);
+        for lanes in [base, effective] {
+            assert_color_near(lanes.color.unwrap(), idle.0);
+            assert!(
+                (lanes.opacity.unwrap() - idle.1).abs() <= 1.0e-5,
+                "cycle {cycle}"
+            );
+            assert_eq!(lanes.scale, Some(idle.2), "cycle {cycle}");
+        }
+    }
+
+    // The routed clicks committed the other checkbox's value each time.
+    let clicked = host
+        .world_mut(world)
+        .unwrap()
+        .inspect_gui(panel, Some(GuiNodeId(3)), 1, 4)
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find(|node| node.id == GuiNodeId(3))
+        .unwrap()
+        .control_revision;
+    assert!(clicked > 10, "only {clicked} committed clicks");
+}

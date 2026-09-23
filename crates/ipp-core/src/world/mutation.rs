@@ -533,15 +533,25 @@ impl WorldContext<'_> {
         })
     }
 
+    /// Restore before ingress that queue inspection cannot see, returning
+    /// every retained evaluated output before inputs are staged.
+    fn restore_for_ingress(
+        &mut self,
+        dt: f64,
+        report: &mut WorldUpdateReport,
+    ) -> Result<(), ErrorReason> {
+        self.world.admitting_ingress = true;
+        let restored = self.dispatch_phase(dt, SystemFramePhase::Restore, report);
+        self.world.admitting_ingress = false;
+        restored?;
+        self.world.mutation_prepared = true;
+        Ok(())
+    }
+
     fn prepare_command_stream(&mut self) -> Result<(), ErrorReason> {
         self.prepare_update(0.0)?;
         if !self.world.mutation_prepared {
-            self.dispatch_phase(
-                0.0,
-                SystemFramePhase::Restore,
-                &mut WorldUpdateReport::default(),
-            )?;
-            self.world.mutation_prepared = true;
+            self.restore_for_ingress(0.0, &mut WorldUpdateReport::default())?;
         }
 
         if self.world.command_stream.is_none() {
@@ -612,6 +622,16 @@ impl WorldContext<'_> {
         }
         let mut report = WorldUpdateReport::default();
         self.dispatch_phase(dt, SystemFramePhase::Check, &mut report)?;
+        // Subsystem input commits at Accept. Restore first, so those commits
+        // stage authored inputs rather than retained evaluated output.
+        let subsystem_ingress = self
+            .instances
+            .before
+            .iter()
+            .any(|instance| instance.system.has_deferred_input());
+        if subsystem_ingress && self.world.fault.is_none() && !self.world.mutation_prepared {
+            self.restore_for_ingress(dt, &mut report)?;
+        }
         self.dispatch_phase(dt, SystemFramePhase::Accept, &mut report)?;
         self.world.prepared_frame = true;
         Ok(())

@@ -280,6 +280,44 @@ impl AnimationAccess<'_, '_> {
                 }
             }
         }
+
+        // A pending transition publishes its held source into component
+        // storage, so a destination sharing those targets takes restoration
+        // values from the source instead of capturing the held sample.
+        for controller in controllers.values().filter(|_| needs_baselines) {
+            let Some(transition) = controller.transition.as_deref() else {
+                continue;
+            };
+            match &transition.source {
+                AnimationTransitionSource::Live(source) => {
+                    for driver in &source.drivers {
+                        if let Some(baseline) = baselines.get_mut(driver.identity())
+                            && baseline.is_none()
+                        {
+                            *baseline = Some(driver.original());
+                        }
+                    }
+                }
+                AnimationTransitionSource::Frozen {
+                    values,
+                    ..
+                } => {
+                    for value in values {
+                        let identity = AnimationTargetIdentity {
+                            entity: value.target,
+                            incarnation: value.incarnation,
+                            property: value.property.clone(),
+                        };
+                        if let Some(baseline) = baselines.get_mut(&identity)
+                            && baseline.is_none()
+                        {
+                            *baseline = Some(value.baseline.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         for identity in &baseline_order {
             let baseline = baselines.get_mut(identity).unwrap();
             if baseline.is_none()

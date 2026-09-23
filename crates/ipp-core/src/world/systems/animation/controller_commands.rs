@@ -275,10 +275,10 @@ impl AnimationAccess<'_, '_> {
                 None
             }
         };
+        // Ingress keeps restored inputs in storage so later commands at this
+        // boundary stage authored values; evaluation publishes the pending hold.
         if let Some(program) = hold_program.as_ref() {
-            self.context
-                .before_numeric_update(program.numeric_targets());
-            program.write_source_hold(&mut self.context.world.components)?;
+            program.validate_source_hold()?;
         }
         self.system.state.unindex_controller(id);
         let mut source = self.system.state.controllers.remove(&id).unwrap();
@@ -734,7 +734,8 @@ impl AnimationAccess<'_, '_> {
         ids.extend(self.system.state.controllers.keys().copied());
         let retain_outputs = retain_outputs
             && crate::compiled_animation_enabled()
-            && self.context.world.queue.is_empty();
+            && self.context.world.queue.is_empty()
+            && !self.context.world.admitting_ingress;
         for &id in &ids {
             self.restore_controller_inputs(id, retain_outputs);
         }

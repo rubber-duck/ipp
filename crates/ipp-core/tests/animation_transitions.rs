@@ -814,3 +814,170 @@ fn rejected_source_hold_keeps_the_existing_controller_installed() {
     assert_eq!(after.time, before.time);
     assert!(after.transition.is_none());
 }
+
+#[test]
+fn same_target_transitions_restore_the_underlying_value_not_the_held_source() {
+    let (mut host, world_id) = host_world();
+    let mut world = host.world_mut(world_id).unwrap();
+    let target = create(&mut world, 100.0);
+    upload(&mut world, 1, &clip(2.0, 0.0, 10.0));
+    upload(&mut world, 2, &clip(2.0, 20.0, 40.0));
+    let held = |drivers| AnimationControllerDescription {
+        drivers,
+        speed: 0.0,
+        looping: false,
+    };
+    let controller = world
+        .create_animation_controller(held(vec![driver(target, 1)]))
+        .unwrap();
+    play_at(&mut world, controller, 1.0);
+    assert_eq!(scalar(&world, target), (100.0, 5.0));
+
+    // Seeking the same clip holds the live source sample in storage while the
+    // destination binds; the destination must still restore the base value.
+    world
+        .transition_animation_controller(
+            controller,
+            transition(
+                held(vec![driver(target, 1)]),
+                1.0,
+                AnimationTransitionStartTime::Seek(0.0),
+            ),
+        )
+        .unwrap();
+    world.update_for_test(0.0).unwrap();
+    world.update_for_test(0.5).unwrap();
+    let (base, effective) = scalar(&world, target);
+    assert_eq!(base, 100.0);
+    close(effective, 2.5);
+
+    // Interrupting the prepared crossfade freezes its composite; the next
+    // destination on the same target restores from the frozen baseline.
+    world
+        .transition_animation_controller(
+            controller,
+            transition(
+                held(vec![driver(target, 2)]),
+                1.0,
+                AnimationTransitionStartTime::Seek(1.0),
+            ),
+        )
+        .unwrap();
+    world.update_for_test(0.0).unwrap();
+    close(scalar(&world, target).1, 2.5);
+    world.update_for_test(1.0).unwrap();
+    assert_eq!(scalar(&world, target), (100.0, 30.0));
+
+    world
+        .control_animation_controller(controller, AnimationPlaybackControl::Stop)
+        .unwrap();
+    world.update_for_test(0.0).unwrap();
+    assert_eq!(scalar(&world, target), (100.0, 100.0));
+}
+
+#[test]
+fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() {
+    let (mut host, world_id) = host_world();
+    let mut world = host.world_mut(world_id).unwrap();
+    let x = offset_of!(components::Transform, x) as u32;
+    let y = offset_of!(components::Transform, y) as u32;
+    let target = submit(
+        &mut world,
+        vec![
+            Command::Create {
+                alias: 1,
+                metadata: Default::default(),
+            },
+            Command::InsertComponentValue {
+                entity: EntityRef::Alias(1),
+                value: ComponentValue::Transform(components::Transform {
+                    x: 100.0,
+                    ..Default::default()
+                }),
+            },
+        ],
+    )
+    .result
+    .unwrap()[0]
+        .1;
+    let property = AnimationTrackTarget::AnimationProperty(AnimationProperty {
+        component: ComponentValue::TRANSFORM,
+        offsets: vec![x],
+    });
+    let clip = AnimationClip::new(
+        2.0,
+        vec![AnimationTrack {
+            target: property.clone(),
+            keys: vec![
+                key(0.0, 0.0),
+                AnimationKeyframe {
+                    interpolation: AnimationInterpolation::Step,
+                    ..key(2.0, 10.0)
+                },
+            ],
+        }],
+    )
+    .unwrap();
+    upload(&mut world, 1, &clip);
+    let held = || AnimationControllerDescription {
+        drivers: vec![AnimationDriverDescription {
+            property: property.clone(),
+            ..driver(target, 1)
+        }],
+        speed: 0.0,
+        looping: false,
+    };
+    let controller = world.create_animation_controller(held()).unwrap();
+    play_at(&mut world, controller, 1.0);
+    let transform = |world: &WorldContext<'_>| {
+        let snapshot = world.inspect(target).unwrap();
+        let fields = |values: &[ComponentValue]| {
+            values
+                .iter()
+                .find_map(|value| match value {
+                    ComponentValue::Transform(value) => Some((value.x, value.y)),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        (fields(&snapshot.base), fields(&snapshot.effective))
+    };
+    assert_eq!(transform(&world), ((100.0, 0.0), (5.0, 0.0)));
+
+    // The queued transition and a later command staging the same component
+    // share one mutation boundary; staging must observe the authored input.
+    world
+        .enqueue_animation_controller(
+            7,
+            AnimationControllerCommand::Transition {
+                id: controller,
+                transition: transition(held(), 1.0, AnimationTransitionStartTime::Seek(0.0)),
+            },
+        )
+        .unwrap();
+    world
+        .enqueue(Batch {
+            id: 8,
+            operations: vec![Command::SetField {
+                entity: EntityRef::Handle(target),
+                component: ComponentValue::TRANSFORM,
+                field: FieldWrite {
+                    offset: y,
+                    value: FieldValue::F32(3.0),
+                },
+            }],
+        })
+        .unwrap();
+    world.update_for_test(0.0).unwrap();
+    let ((base_x, base_y), (effective_x, _)) = transform(&world);
+    assert_eq!((base_x, base_y), (100.0, 3.0));
+    close(effective_x, 5.0);
+    world.update_for_test(1.0).unwrap();
+    close(transform(&world).1.0, 0.0);
+
+    world
+        .control_animation_controller(controller, AnimationPlaybackControl::Stop)
+        .unwrap();
+    world.update_for_test(0.0).unwrap();
+    assert_eq!(transform(&world), ((100.0, 3.0), (100.0, 3.0)));
+}

@@ -556,10 +556,8 @@ impl AnimationTransitionProgram {
         Ok(())
     }
 
-    pub(super) fn write_source_hold(
-        &self,
-        storage: &mut ComponentStorage,
-    ) -> Result<(), ErrorReason> {
+    /// Check that every held source lane can be published to its output.
+    pub(super) fn validate_source_hold(&self) -> Result<(), ErrorReason> {
         for lane in &self.lanes {
             match (&lane.source, &lane.output) {
                 (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {
@@ -572,6 +570,14 @@ impl AnimationTransitionProgram {
                 _ => return Err(ErrorReason::InvalidField),
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn write_source_hold(
+        &self,
+        storage: &mut ComponentStorage,
+    ) -> Result<(), ErrorReason> {
+        self.validate_source_hold()?;
         for lane in &self.lanes {
             match (&lane.source, &lane.output) {
                 (TransitionLaneValue::Property(value), TransitionOutput::Value(output)) => {

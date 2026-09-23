@@ -241,6 +241,10 @@ pub struct WorldSimulationState {
     updating: bool,
     prepared_frame: bool,
     mutation_prepared: bool,
+    /// Restore precedes ingress that queue inspection cannot see: subsystem
+    /// input admitted at Accept or a Host command stream. Restoration then
+    /// returns every retained evaluated output before inputs are staged.
+    admitting_ingress: bool,
     command_stream: Option<BTreeMap<u32, EntityId>>,
     accepting_removals: bool,
     forced_cleanup: bool,

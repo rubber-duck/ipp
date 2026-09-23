@@ -53,6 +53,13 @@ const ICON_CODE_POINTS = {
   neon: "\uf0e7",
 } as const;
 
+/** Aurora idle `background` lane authored by the gallery control theme. */
+const AURORA_IDLE = [0.38, 0.85, 1, 0.9] as const;
+
+/** The gallery's 0.16 s skin transition plus host-frame and inspection
+ * latency, matching the hover probe in gallery-gui-camera. */
+const SKIN_SETTLE_MS = 550;
+
 /** Largest per-channel difference between two region means. */
 function meanDifference(first: RegionStats, second: RegionStats): number {
   return Math.max(
@@ -544,6 +551,35 @@ test("Gallery runs a real GUI demo and cleans it up", {
               `${node.name} opacity stayed ${JSON.stringify(value)}, expected ${expected}`,
             );
           await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      };
+      // A re-enabled control returns to the idle lane within the skin
+      // transition: a refused request or a lane restored to the held
+      // disabled sample would stay dim instead.
+      const waitForIdleLane = async (
+        tree: GuiSemanticTree,
+        node: GuiSemanticNode,
+      ) => {
+        const started = performance.now();
+        for (;;) {
+          const [color, opacity] = await Promise.all([
+            partValue(tree, node, "background", "color"),
+            partValue(tree, node, "background", "opacity"),
+          ]);
+          const elapsedMs = performance.now() - started;
+          if (
+            Math.abs(Number(opacity.value) - 1) < 1e-4 &&
+            (color.value as readonly number[]).every(
+              (value, channel) =>
+                Math.abs(value - AURORA_IDLE[channel]!) < 1e-4,
+            )
+          )
+            return { elapsedMs, color: color.value, opacity: opacity.value };
+          assert.ok(
+            elapsedMs < SKIN_SETTLE_MS,
+            `${node.name} kept ${JSON.stringify({ color, opacity })} ${Math.round(elapsedMs)} ms after enabling`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 16));
         }
       };
       // UPLINK fill beside its label and the panel gap to its right.
@@ -1121,12 +1157,18 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       const enabledUplink = semanticNode(current.semantic, "button", "UPLINK");
       assert.equal(enabledUplink.id, disabledUplink.id);
-      await waitForPartOpacity(current.semantic, enabledUplink, 1);
+      const enabledLane = await waitForIdleLane(
+        current.semantic,
+        enabledUplink,
+      );
       const enabledRegions = await withDetailView(async () => {
         await g.capture("gui-detail-uplink-enabled");
         return uplinkRegions("gui-detail-uplink-enabled", enabledUplink);
       });
-      await recordRegions("uplink-enabled", enabledRegions);
+      await recordRegions("uplink-enabled", {
+        ...enabledRegions,
+        lane: enabledLane,
+      });
       assert.ok(
         meanDifference(enabledRegions.fill, disabledRegions.fill) > 8,
         "enabling UPLINK did not change its captured fill",
@@ -1561,20 +1603,29 @@ test("Gallery runs a real GUI demo and cleans it up", {
       current = await waitForGui(
         ({ semantic }) => semanticNode(semantic, "button", "UPLINK").enabled,
       );
-      // Returning to idle is not asserted through the animated lane: the
-      // reverse skin transition is currently refused (see the region
-      // evidence), so the semantic state and this capture are the evidence.
-      await withDetailView(async () => {
+      // The second disabled -> idle transition reuses UPLINK's skin
+      // controller; it must blend back to the idle lane rather than keep the
+      // disabled sample, and paint the enabled fill again.
+      const reenabledLane = await waitForIdleLane(
+        current.semantic,
+        enabledUplink,
+      );
+      const reenabledRegions = await withDetailView(async () => {
         await g.capture("gui-detail-uplink-reenabled");
+        return uplinkRegions("gui-detail-uplink-reenabled", enabledUplink);
       });
       await recordRegions("uplink-reenabled", {
-        opacity: await partValue(
-          current.semantic,
-          enabledUplink,
-          "background",
-          "opacity",
-        ),
+        ...reenabledRegions,
+        lane: reenabledLane,
       });
+      assert.ok(
+        meanDifference(reenabledRegions.fill, enabledRegions.fill) < 6,
+        `re-enabled UPLINK fill ${JSON.stringify(reenabledRegions.fill.mean)} is not the enabled fill ${JSON.stringify(enabledRegions.fill.mean)}`,
+      );
+      assert.ok(
+        meanDifference(reenabledRegions.fill, disabledRegions.fill) > 8,
+        "re-enabled UPLINK still paints its disabled fill",
+      );
       const beforeReset = await waitForGui();
 
       await g.page.locator("#reset-camera").click();

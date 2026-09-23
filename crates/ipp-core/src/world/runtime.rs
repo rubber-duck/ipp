@@ -166,6 +166,7 @@ impl World {
             updating: false,
             prepared_frame: false,
             mutation_prepared: false,
+            admitting_ingress: false,
             command_stream: None,
             accepting_removals: false,
             forced_cleanup: false,

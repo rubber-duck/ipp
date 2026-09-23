@@ -5,9 +5,10 @@
 //! rounded boxes drawn as one-box retained batches with explicit per-axis
 //! corner/border dimensions, empty-clip suppression, painter-order overlap, box
 //! coverage ramps at close range and clip edges, premultiplied gradients, glow
-//! falloff, tilted, grazing and perspective views and device replacement. All
-//! fixtures are synthetic and local; assertions compare completed-frame pixels
-//! against values derived independently from the scene layout and projection below.
+//! falloff, tilted, grazing and perspective views, Surface cache targets with
+//! nested atlas population and device replacement. All fixtures are synthetic
+//! and local; assertions compare completed-frame pixels against values derived
+//! independently from the scene layout and projection below.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -744,6 +745,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         "tilted exterior stays background",
     )?;
+
+    // Surface cache targets restore their repaint target around nested atlas pages.
+    smoke::surface_cache_target::run(&context, &mut device, &evidence)?;
 
     // Device replacement redraws identical boxes after re-upload.
     device.delete_surface_path(square);
@@ -1602,7 +1606,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     )?;
     println!(
-        "PASS: nested clips, scrolled primitives, boxes, order, coverage ramps, glow, grazing and perspective views, and recovery"
+        "PASS: nested clips, scrolled primitives, boxes, order, coverage ramps, glow, grazing and perspective views, Surface cache targets and recovery"
     );
     Ok(())
 }

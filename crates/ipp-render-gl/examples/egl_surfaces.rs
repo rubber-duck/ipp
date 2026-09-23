@@ -1,4 +1,5 @@
-//! Focused native GLES shader, curve coverage and RGBA Surface frame oracle.
+//! Focused native GLES shader, curve coverage, Surface cache target and RGBA
+//! Surface frame oracle.
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
@@ -131,6 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     std::fs::write(evidence.join("surface-line-regression.rgba"), &slash_pixels)?;
+    smoke::surface_cache_target::run(&context, &mut device, &evidence)?;
     device.delete_surface_path(slash);
     device.delete_surface_path(path);
     device.delete_texture(texture);

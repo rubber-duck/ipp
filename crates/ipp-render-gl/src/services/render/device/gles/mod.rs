@@ -18,6 +18,10 @@ mod linear_target;
 mod submission;
 #[cfg(feature = "surfaces")]
 mod surface;
+#[cfg(feature = "surfaces")]
+mod surface_cache;
+#[cfg(feature = "surfaces")]
+pub use surface_cache::GlesSurfaceCacheTarget;
 
 const VERTEX_SHADER: u32 = 0x8B31;
 const FRAGMENT_SHADER: u32 = 0x8B30;
@@ -67,8 +71,12 @@ pub struct GlesRenderDevice {
     surface_instance_capacity: usize,
     #[cfg(feature = "surfaces")]
     surface_instance_scratch: Vec<[f32; 16]>,
+    /// Pixel size that Surface antialiasing derives from: the drawing buffer,
+    /// a bound Surface cache target or a bound glyph atlas page.
     #[cfg(feature = "surfaces")]
     surface_viewport: [f32; 2],
+    #[cfg(feature = "surfaces")]
+    surface_cache_target: Option<surface_cache::GlesSurfaceCacheBinding>,
     _thread: PhantomData<Rc<()>>,
     #[cfg(feature = "shadows")]
     shadow_target: Option<(u32, [i32; 4])>,

@@ -10,7 +10,11 @@ use crate::RenderError;
 use std::ptr;
 
 impl GlesRenderDevice {
-    fn surface_location(&self, program: &GlesRenderProgram, name: &'static std::ffi::CStr) -> i32 {
+    pub(super) fn surface_location(
+        &self,
+        program: &GlesRenderProgram,
+        name: &'static std::ffi::CStr,
+    ) -> i32 {
         let key = name.to_string_lossy();
         let mut locations = program.parameter_locations.borrow_mut();
         *locations.entry(key.into_owned()).or_insert_with(|| {

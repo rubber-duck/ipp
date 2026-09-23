@@ -781,3 +781,92 @@ fn single_sampling_pass_reports_failures_without_rollback_or_retry() {
             }))
     );
 }
+
+#[test]
+fn joint_override_properties_reject_numeric_and_discrete_tracks_at_bind() {
+    use ipp_core::components::{JointOverrideRow, rows::Rows};
+
+    let mut fixture_host = ipp_core::HostRuntime::new();
+    let (mut world, a, _) = fixture(&mut fixture_host);
+    let translation = Rows::<JointOverrideRow>::offset(0, 1, 0).unwrap();
+    let rotation = Rows::<JointOverrideRow>::offset(0, 1, 1).unwrap();
+    // Present properties of the tracks' kinds, so only the hook can refuse them.
+    let outcome = apply(
+        &mut world,
+        vec![
+            set(
+                a,
+                ComponentValue::SKELETON,
+                translation as usize,
+                FieldValue::Dynamic(DynamicValue::Vec3([0.0, 1.0, 0.0])),
+            ),
+            set(
+                a,
+                ComponentValue::SKELETON,
+                rotation as usize,
+                FieldValue::Dynamic(DynamicValue::Vec4([0.0, 0.0, 0.0, 1.0])),
+            ),
+        ],
+    );
+    assert!(outcome.result.is_ok());
+    let property = |offset| {
+        AnimationTrackTarget::AnimationProperty(AnimationProperty {
+            component: ComponentValue::SKELETON,
+            offsets: vec![offset],
+        })
+    };
+    let key = |time, value, interpolation| AnimationKeyframe {
+        time,
+        value: AnimationValue::Field(ipp_core::components::schema::FieldValue::Dynamic(value)),
+        interpolation,
+    };
+    let numeric = AnimationTrack {
+        target: property(translation),
+        keys: vec![
+            key(
+                0.0,
+                DynamicValue::Vec3([0.0; 3]),
+                AnimationInterpolation::Linear,
+            ),
+            key(
+                1.0,
+                DynamicValue::Vec3([1.0, 0.0, 0.0]),
+                AnimationInterpolation::Step,
+            ),
+        ],
+    };
+    let discrete = AnimationTrack {
+        target: property(rotation),
+        keys: vec![key(
+            0.0,
+            DynamicValue::Vec4([0.0, 0.0, 0.0, 1.0]),
+            AnimationInterpolation::Step,
+        )],
+    };
+    for (id, track) in [(20, numeric), (21, discrete)] {
+        let target = track.target.clone();
+        let clip = AnimationClip::new(1.0, vec![track]).unwrap();
+        upload(&mut world, ANIMATION_TYPE, id, clip.encode());
+        assert_eq!(
+            world.create_animation_controller(AnimationControllerDescription {
+                drivers: vec![AnimationDriverDescription {
+                    target: a,
+                    source: format!("asset://10/{id}"),
+                    variant: 0,
+                    track: 0,
+                    property: target,
+                    weight: 1.0,
+                    additive: false,
+                    reference_time: 0.0,
+                    repeat: false,
+                }],
+                ..Default::default()
+            }),
+            Err(ErrorReason::InvalidField),
+            "joint override track in clip {id} is never an animation target"
+        );
+    }
+
+    // Joint tracks remain the pose animation path.
+    player(&mut world, a, &bend(), 22, PlaybackSettings::default());
+}

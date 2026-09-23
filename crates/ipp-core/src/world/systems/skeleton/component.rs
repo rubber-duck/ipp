@@ -28,9 +28,11 @@ pub struct Skeleton {
     /// `Unset` rather than removing its row: a removed ordinal cannot hold a row
     /// again within this component incarnation.
     ///
-    /// Override properties are not numeric-animatable. Joint animation samples
-    /// the evaluated local pose through `AnimationTrackTarget::Joints`, so the
-    /// pose keeps one animation writer and these rows stay authored input.
+    /// Override properties are never animation targets: `animatable_field`
+    /// rejects every offset in this rows region at bind, for numeric and discrete
+    /// tracks alike. Joint animation samples the evaluated local pose through
+    /// `AnimationTrackTarget::Joints`, so the pose keeps one animation writer and
+    /// these rows stay authored input.
     #[schema(rows)]
     pub joints: Rows<JointOverrideRow>,
     /// Component-owned evaluated data, excluded from authored copies and wire access.
@@ -214,6 +216,10 @@ impl PartialEq for Skeleton {
 }
 
 impl ComponentLifecycle for Skeleton {
+    fn animatable_field(offset: u32) -> bool {
+        row_region_relative(offset, 0).is_none()
+    }
+
     fn preserve_runtime(&mut self, previous: &mut Self) {
         if self.source == previous.source && self.variant == previous.variant {
             self.runtime = std::mem::take(&mut previous.runtime);

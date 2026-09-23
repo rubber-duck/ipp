@@ -21,6 +21,9 @@ pub struct RenderSystemState {
     #[cfg(feature = "surfaces")]
     pub(in crate::world) surface_layout_cache:
         crate::systems::surface::rendering::SurfaceLayoutCache,
+    /// Revisions and interaction priority published with `surface_items`.
+    #[cfg(feature = "surfaces")]
+    pub(in crate::world) surface_cache_inputs: super::surface_cache_inputs::SurfaceCacheInputs,
     pub(in crate::world) diagnostics: Vec<super::RenderDiagnostic>,
     pub(in crate::world) render_state: crate::RenderState,
     pub(in crate::world) state_changes: Vec<crate::RenderStatePatch>,

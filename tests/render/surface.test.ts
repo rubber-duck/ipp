@@ -199,6 +199,16 @@ test("Surface terminal renders crisp small text, drawings and RGBA through a gen
         assert.equal(keyed.removedProperty, null);
         assert.deepEqual(keyed.restoredIds, [1, 2, 3, 7, 6, 5]);
         assert.equal(keyed.nextId, 8);
+        const cache = await call<{ observed: unknown[]; released: boolean }>(
+          "surfaceCacheDeclarations",
+        );
+        assert.deepEqual(cache.observed, [
+          null,
+          { direct_distance: 1.5, texels_per_metre: 512, max_refresh_hz: 4 },
+          { direct_distance: 0, texels_per_metre: 64, max_refresh_hz: 4 },
+          null,
+        ]);
+        assert.equal(cache.released, true);
         await call("paintOrder", [false]);
         await capture("green-over-red");
         assert.deepEqual(

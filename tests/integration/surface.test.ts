@@ -7,6 +7,8 @@ import type { WorldPersistenceHostClient } from "@ipp/client";
 import { runNativeEnvironment } from "./environment.js";
 import {
   exerciseSurfaceLifecycle,
+  SURFACE_CACHE_POLICY,
+  surfaceCachePolicy,
   surfaceSnapshot,
   type SurfaceTestClient,
 } from "./surface-scenario.js";
@@ -110,6 +112,11 @@ test("Surface edits, overlays, animation and snapshots cross a real native conne
       assert.deepEqual(after.collection, before.collection);
       assert.equal(after.collection.nextId, 6);
       assert.equal(after.properties.item_5_asset?.kind, "asset");
+      // Only the authored cache policy persists; cache state is derived.
+      assert.deepEqual(
+        await surfaceCachePolicy(restored, entity.id),
+        SURFACE_CACHE_POLICY,
+      );
     },
   );
 });

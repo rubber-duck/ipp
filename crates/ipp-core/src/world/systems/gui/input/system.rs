@@ -2090,10 +2090,6 @@ impl GuiInputSystem {
     /// Panel entities with live interaction priority: keyboard focus, pointer
     /// hover, press or capture. Surface cache presentation reads this to force
     /// direct rendering; removed or disabled roots leave with their cursors.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by ipp-s1ge.1 preparation")
-    )]
     pub(crate) fn interaction_roots(&self) -> BTreeSet<EntityId> {
         let mut roots = BTreeSet::new();
         roots.extend(self.focus.map(|focus| focus.target.entity));

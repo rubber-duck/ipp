@@ -131,11 +131,10 @@ impl System for RenderSystem {
         let _ = context;
         #[cfg(feature = "surfaces")]
         {
-            self.surface_prepared_dirty |=
-                context.changed_components().iter().any(|(_, component)| {
-                    surface_model_component(*component)
-                        || *component == crate::ComponentValue::SURFACE
-                });
+            self.surface_prepared_dirty |= context
+                .changed_components()
+                .iter()
+                .any(|(_, component)| surface_prepared_component(*component));
             self.surface_primitives_dirty |= context
                 .changed_components()
                 .iter()
@@ -149,8 +148,7 @@ impl System for RenderSystem {
             #[cfg(feature = "surfaces")]
             {
                 for (_, component) in context.changed_components() {
-                    self.surface_prepared_dirty |= surface_model_component(component)
-                        || component == crate::ComponentValue::SURFACE;
+                    self.surface_prepared_dirty |= surface_prepared_component(component);
                     self.surface_primitives_dirty |= component == crate::ComponentValue::SURFACE;
                 }
             }
@@ -449,6 +447,8 @@ impl RenderSystem {
                 self.surface_primitives_dirty = true;
             }
         }
+        #[cfg(feature = "gui")]
+        let surface_prepared = self.surface_prepared_dirty;
         #[cfg(feature = "surfaces")]
         if self.surface_prepared_dirty {
             let mut surface_items = std::mem::take(&mut self.state.surface_items);
@@ -550,11 +550,26 @@ impl RenderSystem {
                     .retain(|identity, _| live.contains(identity));
                 self.update_gui_skin_resource_demand(ecs.id(), assets);
             }
+            self.state
+                .surface_cache_inputs
+                .publish(ecs.world, &mut surface_items);
             self.state.surface_layout_cache = surface_layout_cache;
             self.state.surface_items = surface_items;
             self.surface_prepared_dirty = false;
             self.surface_primitives_dirty = false;
         }
+
+        // Interaction priority follows live input cursors every frame without
+        // re-preparing primitives; skin paint for the same cursors is handled
+        // by the preparation above.
+        #[cfg(feature = "gui")]
+        self.state.surface_cache_inputs.publish_interaction(
+            gui_input
+                .map(|input| input.interaction_roots())
+                .unwrap_or_default(),
+            &mut self.state.surface_items,
+            surface_prepared,
+        );
         self.prepared_dirty = false;
         self.state.items = items;
         self.state.debug_items = debug_items;
@@ -585,6 +600,15 @@ fn surface_primitive_uses_asset(
             ..
         } => false,
     }
+}
+
+/// Component changes that require Surface re-preparation: placement inputs,
+/// the Surface itself and its optional cache policy.
+#[cfg(feature = "surfaces")]
+fn surface_prepared_component(component: u16) -> bool {
+    surface_model_component(component)
+        || component == crate::ComponentValue::SURFACE
+        || component == crate::ComponentValue::SURFACE_CACHE
 }
 
 #[cfg(feature = "surfaces")]

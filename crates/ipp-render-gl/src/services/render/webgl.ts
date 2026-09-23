@@ -228,8 +228,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       texture: WebGLTexture;
       bandTexture: WebGLTexture;
       vao: WebGLVertexArrayObject;
+      /** Curve texels, including contour terminators. */
       count: number;
       width: number;
+      /** Power of two converting fixed-point curve texels to path units. */
+      scale: number;
       bandCount: number;
       bandWidth: number;
     }
@@ -746,6 +749,71 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       }
     : undefined;
 
+  /** Header texels per packed path: an offset and count for 16 + 16 bands. */
+  const SURFACE_BAND_HEADER_TEXELS = 64;
+
+  /**
+   * Width and rows for `count` packed path texels within the texture size
+   * limit, balancing rows so padding stays below one texel per row.
+   */
+  const surfaceTexelLayout = IPP_SURFACES
+    ? (count: number): { width: number; rows: number } | undefined => {
+        if (count === 0) return undefined;
+        const rows = Math.ceil(count / maxTextureSize);
+        if (rows > maxTextureSize) return undefined;
+        return { width: Math.ceil(count / rows), rows };
+      }
+    : undefined;
+
+  /**
+   * Allocate the bound texture and copy `values` into it in row order, leaving
+   * the unused end of the last row undefined, without a padded staging copy.
+   */
+  const uploadSurfaceTexels = IPP_SURFACES
+    ? (
+        layout: { width: number; rows: number },
+        lanes: number,
+        internalFormat: number,
+        format: number,
+        type: number,
+        values: Int16Array | Int32Array | Uint16Array | Uint32Array,
+      ): void => {
+        const { width, rows } = layout;
+        const count = values.length / lanes;
+        const fullRows = Math.floor(count / width);
+        const remainder = count - fullRows * width;
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, internalFormat, width, rows);
+        if (fullRows > 0)
+          gl.texSubImage2D(
+            gl.TEXTURE_2D,
+            0,
+            0,
+            0,
+            width,
+            fullRows,
+            format,
+            type,
+            values.subarray(0, fullRows * width * lanes),
+          );
+        if (remainder > 0)
+          gl.texSubImage2D(
+            gl.TEXTURE_2D,
+            0,
+            0,
+            fullRows,
+            remainder,
+            1,
+            format,
+            type,
+            values.subarray(fullRows * width * lanes),
+          );
+      }
+    : undefined;
+
   /**
    * View a packed analytic instance stream of `count` sixteen-float instances after
    * validating each descriptor against the path's curve and band ranges.
@@ -770,7 +838,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             curveCount <= 0 ||
             curveStart + curveCount > path.count ||
             bandOffset < 0 ||
-            bandOffset + 32 > path.bandCount
+            bandOffset + SURFACE_BAND_HEADER_TEXELS > path.bandCount
           )
             throw new Error("Invalid surface instance range");
         }
@@ -1405,37 +1473,48 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     ...(IPP_SURFACES
       ? {
           create_surface_path(
-            boundsPointer: number,
-            segmentPointer: number,
+            curvePointer: number,
             count: number,
+            curveBits: number,
+            scale: number,
             bandPointer: number,
             bandCount: number,
+            bandBits: number,
           ): number {
             return status(() => {
               count >>>= 0;
               bandCount >>>= 0;
-              if (count === 0 || bandCount === 0)
+              curvePointer >>>= 0;
+              bandPointer >>>= 0;
+              const curveLayout = surfaceTexelLayout!(count);
+              const bandLayout = surfaceTexelLayout!(bandCount);
+              if (!curveLayout || !bandLayout || !(scale > 0))
                 throw new Error("Surface path exceeds device limits");
-              floats(boundsPointer >>> 0, 4);
-              const segments = floats(segmentPointer >>> 0, count * 8);
-              const texels = count * 2;
-              const width = Math.max(2, Math.min(texels, maxTextureSize & ~1));
-              const height = Math.ceil(texels / width);
-              if (height > maxTextureSize)
-                throw new Error("Surface path exceeds device limits");
-              const upload = new Float32Array(width * height * 4);
-              upload.set(segments);
-              const bandValues = new Uint32Array(
-                buffer(bandPointer >>> 0, bandCount * 8, 4),
-                bandPointer >>> 0,
-                bandCount * 2,
-              );
-              const bandWidth = Math.min(bandCount, maxTextureSize);
-              const bandHeight = Math.ceil(bandCount / bandWidth);
-              if (bandHeight > maxTextureSize)
-                throw new Error("Surface bands exceed device limits");
-              const bandUpload = new Uint32Array(bandWidth * bandHeight * 2);
-              bandUpload.set(bandValues);
+              // Fixed-point curve texels hold four signed lanes; see surface_path.rs.
+              const curves =
+                curveBits === 16
+                  ? new Int16Array(
+                      buffer(curvePointer, count * 8, 2),
+                      curvePointer,
+                      count * 4,
+                    )
+                  : new Int32Array(
+                      buffer(curvePointer, count * 16, 4),
+                      curvePointer,
+                      count * 4,
+                    );
+              const bands =
+                bandBits === 16
+                  ? new Uint16Array(
+                      buffer(bandPointer, bandCount * 2, 2),
+                      bandPointer,
+                      bandCount,
+                    )
+                  : new Uint32Array(
+                      buffer(bandPointer, bandCount * 4, 4),
+                      bandPointer,
+                      bandCount,
+                    );
               const texture = gl.createTexture();
               const bandTexture = gl.createTexture();
               const vao = gl.createVertexArray();
@@ -1449,61 +1528,26 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               try {
                 gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
                 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-                for (const [unit, object] of [
-                  [gl.TEXTURE0, texture],
-                  [gl.TEXTURE1, bandTexture],
-                ] as const) {
-                  gl.activeTexture(unit);
-                  gl.bindTexture(gl.TEXTURE_2D, object);
-                  gl.texParameteri(
-                    gl.TEXTURE_2D,
-                    gl.TEXTURE_MIN_FILTER,
-                    gl.NEAREST,
-                  );
-                  gl.texParameteri(
-                    gl.TEXTURE_2D,
-                    gl.TEXTURE_MAG_FILTER,
-                    gl.NEAREST,
-                  );
-                  gl.texParameteri(
-                    gl.TEXTURE_2D,
-                    gl.TEXTURE_WRAP_S,
-                    gl.CLAMP_TO_EDGE,
-                  );
-                  gl.texParameteri(
-                    gl.TEXTURE_2D,
-                    gl.TEXTURE_WRAP_T,
-                    gl.CLAMP_TO_EDGE,
-                  );
-                }
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, texture);
-                gl.texImage2D(
-                  gl.TEXTURE_2D,
-                  0,
-                  gl.RGBA32F,
-                  width,
-                  height,
-                  0,
-                  gl.RGBA,
-                  gl.FLOAT,
-                  upload,
+                uploadSurfaceTexels!(
+                  curveLayout,
+                  4,
+                  curveBits === 16 ? gl.RGBA16I : gl.RGBA32I,
+                  gl.RGBA_INTEGER,
+                  curveBits === 16 ? gl.SHORT : gl.INT,
+                  curves,
                 );
-                gl.activeTexture(gl.TEXTURE1);
                 gl.bindTexture(gl.TEXTURE_2D, bandTexture);
-                gl.texImage2D(
-                  gl.TEXTURE_2D,
-                  0,
-                  gl.RG32UI,
-                  bandWidth,
-                  bandHeight,
-                  0,
-                  gl.RG_INTEGER,
-                  gl.UNSIGNED_INT,
-                  bandUpload,
+                uploadSurfaceTexels!(
+                  bandLayout,
+                  1,
+                  bandBits === 16 ? gl.R16UI : gl.R32UI,
+                  gl.RED_INTEGER,
+                  bandBits === 16 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+                  bands,
                 );
                 gl.bindTexture(gl.TEXTURE_2D, null);
-                gl.activeTexture(gl.TEXTURE0);
                 check();
                 const handle = id();
                 surfacePaths.set(handle, {
@@ -1511,9 +1555,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   bandTexture,
                   vao,
                   count,
-                  width,
+                  width: curveLayout.width,
+                  scale,
                   bandCount,
-                  bandWidth,
+                  bandWidth: bandLayout.width,
                 });
                 retained = true;
                 return handle;
@@ -1549,7 +1594,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               bandOffset >>>= 0;
               if (curveCount === 0 || curveStart + curveCount > path.count)
                 throw new Error("Invalid surface curve range");
-              if (bandOffset + 32 > path.bandCount)
+              if (bandOffset + SURFACE_BAND_HEADER_TEXELS > path.bandCount)
                 throw new Error("Invalid surface band range");
               if (blendMode !== 2) {
                 gl.enable(gl.BLEND);
@@ -1576,8 +1621,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
               programVec4At(program, uniform("u_color"), colorPointer >>> 0);
               programInt(program, uniform("u_curves"), 0);
+              programFloat(program, uniform("u_curve_scale"), path.scale);
               programInt(program, uniform("u_curve_start"), curveStart);
-              programInt(program, uniform("u_curve_count"), curveCount);
               programInt(program, uniform("u_curve_width"), path.width);
               programInt(program, uniform("u_fill_rule"), fillRule >>> 0);
               programInt(program, uniform("u_bands"), 1);
@@ -1718,6 +1763,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               programMatrixAt(program, program.mvp, mvpPointer >>> 0);
               programVec4At(program, uniform("u_clip"), clipPointer >>> 0);
               programInt(program, uniform("u_curves"), 0);
+              programFloat(program, uniform("u_curve_scale"), path.scale);
               programInt(program, uniform("u_curve_width"), path.width);
               programInt(program, uniform("u_bands"), 1);
               programInt(program, uniform("u_band_width"), path.bandWidth);

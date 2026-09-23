@@ -9,12 +9,14 @@ uniform vec4 u_bounds;
 uniform vec4 u_placement; // position.xy, scale.xy
 uniform vec4 u_color;
 uniform int u_band_offset;
+uniform int u_curve_start;
 uniform vec4 u_viewport;
 out vec2 v_path_position;
 out vec2 v_surface_position;
 out vec4 v_color;
 flat out vec4 v_bounds;
 flat out int v_band_offset;
+flat out int v_curve_start;
 
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(1 - ((gl_VertexID >> 1) & 1)));
@@ -36,5 +38,6 @@ void main() {
     v_color = u_color;
     v_bounds = u_bounds;
     v_band_offset = u_band_offset;
+    v_curve_start = u_curve_start;
     gl_Position = u_mvp * vec4(surface, 0.0, 1.0);
 }

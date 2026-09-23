@@ -309,9 +309,42 @@ mod view {
     }
 }
 
+/// Upload the unit-square contour through the production path packer.
+#[cfg(target_os = "linux")]
+fn unit_square(
+    device: &mut ipp_render_gl::GlesRenderDevice,
+) -> Result<
+    (
+        <ipp_render_gl::GlesRenderDevice as ipp_render_gl::RenderDevice>::SurfacePath,
+        ipp_render_gl::SurfacePathDescriptor,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    use ipp_core::services::asset_management::quadratic::{QuadraticContour, QuadraticSegment};
+    use ipp_render_gl::RenderDevice;
+
+    let line = |to| QuadraticSegment::Line {
+        to,
+    };
+    let contours = [QuadraticContour {
+        start: [0.0, 0.0],
+        segments: vec![
+            line([1.0, 0.0]),
+            line([1.0, 1.0]),
+            line([0.0, 1.0]),
+            line([0.0, 0.0]),
+        ],
+    }];
+    let atlas = ipp_render_gl::pack_surface_paths([([0.0, 0.0, 1.0, 1.0], contours.as_slice())]);
+    Ok((
+        device.create_surface_path(&atlas.texels)?,
+        atlas.descriptors[0],
+    ))
+}
+
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use ipp_render_gl::{RenderDevice, SurfacePathDescriptor};
+    use ipp_render_gl::RenderDevice;
     use std::path::PathBuf;
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -348,20 +381,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Unit-square contour used as scrolled curves, text-proxy glyphs and
-    // painter-order probes. Headers reference every curve, as in egl_surfaces.
-    let mut bands = vec![[32, 4]; 32];
-    bands.extend((0..4).map(|curve| [curve, 0]));
-    let square = device.create_surface_path(
-        &[0.0, 0.0, 1.0, 1.0],
-        &[
-            [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ],
-        &bands,
-    )?;
-    let square_descriptor = SurfacePathDescriptor::new([0, 4], 0);
+    // painter-order probes.
+    let (square, square_descriptor) = unit_square(&mut device)?;
     // Two horizontal texels: left reddish, right greenish. Height one avoids
     // any row-order question; scroll assertions compare texels relatively.
     let stripes = device.create_texture(2, 1, &[255, 32, 32, 255, 32, 255, 32, 255])?;
@@ -1295,18 +1316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_str!("../src/services/render/shaders/surface.vert"),
         include_str!("../src/services/render/shaders/surface.frag"),
     )?;
-    let mut bands = vec![[32, 4]; 32];
-    bands.extend((0..4).map(|curve| [curve, 0]));
-    let square = device.create_surface_path(
-        &[0.0, 0.0, 1.0, 1.0],
-        &[
-            [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ],
-        &bands,
-    )?;
+    let (square, square_descriptor) = unit_square(&mut device)?;
 
     let text_program = device.create_program(
         include_str!("../src/services/render/shaders/surface_text.vert"),
@@ -1343,7 +1353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &path_program,
         &square,
         &[0.0, 0.0, 1.0, 1.0],
-        SurfacePathDescriptor::new([0, 4], 0),
+        square_descriptor,
         &atlas_mvp,
         &slot_placement,
         &atlas_clip,

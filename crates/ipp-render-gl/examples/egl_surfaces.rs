@@ -32,23 +32,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_str!("../src/services/render/shaders/surface_bitmap.vert"),
         include_str!("../src/services/render/shaders/surface_bitmap.frag"),
     )?;
-    let bands = vec![[32, 8]; 32];
-    let mut bands = bands;
-    bands.extend((0..8).map(|curve| [curve, 0]));
-    let path = device.create_surface_path(
-        &[-0.65, -0.65, 0.65, 0.65],
-        &[
-            [0.65, 0.0, 0.65, 0.65, 0.0, 0.65, 1.0, 0.0],
-            [0.0, 0.65, -0.65, 0.65, -0.65, 0.0, 1.0, 0.0],
-            [-0.65, 0.0, -0.65, -0.65, 0.0, -0.65, 1.0, 0.0],
-            [0.0, -0.65, 0.65, -0.65, 0.65, 0.0, 1.0, 0.0],
-            [0.28, 0.0, 0.28, -0.28, 0.0, -0.28, 1.0, 0.0],
-            [0.0, -0.28, -0.28, -0.28, -0.28, 0.0, 1.0, 0.0],
-            [-0.28, 0.0, -0.28, 0.28, 0.0, 0.28, 1.0, 0.0],
-            [0.0, 0.28, 0.28, 0.28, 0.28, 0.0, 1.0, 0.0],
-        ],
-        &bands,
-    )?;
+    use ipp_core::services::asset_management::quadratic::{QuadraticContour, QuadraticSegment};
+
+    let quadratic = |control, to| QuadraticSegment::Quadratic {
+        control,
+        to,
+    };
+    // A ring: an outer counter-clockwise quadratic circle and an inner
+    // clockwise one, packed through the production path atlas.
+    let ring = [
+        QuadraticContour {
+            start: [0.65, 0.0],
+            segments: vec![
+                quadratic([0.65, 0.65], [0.0, 0.65]),
+                quadratic([-0.65, 0.65], [-0.65, 0.0]),
+                quadratic([-0.65, -0.65], [0.0, -0.65]),
+                quadratic([0.65, -0.65], [0.65, 0.0]),
+            ],
+        },
+        QuadraticContour {
+            start: [0.28, 0.0],
+            segments: vec![
+                quadratic([0.28, -0.28], [0.0, -0.28]),
+                quadratic([-0.28, -0.28], [-0.28, 0.0]),
+                quadratic([-0.28, 0.28], [0.0, 0.28]),
+                quadratic([0.28, 0.28], [0.28, 0.0]),
+            ],
+        },
+    ];
+    let ring_atlas =
+        ipp_render_gl::pack_surface_paths([([-0.65, -0.65, 0.65, 0.65], ring.as_slice())]);
+    let path = device.create_surface_path(&ring_atlas.texels)?;
     let texture = device.create_texture(1, 1, &[0, 255, 0, 128])?;
     let identity = [
         1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -59,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &path_program,
         &path,
         &[-0.65, -0.65, 0.65, 0.65],
-        ipp_render_gl::SurfacePathDescriptor::new([0, 8], 0),
+        ring_atlas.descriptors[0],
         &identity,
         &[0.0, 0.0, 1.0, 1.0],
         &clip,
@@ -93,29 +107,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         evidence.join("surface-frame.txt"),
         format!("center={center:?}\nbitmap={bitmap:?}\n"),
     )?;
-    let slash_bands = {
-        let mut values = vec![[32, 4]; 32];
-        values.extend((0..4).map(|curve| [curve, 0]));
-        values
+    // Raw font-unit lines: a line stores its end as its control point, which
+    // must force a stable direct line intersection rather than a quadratic solve.
+    let line = |to| QuadraticSegment::Line {
+        to,
     };
-    // Deliberately retain the old midpoint representation here. The kind lane
-    // must force a stable direct line intersection even with raw font units.
-    let slash = device.create_surface_path(
-        &[82.0, -143.0, 518.0, 823.0],
-        &[
-            [82.0, -143.0, 257.0, 340.0, 432.0, 823.0, 0.0, 0.0],
-            [432.0, 823.0, 475.0, 823.0, 518.0, 823.0, 0.0, 0.0],
-            [518.0, 823.0, 343.0, 340.0, 168.0, -143.0, 0.0, 0.0],
-            [168.0, -143.0, 125.0, -143.0, 82.0, -143.0, 0.0, 0.0],
+    let slash_contour = [QuadraticContour {
+        start: [82.0, -143.0],
+        segments: vec![
+            line([432.0, 823.0]),
+            line([518.0, 823.0]),
+            line([168.0, -143.0]),
+            line([82.0, -143.0]),
         ],
-        &slash_bands,
-    )?;
+    }];
+    let slash_atlas = ipp_render_gl::pack_surface_paths([(
+        [82.0, -143.0, 518.0, 823.0],
+        slash_contour.as_slice(),
+    )]);
+    let slash = device.create_surface_path(&slash_atlas.texels)?;
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
     device.draw_surface_path(
         &path_program,
         &slash,
         &[82.0, -143.0, 518.0, 823.0],
-        ipp_render_gl::SurfacePathDescriptor::new([0, 4], 0),
+        slash_atlas.descriptors[0],
         &identity,
         &[-0.300, -0.340, 0.001, 0.001],
         &clip,

@@ -12,6 +12,8 @@ use super::{GlesRenderDevice, GlesRenderProgram};
 enum GlesUniformValue {
     Int(i32),
     #[cfg(feature = "surfaces")]
+    Float(u32),
+    #[cfg(feature = "surfaces")]
     Vec4([u32; 4]),
     #[cfg(feature = "surfaces")]
     Mat4([u32; 16]),
@@ -55,6 +57,20 @@ impl GlesRenderDevice {
             // SAFETY: The caller made `program` current in this context; the
             // location belongs to it and GL copies the scalar.
             unsafe { (self.gl.uniform_int)(location, value) };
+        }
+    }
+
+    /// Set a float uniform of the current `program` if it changed.
+    #[cfg(feature = "surfaces")]
+    pub(super) fn program_float(&self, program: &GlesRenderProgram, location: i32, value: f32) {
+        let changed = program
+            .values
+            .borrow_mut()
+            .replace(location, GlesUniformValue::Float(value.to_bits()));
+        if changed {
+            // SAFETY: The caller made `program` current in this context; the
+            // location belongs to it and GL copies the scalar.
+            unsafe { (self.gl.uniform_float)(location, value) };
         }
     }
 

@@ -95,9 +95,7 @@ impl RenderDevice for Device {
 
     fn create_surface_path(
         &mut self,
-        _: &[f32; 4],
-        _: &[[f32; 8]],
-        _: &[[u32; 2]],
+        _: &crate::SurfacePathTexels,
     ) -> Result<(), crate::RenderError> {
         if self.fail_path {
             Err(crate::RenderError::RenderDevice("injected failure".into()))

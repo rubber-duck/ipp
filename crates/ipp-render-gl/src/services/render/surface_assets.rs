@@ -164,21 +164,17 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, FontAsset> {
                 [b[0], -b[3], b[2], -b[1]]
             })
             .collect();
-        let atlas = surface_path::atlas(
+        let atlas = surface_path::pack_surface_paths(
             glyph_bounds
                 .iter()
                 .zip(&normalized_contours)
                 .map(|(&bounds, contours)| (bounds, contours.as_slice())),
         );
-        let bytes = atlas.curves.len() * 32 + atlas.bands.len() * 8;
-        let path = if atlas.curves.is_empty() {
+        let bytes = atlas.texels.byte_len();
+        let path = if atlas.texels.curves.is_empty() {
             None
         } else {
-            match self.device.borrow_mut().create_surface_path(
-                &[0.0; 4],
-                &atlas.curves,
-                &atlas.bands,
-            ) {
+            match self.device.borrow_mut().create_surface_path(&atlas.texels) {
                 Ok(path) => Some(path),
                 Err(crate::RenderError::ContextLost) => {
                     self.pending = Some(font);
@@ -280,22 +276,18 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
             .iter()
             .map(|layer| compute_layer_bounds(drawing.bounds(), layer))
             .collect();
-        let atlas = surface_path::atlas(
+        let atlas = surface_path::pack_surface_paths(
             drawing
                 .layers()
                 .iter()
                 .zip(&layer_bounds)
                 .map(|(layer, &bounds)| (bounds, layer.contours.as_slice())),
         );
-        let bytes = atlas.curves.len() * 32 + atlas.bands.len() * 8;
-        let path = if atlas.curves.is_empty() {
+        let bytes = atlas.texels.byte_len();
+        let path = if atlas.texels.curves.is_empty() {
             None
         } else {
-            match self.device.borrow_mut().create_surface_path(
-                &[0.0; 4],
-                &atlas.curves,
-                &atlas.bands,
-            ) {
+            match self.device.borrow_mut().create_surface_path(&atlas.texels) {
                 Ok(path) => Some(path),
                 Err(crate::RenderError::ContextLost) => {
                     self.pending = Some(drawing);

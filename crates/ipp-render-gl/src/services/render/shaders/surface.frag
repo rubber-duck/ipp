@@ -5,9 +5,9 @@
 precision highp float;
 precision highp int;
 
-uniform sampler2D u_curves;
-uniform int u_curve_count;
-uniform int u_curve_start;
+// Fixed-point curve texels and single-channel bands; see surface_path.rs for the layout.
+uniform highp isampler2D u_curves;
+uniform float u_curve_scale;
 uniform int u_curve_width;
 uniform highp usampler2D u_bands;
 uniform int u_band_width;
@@ -18,6 +18,7 @@ in vec2 v_surface_position;
 in vec4 v_color;
 flat in vec4 v_bounds;
 flat in int v_band_offset;
+flat in int v_curve_start;
 out vec4 o_color;
 
 uint root_code(float p1, float p2, float p3) {
@@ -47,20 +48,27 @@ vec2 solve_vertical(vec4 p12, vec2 p3, vec2 a, vec2 b, bool line) {
     return solve_horizontal(q, p3.yx, a.yx, b.yx, line);
 }
 
-uvec2 band_record(int index) {
-    return texelFetch(u_bands, ivec2(index % u_band_width, index / u_band_width), 0).xy;
+int band_value(int index) {
+    return int(texelFetch(u_bands, ivec2(index % u_band_width, index / u_band_width), 0).x);
 }
 
-void curve_points(uint curve, vec2 sample_position, out vec4 p12, out vec2 p3, out vec2 a, out vec2 b, out bool line) {
-    int first_index = int(curve) * 2;
-    int second_index = first_index + 1;
-    vec4 absolute12 = texelFetch(u_curves, ivec2(first_index % u_curve_width, first_index / u_curve_width), 0);
-    vec4 absolute3 = texelFetch(u_curves, ivec2(second_index % u_curve_width, second_index / u_curve_width), 0);
+ivec4 curve_texel(int index) {
+    return texelFetch(u_curves, ivec2(index % u_curve_width, index / u_curve_width), 0);
+}
+
+void curve_points(int curve, vec2 sample_position, out vec4 p12, out vec2 p3, out vec2 a, out vec2 b, out bool line) {
+    // Contour segments share endpoints: the next texel starts with this segment's end.
+    ivec4 fixed12 = curve_texel(curve);
+    ivec2 fixed3 = curve_texel(curve + 1).xy;
+    // Power-of-two scaling of exact integers reproduces the packed coordinates exactly.
+    vec4 absolute12 = vec4(fixed12) * u_curve_scale;
+    vec2 absolute3 = vec2(fixed3) * u_curve_scale;
     // Derive the polynomial before translating to the fragment. Large font-unit
     // coordinates otherwise give mathematically linear axes a spurious quadratic term.
     a = absolute12.xy - 2.0 * absolute12.zw + absolute3.xy;
     b = absolute12.xy - absolute12.zw;
-    line = absolute3.z < 0.5;
+    // Lines store their end as the control point; integer equality is exact.
+    line = all(equal(fixed12.zw, fixed3));
     p12 = absolute12 - vec4(sample_position, sample_position);
     p3 = absolute3.xy - sample_position;
 }
@@ -69,9 +77,10 @@ void accumulate(vec2 sample_position, vec2 pixels_per_unit, out float xcov, out 
     xcov = 0.0; ycov = 0.0; xwgt = 0.0; ywgt = 0.0;
     vec2 extent = max(v_bounds.zw - v_bounds.xy, vec2(1.0 / 65536.0));
     ivec2 band = clamp(ivec2((sample_position - v_bounds.xy) / extent * 16.0), ivec2(0), ivec2(15));
-    uvec2 header = band_record(v_band_offset + band.y);
-    for (uint index = 0u; index < header.y; ++index) {
-        uint curve = band_record(int(header.x + index)).x;
+    int list = v_band_offset + band_value(v_band_offset + band.y * 2);
+    int count = band_value(v_band_offset + band.y * 2 + 1);
+    for (int index = 0; index < count; ++index) {
+        int curve = v_curve_start + band_value(list + index);
         vec4 p12; vec2 p3; vec2 a; vec2 b; bool line;
         curve_points(curve, sample_position, p12, p3, a, b, line);
         uint code = root_code(p12.y, p12.w, p3.y);
@@ -81,9 +90,10 @@ void accumulate(vec2 sample_position, vec2 pixels_per_unit, out float xcov, out 
             if (code > 1u) { xcov -= clamp(r.y + 0.5, 0.0, 1.0); xwgt = max(xwgt, clamp(1.0 - abs(r.y) * 2.0, 0.0, 1.0)); }
         }
     }
-    header = band_record(v_band_offset + 16 + band.x);
-    for (uint index = 0u; index < header.y; ++index) {
-        uint curve = band_record(int(header.x + index)).x;
+    list = v_band_offset + band_value(v_band_offset + 32 + band.x * 2);
+    count = band_value(v_band_offset + 32 + band.x * 2 + 1);
+    for (int index = 0; index < count; ++index) {
+        int curve = v_curve_start + band_value(list + index);
         vec4 p12; vec2 p3; vec2 a; vec2 b; bool line;
         curve_points(curve, sample_position, p12, p3, a, b, line);
         uint code = root_code(p12.x, p12.z, p3.x);

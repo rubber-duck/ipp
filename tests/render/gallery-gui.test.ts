@@ -2280,7 +2280,6 @@ function cacheDelta(before: CacheObservation, after: CacheObservation) {
     repaints: after.repaints - before.repaints,
     allocations: after.allocations - before.allocations,
     reuses: after.reuses - before.reuses,
-    direct: after.direct - before.direct,
   };
 }
 
@@ -2639,7 +2638,10 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       const scanStart = await observe("surface-cache-scan-start");
       await new Promise((resolve) => setTimeout(resolve, 1_000));
       const scanEnd = await observe("surface-cache-scan-end");
-      const scan = cacheDelta(scanStart, scanEnd);
+      const scan = {
+        ...cacheDelta(scanStart, scanEnd),
+        direct: scanEnd.direct - scanStart.direct,
+      };
       const scanSeconds =
         (scanEnd.record!.paintedAtMs - scanStart.record!.paintedAtMs) / 1000;
       assert.ok(

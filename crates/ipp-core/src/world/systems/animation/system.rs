@@ -593,14 +593,17 @@ fn validate_skin_sample(
     use crate::DynamicValue;
     use crate::components::schema::FieldValue;
 
-    if description.drivers.len() != 3 || !time.is_finite() || time < 0.0 {
-        return Err(crate::ErrorReason::InvalidValue);
-    }
-    let expected = [
+    let expected: Vec<_> = [
         DynamicValue::Vec4(expected.color),
         DynamicValue::F32(expected.opacity),
         DynamicValue::Vec2(expected.scale),
-    ];
+    ]
+    .into_iter()
+    .chain(expected.align_x.map(DynamicValue::F32))
+    .collect();
+    if description.drivers.len() != expected.len() || !time.is_finite() || time < 0.0 {
+        return Err(crate::ErrorReason::InvalidValue);
+    }
     for (driver, expected) in description.drivers.iter().zip(expected) {
         let read = access.read();
         let Some(key) = read.source_key(driver) else {

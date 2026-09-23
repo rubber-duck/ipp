@@ -5,6 +5,13 @@
 //! resolve independently through the same variant/state/base candidate chain.
 //! AnimationSystem is the sole numeric sampler; this module resolves authored
 //! destinations and paints effective values only.
+//!
+//! Colour, opacity, scale and the checkbox indicator's `align_x` are the
+//! animated numeric lanes: a state's motion clip supplies color, opacity and
+//! scale tracks from its base track, plus an `align_x` track after them when
+//! the base part declares that lane, so a switch knob glides between its
+//! unchecked and checked positions. The remaining shape, gradient and glow
+//! lanes are static material values of the resolved state.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -255,6 +262,10 @@ pub struct GuiPartStyle {
     pub opacity: Option<f32>,
     /// Optional per-axis scale.
     pub scale: Option<[f32; 2]>,
+    /// Optional horizontal alignment along the control, clamped to -1..=1 when
+    /// painted. Only the checkbox indicator reads it: -1 and +1 centre it in
+    /// the left- and right-most height-square cells of a wider control.
+    pub align_x: Option<f32>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
     /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
@@ -295,6 +306,7 @@ impl GuiPartStyle {
         self.color.is_none()
             && self.opacity.is_none()
             && self.scale.is_none()
+            && self.align_x.is_none()
             && self.asset.is_none()
             && self.corner_radius.is_none()
             && self.border_width.is_none()
@@ -364,6 +376,9 @@ pub fn part_style(root: &GuiRoot, node: GuiNodeId, part: &str) -> GuiPartStyle {
             ("scale", DynamicValue::Vec2(scale)) if valid_scale(scale) => {
                 style.scale = Some(scale);
             }
+            ("align_x", DynamicValue::F32(align)) if align.is_finite() => {
+                style.align_x = Some(align);
+            }
             ("corner_radius", DynamicValue::Vec2(cr)) if valid_non_negative_vec2(cr) => {
                 style.corner_radius = Some(cr);
             }
@@ -426,6 +441,7 @@ pub fn resolve_state_part_style(
         merged.color = merged.color.or(next.color);
         merged.opacity = merged.opacity.or(next.opacity);
         merged.scale = merged.scale.or(next.scale);
+        merged.align_x = merged.align_x.or(next.align_x);
         merged.asset = merged.asset.or(next.asset);
         merged.corner_radius = merged.corner_radius.or(next.corner_radius);
         merged.border_width = merged.border_width.or(next.border_width);
@@ -525,6 +541,8 @@ pub struct GuiSkinnedAppearance {
     pub opacity: Option<f32>,
     /// Optional scale lane.
     pub scale: Option<[f32; 2]>,
+    /// Optional horizontal alignment lane.
+    pub align_x: Option<f32>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
     /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
@@ -611,6 +629,7 @@ pub fn resolve_appearance(
         color: lanes.color,
         opacity: lanes.opacity,
         scale: lanes.scale,
+        align_x: lanes.align_x,
         asset: lanes.asset,
         corner_radius: lanes.corner_radius,
         border_width: lanes.border_width,
@@ -672,6 +691,11 @@ pub struct GuiPartMotion {
     pub easing: AnimationTransitionEasing,
     /// First of the color, opacity and scale tracks.
     pub base_track: u32,
+    /// Whether the clip also animates `align_x` from `base_track + 3`.
+    ///
+    /// Set when the base part declares `align_x`, so every state resolves an
+    /// alignment destination and the animated base lane exists.
+    pub animates_align: bool,
     /// Clip time that represents this state's authored destination.
     pub sample_time: f64,
 }
@@ -711,6 +735,10 @@ pub fn resolve_state_part_motion(
         _ => return None,
     };
     let track = super::super::tree::component::skin_motion_base_track(f32_lane("track")?)?;
+    let animates_align = part_style(root, node, base).align_x.is_some();
+    if animates_align {
+        track.checked_add(3)?;
+    }
     let time = f32_lane("time")?;
     if !duration.is_finite() || duration < 0.0 || !time.is_finite() || time < 0.0 {
         return None;
@@ -720,6 +748,7 @@ pub fn resolve_state_part_motion(
         duration_secs: duration as f64,
         easing,
         base_track: track,
+        animates_align,
         sample_time: time as f64,
     })
 }
@@ -738,6 +767,7 @@ pub(crate) fn appearance_with_effective_numeric(
     appearance.color = sampled.color.or(appearance.color);
     appearance.opacity = sampled.opacity.or(appearance.opacity);
     appearance.scale = sampled.scale.or(appearance.scale);
+    appearance.align_x = sampled.align_x.or(appearance.align_x);
     appearance
 }
 
@@ -1353,6 +1383,14 @@ fn skin_primitive(
         return Some(primitive);
     };
     let styled = apply_appearance_to_primitive(&primitive, &appearance);
+    let styled = match &node.content {
+        GuiEvaluatedContent::Checkbox {
+            ..
+        } if id.part == GuiPrimitivePart::Icon => {
+            place_checkbox_indicator(styled, node.rect, view.units_per_metre, &appearance)
+        }
+        _ => styled,
+    };
     let supports_resource = !matches!(styled, SurfaceRenderPrimitive::Glyphs { .. });
     let resource = if supports_resource {
         match appearance.asset.as_ref() {
@@ -1384,6 +1422,47 @@ fn skin_primitive(
     let fallback = styled.clone();
     apply_resolved_asset_to_primitive(styled, resource, resolver)
         .or_else(|| (!resource_required).then_some(fallback))
+}
+
+/// Move a checkbox indicator along its control and scale it about its centre.
+///
+/// The indicator is synthesized as a square centred in the control rectangle.
+/// For a control wider than tall, alignment `t` (clamped to -1..=1) places the
+/// indicator centre at `x + h/2 + (t + 1)/2 * (w - h)`: 0 keeps the centred
+/// square, while -1 and +1 centre it in the left- and right-most `h`-square
+/// cells, so a switch knob keeps the same inset from both track ends. A
+/// control no wider than tall ignores alignment. The scale lane then resizes
+/// the indicator about that centre. Neutral lanes leave geometry untouched.
+fn place_checkbox_indicator(
+    mut primitive: SurfaceRenderPrimitive,
+    rect: [f32; 4],
+    units: f32,
+    appearance: &GuiSkinnedAppearance,
+) -> SurfaceRenderPrimitive {
+    if let SurfaceRenderPrimitive::Box {
+        style,
+        size,
+        ..
+    } = &mut primitive
+    {
+        let align = appearance
+            .align_x
+            .filter(|align| align.is_finite())
+            .map_or(0.0, |align| align.clamp(-1.0, 1.0));
+        let travel = if rect[2] > rect[3] {
+            align * 0.5 * (rect[2] - rect[3]) / units
+        } else {
+            0.0
+        };
+        let offset = [
+            travel + size[0] * (1.0 - style.scale[0]) * 0.5,
+            size[1] * (1.0 - style.scale[1]) * 0.5,
+        ];
+        if offset != [0.0, 0.0] && offset.iter().all(|value| value.is_finite()) {
+            style.position = [style.position[0] + offset[0], style.position[1] + offset[1]];
+        }
+    }
+    primitive
 }
 
 fn is_supported_skin_asset(source: &AssetSource) -> bool {

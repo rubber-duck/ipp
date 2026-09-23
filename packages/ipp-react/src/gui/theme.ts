@@ -54,7 +54,14 @@ export interface GuiThemeLaneStyle {
    * selects a solid fill instead of inheriting that gradient. */
   readonly color?: readonly [number, number, number, number] | undefined;
   readonly opacity?: number | undefined;
+  /** Per-axis scale. A checkbox indicator scales about its own centre. */
   readonly scale?: readonly [number, number] | undefined;
+  /** Horizontal checkbox-indicator position, clamped to -1..1 (default 0).
+   * On a control wider than tall, -1 and +1 centre the indicator in the
+   * left- and right-most height-square cells and 0 keeps it centred, so a
+   * capsule checkbox reads as a switch whose knob keeps the same inset at
+   * both ends. Other parts ignore it. */
+  readonly alignX?: number | undefined;
   readonly asset?: GuiAssetSource | undefined;
   readonly cornerRadius?: readonly [number, number] | undefined;
   readonly borderWidth?: number | undefined;
@@ -65,7 +72,12 @@ export interface GuiThemeLaneStyle {
   readonly transition?: GuiThemeTransition | undefined;
 }
 
-/** Animation clip configuration for core-owned appearance transitions. */
+/** Animation clip configuration for core-owned appearance transitions.
+ *
+ * The clip holds color, opacity and scale tracks from `track`, sampled at
+ * `time` for this state. When the part's base declares `alignX`, an
+ * `align_x` track follows at `track + 3` so the indicator glides between
+ * positions. Sampled values must equal the state's resolved lanes. */
 export interface GuiThemeTransition {
   readonly motion: GuiAssetSource;
   readonly duration: number;
@@ -137,6 +149,7 @@ export function validateThemeLaneStyle(
         "color",
         "opacity",
         "scale",
+        "alignX",
         "asset",
         "cornerRadius",
         "borderWidth",
@@ -172,6 +185,11 @@ export function validateThemeLaneStyle(
       ))
   )
     throw new Error(`GUI theme ${what} scale must be two finite numbers`);
+  if (
+    style.alignX !== undefined &&
+    (typeof style.alignX !== "number" || !Number.isFinite(style.alignX))
+  )
+    throw new Error(`GUI theme ${what} alignX must be a finite number`);
   if (style.asset !== undefined) validateAsset(style.asset, `${what}.asset`);
   if (
     style.cornerRadius !== undefined &&
@@ -419,6 +437,8 @@ function dynamicLanes(
     set("opacity", { kind: "f32", value: lanes.opacity });
   if (lanes.scale !== undefined)
     set("scale", { kind: "vec2", value: [...lanes.scale] });
+  if (lanes.alignX !== undefined)
+    set("align_x", { kind: "f32", value: lanes.alignX });
   if (lanes.asset !== undefined)
     set("asset", { kind: "asset", value: { ...lanes.asset } });
   if (lanes.cornerRadius !== undefined)

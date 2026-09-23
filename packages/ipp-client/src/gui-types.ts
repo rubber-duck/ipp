@@ -456,6 +456,7 @@ export type GuiPartProperty =
   | "color"
   | "opacity"
   | "scale"
+  | "align_x"
   | "asset"
   | "corner_radius"
   | "border_width"

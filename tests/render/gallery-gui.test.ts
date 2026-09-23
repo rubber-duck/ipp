@@ -1684,6 +1684,63 @@ test("Gallery runs a real GUI demo and cleans it up", {
         checkboxPaint.changedPixels > 20,
         `checked indicator region did not visibly change: ${JSON.stringify(checkboxPaint)}`,
       );
+      // SCAN is a capsule switch whose knob slides to the right end while on
+      // and the left end while off. Rows through the knob, inset from the
+      // capsule ends, weigh each sample by its contrast with the row median
+      // (the track), so the knob ink centroid falls on the knob's side.
+      const knobInk = async (label: string) => {
+        const [x, y, width, height] = semanticNode(
+          current.semantic,
+          "checkbox",
+        ).bounds;
+        const columns = 64;
+        const rows = [0.3, 0.4, 0.5, 0.6, 0.7];
+        const xs = Array.from(
+          { length: columns },
+          (_, column) => x + 0.06 + ((width - 0.12) * column) / (columns - 1),
+        );
+        const samples = await g.call<readonly (readonly number[])[]>(
+          "sampleGalleryGuiCapture",
+          label,
+          rows.flatMap((row) =>
+            xs.map((sampleX) => [sampleX, y + height * row] as const),
+          ),
+        );
+        let weight = 0;
+        let moment = 0;
+        rows.forEach((_, row) => {
+          const line = samples.slice(row * columns, (row + 1) * columns);
+          const median = [0, 1, 2].map((channel) => {
+            const values = line
+              .map((pixel) => pixel[channel]!)
+              .sort((a, b) => a - b);
+            return values[values.length >> 1]!;
+          });
+          line.forEach((pixel, column) => {
+            const contrast = Math.max(
+              ...median.map((value, channel) =>
+                Math.abs(pixel[channel]! - value),
+              ),
+            );
+            const ink = Math.max(0, contrast - 24);
+            weight += ink;
+            moment += ink * xs[column]!;
+          });
+        });
+        assert.ok(weight > 0, `${label} shows no SCAN knob`);
+        return { centroid: moment / weight, centre: x + width / 2, weight };
+      };
+      const knobOn = await knobInk("gui-demo-overview");
+      const knobOff = await knobInk("gui-demo-controls-active");
+      await recordRegions("scan-knob", { on: knobOn, off: knobOff });
+      assert.ok(
+        knobOn.centroid > knobOn.centre + 0.1,
+        `SCAN knob is not at the right end while on: ${JSON.stringify(knobOn)}`,
+      );
+      assert.ok(
+        knobOff.centroid < knobOff.centre - 0.1,
+        `SCAN knob is not at the left end while off: ${JSON.stringify(knobOff)}`,
+      );
       const sliderPaint = await g.call<{ changedPixels: number }>(
         "compareViewerCaptureRegion",
         "gui-demo-overview",

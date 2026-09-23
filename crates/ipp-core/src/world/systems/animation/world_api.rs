@@ -50,6 +50,8 @@ pub(in crate::world) struct GuiSkinAnimationSample {
     pub color: [f32; 4],
     pub opacity: f32,
     pub scale: [f32; 2],
+    /// Present exactly when the motion also drives the `align_x` lane.
+    pub align_x: Option<f32>,
 }
 
 impl WorldContext<'_> {

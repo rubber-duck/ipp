@@ -8,6 +8,7 @@ import type {
   GuiSemanticRole,
   GuiSemanticTree,
   Inspection,
+  SurfaceCacheRecord,
 } from "@ipp/client";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import { responseGate } from "../browser/response-gate.js";
@@ -16,6 +17,15 @@ import {
   openGallery,
   transform,
 } from "./gallery-driver.js";
+import {
+  compareFrames,
+  count,
+  differenceImage,
+  encodePng,
+  intersectionOverUnion,
+  mask,
+  type RgbaFrame,
+} from "./retained-gui-images.js";
 import {
   PROJECTOR_MESH_SOURCES,
   PROJECTOR_TEXTURE_SOURCES,
@@ -2218,6 +2228,468 @@ test("Gallery runs a real GUI demo and cleans it up", {
         returnedPulse: waveformAnimation(returnedInspection, true).id,
       });
       await g.capture("gui-demo-returned");
+      assert.deepEqual(g.errors, []);
+    },
+  );
+});
+
+/** The gallery panel's cache policy, restated independently of scene.tsx. */
+const CACHE_DIRECT_DISTANCE = 20;
+const CACHE_TEXELS_PER_METRE = 80;
+const CACHE_REFRESH_HZ = 30;
+const CACHE_HYSTERESIS = 0.1;
+
+/**
+ * Cache image size in a band: content metres times the band's halved density,
+ * rounded up. Surface sizes are f32 fields, so 7.4 m reads as 7.40000010 m.
+ */
+function expectedCacheSize(band: number): readonly [number, number] {
+  const density = CACHE_TEXELS_PER_METRE / 2 ** (band - 1);
+  return [
+    Math.ceil(Math.fround(7.4) * density),
+    Math.ceil(Math.fround(4.8) * density),
+  ];
+}
+
+/**
+ * Cached versus direct panel tolerance, taken from the retained-gui text
+ * comparison: at most 3.5% of panel pixels may differ by more than 64 levels
+ * and bright text/glow masks must overlap by at least 0.85. The band-one
+ * image resamples the panel once more than direct drawing, which moves glyph
+ * and border edges by about one texel.
+ */
+const CACHE_COMPARISON = {
+  channelThreshold: 64,
+  maxChangedFraction: 0.035,
+  minTextAgreement: 0.85,
+} as const;
+
+interface CacheObservation {
+  readonly label: string;
+  readonly record: SurfaceCacheRecord | undefined;
+  readonly backend: Record<string, unknown>;
+  readonly repaints: number;
+  readonly allocations: number;
+  readonly reuses: number;
+}
+
+function cacheDelta(before: CacheObservation, after: CacheObservation) {
+  return {
+    repaints: after.repaints - before.repaints,
+    allocations: after.allocations - before.allocations,
+    reuses: after.reuses - before.reuses,
+  };
+}
+
+function decodeRegion(region: {
+  width: number;
+  height: number;
+  pixels: string;
+}): RgbaFrame {
+  return {
+    width: region.width,
+    height: region.height,
+    pixels: new Uint8Array(Buffer.from(region.pixels, "base64")),
+  };
+}
+
+/** Bright text, icon and glow pixels of the panel. */
+function isBright(r: number, g: number, b: number): boolean {
+  return Math.max(r, g, b) >= 170;
+}
+
+test("Gallery GUI panel caches distant presentation within direct-rendering tolerance", {
+  timeout: 180_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "GUI demo Surface cache",
+    {
+      ...galleryEnvironment,
+      evidenceParent: resolve("target/reviews/gui-demo-surface-cache"),
+    },
+    context.signal,
+    async (scenario) => {
+      const started = performance.now();
+      const g = await openGallery(scenario, { initialPage: "gui" });
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector<HTMLOutputElement>("#status")?.dataset
+            .state === "ready",
+      );
+      // Keep the pointer off the canvas: hover would promote the panel.
+      await g.page.mouse.move(1, 1);
+      // Compare the vector panel alone, as the gallery's isolation control
+      // intends, so projector geometry never occludes a placed panel.
+      await g.page.locator("#gui-vector-only").click();
+      await g.waitFor(
+        (inspection) =>
+          !inspection.entities.some(({ metadata }) =>
+            metadata.symbolicId?.startsWith("gui-projector-"),
+          ),
+      );
+      await g.page.mouse.move(1, 1);
+      const evidence: Record<string, unknown> = {};
+      const record = async (name: string, value: unknown) => {
+        evidence[name] = value;
+        await writeFile(
+          join(scenario.evidence.directory, "surface-cache-evidence.json"),
+          JSON.stringify(
+            evidence,
+            (_key, value) =>
+              typeof value === "bigint" ? String(value) : value,
+            2,
+          ) + "\n",
+        );
+      };
+      const observe = async (label: string): Promise<CacheObservation> => {
+        const entity = guiEntity(await g.inspect())?.id;
+        const { frame } = await g.capture(label);
+        const backend = frame.backend;
+        const records = backend.surfaceCaches as
+          | readonly SurfaceCacheRecord[]
+          | undefined;
+        assert.ok(records, "Surface cache diagnostics are unavailable");
+        const observation = {
+          label,
+          record:
+            entity === undefined
+              ? undefined
+              : records.find((entry) => entry.entity === entity),
+          backend,
+          repaints: Number(backend.totalSurfaceCacheRepaints),
+          allocations: Number(backend.totalSurfaceCacheAllocations),
+          reuses: Number(backend.totalSurfaceCacheReuses),
+        };
+        const { ingress: _ingress, ...stats } = backend;
+        await record(label, { ...stats, records });
+        return observation;
+      };
+      // Poll completed frames until the panel's record satisfies `ready`.
+      const observeUntil = async (
+        label: string,
+        ready: (record: SurfaceCacheRecord | undefined) => boolean,
+      ) => {
+        const deadline = performance.now() + 10_000;
+        for (;;) {
+          const observation = await observe(label);
+          if (ready(observation.record)) return observation;
+          assert.ok(
+            performance.now() < deadline,
+            `${label}: cache record stayed ${JSON.stringify(observation.record, (_key, value) => (typeof value === "bigint" ? String(value) : value))}`,
+          );
+        }
+      };
+      const reused = (band: number) => (entry?: SurfaceCacheRecord) =>
+        entry?.mode === "reused" && entry.band === band;
+      const assertWarm = (observation: CacheObservation, band: number) => {
+        const [width, height] = expectedCacheSize(band);
+        assert.equal(observation.record?.mode, "reused");
+        assert.equal(observation.record?.band, band);
+        assert.equal(observation.record?.width, width);
+        assert.equal(observation.record?.height, height);
+        assert.equal(observation.record?.residentBytes, 4 * width * height);
+        // A warm frame composites the unchanged image: no raster or upload work.
+        assert.equal(observation.backend.surfaceCacheReuses, 1);
+        assert.equal(observation.backend.surfaceCacheRepaints, 0);
+        assert.equal(observation.backend.surfaceCacheDirect, 0);
+        assert.equal(observation.backend.surfaceCacheAllocations, 0);
+        assert.equal(observation.backend.uploadedBytes, 0);
+        assert.equal(
+          observation.backend.surfaceCacheResidentBytes,
+          4 * width * height,
+        );
+      };
+      const setMode = async (mode: "automatic" | "cached" | "direct") => {
+        await g.page.locator("#gui-surface-cache").selectOption(mode);
+        await g.settle();
+      };
+      const place = (distance: number, replace = true) =>
+        g.call("faceGalleryGuiToCamera", 0.92, distance, replace);
+      const panelBounds = async () => {
+        const corners = await g.call<readonly { x: number; y: number }[]>(
+          "projectGalleryPoints",
+          "gui-demo",
+          [
+            [-3.7, 2.4, 0],
+            [3.7, 2.4, 0],
+            [-3.7, -2.4, 0],
+            [3.7, -2.4, 0],
+          ],
+        );
+        return [
+          Math.min(...corners.map((p) => p.x)),
+          Math.min(...corners.map((p) => p.y)),
+          Math.max(...corners.map((p) => p.x)),
+          Math.max(...corners.map((p) => p.y)),
+        ] as const;
+      };
+      // Cached (actual) against direct (expected) at one placement and camera.
+      const compareWithDirect = async (name: string, band: number) => {
+        const cached = await observeUntil(`${name}-cached`, reused(band));
+        assertWarm(cached, band);
+        await setMode("direct");
+        const direct = await observeUntil(
+          `${name}-direct`,
+          (entry) => entry === undefined,
+        );
+        assert.equal(direct.backend.surfaceCacheEntries, 0);
+        assert.equal(direct.backend.surfaceCacheResidentBytes, 0);
+        assert.equal(direct.backend.surfaceCacheDirect, 0);
+        const bounds = await panelBounds();
+        const [expected, actual] = await Promise.all(
+          [direct.label, cached.label].map((label) =>
+            g
+              .call<{
+                width: number;
+                height: number;
+                pixels: string;
+              }>("viewerCaptureRegionPixels", label, bounds)
+              .then(decodeRegion),
+          ),
+        );
+        const difference = compareFrames(
+          expected!,
+          actual!,
+          CACHE_COMPARISON.channelThreshold,
+        );
+        const expectedText = mask(expected!, isBright);
+        const actualText = mask(actual!, isBright);
+        const comparison = {
+          ...difference,
+          width: expected!.width,
+          height: expected!.height,
+          directTextPixels: count(expectedText),
+          cachedTextPixels: count(actualText),
+          textAgreement: intersectionOverUnion(expectedText, actualText),
+        };
+        await Promise.all([
+          writeFile(
+            join(scenario.evidence.directory, `${name}-expected.png`),
+            encodePng(expected!),
+          ),
+          writeFile(
+            join(scenario.evidence.directory, `${name}-actual.png`),
+            encodePng(actual!),
+          ),
+          writeFile(
+            join(scenario.evidence.directory, `${name}-diff.png`),
+            encodePng(
+              differenceImage(
+                expected!,
+                actual!,
+                CACHE_COMPARISON.channelThreshold,
+              ),
+            ),
+          ),
+          record(`${name}-comparison`, comparison),
+        ]);
+        assert.ok(comparison.directTextPixels > 500, "panel text is missing");
+        assert.ok(
+          comparison.changedFraction <= CACHE_COMPARISON.maxChangedFraction &&
+            comparison.textAgreement >= CACHE_COMPARISON.minTextAgreement,
+          `${name}: cached panel differs from direct presentation: ${JSON.stringify(comparison)}`,
+        );
+        await setMode("automatic");
+        return comparison;
+      };
+
+      // Static content makes repaint counts exact: stop the scrolling trace.
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox" },
+        { kind: "toggle" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-autoscan")?.textContent === "standby",
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+
+      // The authored camera is inside the direct distance.
+      const authored = await g.inspect();
+      const camera = transform(authored);
+      const panel = fieldsWith(authored, "gui-demo", "sx");
+      const authoredDistance = Math.hypot(
+        ...["x", "y", "z"].map(
+          (axis) => Number(panel[axis]) - Number(camera[axis]),
+        ),
+      );
+      assert.ok(authoredDistance < CACHE_DIRECT_DISTANCE);
+      const near = await observeUntil(
+        "surface-cache-authored-near",
+        (entry) => entry?.mode === "near",
+      );
+      assert.equal(near.record?.band, 0);
+      assert.equal(near.record?.residentBytes, 0);
+      assert.equal(near.backend.surfaceCacheDirect, 1);
+      assert.equal(near.backend.surfaceCacheRepaints, 0);
+      assert.equal(near.backend.surfaceCacheResidentBytes, 0);
+      await record("authored-distance", authoredDistance);
+
+      // Cold band-one frame: one allocation and one repaint, then reuse.
+      const beforeCold = near;
+      await place(26, false);
+      const warm = await observeUntil("surface-cache-band1-warm", reused(1));
+      assertWarm(warm, 1);
+      assert.deepEqual(
+        { ...cacheDelta(beforeCold, warm), reuses: 0 },
+        { repaints: 1, allocations: 1, reuses: 0 },
+      );
+      assert.equal(warm.record?.repaints, 1);
+      const aurora = await compareWithDirect("surface-cache-aurora-band1", 1);
+
+      // Hysteresis: 42 m stays in band one (boundary 40 m + 10%), 46 m moves
+      // to band two with one resize, 38 m stays there and 34 m returns.
+      const bands: Array<readonly [number, number, number]> = [
+        [2 * CACHE_DIRECT_DISTANCE * (1 + CACHE_HYSTERESIS) - 2, 1, 0],
+        [2 * CACHE_DIRECT_DISTANCE * (1 + CACHE_HYSTERESIS) + 2, 2, 1],
+        [2 * CACHE_DIRECT_DISTANCE * (1 - CACHE_HYSTERESIS) + 2, 2, 0],
+        [2 * CACHE_DIRECT_DISTANCE * (1 - CACHE_HYSTERESIS) - 2, 1, 1],
+      ];
+      let previous = await observeUntil("surface-cache-readmitted", reused(1));
+      const sizes: Array<readonly [number, number]> = [];
+      for (const [distance, band, allocations] of bands) {
+        await place(distance);
+        const current = await observeUntil(
+          `surface-cache-${distance}m`,
+          reused(band),
+        );
+        assertWarm(current, band);
+        assert.deepEqual(
+          { ...cacheDelta(previous, current), reuses: 0 },
+          { repaints: allocations, allocations, reuses: 0 },
+          `${distance} m`,
+        );
+        sizes.push([current.record!.width, current.record!.height]);
+        previous = current;
+      }
+      assert.ok(sizes[1]![0] < sizes[0]![0] && sizes[1]![1] < sizes[0]![1]);
+
+      // A viewport resize keeps the fixed texel density: no repaint.
+      await place(26);
+      previous = await observeUntil("surface-cache-before-resize", reused(1));
+      const viewport = g.page.viewportSize()!;
+      await g.page.setViewportSize({
+        width: viewport.width - 160,
+        height: viewport.height - 80,
+      });
+      try {
+        const resized = await observeUntil(
+          "surface-cache-viewport-resized",
+          reused(1),
+        );
+        assertWarm(resized, 1);
+        assert.deepEqual(cacheDelta(previous, resized).repaints, 0);
+        assert.deepEqual(cacheDelta(previous, resized).allocations, 0);
+      } finally {
+        await g.page.setViewportSize(viewport);
+      }
+      previous = await observeUntil(
+        "surface-cache-viewport-restored",
+        reused(1),
+      );
+
+      // A skin switch is paint, not a resource change: it repaints at the
+      // band's cadence and settles on the latest state.
+      await g.call(
+        "galleryGuiAction",
+        { role: "button", name: "EMBER" },
+        { kind: "press" },
+      );
+      await g.page.waitForFunction(
+        () => document.querySelector("#gui-skin")?.textContent === "ember",
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      const reskinned = await observeUntil(
+        "surface-cache-ember-settled",
+        reused(1),
+      );
+      const reskin = cacheDelta(previous, reskinned);
+      const reskinSeconds =
+        (reskinned.record!.paintedAtMs - previous.record!.paintedAtMs) / 1000;
+      assert.equal(reskin.allocations, 0);
+      assert.ok(reskin.repaints >= 1, "the skin switch never repainted");
+      assert.ok(
+        reskin.repaints <= Math.ceil(reskinSeconds * CACHE_REFRESH_HZ) + 1,
+        `skin repaints exceeded the ${CACHE_REFRESH_HZ} Hz cap: ${JSON.stringify({ reskin, reskinSeconds })}`,
+      );
+      await record("ember-repaints", { ...reskin, reskinSeconds });
+      const ember = await compareWithDirect("surface-cache-ember-band1", 1);
+
+      // Continuous scanning repaints at the cap without starving.
+      previous = await observeUntil("surface-cache-before-scan", reused(1));
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox" },
+        { kind: "toggle" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-autoscan")?.textContent === "enabled",
+      );
+      const scanStart = await observe("surface-cache-scan-start");
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      const scanEnd = await observe("surface-cache-scan-end");
+      const scan = cacheDelta(scanStart, scanEnd);
+      const scanSeconds =
+        (scanEnd.record!.paintedAtMs - scanStart.record!.paintedAtMs) / 1000;
+      assert.ok(scan.repaints >= 2, "continuous scanning starved repaints");
+      assert.ok(
+        scan.repaints <= Math.ceil(scanSeconds * CACHE_REFRESH_HZ) + 1,
+        `scan repaints exceeded the cap: ${JSON.stringify({ scan, scanSeconds })}`,
+      );
+      assert.equal(scan.allocations, 0);
+      await record("scan-repaints", { ...scan, scanSeconds });
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox" },
+        { kind: "toggle" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-autoscan")?.textContent === "standby",
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      previous = await observeUntil("surface-cache-scan-stopped", reused(1));
+
+      // Hover promotes the distant panel to direct presentation at once.
+      const pulse = await g.call<ProjectedGuiNode>(
+        "galleryGuiPoint",
+        { role: "button", name: "PULSE" },
+        0.5,
+        0.5,
+      );
+      await g.page.mouse.move(pulse.clientX, pulse.clientY);
+      const hovered = await observeUntil(
+        "surface-cache-hover",
+        (entry) => entry?.mode === "interaction",
+      );
+      assert.equal(hovered.backend.surfaceCacheDirect, 1);
+      assert.equal(hovered.backend.surfaceCacheReuses, 0);
+      assert.equal(hovered.backend.surfaceCacheRepaints, 0);
+      const heldHover = await observe("surface-cache-hover-held");
+      assert.equal(heldHover.record?.mode, "interaction");
+      assert.equal(cacheDelta(hovered, heldHover).repaints, 0);
+      // Leaving repaints before the changed image can be shown again. The
+      // canvas corner shows only background, so the GUI observes the exit.
+      const canvas = (await g.page.locator("#ipp-world-canvas").boundingBox())!;
+      await g.page.mouse.move(canvas.x + 8, canvas.y + 8);
+      const left = await observeUntil("surface-cache-hover-left", reused(1));
+      assert.ok(cacheDelta(heldHover, left).repaints >= 1);
+      assert.ok(left.record!.paintedAtMs > previous.record!.paintedAtMs);
+
+      // Removing the GUI World content releases its image.
+      await g.call("releaseGalleryGuiTransform");
+      await g.navigate("shapes");
+      const released = await observeUntil("surface-cache-released", () => true);
+      assert.deepEqual(released.backend.surfaceCaches, []);
+      assert.equal(released.backend.surfaceCacheEntries, 0);
+      assert.equal(released.backend.surfaceCacheResidentBytes, 0);
+      await record("summary", {
+        aurora,
+        ember,
+        durationMs: performance.now() - started,
+      });
       assert.deepEqual(g.errors, []);
     },
   );

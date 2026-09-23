@@ -6,6 +6,7 @@ import type {
   GuiSemanticRole,
   GuiSemanticTree,
   Inspection,
+  SurfaceCacheRecord,
 } from "@ipp/client";
 import { runBrowserEnvironment } from "../browser/environment.js";
 import {
@@ -27,6 +28,30 @@ const environment = {
   ...galleryEnvironment,
   evidenceParent: resolve("target/reviews/gui-camera-input"),
 };
+
+/** Gallery panel cache policy, restated independently of scene.tsx. */
+const CACHE_DIRECT_DISTANCE = 20;
+const CACHE_TEXELS_PER_METRE = 80;
+
+/** Cache image size in a band; Surface sizes are f32 fields. */
+function expectedCacheSize(band: number): readonly [number, number] {
+  const density = CACHE_TEXELS_PER_METRE / 2 ** (band - 1);
+  return [
+    Math.ceil(Math.fround(7.4) * density),
+    Math.ceil(Math.fround(4.8) * density),
+  ];
+}
+
+/** World distance from the camera to the panel anchor, from public inspection. */
+function panelDistance(inspection: Inspection): number {
+  const camera = transform(inspection);
+  const panel = transform(inspection, "gui-demo");
+  return Math.hypot(
+    ...["x", "y", "z"].map(
+      (axis) => Number(panel[axis]) - Number(camera[axis]),
+    ),
+  );
+}
 
 function cameraChanged(before: Record<string, unknown>, after: Inspection) {
   const current = transform(after);
@@ -148,8 +173,127 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         assert.deepEqual(after, before);
       };
 
-      const header = await point("text", "GUI DEMO");
       let edge = await panelEdge();
+
+      // Camera-only motion over the cached panel composites the existing
+      // image: no repaint and no upload. Static content makes counts exact.
+      const cacheState = async (label: string) => {
+        const panel = (await g.inspect()).entities.find(
+          ({ metadata }) => metadata.symbolicId === "gui-demo",
+        )!.id;
+        const { frame } = await g.capture(label);
+        const records = frame.backend.surfaceCaches as
+          | readonly SurfaceCacheRecord[]
+          | undefined;
+        assert.ok(records, "Surface cache diagnostics are unavailable");
+        const { ingress: _ingress, ...stats } = frame.backend;
+        await scenario.evidence.record(`${label}-surface-cache`, stats);
+        return {
+          record: records.find(({ entity }) => entity === panel),
+          backend: frame.backend,
+          repaints: Number(frame.backend.totalSurfaceCacheRepaints),
+          allocations: Number(frame.backend.totalSurfaceCacheAllocations),
+          uploaded: Number(frame.backend.totalUploadedBytes),
+        };
+      };
+      const cacheUntil = async (
+        label: string,
+        ready: (record?: SurfaceCacheRecord) => boolean,
+      ) => {
+        const deadline = performance.now() + 10_000;
+        for (;;) {
+          const state = await cacheState(label);
+          if (ready(state.record)) return state;
+          assert.ok(
+            performance.now() < deadline,
+            `${label}: cache record stayed ${state.record?.mode}`,
+          );
+        }
+      };
+      const reusedBand = (band: number) => (record?: SurfaceCacheRecord) =>
+        record?.mode === "reused" && record.band === band;
+      const dollyOut = async (minimum: number) => {
+        for (let step = 0; step < 12; step++) {
+          const distance = panelDistance(await g.inspect());
+          if (distance >= minimum) return distance;
+          const before = transform(await g.inspect());
+          await g.page.mouse.move(...edge.outside);
+          await g.page.mouse.wheel(0, 120);
+          await g.waitFor((inspection) => cameraChanged(before, inspection));
+        }
+        throw new Error(`Camera did not dolly beyond ${minimum} m`);
+      };
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox" },
+        { kind: "toggle" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-autoscan")?.textContent === "standby",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 550));
+      assert.ok(panelDistance(await g.inspect()) < CACHE_DIRECT_DISTANCE);
+      const near = await cacheUntil(
+        "camera-cache-near",
+        (record) => record?.mode === "near",
+      );
+      const bandOneDistance = await dollyOut(CACHE_DIRECT_DISTANCE * 1.2);
+      assert.ok(bandOneDistance < 2 * CACHE_DIRECT_DISTANCE);
+      const bandOne = await cacheUntil("camera-cache-band1", reusedBand(1));
+      assert.equal(bandOne.allocations - near.allocations, 1);
+      assert.equal(bandOne.repaints - near.repaints, 1);
+      edge = await panelEdge();
+      const beforeOrbit = transform(await g.inspect());
+      await g.drag(edge.outside, [
+        edge.outside[0] + edge.tangent[0] * 60,
+        edge.outside[1] + edge.tangent[1] * 60,
+      ]);
+      await g.waitFor((inspection) => cameraChanged(beforeOrbit, inspection));
+      const orbited = await cacheState("camera-cache-orbited");
+      assert.ok(cameraChanged(beforeOrbit, await g.inspect()));
+      assert.equal(orbited.record?.mode, "reused");
+      assert.equal(orbited.record?.band, 1);
+      assert.deepEqual(
+        [orbited.record?.width, orbited.record?.height],
+        expectedCacheSize(1),
+      );
+      assert.equal(orbited.repaints - bandOne.repaints, 0);
+      assert.equal(orbited.allocations - bandOne.allocations, 0);
+      assert.equal(orbited.uploaded - bandOne.uploaded, 0);
+      assert.equal(orbited.backend.surfaceCacheReuses, 1);
+      assert.equal(orbited.backend.uploadedBytes, 0);
+      // Dollying past the next boundary resizes the same image once.
+      edge = await panelEdge();
+      await dollyOut(2 * CACHE_DIRECT_DISTANCE * 1.2);
+      const bandTwo = await cacheUntil("camera-cache-band2", reusedBand(2));
+      assert.equal(bandTwo.allocations - orbited.allocations, 1);
+      assert.equal(bandTwo.repaints - orbited.repaints, 1);
+      assert.deepEqual(
+        [bandTwo.record?.width, bandTwo.record?.height],
+        expectedCacheSize(2),
+      );
+      assert.equal(
+        bandTwo.backend.surfaceCacheResidentBytes,
+        4 * expectedCacheSize(2)[0] * expectedCacheSize(2)[1],
+      );
+      await g.page.locator("#reset-camera").click();
+      await cacheUntil(
+        "camera-cache-reset",
+        (record) => record?.mode === "near",
+      );
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox" },
+        { kind: "toggle" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-autoscan")?.textContent === "enabled",
+      );
+
+      const header = await point("text", "GUI DEMO");
+      edge = await panelEdge();
       await unchangedAfterDrag([header.clientX, header.clientY], edge.outside);
 
       const sliderStart = await point("slider", undefined, 0.25);

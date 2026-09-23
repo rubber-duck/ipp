@@ -1,4 +1,4 @@
-import type { GuiSceneState } from "./scene.js";
+import type { GuiSceneState, GuiSurfaceCacheMode } from "./scene.js";
 
 interface GuiControlsProps {
   scene: GuiSceneState;
@@ -26,6 +26,28 @@ export function GuiControls({ scene }: GuiControlsProps) {
       <p>
         Compare the FPS readout at the same camera angle. Isolates the whole GUI
         Surface and camera without projector geometry.
+      </p>
+      <label className="mesh-select" htmlFor="gui-surface-cache">
+        <span>Panel presentation</span>
+        <select
+          id="gui-surface-cache"
+          value={scene.surfaceCache}
+          disabled={!scene.ready}
+          onChange={(event) =>
+            scene.selectSurfaceCache(
+              event.currentTarget.value as GuiSurfaceCacheMode,
+            )
+          }
+        >
+          <option value="automatic">Automatic caching</option>
+          <option value="cached">Cached at every distance</option>
+          <option value="direct">Direct rendering</option>
+        </select>
+      </label>
+      <p>
+        Automatic caching draws the panel directly near the authored view and
+        from a reduced-rate texture once the camera zooms out past 22 m. Focus,
+        hover and dragging on the panel always draw it directly.
       </p>
       <dl className="selection-summary">
         <div>
@@ -64,4 +86,8 @@ export function GuiControls({ scene }: GuiControlsProps) {
   );
 }
 
-export { useGuiScene, type GuiSceneState } from "./scene.js";
+export {
+  useGuiScene,
+  type GuiSceneState,
+  type GuiSurfaceCacheMode,
+} from "./scene.js";

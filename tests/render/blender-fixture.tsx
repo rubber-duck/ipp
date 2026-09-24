@@ -1,4 +1,4 @@
-import { presentationTesting } from "@ipp/client/testing";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type { FrameCapture } from "@ipp/client";
 import { createRoot, Entity, Transform, type ReactWorldRoot } from "@ipp/react";
 import type { BlenderViewerHandle } from "../../examples/blender-viewer/main.js";

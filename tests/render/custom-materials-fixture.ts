@@ -1,5 +1,5 @@
 /** Backend-independent material scenarios driven through the generated worker client. */
-import { presentationTesting } from "@ipp/client/testing";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
   AnimationWorldClient,

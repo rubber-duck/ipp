@@ -1,5 +1,5 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
-import { presentationTesting } from "@ipp/client/testing";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { activateFixtureCamera } from "../integration/camera-fixtures.js";
 import type { Client } from "@ipp/client";
 import type {

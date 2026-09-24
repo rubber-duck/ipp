@@ -2,7 +2,7 @@ import type { RenderStatisticsSnapshot } from "@ipp/client";
 import {
   presentationTesting,
   type GlyphAtlasLimits,
-} from "@ipp/client/testing";
+} from "../../packages/ipp-client/src/testing.js";
 import {
   createRoot,
   Entity,

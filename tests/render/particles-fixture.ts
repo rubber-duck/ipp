@@ -1,5 +1,5 @@
 /** Real generated-worker particle scenarios; launch/capture transport stays in the environment. */
-import { presentationTesting } from "@ipp/client/testing";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
   FrameCapture,

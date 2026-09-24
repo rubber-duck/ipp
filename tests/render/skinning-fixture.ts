@@ -1,4 +1,4 @@
-import { presentationTesting } from "@ipp/client/testing";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { settledAsset } from "../integration/asset-fixtures.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {

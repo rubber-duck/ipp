@@ -1,4 +1,4 @@
-import { presentationTesting } from "@ipp/client/testing";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type { RenderWorldClient, Command, FrameCapture } from "@ipp/client";
 import {
   activateFixtureCamera,

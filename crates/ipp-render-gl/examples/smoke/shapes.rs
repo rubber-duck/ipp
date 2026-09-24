@@ -123,7 +123,6 @@ fn planes<D: RenderDevice>(
     capture: &mut impl FnMut() -> Result<Vec<u8>>,
     output: &Path,
 ) -> Result<()> {
-    let other_world_programs = renderer.cached_program_count();
     let mut world_host = ipp_core::HostRuntime::new();
     let mut world = load(&mut world_host, renderer, fixtures, "plane")?;
     super::world::render_frame(renderer, &mut world, WIDTH, HEIGHT)?;
@@ -228,9 +227,9 @@ fn planes<D: RenderDevice>(
             .expect("fixture World remains live");
 
         assert_eq!(
-            renderer.cached_program_count(),
-            other_world_programs + 1,
-            "only the active plane recipe remains resident beside other Worlds"
+            super::world::resident_programs(world.asset_resources()),
+            1,
+            "only the active plane recipe remains resident"
         );
     }
     let tint = [0.25, 0.5, 0.75];

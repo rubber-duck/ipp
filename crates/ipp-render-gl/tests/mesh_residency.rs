@@ -104,8 +104,18 @@ fn frame_accounting_reports_between_frame_uploads_once() {
     let (mut world, mut renderer, _) = setup(&mut host);
     upload(&mut world, 1);
 
-    assert_eq!(renderer.begin_frame(), 78);
-    assert_eq!(renderer.begin_frame(), 0);
+    // Uploads completed between renders belong to the next completed render.
+    let first = renderer.render_stats(&mut world, 100, 100).unwrap();
+    assert_eq!(first.uploaded_bytes, 78);
+    let second = renderer.render_stats(&mut world, 100, 100).unwrap();
+    assert_eq!(second.uploaded_bytes, 0);
+    assert_eq!(
+        renderer.viewport_limits(),
+        Some(ipp_render_gl::ViewportLimits {
+            max_width: 4096,
+            max_height: 4096,
+        })
+    );
 }
 
 #[test]
@@ -661,8 +671,7 @@ fn render_host_frame<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     host: &mut ipp_core::HostRuntime,
     world_id: ipp_core::WorldId,
-) -> ipp_render_gl::RenderStats {
-    renderer.begin_frame();
+) -> FrameStats {
     for _ in 0..8 {
         host.world_mut(world_id)
             .unwrap()
@@ -671,7 +680,7 @@ fn render_host_frame<D: RenderDevice>(
         host.progress_assets();
         let mut world = host.world_mut(world_id).unwrap();
         world.step(0.0).unwrap();
-        let stats = renderer.render(&mut world, 100, 100).unwrap();
+        let stats = renderer.render_stats(&mut world, 100, 100).unwrap();
         if !world.asset_resources().iter().any(|resource| {
             resource.source().kind == AssetTypeId(14)
                 && *resource.status() == AssetLoadStatus::Unloaded
@@ -934,7 +943,7 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
 #[cfg(feature = "gui")]
 #[test]
 fn population_budget_defers_misses_and_resumes_next_frame() {
-    let floor = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32;
+    let floor = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..floor + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) =
@@ -965,7 +974,7 @@ fn population_budget_defers_misses_and_resumes_next_frame() {
 #[test]
 fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
     // More glyphs than the per-frame floor; the scene's Surface shows up to 50.
-    let count = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32 + 16;
+    let count = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32 + 16;
     let ids: Vec<u32> = (0..count).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, _) =

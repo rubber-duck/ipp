@@ -61,12 +61,12 @@ impl<D: RenderDevice> RenderService<D> {
             program_keys: Vec::new(),
             program_lookup: vec![None; super::super::shader::PROGRAM_RECIPE_COUNT],
             custom_materials: BTreeMap::new(),
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             custom_fallbacks: BTreeMap::new(),
             uploads: Default::default(),
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             statistics: Default::default(),
-            #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+            #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
             retained_surface_residency: Default::default(),
             frame_scratch: Default::default(),
             #[cfg(feature = "particles")]
@@ -210,7 +210,7 @@ impl<D: RenderDevice> RenderService<D> {
         }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
         {
             self.retained_surface_residency = Default::default();
         }
@@ -253,7 +253,7 @@ impl<D: RenderDevice> RenderService<D> {
         for key in keys {
             resources.invalidate_graphics(key);
         }
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         self.custom_fallbacks.clear();
         self.light_selections.clear();
         #[cfg(feature = "shadows")]
@@ -284,7 +284,7 @@ impl<D: RenderDevice> RenderService<D> {
     /// Testing mode attributing each GL error to its failing call; normal
     /// submissions validate at pass boundaries (see
     /// [`crate::RenderDevice::set_exhaustive_draw_checks`]).
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
         self.device.borrow_mut().set_exhaustive_draw_checks(enabled);
     }
@@ -294,7 +294,7 @@ impl<D: RenderDevice> RenderService<D> {
     /// The World's glyph demand leaves the shared atlas; pages other Worlds still use
     /// stay resident. Its Surface cache images are released.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
         let before = self.retained_surface_residency(world);
         self.light_selections.remove(&world);
         #[cfg(feature = "surfaces")]
@@ -313,7 +313,7 @@ impl<D: RenderDevice> RenderService<D> {
             self.glyph_atlas.release_if_unused();
         }
 
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
         self.track_retained_surface_residency(world, before);
     }
 
@@ -323,7 +323,7 @@ impl<D: RenderDevice> RenderService<D> {
     ///
     /// A lowered budget retires pages at the next publication; zero pages is treated
     /// as one.
-    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    #[cfg(all(feature = "gui", any(test, feature = "diagnostics")))]
     pub fn set_glyph_atlas_limits(&mut self, limits: super::super::glyph_atlas::GlyphAtlasLimits) {
         self.glyph_atlas.set_limits(limits);
     }
@@ -335,7 +335,7 @@ impl<D: RenderDevice> RenderService<D> {
     /// [`super::super::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero populates only
     /// that floor per frame; an infinite budget populates up to
     /// [`super::super::glyph_atlas::MAX_POPULATES_PER_FRAME`].
-    #[cfg(all(feature = "gui", feature = "diagnostics"))]
+    #[cfg(all(feature = "gui", any(test, feature = "diagnostics")))]
     pub fn set_glyph_population_budget_ms(&mut self, budget_ms: f64) {
         self.glyph_population.set_budget_ms(budget_ms);
     }
@@ -347,7 +347,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Statistics of the last completed render; reset when a render starts.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn statistics(&self) -> &crate::RenderStatistics {
         &self.statistics
     }

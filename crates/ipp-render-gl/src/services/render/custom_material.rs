@@ -30,7 +30,7 @@ pub(super) struct CustomDrawState {
 }
 
 /// Why an entity's custom material falls back to default drawing.
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomMaterialFallback {
     /// Authored shader source of the material.
@@ -66,7 +66,7 @@ impl<D: RenderDevice> RenderService<D> {
                 .is_ok()
                 && world.custom_material(*entity).is_some()
         });
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         self.custom_fallbacks.retain(|entity, _| {
             items
                 .binary_search_by_key(entity, |item| item.entity)
@@ -81,7 +81,7 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "particles")]
             if item.particle.is_some_and(|p| p.sprite) {
                 ready.remove(&item.entity);
-                #[cfg(feature = "diagnostics")]
+                #[cfg(any(test, feature = "diagnostics"))]
                 self.custom_fallbacks.remove(&item.entity);
                 continue;
             }
@@ -90,7 +90,7 @@ impl<D: RenderDevice> RenderService<D> {
                 .then(|| world.custom_material(item.entity))
                 .flatten();
             let Some(material) = material else {
-                #[cfg(feature = "diagnostics")]
+                #[cfg(any(test, feature = "diagnostics"))]
                 self.custom_fallbacks.remove(&item.entity);
                 continue;
             };
@@ -214,14 +214,14 @@ impl<D: RenderDevice> RenderService<D> {
             })();
             match result {
                 Ok(()) => {
-                    #[cfg(feature = "diagnostics")]
+                    #[cfg(any(test, feature = "diagnostics"))]
                     self.custom_fallbacks.remove(&item.entity);
                 }
                 Err(RenderError::ContextLost) => return Err(RenderError::ContextLost),
-                #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
+                #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
                 Err(error) => {
                     ready.remove(&item.entity);
-                    #[cfg(feature = "diagnostics")]
+                    #[cfg(any(test, feature = "diagnostics"))]
                     self.record_custom_fallback(item.entity, &material.source, error);
                 }
             }
@@ -231,7 +231,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Retain a fallback reason, logging it only when it changes.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     fn record_custom_fallback(&mut self, entity: EntityId, source: &str, error: RenderError) {
         if self
             .custom_fallbacks
@@ -311,7 +311,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Most recent material fallback reasons, separate from semantic World outcomes.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn custom_material_diagnostics(&self) -> &BTreeMap<EntityId, CustomMaterialFallback> {
         &self.custom_fallbacks
     }

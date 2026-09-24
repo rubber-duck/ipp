@@ -624,22 +624,15 @@ fn optional_streams<D: RenderDevice>(
         ("position-after-weight", false, false, None),
     ];
     renderer.replace_device(&mut ipp_core::HostRuntime::new(), rebuild()?)?;
+    let mut empty_host = ipp_core::HostRuntime::new();
+    let mut empty = super::world::empty_world(&mut empty_host);
+    super::world::render_frame(renderer, &mut empty, WIDTH, HEIGHT)?;
     assert_eq!(
-        renderer.cached_program_count(),
+        super::world::resident_programs(empty.asset_resources()),
         0,
-        "no eager shader compilation"
+        "no eager shader compilation: an empty world needs no program"
     );
-    super::world::render_frame(
-        renderer,
-        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
-        WIDTH,
-        HEIGHT,
-    )?;
-    assert_eq!(
-        renderer.cached_program_count(),
-        0,
-        "empty world needs no program"
-    );
+    drop(empty);
     let mut solid = None;
     let mut textured = None;
     let mut evidence = String::from("layout,vertex_bytes,upload_bytes,programs\n");
@@ -708,7 +701,7 @@ fn optional_streams<D: RenderDevice>(
             "{name}: only present data uploads"
         );
         assert_eq!(
-            renderer.cached_program_count(),
+            super::world::resident_programs(world.asset_resources()),
             1,
             "only the current World's program demand stays resident"
         );
@@ -755,7 +748,7 @@ fn optional_streams<D: RenderDevice>(
         );
         evidence.push_str(&format!(
             "{name},{vertex_bytes},{expected_upload},{}\n",
-            renderer.cached_program_count()
+            super::world::resident_programs(world.asset_resources())
         ));
         if name == "weight-varying" {
             let identity = world.render_items()[0].mesh;
@@ -772,14 +765,14 @@ fn optional_streams<D: RenderDevice>(
                     .id,
                 identity.asset
             );
-            assert_eq!(renderer.cached_program_count(), 0);
+            assert_eq!(super::world::resident_programs(world.asset_resources()), 0);
             assert_eq!(
                 deliver!(renderer, world_host, world, &bytes, Some(&texture))?.uploaded_bytes
                     as usize,
                 expected_upload
             );
             assert_eq!(
-                renderer.cached_program_count(),
+                super::world::resident_programs(world.asset_resources()),
                 1,
                 "rebuild only current demand"
             );
@@ -800,7 +793,10 @@ fn optional_streams<D: RenderDevice>(
             super::world::present_world!(renderer, world_host, world, WIDTH, HEIGHT)?;
             drop(world);
             world_host.flush_resource_lifecycle();
-            assert_eq!(renderer.cached_program_count(), 1);
+            assert_eq!(
+                super::world::resident_programs(world_host.asset_resources()),
+                1
+            );
         }
     }
     std::fs::write(output.join("optional-streams.csv"), evidence)?;

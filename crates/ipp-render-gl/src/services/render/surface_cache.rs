@@ -124,7 +124,7 @@ pub enum SurfaceCachePresentation {
 
 impl SurfaceCachePresentation {
     /// Stable numeric code used by diagnostic exports, in declaration order.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub const fn code(self) -> u32 {
         match self {
             Self::Near => 0,
@@ -139,7 +139,7 @@ impl SurfaceCachePresentation {
     }
 
     /// Whether the Surface was drawn directly rather than from its image.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub const fn is_direct(self) -> bool {
         matches!(
             self,
@@ -149,7 +149,7 @@ impl SurfaceCachePresentation {
 }
 
 /// Read-only state of one opted-in Surface's cache on this context.
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceCacheDiagnostic {
     /// Live generational entity identity within its World.
@@ -218,7 +218,7 @@ pub(crate) enum SurfaceCacheAction {
 }
 
 /// Per-frame cache work, published into [`super::RenderStatistics`].
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceCacheFrameCounts {
     pub repaints: u32,
@@ -279,9 +279,9 @@ struct SurfaceCacheEntry<T> {
     /// Plan stamp of the last frame that listed this Surface as live and opted in.
     live: u64,
     presentation: SurfaceCachePresentation,
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     repaints: u32,
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     reuses: u32,
     // Frame-local selection.
     action: SurfaceCacheAction,
@@ -307,9 +307,9 @@ impl<T> SurfaceCacheEntry<T> {
             seen_paint: 0,
             live: 0,
             presentation: SurfaceCachePresentation::Near,
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             repaints: 0,
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             reuses: 0,
             action: SurfaceCacheAction::Direct,
             desired: [0, 0],
@@ -336,7 +336,7 @@ pub(crate) struct SurfaceTextureCache<T> {
     stamp: u64,
     /// World whose frame is planned and not yet finished.
     planned: Option<WorldId>,
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     counts: SurfaceCacheFrameCounts,
     /// Reused budget ordering scratch.
     order: Vec<(bool, u64, (WorldId, EntityId))>,
@@ -351,7 +351,7 @@ impl<T> Default for SurfaceTextureCache<T> {
             entries: BTreeMap::new(),
             stamp: 0,
             planned: None,
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             counts: SurfaceCacheFrameCounts::default(),
             order: Vec::new(),
         }
@@ -391,7 +391,7 @@ impl<T> SurfaceTextureCache<T> {
     ) -> Result<(), RenderError> {
         self.stamp += 1;
         self.planned = Some(world);
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.counts = SurfaceCacheFrameCounts::default();
         }
@@ -403,13 +403,13 @@ impl<T> SurfaceTextureCache<T> {
 
         self.apply_budget(targets);
         let allocated = self.allocate(world, time, targets);
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         self.count_plan(world);
         allocated
     }
 
     /// Count this plan's presentations for the frame statistics.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     fn count_plan(&mut self, world: WorldId) {
         for entry in self.entries.range_mut(world_range(world)).map(|(_, e)| e) {
             if entry.live != self.stamp {
@@ -679,7 +679,7 @@ impl<T> SurfaceTextureCache<T> {
 
                     resident += image_bytes(desired);
                     entry.painted = None;
-                    #[cfg(feature = "diagnostics")]
+                    #[cfg(any(test, feature = "diagnostics"))]
                     {
                         self.counts.allocations += 1;
                     }
@@ -771,7 +771,7 @@ impl<T> SurfaceTextureCache<T> {
         entry.missing.sort_unstable();
         entry.missing.dedup();
         entry.painted_at = time;
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             entry.repaints = entry.repaints.saturating_add(1);
             self.counts.repaints += 1;
@@ -817,7 +817,7 @@ impl<T> SurfaceTextureCache<T> {
         }
 
         // A reused image that failed to composite was not presented.
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         if entry.action == SurfaceCacheAction::Reuse {
             entry.reuses = entry.reuses.saturating_sub(1);
             self.counts.reuses = self.counts.reuses.saturating_sub(1);
@@ -828,7 +828,7 @@ impl<T> SurfaceTextureCache<T> {
         entry.retry_at = time + SURFACE_CACHE_RETRY_SECONDS;
         entry.action = SurfaceCacheAction::Direct;
         entry.presentation = SurfaceCachePresentation::Fallback;
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.counts.direct += 1;
             self.counts.fallbacks += 1;
@@ -881,7 +881,7 @@ impl<T> SurfaceTextureCache<T> {
     }
 
     /// The last completed plan's counts.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn counts(&self) -> SurfaceCacheFrameCounts {
         self.counts
     }
@@ -928,7 +928,7 @@ impl<T> SurfaceTextureCache<T> {
     }
 
     /// Append one World's entries in entity order.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn diagnostics(&self, world: WorldId, out: &mut Vec<SurfaceCacheDiagnostic>) {
         out.extend(
             self.entries

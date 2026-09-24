@@ -14,9 +14,7 @@ use ipp_core::{
     SurfaceItemContent, SurfaceItemId, SurfaceItemPatch, SurfaceItemStyle, WorldContext, WorldId,
     components::{Camera, Transform},
 };
-use ipp_render_gl::{
-    RenderError, RenderService, RenderStats, SurfaceCacheDiagnostic, SurfaceCachePresentation,
-};
+use ipp_render_gl::{RenderError, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation};
 use support::*;
 
 const VIEWPORT: u32 = 100;
@@ -97,17 +95,16 @@ fn try_frame(
     renderer: &mut RenderService<TestDevice>,
     world: &mut WorldContext<'_>,
     dt: f64,
-) -> Result<RenderStats, RenderError> {
-    renderer.begin_frame();
+) -> Result<FrameStats, RenderError> {
     advance(world, dt).unwrap();
-    renderer.render(world, VIEWPORT, VIEWPORT)
+    renderer.render_stats(world, VIEWPORT, VIEWPORT)
 }
 
 fn frame(
     renderer: &mut RenderService<TestDevice>,
     world: &mut WorldContext<'_>,
     dt: f64,
-) -> RenderStats {
+) -> FrameStats {
     try_frame(renderer, world, dt).unwrap()
 }
 
@@ -136,7 +133,7 @@ fn presentation(renderer: &RenderService<TestDevice>, world: WorldId) -> Surface
 }
 
 /// Cache counters of one frame: repaints, reuses, direct, fallbacks, allocations.
-fn work(stats: &RenderStats) -> [u32; 5] {
+fn work(stats: &FrameStats) -> [u32; 5] {
     [
         stats.surface_cache_repaints,
         stats.surface_cache_reuses,
@@ -1159,7 +1156,7 @@ fn worlds_share_the_context_budget() {
     assert_eq!(diagnostics(&renderer, first)[0].size, [0, 0]);
 
     // Forgetting one World leaves the other's image.
-    renderer.set_surface_cache_budget(ipp_render_gl::DEFAULT_SURFACE_CACHE_BUDGET_BYTES);
+    renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
     let mut world = host.world_mut(first).unwrap();
     frame(&mut renderer, &mut world, 0.1);
     drop(world);
@@ -1196,7 +1193,7 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
 #[cfg(feature = "gui")]
 #[test]
 fn text_drawn_analytically_under_the_population_bound_is_refined_next_frame() {
-    let budget = ipp_render_gl::glyph_atlas::MIN_POPULATES_PER_FRAME as u32;
+    let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..budget + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
     let (mut renderer, state, world_id, entity) =

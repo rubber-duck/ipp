@@ -90,7 +90,7 @@ impl ProbeBox {
             opacity: 1.0,
             clip: None,
         };
-        ipp_render_gl::gui_batch::generate_box_vertices(
+        ipp_render_gl::generate_gui_box_vertices(
             &style,
             &[self.placement[2], self.placement[3]],
             &self.corner,
@@ -151,7 +151,7 @@ fn glyph_vertex(position: [f32; 2], uv: [f32; 2], color: [f32; 4]) -> ipp_render
         position,
         color0: color,
         gradient_coords: [uv[0], uv[1], 0.0, 0.0],
-        material_params: [ipp_render_gl::gui_batch::GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
+        material_params: [ipp_render_gl::GUI_FILL_GLYPH, 0.0, 0.0, 1.0],
         clip: ROOT,
         ..ipp_render_gl::GuiVertex::EMPTY
     }
@@ -834,7 +834,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         end_color: [0.0, 0.0, 1.0, 1.0],
     };
     let mut batch_vertices = Vec::new();
-    batch_vertices.extend_from_slice(&ipp_render_gl::gui_batch::generate_box_vertices(
+    batch_vertices.extend_from_slice(&ipp_render_gl::generate_gui_box_vertices(
         &linear_style,
         &[1.0, 1.0],
         &[0.1, 0.1],
@@ -861,7 +861,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_color: [1.0, 1.0, 0.0, 1.0],
         end_color: [0.5, 0.0, 0.5, 1.0],
     };
-    batch_vertices.extend_from_slice(&ipp_render_gl::gui_batch::generate_box_vertices(
+    batch_vertices.extend_from_slice(&ipp_render_gl::generate_gui_box_vertices(
         &radial_style,
         &[1.0, 1.0],
         &[0.35, 0.12],
@@ -888,7 +888,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         radius: 0.15,
         falloff: 1.5,
     };
-    batch_vertices.extend_from_slice(&ipp_render_gl::gui_batch::generate_box_vertices(
+    batch_vertices.extend_from_slice(&ipp_render_gl::generate_gui_box_vertices(
         &glow_style,
         &[1.0, 0.75],
         &[0.1, 0.1],
@@ -909,7 +909,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opacity: 1.0,
         clip: None,
     };
-    let border_verts = ipp_render_gl::gui_batch::generate_box_vertices(
+    let border_verts = ipp_render_gl::generate_gui_box_vertices(
         &border_style,
         &[1.0, 0.75],
         &[0.1, 0.1],
@@ -932,7 +932,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         position: [3.4, 1.75],
         ..border_style
     };
-    let hollow_vertices = ipp_render_gl::gui_batch::generate_box_vertices(
+    let hollow_vertices = ipp_render_gl::generate_gui_box_vertices(
         &hollow_style,
         &[0.4, 0.4],
         &[0.05, 0.05],
@@ -1008,7 +1008,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         position: [0.5, 0.5],
         ..glow_style
     };
-    let rail = ipp_render_gl::gui_batch::generate_box_vertices(
+    let rail = ipp_render_gl::generate_gui_box_vertices(
         &rail_style,
         &[1.0, 0.0125],
         &[0.0, 0.0],
@@ -1022,7 +1022,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         position: [2.0, 0.5],
         ..rail_style
     };
-    let outline = ipp_render_gl::gui_batch::generate_box_vertices(
+    let outline = ipp_render_gl::generate_gui_box_vertices(
         &outline_style,
         &[1.0, 0.5],
         &[0.0, 0.0],

@@ -23,7 +23,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(209, "gl.render");
 
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.statistics = Default::default();
         }
@@ -32,7 +32,7 @@ impl<D: RenderDevice> RenderService<D> {
             return Err(RenderError::InvalidViewport);
         }
 
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
         let residency = self.retained_surface_residency(world.id());
 
         world.set_render_viewport(Some((width, height)));
@@ -107,7 +107,7 @@ impl<D: RenderDevice> RenderService<D> {
                 self.finish_retained_surfaces(world.id(), surface_items, false);
                 #[cfg(feature = "surfaces")]
                 self.finish_surface_caches(world, false);
-                #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+                #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
                 self.track_retained_surface_residency(world.id(), residency);
                 return Err(error);
             }
@@ -140,16 +140,16 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "surfaces")]
         self.finish_retained_surfaces(world.id(), surface_items, completed);
         #[cfg(feature = "surfaces")]
-        #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
+        #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
         let cache_planned = self.finish_surface_caches(world, completed);
-        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
         self.track_retained_surface_residency(world.id(), residency);
 
-        #[cfg_attr(not(feature = "diagnostics"), allow(unused_mut))]
+        #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_mut))]
         let mut work = result?;
         finish?;
 
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             work.statistics.uploaded_bytes = work
                 .statistics
@@ -275,7 +275,7 @@ impl<D: RenderDevice> RenderService<D> {
                 .get_mut(&world.id())
                 .expect("prepared lighting")
                 .assign_shadows(&mut lighting);
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             {
                 stats.statistics.unshadowed_lights = lighting
                     .requested_shadows

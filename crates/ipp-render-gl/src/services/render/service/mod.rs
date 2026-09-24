@@ -19,7 +19,7 @@ use std::{
     rc::Rc,
 };
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 use super::custom_material::CustomMaterialFallback;
 
 #[cfg(feature = "particles")]
@@ -79,14 +79,14 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) custom_materials:
         BTreeMap<ipp_core::EntityId, super::custom_material::PreparedCustomMaterial>,
     /// Retained custom-material fallbacks, so each changed reason is logged once.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) custom_fallbacks: BTreeMap<ipp_core::EntityId, CustomMaterialFallback>,
     uploads: super::frame_statistics::RenderUploadCounter,
     /// Statistics of the last completed render.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     statistics: super::frame_statistics::RenderStatistics,
     /// Context-wide retained Surface residency, maintained per World render.
-    #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+    #[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
     retained_surface_residency: surface::RetainedSurfaceResidency,
     frame_scratch: RenderFrameScratch,
     #[cfg(feature = "particles")]

@@ -2,6 +2,7 @@
 
 pub(crate) mod deferred_removal;
 pub(crate) mod egl;
+pub(crate) mod frame_stats;
 pub(crate) mod world;
 
 #[cfg(feature = "surfaces")]

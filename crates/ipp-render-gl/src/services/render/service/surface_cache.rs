@@ -18,7 +18,7 @@
 //! documented beside it in `render/surface_cache.rs`.
 
 use super::super::frame_statistics::RenderFrameWork;
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 use super::super::surface_cache::SurfaceCacheDiagnostic;
 use super::super::surface_cache::{SurfaceCacheAction, SurfaceCacheInput, SurfaceCacheTargets};
 use super::{RenderError, RenderService};
@@ -121,7 +121,7 @@ pub(super) fn surface_raster<T>(
 impl<D: RenderDevice> RenderService<D> {
     /// Append the cache state of one World's opted-in Surfaces after the last
     /// completed frame, in entity order. Read-only; it never changes presentation.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn surface_cache_diagnostics(
         &self,
         world: ipp_core::WorldId,
@@ -136,13 +136,13 @@ impl<D: RenderDevice> RenderService<D> {
     /// Images beyond the budget are evicted, least recently presented first,
     /// before new allocations; Surfaces that still do not fit present directly.
     /// Zero disables caching. The budget survives context loss.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn set_surface_cache_budget(&mut self, bytes: usize) {
         self.surface_cache.set_budget(bytes);
     }
 
     /// Current Surface cache image budget in bytes.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn surface_cache_budget(&self) -> usize {
         self.surface_cache.budget()
     }
@@ -417,7 +417,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Publish a completed plan's counts and context-wide cache residency.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) fn publish_surface_cache_statistics(
         &self,
         planned: bool,

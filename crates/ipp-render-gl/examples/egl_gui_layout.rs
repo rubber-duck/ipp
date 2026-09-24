@@ -89,7 +89,7 @@ fn render(
     renderer: &mut ipp_render_gl::RenderService<ipp_render_gl::GlesRenderDevice>,
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
-) -> Result<ipp_render_gl::RenderStats> {
+) -> Result<crate::smoke::frame_stats::FrameStats> {
     smoke::world::render_host_frame(
         renderer,
         host,
@@ -155,7 +155,7 @@ fn settle_assets(
     panel: ipp_core::EntityId,
     sources: &[ipp_core::services::asset_management::AssetSource],
     payloads: &std::collections::BTreeMap<String, Vec<u8>>,
-) -> Result<ipp_render_gl::RenderStats> {
+) -> Result<crate::smoke::frame_stats::FrameStats> {
     let progress_limit = payloads
         .values()
         .map(|bytes| {
@@ -165,7 +165,7 @@ fn settle_assets(
         })
         .sum::<usize>()
         + payloads.len() * 8;
-    let mut last = ipp_render_gl::RenderStats::default();
+    let mut last = crate::smoke::frame_stats::FrameStats::default();
     for _ in 0..progress_limit {
         host.progress_assets();
         for request in host.take_resource_requests() {

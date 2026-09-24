@@ -97,7 +97,7 @@ pub struct AnalyticGlyphCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     runs: BTreeMap<(EntityId, SurfacePrimitiveIdentity), RetainedAnalyticRun<D>>,
     /// Sum of `bytes` over every retained stream.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     resident: usize,
     frame: u64,
 }
@@ -108,14 +108,14 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         Self {
             device,
             runs: BTreeMap::new(),
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             resident: 0,
             frame: 0,
         }
     }
 
     /// Resident bytes of every retained instance stream.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn resident_bytes(&self) -> usize {
         self.resident
     }
@@ -128,7 +128,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
                 device.delete_surface_instances(stream);
             }
         }
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.resident = 0;
         }
@@ -204,7 +204,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
             bytes: 0,
             seen: self.frame,
         });
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.resident -= retained.bytes;
         }
@@ -237,7 +237,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         let bytes = scratch.len() * ANALYTIC_INSTANCE_BYTES;
         retained.instances = scratch.len() as u32;
         retained.bytes = bytes;
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.resident += bytes;
         }
@@ -253,14 +253,14 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         if let Some(surfaces) = surfaces {
             let frame = self.frame;
             let mut device = self.device.borrow_mut();
-            #[cfg(feature = "diagnostics")]
+            #[cfg(any(test, feature = "diagnostics"))]
             let resident = &mut self.resident;
             self.runs.retain(|&(entity, _), run| {
                 if !surfaces.is_stale(entity, run.seen == frame) {
                     return true;
                 }
 
-                #[cfg(feature = "diagnostics")]
+                #[cfg(any(test, feature = "diagnostics"))]
                 {
                     *resident -= run.bytes;
                 }

@@ -56,9 +56,9 @@ pub use device::SurfacePathDescriptor;
 pub use device::SurfacePathInstance;
 pub use device::{PlatformRenderDevice, RenderDevice, ViewportLimits};
 pub use frame_statistics::RenderFrameSummary;
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 pub use frame_statistics::RenderStatistics;
-#[cfg(all(feature = "gui", feature = "diagnostics"))]
+#[cfg(all(feature = "gui", any(test, feature = "diagnostics")))]
 pub use glyph_atlas::{GlyphAtlasLimits, MIN_POPULATES_PER_FRAME as GLYPH_MIN_POPULATES_PER_FRAME};
 /// Retained GUI vertices are the layout of the public [`RenderDevice`] GUI batch
 /// operations; device-level hosts generate box geometry and interpret its fill
@@ -78,11 +78,11 @@ pub use device::WebGlRenderDevice;
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::GlesRenderDevice;
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 pub use custom_material::CustomMaterialFallback;
 pub use lighting::RenderLightingFrame;
 pub use service::{RenderError, RenderService};
-#[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+#[cfg(all(feature = "surfaces", any(test, feature = "diagnostics")))]
 pub use surface_cache::{
     SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,

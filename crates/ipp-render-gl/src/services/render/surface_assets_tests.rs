@@ -8,6 +8,10 @@ struct Device {
 }
 
 impl RenderDevice for Device {
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        None
+    }
+
     type Program = ();
     type Mesh = ();
     type Texture = ();

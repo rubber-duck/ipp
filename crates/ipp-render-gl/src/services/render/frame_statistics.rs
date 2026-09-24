@@ -21,7 +21,7 @@ pub struct RenderFrameSummary {
 }
 
 /// Diagnostic statistics of the last completed render.
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStatistics {
     /// Vertex/index/pixel uploads accounted by this submission, including resource
@@ -127,7 +127,7 @@ pub struct RenderStatistics {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct RenderFrameWork {
     pub(crate) summary: RenderFrameSummary,
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) statistics: RenderStatistics,
 }
 
@@ -144,9 +144,9 @@ impl RenderFrameWork {
     }
 
     /// Count bytes this submission wrote to GPU storage.
-    #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
+    #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
     pub(crate) fn uploaded(&mut self, bytes: usize) {
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.statistics.uploaded_bytes = self
                 .statistics
@@ -163,15 +163,15 @@ impl RenderFrameWork {
 /// `diagnostics` it is empty and counting compiles out.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RenderUploadCounter {
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     bytes: std::rc::Rc<std::cell::Cell<u32>>,
 }
 
 impl RenderUploadCounter {
     /// Record a completed upload of `bytes`.
-    #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
+    #[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
     pub(crate) fn add(&self, bytes: usize) {
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         self.bytes.set(
             self.bytes
                 .get()
@@ -180,7 +180,7 @@ impl RenderUploadCounter {
     }
 
     /// Take the uploads recorded since the last completed render.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn take(&self) -> u32 {
         self.bytes.replace(0)
     }

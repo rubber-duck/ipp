@@ -103,14 +103,21 @@ def check_manifests():
         any("proc-macro" in t["kind"] for t in packages[MACROS]["targets"]),
         f"{MACROS} must remain a host-compiled proc-macro crate",
     )
-    for host in HOSTS:
-        require(
-            any(
-                d["name"] == RENDER and d["optional"]
-                for d in packages[host]["dependencies"]
-            ),
-            f"{host}: rendering must be optional",
-        )
+    require(
+        any(
+            d["name"] == RENDER and d["optional"]
+            for d in packages["ipp-wasm"]["dependencies"]
+        ),
+        "ipp-wasm: rendering must be optional",
+    )
+    require(
+        all(
+            d["kind"] == "dev"
+            for d in packages["ipp-server"]["dependencies"]
+            if d["name"] == RENDER
+        ),
+        "ipp-server: the renderer serves only its profiling example",
+    )
 
 
 def graph(package, target, features, default_features=False):
@@ -234,6 +241,7 @@ def main():
         check_graph(CORE, target, ["zip-data-source"], ["zip-data-source"])
         check_graph("ipp-protocol", target, ["schema-export"], [])
         check_graph(RENDER, target, [], [], [])
+        check_graph(RENDER, target, ["diagnostics"], ["diagnostics"], ["diagnostics"])
         check_graph(
             RENDER,
             target,
@@ -241,7 +249,7 @@ def main():
             ["skeletal-animation", "mesh-poses", "shadows", "particles", "surfaces"],
             ["skeletal-animation", "mesh-poses", "shadows", "particles", "surfaces"],
         )
-        count += 4
+        count += 5
     for host, target in zip(HOSTS, (native, "wasm32-unknown-unknown")):
         for features, core, renderer in (
             ([], [], None),
@@ -277,13 +285,22 @@ def main():
                 ],
             ),
         ):
+            if host == "ipp-server":
+                # The native server has no render feature; its renderer is a
+                # dev-dependency of the profiling example.
+                if features == ["render"]:
+                    continue
+                features = [feature for feature in features if feature != "render"]
+                renderer = None
             check_graph(host, target, features, core, renderer)
             count += 1
         check_graph(host, target, [], ["builtin-assets"], default_features=True)
-        check_graph(
-            host, target, ["render"], ["builtin-assets"], [], default_features=True
-        )
-        count += 2
+        count += 1
+        if host == "ipp-wasm":
+            check_graph(
+                host, target, ["render"], ["builtin-assets"], [], default_features=True
+            )
+            count += 1
     check_graph("ipp-server", native, ["websocket"], [])
     check_graph("ipp-wasm", "wasm32-unknown-unknown", ["schema-export"], [])
     count += 2

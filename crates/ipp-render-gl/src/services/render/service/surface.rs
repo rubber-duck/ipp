@@ -877,7 +877,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Retained GUI and analytic glyph bytes of one World.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) fn retained_surface_residency(
         &self,
         world: ipp_core::WorldId,
@@ -896,7 +896,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Fold one World's residency change since `before` into the context totals.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) fn track_retained_surface_residency(
         &mut self,
         world: ipp_core::WorldId,
@@ -912,7 +912,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Publish context-wide retained Surface residency and this frame's glyph work.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(super) fn publish_retained_surface_statistics(
         &mut self,
         statistics: &mut crate::RenderStatistics,
@@ -932,7 +932,7 @@ impl<D: RenderDevice> RenderService<D> {
 }
 
 /// Resident bytes of retained per-Surface GPU storage, per World or context-wide.
-#[cfg(feature = "diagnostics")]
+#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct RetainedSurfaceResidency {
     #[cfg(feature = "gui")]

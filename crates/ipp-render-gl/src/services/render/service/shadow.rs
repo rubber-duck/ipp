@@ -67,7 +67,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(226, "gl.shadow-pass");
 
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             stats.statistics.shadow_resident_bytes = self
                 .shadow_map_size
@@ -311,7 +311,7 @@ impl<D: RenderDevice> RenderService<D> {
                     target.as_deref().zip(item.pose.map(|(_, weight)| weight)),
                     None,
                 )?;
-                #[cfg(feature = "diagnostics")]
+                #[cfg(any(test, feature = "diagnostics"))]
                 {
                     stats.statistics.shadow_draw_calls += 1;
                 }

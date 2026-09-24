@@ -15,7 +15,7 @@ The optional `profiling` feature adds stage timing and allocation counters witho
 - [Per-frame allocation sweep](allocations.md)
 - [Original pointer experiment](pointer-results.md)
 
-These reports preserve the original machine, revision and methodology. Historical commands refer to the experiment's former tooling; use the current guide for new runs. Retained output records source/build/fixture identity so new measurements can be compared without confusing instrumented and ordinary builds.
+These reports preserve the original machine, revision and methodology. Historical commands refer to the experiment's former tooling; use the current guide for new runs. Their numbered modes and toggles were in-process comparison switches that have since been removed; the runtime keeps only the selected implementation. Retained output records source/build/fixture identity so new measurements can be compared without confusing instrumented and ordinary builds.
 
 The [retained Surface rendering guide](retained-gui.md) compares analytic and retained browser text presentation and defines the pending iPhone 14 Pro GUI procedure.
 

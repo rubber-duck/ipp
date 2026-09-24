@@ -91,13 +91,8 @@ impl SkinningSystem {
                     });
                 }
             }
-            if !crate::allocation_optimizations_enabled() {
-                palette = Vec::new();
-            }
         }
-        if crate::allocation_optimizations_enabled() {
-            self.state.palette_scratch = palette;
-        }
+        self.state.palette_scratch = palette;
     }
 }
 

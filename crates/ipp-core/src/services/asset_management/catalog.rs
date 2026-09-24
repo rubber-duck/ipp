@@ -388,17 +388,12 @@ impl AssetManagementService {
     pub fn poll_loads(&mut self, sources: &mut DataSourceManagementService, cx: &mut Context<'_>) {
         #[cfg(feature = "profiling")]
         let _allocation_scope = crate::profiling::AllocationScope::new(211, "assets.poll");
-        if crate::allocation_optimizations_enabled() {
-            // Polling cannot insert, remove or reuse catalog slots. Loader callbacks
-            // receive only their resource and the I/O service; lifecycle work is queued.
-            for slot in 0..self.assets.len() {
-                if let Some(key) = self.assets[slot].provider.as_ref().map(AssetProvider::key) {
-                    self.poll_load_key(sources, key, cx);
-                }
+        // Polling cannot insert, remove or reuse catalog slots. Loader callbacks
+        // receive only their resource and the I/O service; lifecycle work is queued.
+        for slot in 0..self.assets.len() {
+            if let Some(key) = self.assets[slot].provider.as_ref().map(AssetProvider::key) {
+                self.poll_load_key(sources, key, cx);
             }
-        } else {
-            let keys = self.iter().map(AssetProvider::key).collect();
-            self.poll_selected_loads(sources, &keys, cx);
         }
     }
 

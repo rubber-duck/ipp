@@ -122,37 +122,15 @@ impl AnimationController {
         self.numeric_targets.clear();
         self.discrete_drivers.clear();
         self.numeric_outputs.clear();
-        if crate::direct_numeric_updates_enabled() {
-            for &key in self.driver_targets.keys() {
-                if !crate::compiled_property_bindings_enabled()
-                    && super::numeric_output::AnimationNumericOutput::patch_only(key.1)
-                    && self.driver_targets[&key]
-                        .iter()
-                        .any(|&i| !self.drivers[i].original().numeric())
-                {
-                    continue;
-                }
-                if let Some(output) =
-                    super::numeric_output::AnimationNumericOutput::bind(storage, key)
-                {
-                    self.numeric_outputs.push((key, output));
-                    self.numeric_targets.push(key);
-                }
+        for &key in self.driver_targets.keys() {
+            if let Some(output) = super::numeric_output::AnimationNumericOutput::bind(storage, key)
+            {
+                self.numeric_outputs.push((key, output));
+                self.numeric_targets.push(key);
             }
         }
         for driver in &mut self.drivers {
             driver.bind_numeric(storage);
-        }
-        if !crate::compiled_property_bindings_enabled()
-            && self
-                .drivers
-                .iter()
-                .any(|driver| !driver.has_numeric_binding())
-        {
-            for driver in &mut self.drivers {
-                driver.clear_numeric_binding();
-            }
-            return;
         }
         // Whole-value staging must remain coherent within its target component.
         // Discrete single-property patches cannot overwrite other numeric properties.
@@ -218,11 +196,9 @@ impl AnimationController {
         &self,
         key: (EntityId, u16),
     ) -> impl Iterator<Item = &dyn AnimationDriverBinding> {
-        let indexed = crate::animation_binding_index_enabled();
-        let all = (!indexed).then_some(&self.drivers).into_iter().flatten();
-        let selected = indexed
-            .then(|| self.driver_targets.get(&key))
-            .flatten()
+        let selected = self
+            .driver_targets
+            .get(&key)
             .into_iter()
             .flatten()
             .filter_map(|&index| self.drivers.get(index));
@@ -244,21 +220,16 @@ impl AnimationController {
                         .then_some(driver.as_ref())
                 })
             });
-        all.chain(selected)
-            .map(|driver| driver.as_ref())
-            .chain(transition)
+        selected.map(|driver| driver.as_ref()).chain(transition)
     }
 
     pub(super) fn changed_drivers<'a>(
         &'a self,
         staged: &'a crate::world::WorldMutationState,
     ) -> impl Iterator<Item = &'a dyn AnimationDriverBinding> {
-        let indexed = crate::animation_binding_index_enabled();
-        let all = (!indexed).then_some(&self.drivers).into_iter().flatten();
-        let selected = indexed
-            .then_some(staged.changed.keys())
-            .into_iter()
-            .flatten()
+        let selected = staged
+            .changed
+            .keys()
             .filter_map(|key| self.driver_targets.get(key))
             .flatten()
             .filter_map(|&index| self.drivers.get(index));
@@ -282,9 +253,7 @@ impl AnimationController {
                         .then_some(driver.as_ref())
                 })
             });
-        all.chain(selected)
-            .map(|driver| driver.as_ref())
-            .chain(transition)
+        selected.map(|driver| driver.as_ref()).chain(transition)
     }
 
     pub(super) fn restoration_drivers(
@@ -450,17 +419,13 @@ impl AnimationSystemState {
     ) -> Vec<AnimationControllerId> {
         let mut ids = std::mem::take(&mut self.affected_controllers);
         ids.clear();
-        if crate::stress_optimizations_enabled() {
-            for key in staged.changed.keys() {
-                if let Some(targets) = self.target_controllers.get(key) {
-                    ids.extend(targets);
-                }
+        for key in staged.changed.keys() {
+            if let Some(targets) = self.target_controllers.get(key) {
+                ids.extend(targets);
             }
-            ids.sort_unstable();
-            ids.dedup();
-        } else {
-            ids.extend(self.controllers.keys());
         }
+        ids.sort_unstable();
+        ids.dedup();
         ids
     }
 
@@ -470,9 +435,6 @@ impl AnimationSystemState {
         &mut self,
         id: AnimationControllerId,
     ) -> Option<AnimationController> {
-        if !crate::allocation_optimizations_enabled() {
-            return self.controllers.remove(&id);
-        }
         let controller = self.controllers.get_mut(&id)?;
         Some(std::mem::replace(
             controller,

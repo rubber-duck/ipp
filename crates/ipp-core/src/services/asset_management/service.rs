@@ -83,15 +83,13 @@ impl AssetDemandSelection {
         source: &str,
         variant: u32,
     ) {
-        if crate::allocation_optimizations_enabled() {
-            let query = super::source_lookup::AssetSourceLookup {
-                kind,
-                uri: [source, "", "", ""],
-                variant,
-            };
-            if demand.contains(&query as &dyn super::source_lookup::AssetSourceIdentity) {
-                return;
-            }
+        let query = super::source_lookup::AssetSourceLookup {
+            kind,
+            uri: [source, "", "", ""],
+            variant,
+        };
+        if demand.contains(&query as &dyn super::source_lookup::AssetSourceIdentity) {
+            return;
         }
         demand.insert(Self::new(kind, source, variant));
     }
@@ -376,29 +374,6 @@ impl AssetManagementService {
             let new_internal = consumer.internal.insert(key);
             consumer.observations_dirty |= new_owned || new_internal;
         }
-        for source in removed {
-            self.release_client_source(world, &source);
-        }
-        Ok(())
-    }
-
-    /// Replace a World's private preparation demand; teardown uses ordinary World ownership.
-    pub fn prepare_internal_sources(
-        &mut self,
-        world: crate::WorldId,
-        sources: impl IntoIterator<Item = (AssetSource, Vec<u8>)>,
-    ) -> Result<(), String> {
-        let mut desired = BTreeSet::new();
-        for (source, bytes) in sources {
-            desired.insert(self.prepare_internal_source(world, source, bytes)?);
-        }
-        let removed: Vec<_> = self
-            .consumers
-            .get(&world)
-            .into_iter()
-            .flat_map(|consumer| consumer.internal.difference(&desired))
-            .filter_map(|key| self.get(*key).map(|resource| resource.source().clone()))
-            .collect();
         for source in removed {
             self.release_client_source(world, &source);
         }
@@ -713,14 +688,10 @@ impl AssetManagementService {
                 if _asset.source().kind == crate::MESH_TYPE {
                     return self.consumers.values().any(|consumer| {
                         consumer.evaluation_meshes.iter().any(|selection| {
-                            if crate::evaluation_scratch_reuse_enabled() {
-                                let source = _asset.source();
-                                selection.kind == source.kind
-                                    && selection.variant == source.variant
-                                    && selection.source == source.uri
-                            } else {
-                                selection.descriptor() == *_asset.source()
-                            }
+                            let source = _asset.source();
+                            selection.kind == source.kind
+                                && selection.variant == source.variant
+                                && selection.source == source.uri
                         })
                     });
                 }
@@ -820,11 +791,10 @@ impl AssetManagementService {
         &mut self,
         world: crate::WorldId,
     ) -> Result<Vec<AssetResourceSnapshot>, String> {
-        if crate::allocation_optimizations_enabled()
-            && self
-                .consumers
-                .get(&world)
-                .is_some_and(|consumer| !consumer.observations_dirty)
+        if self
+            .consumers
+            .get(&world)
+            .is_some_and(|consumer| !consumer.observations_dirty)
         {
             return Ok(std::mem::take(
                 &mut self.consumers.get_mut(&world).unwrap().events,
@@ -971,12 +941,7 @@ impl AssetManagementService {
         #[cfg(feature = "profiling")]
         let _allocation_scope = crate::profiling::AllocationScope::new(201, "assets.source_data");
 
-        if crate::allocation_optimizations_enabled() {
-            let key = self.find_source(world, kind, source, variant)?;
-            return Some((key, self.get_typed(key)?));
-        }
-        let selection = AssetDemandSelection::new(kind, source, variant);
-        let key = self.find(&Self::scoped_selection(world, &selection).descriptor())?;
+        let key = self.find_source(world, kind, source, variant)?;
         Some((key, self.get_typed(key)?))
     }
 }

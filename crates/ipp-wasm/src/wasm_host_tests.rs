@@ -519,8 +519,7 @@ fn provider_completions_above_former_aggregate_budget_both_load() {
 }
 
 #[test]
-fn consumed_frame_output_is_invalidated_and_reused_when_enabled() {
-    let reuse = ipp_core::allocation_followup_enabled();
+fn consumed_frame_output_is_invalidated_and_reused() {
     let mut boundary = WasmHostBoundary::new();
     connect(&mut boundary, 1);
     // Drain startup observations, then establish the warmed response capacity.
@@ -536,9 +535,7 @@ fn consumed_frame_output_is_invalidated_and_reused_when_enabled() {
     assert!(boundary.output_ptr().is_null());
     assert!(boundary.tick(0.0));
     assert!(boundary.poll());
-    if reuse {
-        assert_eq!(boundary.output_ptr(), address);
-    }
+    assert_eq!(boundary.output_ptr(), address);
     assert_eq!(&boundary.output()[..8], &world_session(1).to_le_bytes());
     assert_eq!(&boundary.output()[8..16], &0u64.to_le_bytes());
     assert_eq!(boundary.output()[24], 4);

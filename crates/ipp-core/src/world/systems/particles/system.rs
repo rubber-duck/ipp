@@ -78,17 +78,11 @@ impl System for ParticleSystem {
                 continue;
             }
             let present = |component| {
-                if crate::allocation_followup_enabled() {
-                    return context
-                        .staged
-                        .entities
-                        .get(&entity)
-                        .and_then(|record| record.input(component))
-                        .is_some();
-                }
                 context
                     .staged
-                    .input_value(&context.world_data.components, entity, component)
+                    .entities
+                    .get(&entity)
+                    .and_then(|record| record.input(component))
                     .is_some()
             };
             if (present(C::PARTICLE_EMITTER) && present(C::PARTICLE_PLAYBACK))

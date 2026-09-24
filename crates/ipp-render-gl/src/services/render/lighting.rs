@@ -35,20 +35,11 @@ impl RenderLightingFrame {
     ) -> Result<Self, RenderError> {
         assert!(lights.len() <= MAX_LIGHTS, "per-draw shader capacity");
         let entity = world.active_camera().ok_or(RenderError::InvalidTransform)?;
-        let orthographic = if ipp_core::render_buffer_reuse_enabled() {
-            world
-                .active_camera_component()
-                .ok_or(RenderError::InvalidTransform)?
-                .projection
-                == 1
-        } else {
-            world
-                .inspect(entity)
-                .ok_or(RenderError::InvalidTransform)?
-                .effective
-                .iter()
-                .any(|value| matches!(value, ipp_core::ComponentValue::Camera(c) if c.projection == 1))
-        };
+        let orthographic = world
+            .active_camera_component()
+            .ok_or(RenderError::InvalidTransform)?
+            .projection
+            == 1;
         let pose = world
             .world_matrix(entity)
             .map_err(|_| RenderError::InvalidTransform)?;

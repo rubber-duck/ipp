@@ -92,6 +92,8 @@ At each completed pose the flat scan and BVH must return identical candidate ent
 
 ## Draw and spatial comparisons
 
+Compare an optimization against git revisions rather than runtime switches: build the baseline and candidate revisions with the same profile, preset, fixture version and environment, and alternate their runs.
+
 `--geometry-index flat|bvh` selects the index before loading. Compare ordinary release runs in alternating order. Full frame costs include bounds evaluation and tree maintenance as well as render queries.
 
 `--draw-sweep` intercepts native GLES calls in the benchmark host. Controls skip indexed draws, submit a fraction, discard rasterization or skip submission state calls while retaining engine traversal. Normal captures before and after interventions must match. The controls intentionally alter their own images; they are diagnostic experiments, not production optimizations.

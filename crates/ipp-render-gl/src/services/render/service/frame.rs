@@ -27,9 +27,7 @@ impl<D: RenderDevice> RenderService<D> {
         self.prepare_programs(world)?;
         // Program demand needs mutable asset access; completed inputs are borrowed
         // only after that phase, through the synchronous draw submission.
-        let snapshot =
-            (!ipp_core::render_buffer_reuse_enabled()).then(|| world.render_items().to_vec());
-        let items = snapshot.as_deref().unwrap_or_else(|| world.render_items());
+        let items = world.render_items();
         #[cfg(feature = "surfaces")]
         let surface_items = world.surface_render_items();
         self.debug.retain(world.debug_render_items());
@@ -161,11 +159,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
 
-        let mut scratch = if ipp_core::render_buffer_reuse_enabled() {
-            std::mem::take(&mut self.frame_scratch)
-        } else {
-            RenderFrameScratch::default()
-        };
+        let mut scratch = std::mem::take(&mut self.frame_scratch);
         let result = self.draw_prepared_items(
             world,
             items,
@@ -324,9 +318,6 @@ impl<D: RenderDevice> RenderService<D> {
                 #[cfg(feature = "particles")]
                 let instances = {
                     scratch.instances.clear();
-                    if !ipp_core::render_buffer_reuse_enabled() {
-                        scratch.instances = Vec::new();
-                    }
                     if item.particle.is_some() {
                         scratch
                             .instances

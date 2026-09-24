@@ -34,16 +34,7 @@ pub(in crate::world) fn source_key_from_fields(
         }
     }
 
-    if crate::allocation_optimizations_enabled() {
-        return assets.find_source(world, kind, source, variant);
-    }
-
-    let selection =
-        crate::services::asset_management::service::AssetManagementService::scoped_selection(
-            world,
-            &AssetDemandSelection::new(kind, source, variant),
-        );
-    assets.find(&selection.descriptor())
+    assets.find_source(world, kind, source, variant)
 }
 
 pub(in crate::world) fn cached_source_key(

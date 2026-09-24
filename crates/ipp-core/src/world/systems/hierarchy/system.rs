@@ -189,23 +189,9 @@ impl System for HierarchySystem {
         }
         self.graph.prepare_order();
         self.graph.prepare_access(&context.world.world.components);
-        if crate::compiled_hierarchy_enabled() {
-            self.graph
-                .compiled
-                .reset_aims(&mut context.world.world.components);
-        } else {
-            for &entity in &self.graph.order {
-                if let Some(value) = context
-                    .world
-                    .world
-                    .components
-                    .look_at_mut(entity.index() as usize)
-                {
-                    value.runtime.rotation = None;
-                    value.runtime.invalid = false;
-                }
-            }
-        }
+        self.graph
+            .compiled
+            .reset_aims(&mut context.world.world.components);
         self.graph.propagate(context.world.world, false);
         self.refresh = false;
     }

@@ -188,9 +188,6 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         stats: &mut RenderStats,
     ) -> Result<(), RenderError> {
         scratch.clear();
-        if !ipp_core::render_buffer_reuse_enabled() {
-            *scratch = Vec::new();
-        }
         build(scratch);
 
         let retained = self.runs.entry(key).or_insert_with(|| RetainedAnalyticRun {

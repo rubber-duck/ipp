@@ -784,11 +784,15 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
         .unwrap();
     let world = host.create_world(Default::default()).unwrap();
     let source = source("ipp-render://fixture/recipe");
+    let key = host
+        .asset_resources_mut()
+        .prepare_internal_source(world, source.clone(), vec![7])
+        .unwrap();
     host.asset_resources_mut()
-        .prepare_internal_sources(world, [(source.clone(), vec![7])])
+        .retain_internal_sources(world, &[key])
         .unwrap();
     host.progress_assets();
-    let key = host.asset_resources().find(&source).unwrap();
+    assert_eq!(host.asset_resources().find(&source), Some(key));
     assert!(
         host.world_mut(world)
             .unwrap()
@@ -796,11 +800,16 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
             .is_empty()
     );
     host.asset_resources_mut()
-        .prepare_internal_sources(world, [])
+        .retain_internal_sources(world, &[])
+        .unwrap();
+    let prepared = host
+        .asset_resources_mut()
+        .prepare_internal_source(world, source.clone(), vec![7])
         .unwrap();
     host.asset_resources_mut()
-        .prepare_internal_sources(world, [(source.clone(), vec![7])])
+        .retain_internal_sources(world, &[prepared])
         .unwrap();
+    assert_eq!(prepared, key);
     host.progress_assets();
     assert_eq!(host.asset_resources().find(&source), Some(key));
     assert_eq!(

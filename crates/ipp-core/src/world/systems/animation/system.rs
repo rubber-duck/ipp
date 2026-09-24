@@ -262,7 +262,7 @@ impl System for AnimationSystem {
         event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
         use crate::services::asset_management::AssetLifecycleKind;
-        if crate::compiled_animation_enabled() && event.kind == AssetLifecycleKind::StatusChanged {
+        if event.kind == AssetLifecycleKind::StatusChanged {
             self.suspend_asset(
                 context.world.world,
                 context.world.asset_acquisition,

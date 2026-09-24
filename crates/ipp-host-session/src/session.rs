@@ -33,15 +33,9 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
         {
             return Err("connection congestion: reliable output reservation exhausted".into());
         }
-        let mut buffer = if ipp_core::allocation_optimizations_enabled() {
-            self.world.take_command_buffer()
-        } else {
-            Vec::new()
-        };
+        let mut buffer = self.world.take_command_buffer();
         let request = ipp_protocol::decode_request_with_buffer(bytes, self.session.id, &mut buffer);
-        if ipp_core::allocation_optimizations_enabled() {
-            self.world.recycle_command_buffer(buffer);
-        }
+        self.world.recycle_command_buffer(buffer);
         self.receive_decoded(request.map_err(|error| {
             ipp_core::diagnostic!(
                 Warn,
@@ -134,10 +128,7 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
     /// Return exclusive encoded storage after the consumer has finished with it.
     pub fn recycle_response_buffer(&mut self, mut bytes: Vec<u8>) {
         bytes.clear();
-        if bytes.capacity() != 0
-            && ipp_core::allocation_followup_enabled()
-            && self.response_buffers.len() < self.response_buffers.capacity()
-        {
+        if bytes.capacity() != 0 && self.response_buffers.len() < self.response_buffers.capacity() {
             self.response_buffers.push(bytes);
         }
     }
@@ -232,16 +223,8 @@ impl WorldSession {
             private_world,
             command_batch: None,
             last_failure: None,
-            pending: if ipp_core::allocation_optimizations_enabled() {
-                VecDeque::with_capacity(MAX_PENDING)
-            } else {
-                VecDeque::new()
-            },
-            replies: if ipp_core::allocation_optimizations_enabled() {
-                Vec::with_capacity(MAX_PENDING)
-            } else {
-                Vec::new()
-            },
+            pending: VecDeque::with_capacity(MAX_PENDING),
+            replies: Vec::with_capacity(MAX_PENDING),
             prepared: false,
             outbox: VecDeque::new(),
             request_origins: Default::default(),

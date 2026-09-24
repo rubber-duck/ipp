@@ -58,8 +58,7 @@ impl SystemRuntimeAccess<'_> {
         entity: EntityId,
         component: u16,
     ) -> bool {
-        crate::allocation_optimizations_enabled()
-            && !self.world.state.dirty.contains(&(entity, component))
+        !self.world.state.dirty.contains(&(entity, component))
             && !self.world.state.prepared.contains_key(&(entity, component))
             && self
                 .world
@@ -408,9 +407,7 @@ impl WorldContext<'_> {
             .visit_scoped(self.world.identity, None, |system, _| {
                 system.finish_batch(&mut outcome)
             });
-        if crate::allocation_optimizations_enabled() {
-            self.recycle_command_buffer(batch.operations);
-        }
+        self.recycle_command_buffer(batch.operations);
         outcome
     }
 

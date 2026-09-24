@@ -1,6 +1,6 @@
 //! Private debug meshes: no source registrations, uploads, or world asset events.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{RenderDevice, RenderError, services::render::assets::SharedRenderDevice};
 use ipp_core::{DebugRenderItem, systems::geometry::GeometryPrimitiveVisual};
@@ -49,18 +49,13 @@ impl<D: RenderDevice> DebugGeometryRenderCache<D> {
     }
 
     pub(crate) fn retain(&mut self, items: &[DebugRenderItem]) {
-        if ipp_core::render_buffer_reuse_enabled() {
-            self.used.clear();
-            self.used
-                .extend(items.iter().map(|item| item.geometry.mesh_key()));
-            self.used.sort_unstable();
-            self.used.dedup();
-            self.entries
-                .retain(|key, _| self.used.binary_search(key).is_ok());
-        } else {
-            let used: BTreeSet<_> = items.iter().map(|item| item.geometry.mesh_key()).collect();
-            self.entries.retain(|key, _| used.contains(key));
-        }
+        self.used.clear();
+        self.used
+            .extend(items.iter().map(|item| item.geometry.mesh_key()));
+        self.used.sort_unstable();
+        self.used.dedup();
+        self.entries
+            .retain(|key, _| self.used.binary_search(key).is_ok());
     }
 
     pub(crate) fn get(

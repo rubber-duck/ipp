@@ -8,12 +8,9 @@ impl WorldContext<'_> {
     /// Rebuild only prepared track access for controlled locality profiling.
     /// Runs outside frame timing and preserves target bindings, originals and clocks.
     #[doc(hidden)]
-    pub fn profile_rebind_animation_tracks(
-        &mut self,
-    ) -> Result<(usize, usize, usize), ErrorReason> {
+    pub fn profile_rebind_animation_tracks(&mut self) -> Result<(usize, usize), ErrorReason> {
         self.with_system::<AnimationSystem, _>(AnimationSystem::ID, |system, context| {
             let mut count = 0;
-            let mut copied_bytes = 0;
             let mut segment_bytes = 0;
             for controller in system
                 .state
@@ -29,11 +26,10 @@ impl WorldContext<'_> {
                     driver.suspend_track();
                     driver.resolve_track(clip)?;
                     count += 1;
-                    copied_bytes += driver.copied_track_bytes();
                     segment_bytes += driver.segment_bytes();
                 }
             }
-            Ok((count, copied_bytes, segment_bytes))
+            Ok((count, segment_bytes))
         })
         .ok_or(ErrorReason::InvalidValue)?
     }
@@ -101,11 +97,8 @@ impl WorldContext<'_> {
                 } else {
                     time
                 };
-                let expected = driver.sample(
-                    clip,
-                    controller.snapshot.time + time_offset,
-                    driver.original(),
-                )?;
+                let expected = driver
+                    .sample_bound(controller.snapshot.time + time_offset, driver.original())?;
                 if let Some(track) = clip.typed_track::<f32>(description.track as usize) {
                     if track.sample(time).into_value() != expected {
                         return Err(ErrorReason::InvalidValue);

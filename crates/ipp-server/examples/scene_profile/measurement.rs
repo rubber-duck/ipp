@@ -382,15 +382,15 @@ pub(crate) fn run() -> Result<()> {
     {
         let mut world = scene.host.world_mut(scene.world).unwrap();
         let started = Instant::now();
-        let (drivers, copied_bytes, segment_bytes) = world.profile_rebind_animation_tracks()?;
+        let (drivers, segment_bytes) = world.profile_rebind_animation_tracks()?;
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         println!(
-            "Prepared {drivers} typed driver tracks in {elapsed:.3} ms; copied track data {copied_bytes} bytes; inline working segments {segment_bytes} bytes"
+            "Prepared {drivers} typed driver tracks in {elapsed:.3} ms; inline working segments {segment_bytes} bytes"
         );
         std::fs::write(
             output.join("track-storage.json"),
             format!(
-                "{{\"drivers\":{drivers},\"copied_track_bytes\":{copied_bytes},\"rebind_ms\":{elapsed},\"inline_segment_bytes\":{segment_bytes}}}\n"
+                "{{\"drivers\":{drivers},\"rebind_ms\":{elapsed},\"inline_segment_bytes\":{segment_bytes}}}\n"
             ),
         )?;
         // The standalone typed-curve comparison only defines a unit-weight,

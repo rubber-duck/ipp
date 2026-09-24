@@ -121,9 +121,7 @@ impl AssetDependencySystem {
         _dt: f64,
     ) {
         let _ = overlay;
-        if !crate::allocation_optimizations_enabled()
-            || self.state.animation_demand_revision != Some(animation.state.demand_revision)
-        {
+        if self.state.animation_demand_revision != Some(animation.state.demand_revision) {
             self.state.animation_demand_revision = Some(animation.state.demand_revision);
             let animation_sources: std::collections::BTreeSet<_> =
                 animation.state.animation_sources.iter().cloned().collect();
@@ -144,28 +142,19 @@ impl AssetDependencySystem {
             })
             .collect();
         assets.update_user_deltas(ecs.world.id, changes);
-        if crate::evaluation_scratch_reuse_enabled() {
-            if !self.state.evaluation_meshes_initialized {
-                let changed = crate::systems::geometry::update_evaluation_mesh_demand(
-                    ecs.world,
-                    &ecs.world.state,
-                    &mut self.state.evaluation_meshes,
-                );
-                if changed || !self.state.evaluation_meshes_initialized {
-                    assets.set_evaluation_meshes(
-                        ecs.world.id,
-                        self.state.evaluation_meshes.keys().cloned().collect(),
-                    );
-                    self.state.evaluation_meshes_initialized = true;
-                }
-            }
-        } else {
-            // A later comparison switch must reconcile against this actual set.
-            self.state.evaluation_meshes_initialized = false;
-            assets.set_evaluation_meshes(
-                ecs.world.id,
-                crate::systems::geometry::evaluation_mesh_demand(ecs.world, &ecs.world.state),
+        if !self.state.evaluation_meshes_initialized {
+            let changed = crate::systems::geometry::update_evaluation_mesh_demand(
+                ecs.world,
+                &ecs.world.state,
+                &mut self.state.evaluation_meshes,
             );
+            if changed || !self.state.evaluation_meshes_initialized {
+                assets.set_evaluation_meshes(
+                    ecs.world.id,
+                    self.state.evaluation_meshes.keys().cloned().collect(),
+                );
+                self.state.evaluation_meshes_initialized = true;
+            }
         }
         self.state
             .prepared_changes

@@ -45,37 +45,6 @@ impl AnimationRuntimeTarget {
     }
 
     #[cfg(feature = "skeletal-animation")]
-    pub(in crate::world) fn read_joints(
-        &self,
-        storage: &crate::components::registry::ComponentStorage,
-        entity: EntityId,
-    ) -> Result<AnimationValue, ErrorReason> {
-        let Self::JointLocal {
-            source,
-            joints,
-        } = self
-        else {
-            return Err(ErrorReason::InvalidField);
-        };
-        let pose = storage
-            .skeleton(entity.index() as usize)
-            .and_then(|value| value.runtime.pose.as_ref())
-            .filter(|pose| pose.valid && pose.source == *source)
-            .ok_or(ErrorReason::MissingComponent)?;
-        Ok(AnimationValue::Pose(
-            joints
-                .iter()
-                .map(|&joint| {
-                    pose.local
-                        .get(joint as usize)
-                        .copied()
-                        .ok_or(ErrorReason::InvalidField)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        ))
-    }
-
-    #[cfg(feature = "skeletal-animation")]
     pub(in crate::world) fn write_joints(
         &self,
         storage: &mut crate::components::registry::ComponentStorage,
@@ -151,7 +120,6 @@ pub struct AnimationDriver<T: AnimationSample> {
     interval: std::cell::Cell<usize>,
     duration: f64,
     track: Option<std::sync::Arc<AnimationTrack<T>>>,
-    track_copied: bool,
     segment: std::cell::RefCell<Option<super::clip::AnimationSampleSegment<T>>>,
     cache_segment: bool,
     pub(super) destination: Option<crate::world::component_binding::ComponentBinding<T>>,
@@ -302,9 +270,6 @@ pub(in crate::world) trait AnimationDriverBinding: Debug {
     fn suspend_track(&mut self);
 
     #[cfg(feature = "profiling")]
-    fn copied_track_bytes(&self) -> usize;
-
-    #[cfg(feature = "profiling")]
     fn segment_bytes(&self) -> usize;
 
     fn resolve_track(&mut self, clip: &AnimationClip) -> Result<(), ErrorReason>;
@@ -330,13 +295,6 @@ pub(in crate::world) trait AnimationDriverBinding: Debug {
 
     #[cfg(feature = "skeletal-animation")]
     fn runtime_target(&self) -> &AnimationRuntimeTarget;
-
-    fn sample(
-        &self,
-        clip: &AnimationClip,
-        time: f64,
-        current: AnimationValue,
-    ) -> Result<AnimationValue, ErrorReason>;
 
     fn as_any(&self) -> &dyn Any;
 
@@ -572,8 +530,7 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         self.transition_destination = super::numeric_binding::bind_transition(self, storage);
         self.dynamic_destination = None;
         let property = self.identity.property.property();
-        self.discrete = crate::compiled_property_bindings_enabled()
-            && self.description.weight == 1.0
+        self.discrete = self.description.weight == 1.0
             && !self.description.additive
             && property.is_some_and(|p| p.offsets.len() == 1)
             && matches!(
@@ -594,9 +551,7 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             self.discrete = false;
         }
         self.reset_discrete();
-        if crate::compiled_property_bindings_enabled()
-            && crate::direct_numeric_updates_enabled()
-            && self.description.weight == 1.0
+        if self.description.weight == 1.0
             && !self.description.additive
             && std::any::TypeId::of::<T>() == std::any::TypeId::of::<crate::DynamicValue>()
             && let Some(property) = property
@@ -788,17 +743,6 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
     }
 
     #[cfg(feature = "profiling")]
-    fn copied_track_bytes(&self) -> usize {
-        if self.track_copied {
-            self.track
-                .as_ref()
-                .map_or(0, |track| track.resident_bytes())
-        } else {
-            0
-        }
-    }
-
-    #[cfg(feature = "profiling")]
     fn segment_bytes(&self) -> usize {
         if self.cache_segment {
             std::mem::size_of::<super::clip::AnimationSampleSegment<T>>()
@@ -812,14 +756,8 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             let track = clip
                 .shared_track::<T>(self.description.track as usize)
                 .ok_or(ErrorReason::InvalidField)?;
-            self.track_copied = crate::animation_track_copy_enabled();
-            self.cache_segment =
-                crate::animation_segment_copy_enabled() && matches!(track.value_kind(), 1 | 8);
-            self.track = Some(if self.track_copied {
-                std::sync::Arc::new((*track).clone())
-            } else {
-                track
-            });
+            self.cache_segment = matches!(track.value_kind(), 1 | 8);
+            self.track = Some(track);
         }
         Ok(())
     }
@@ -893,18 +831,6 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
         &self.runtime_target
     }
 
-    fn sample(
-        &self,
-        clip: &AnimationClip,
-        time: f64,
-        current: AnimationValue,
-    ) -> Result<AnimationValue, ErrorReason> {
-        let track = clip
-            .typed_track::<T>(self.description.track as usize)
-            .ok_or(ErrorReason::InvalidField)?;
-        self.sample_track(track, time, current)
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -939,10 +865,8 @@ impl<T: AnimationSample> AnimationDriver<T> {
         };
         let sample = if self.cache_segment {
             track.sample_segment(time, &mut self.segment.borrow_mut())
-        } else if crate::animation_update_reuse_enabled() {
-            track.sample_cached(time, &self.interval)
         } else {
-            track.sample(time)
+            track.sample_cached(time, &self.interval)
         }
         .into_value();
         if !self.description.additive && self.description.weight == 1.0 {
@@ -993,7 +917,6 @@ pub(in crate::world) fn make_driver(
                 interval: std::cell::Cell::new(0),
                 duration,
                 track: None,
-                track_copied: false,
                 segment: std::cell::RefCell::new(None),
                 cache_segment: false,
                 destination: None,

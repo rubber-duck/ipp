@@ -119,10 +119,7 @@ pub(super) fn bind<T: AnimationSample>(
     driver: &AnimationDriver<T>,
     storage: &ComponentStorage,
 ) -> Option<ComponentBinding<T>> {
-    if !crate::direct_numeric_updates_enabled()
-        || driver.description.weight != 1.0
-        || driver.description.additive
-    {
+    if driver.description.weight != 1.0 || driver.description.additive {
         return None;
     }
     bind_transition(driver, storage)

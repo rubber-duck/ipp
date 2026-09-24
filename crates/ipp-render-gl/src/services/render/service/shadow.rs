@@ -174,9 +174,6 @@ impl<D: RenderDevice> RenderService<D> {
         let slot = frame.shadow_settings[index * 4] as u32;
         let grid = frame.shadow_settings[index * 4 + 3] as u32;
         scratch.casters.clear();
-        if !ipp_core::render_buffer_reuse_enabled() {
-            scratch.casters = Vec::new();
-        }
         for (item_index, item) in items.iter().enumerate() {
             let custom = customs.get(&item.entity);
             if !scratch.shadow_visibility[view_index * items.len() + item_index] {
@@ -249,9 +246,6 @@ impl<D: RenderDevice> RenderService<D> {
                 let model = {
                     if item.particle.is_some() {
                         scratch.instances.clear();
-                        if !ipp_core::render_buffer_reuse_enabled() {
-                            scratch.instances = Vec::new();
-                        }
                         scratch.instances.push(super::super::particles::instance(
                             item,
                             super::super::particles::identity(),

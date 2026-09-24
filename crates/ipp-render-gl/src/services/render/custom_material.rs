@@ -49,11 +49,7 @@ impl<D: RenderDevice> RenderService<D> {
 
         // Records own only copied draw flags, asset identities and retained buffers.
         // They never keep component/asset references across a World phase.
-        let mut ready = if ipp_core::allocation_optimizations_enabled() {
-            std::mem::take(&mut self.custom_materials)
-        } else {
-            BTreeMap::new()
-        };
+        let mut ready = std::mem::take(&mut self.custom_materials);
         ready.retain(|entity, _| {
             items
                 .binary_search_by_key(entity, |item| item.entity)

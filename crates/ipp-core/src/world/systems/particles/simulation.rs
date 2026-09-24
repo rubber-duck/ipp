@@ -146,14 +146,8 @@ pub(crate) fn simulate(
     use crate::components::schema::ComponentLifecycle;
     let signature = (e.seed, e.space, e.restart);
     if state.signature != Some(signature) {
-        let (mut particles, mut deaths) = if crate::evaluation_scratch_reuse_enabled() {
-            (
-                std::mem::take(&mut state.particles),
-                std::mem::take(&mut state.deaths),
-            )
-        } else {
-            Default::default()
-        };
+        let mut particles = std::mem::take(&mut state.particles);
+        let mut deaths = std::mem::take(&mut state.deaths);
         particles.clear();
         deaths.clear();
         *state = ParticleRuntimeState {
@@ -166,9 +160,6 @@ pub(crate) fn simulate(
     state.space = e.space;
     if e.validate().is_err() || !dt.is_finite() || dt < 0.0 {
         return;
-    }
-    if !crate::evaluation_scratch_reuse_enabled() {
-        state.deaths = Default::default();
     }
     state.deaths.clear();
     state.deaths.extend(

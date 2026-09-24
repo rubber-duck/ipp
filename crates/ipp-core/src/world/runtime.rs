@@ -184,11 +184,7 @@ impl World {
                 ..WorldEntityState::default()
             },
             components: registry::ComponentStorage::default(),
-            queue: if crate::allocation_optimizations_enabled() {
-                VecDeque::with_capacity(64)
-            } else {
-                VecDeque::new()
-            },
+            queue: VecDeque::with_capacity(64),
             command_buffers: Vec::new(),
             lifecycle_cleanup: Vec::new(),
             tick: 0,

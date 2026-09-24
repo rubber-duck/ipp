@@ -42,21 +42,8 @@ impl crate::WorldContext<'_> {
         source: &str,
         variant: u32,
     ) -> Option<crate::services::asset_management::AssetKey> {
-        if crate::allocation_optimizations_enabled() {
-            return self
-                .asset_acquisition
-                .find_source(self.world.id, kind, source, variant);
-        }
-        let selection = crate::services::asset_management::service::AssetDemandSelection::new(
-            kind, source, variant,
-        );
-        self.asset_acquisition.find(
-            &crate::services::asset_management::service::AssetManagementService::scoped_selection(
-                self.world.id,
-                &selection,
-            )
-            .descriptor(),
-        )
+        self.asset_acquisition
+            .find_source(self.world.id, kind, source, variant)
     }
 
     /// Typed convenience adapter; storage and loading remain generic.

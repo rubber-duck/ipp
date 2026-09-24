@@ -189,7 +189,7 @@ impl HierarchyGraph {
         &mut self,
         storage: &crate::components::registry::ComponentStorage,
     ) {
-        if crate::compiled_hierarchy_enabled() && !self.compiled.valid {
+        if !self.compiled.valid {
             let mut compiled = std::mem::take(&mut self.compiled);
             compiled.prepare(self, storage);
             self.compiled = compiled;
@@ -197,7 +197,7 @@ impl HierarchyGraph {
     }
 
     pub(crate) fn propagate(&self, world: &mut WorldSimulationState, aimed: bool) {
-        if crate::compiled_hierarchy_enabled() && self.compiled.valid {
+        if self.compiled.valid {
             self.compiled.propagate(&mut world.components, aimed);
             return;
         }

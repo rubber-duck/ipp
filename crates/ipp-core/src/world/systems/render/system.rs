@@ -403,19 +403,9 @@ impl RenderSystem {
             self.state.entries_ready = !pending_resources;
             self.state.items.clear();
         }
-        let (mut items, debug_items) = if crate::allocation_optimizations_enabled() {
-            (
-                std::mem::take(&mut self.state.items),
-                std::mem::take(&mut self.state.debug_items),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let mut diagnostics = if crate::render_buffer_reuse_enabled() {
-            std::mem::take(&mut self.state.diagnostics)
-        } else {
-            Vec::new()
-        };
+        let mut items = std::mem::take(&mut self.state.items);
+        let debug_items = std::mem::take(&mut self.state.debug_items);
+        let mut diagnostics = std::mem::take(&mut self.state.diagnostics);
         diagnostics.clear();
         #[cfg(feature = "skeletal-animation")]
         if let Some(skeleton) = skeleton {

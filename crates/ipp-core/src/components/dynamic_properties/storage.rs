@@ -128,16 +128,11 @@ impl DynamicProperties {
                 .map(DynamicValue::Asset);
         }
         let start = descriptor.offset as usize;
-        if crate::allocation_optimizations_enabled() {
-            let data = self.buffer.get(start..start + descriptor.kind.byte_len())?;
-            let mut bytes = [0u8; 65];
-            bytes[0] = descriptor.kind as u8;
-            bytes[1..1 + data.len()].copy_from_slice(data);
-            return DynamicValue::decode(&bytes[..1 + data.len()]).ok();
-        }
-        let mut bytes = vec![descriptor.kind as u8];
-        bytes.extend_from_slice(self.buffer.get(start..start + descriptor.kind.byte_len())?);
-        DynamicValue::decode(&bytes).ok()
+        let data = self.buffer.get(start..start + descriptor.kind.byte_len())?;
+        let mut bytes = [0u8; 65];
+        bytes[0] = descriptor.kind as u8;
+        bytes[1..1 + data.len()].copy_from_slice(data);
+        DynamicValue::decode(&bytes[..1 + data.len()]).ok()
     }
 
     /// Resolve a name once for a prepared property binding.
@@ -234,7 +229,7 @@ impl DynamicProperties {
     ) {
         if let DynamicValue::Asset(asset) = value {
             self.assets.insert(descriptor.key, asset);
-        } else if crate::allocation_optimizations_enabled() {
+        } else {
             let start = descriptor.offset as usize;
             let output = &mut self.buffer[start..start + descriptor.kind.byte_len()];
             if let Some(lanes) = value.floats() {
@@ -250,10 +245,6 @@ impl DynamicProperties {
                 };
                 output.copy_from_slice(&bytes);
             }
-        } else {
-            let bytes = value.encode();
-            let start = descriptor.offset as usize;
-            self.buffer[start..start + descriptor.kind.byte_len()].copy_from_slice(&bytes[1..]);
         }
     }
 

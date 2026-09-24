@@ -38,7 +38,7 @@ impl<K: Ord, V> MutationMap<K, V> {
             let (k, v) = self.single.take().unwrap();
             self.multiple.insert(k, v);
         }
-        if self.multiple.is_empty() && crate::allocation_optimizations_enabled() {
+        if self.multiple.is_empty() {
             self.single = Some((key, value));
             None
         } else {

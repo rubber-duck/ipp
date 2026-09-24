@@ -414,11 +414,26 @@ export async function captureCommandBatchBoundary() {
   });
   const before = await current.canvas.capture();
   captures.set("batch-before", before);
+  // `waitForFrame(0n)` returns the latest presented frame without waiting.
+  const presentedBefore = (await client.waitForFrame(0n)).tick;
   const id = await client.beginBatch();
   const first = await client.batchChunk(id, [write(1000)]);
   if (!first.ok) throw new Error("Batch fixture transform rejected");
-  const held = await client.presentation!.capture(first.tick);
-  captures.set("batch-held", held);
+  // An open batch withholds evaluation and presentation, so no frame renders
+  // and no pixels can be captured until it ends. Give the worker several of
+  // its frames, well inside the batch deadline, and observe that no frame
+  // after the acknowledged tick was presented.
+  let advancedDuringHold = false;
+  client.waitForFrame(first.tick).then(
+    () => {
+      advancedDuringHold = true;
+    },
+    () => {},
+  );
+  await animationFrames(6);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const heldObservation = advancedDuringHold;
+  const heldTick = (await client.waitForFrame(0n)).tick;
   const second = await client.batchChunk(id, []);
   await client.endBatch(id);
   await client.waitForFrame(first.tick);
@@ -429,13 +444,20 @@ export async function captureCommandBatchBoundary() {
   const after = await current.canvas.capture();
   captures.set("batch-restored", after);
   return {
+    presentedBefore,
     firstTick: first.tick,
     secondTick: second.tick,
-    heldTick: held.tick,
+    heldTick,
+    advancedDuringHold: heldObservation,
     completeTick: complete.tick,
-    heldDifference: compareImages(before, held),
     completedDifference: compareImages(before, complete),
     restoredDifference: compareImages(before, after),
     renderer: complete.backend.unmaskedRenderer,
   };
+}
+
+/** Yield `count` page animation frames; the worker schedules its own frames alongside. */
+async function animationFrames(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1)
+    await new Promise((resolve) => requestAnimationFrame(resolve));
 }

@@ -33,7 +33,7 @@ The [suite registry](../../tools/pipeline/suites.json) selects real browser scen
 
 [Render lifecycle tests](../../tests/render/render.test.ts) pair acknowledged state/events with completed images. [Prepared geometry](../../tests/render/ready-geometry.test.ts) gates real HTTP loads to verify that old selections remain visible until a replacement is ready, and that failure/cancellation preserves usable state. [Viewer tests](../../tests/render/viewer.test.ts) drive the actual packaged application. Detailed cases and image tolerances belong in those tests.
 
-`client.presentation.capture(afterTick)` waits for a sufficiently recent completed frame and returns top-left RGBA8; it does not advance time. Acknowledgement and resource readiness alone do not prove visible output. Runners retain logs, session/tick metadata and images under `target/integration-artifacts/`, and clean up owned browsers, workers, servers and connections under the [testing policy](integration-testing.md).
+`client.presentation.capture(afterTick)` waits for a sufficiently recent completed frame and returns top-left RGBA8; it does not advance time. A capture completes with the next frame rendered at or after the requested tick, so while an open command batch withholds presentation or the Host is paused, request it after the batch ends or observe the presented tick with `waitForFrame`. Acknowledgement and resource readiness alone do not prove visible output. Runners retain logs, session/tick metadata and images under `target/integration-artifacts/`, and clean up owned browsers, workers, servers and connections under the [testing policy](integration-testing.md).
 
 ## Asset loading and recovery
 

@@ -38,14 +38,8 @@ fn create(
                     classes: vec![],
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::Camera(camera),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::Transform(transform),
-            },
+            Command::insert_value(EntityRef::Alias(0), ComponentValue::Camera(camera)),
+            Command::insert_value(EntityRef::Alias(0), ComponentValue::Transform(transform)),
         ],
     );
     report.outcomes[0].result.as_ref().unwrap()[0].1
@@ -504,10 +498,10 @@ fn invalid_and_unrepresentable_navigation_preserves_every_component() {
     ] {
         let report = run(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Camera(camera),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Camera(camera),
+            )],
         );
         assert!(report.outcomes[0].result.is_ok());
 

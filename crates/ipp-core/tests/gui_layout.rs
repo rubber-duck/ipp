@@ -58,14 +58,11 @@ fn create_panel(world: &mut WorldContext<'_>) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -350,14 +347,11 @@ fn create_scroll_panel(world: &mut WorldContext<'_>) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]

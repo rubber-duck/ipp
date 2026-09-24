@@ -722,52 +722,6 @@ impl<R: SchemaRow> SchemaRowsField for Rows<R> {
     }
 }
 
-/// A boxed table behaves exactly like the table; components box large or
-/// rarely used tables to keep their value, and so every `Command`, small.
-impl<R: SchemaRow> SchemaField for Box<Rows<R>> {
-    const KIND: FieldKind = FieldKind::Rows;
-
-    fn to_value(&self) -> FieldValue {
-        (**self).to_value()
-    }
-
-    fn from_value(value: FieldValue) -> Result<Self, FieldError> {
-        Rows::from_value(value).map(Box::new)
-    }
-
-    fn write_default(&self, sink: &mut impl ContractSink) {
-        (**self).write_default(sink)
-    }
-
-    fn retained_bytes(&self) -> Option<usize> {
-        Some(std::mem::size_of::<Rows<R>>() + Rows::retained_bytes(self))
-    }
-}
-
-impl<R: SchemaRow> SchemaRowsField for Box<Rows<R>> {
-    const LAYOUT: RowsLayout = R::LAYOUT;
-
-    fn has_row_field(relative: u32) -> bool {
-        Rows::<R>::has_row_field(relative)
-    }
-
-    fn row_field(&self, relative: u32) -> Result<FieldValue, FieldError> {
-        (**self).row_field(relative)
-    }
-
-    fn set_row_field(&mut self, relative: u32, value: FieldValue) -> Result<(), FieldError> {
-        (**self).set_row_field(relative, value)
-    }
-
-    fn validate_row_field(relative: u32, kind: FieldKind) -> Result<(), FieldError> {
-        Rows::<R>::validate_row_field(relative, kind)
-    }
-
-    fn visit_assets(&self, visit: &mut dyn FnMut(&AssetSource)) {
-        (**self).visit_assets(visit)
-    }
-}
-
 /// Append one row in the table's per-row encoding: a presence mask of
 /// [`RowsLayout::mask_bytes`] bytes, then the present values in layout order
 /// (see [`Rows::encode`]).

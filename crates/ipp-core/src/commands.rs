@@ -88,11 +88,14 @@ pub enum Command {
     },
     /// Native subsystem insertion with complete authored inputs. This operation
     /// does not require a default factory and has no production wire tag.
+    /// Construct it with [`Command::insert_value`].
     InsertComponentValue {
         /// Target entity.
         entity: EntityRef,
-        /// Registered typed authored inputs; effective resources are prepared locally.
-        value: crate::ComponentValue,
+        /// Registered typed authored inputs; effective resources are prepared
+        /// locally. Boxed so the largest component never sets the inline size of
+        /// every queued command (see [`MAX_COMMAND_INLINE_BYTES`]).
+        value: Box<crate::ComponentValue>,
     },
     /// Update a producer base field without replacing its incarnation.
     SetField {
@@ -202,6 +205,29 @@ pub enum Command {
         /// Declaration to release.
         overlay: StateOverlayRef,
     },
+}
+
+/// Upper bound on the inline size of one [`Command`].
+///
+/// Queued batches keep one `Command` slot per operation, and
+/// [`WorldLimits::max_batch_bytes`](crate::WorldLimits::max_batch_bytes)
+/// charges `size_of::<Command>()` for every slot of operation capacity. Payloads
+/// that grow with components (whole component values, field lists and names)
+/// therefore live behind a heap pointer so that component growth never widens
+/// every queued command. A compile-time assertion keeps every build, including
+/// test builds with test-only registry components, within this bound.
+pub const MAX_COMMAND_INLINE_BYTES: usize = 128;
+
+const _: () = assert!(std::mem::size_of::<Command>() <= MAX_COMMAND_INLINE_BYTES);
+
+impl Command {
+    /// Insert a complete typed component value; see [`Command::InsertComponentValue`].
+    pub fn insert_value(entity: EntityRef, value: crate::ComponentValue) -> Self {
+        Self::InsertComponentValue {
+            entity,
+            value: Box::new(value),
+        }
+    }
 }
 
 /// One ordered command buffer, submitted alone or within a Host-controlled stream.

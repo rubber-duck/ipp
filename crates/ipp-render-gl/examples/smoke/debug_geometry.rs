@@ -386,13 +386,13 @@ fn world<'a, D: RenderDevice>(
     let camera = world.active_camera().unwrap();
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(camera),
-            value: ComponentValue::Transform(Transform {
+        vec![Command::insert_value(
+            EntityRef::Handle(camera),
+            ComponentValue::Transform(Transform {
                 z: 6.0,
                 ..Transform::default()
             }),
-        }],
+        )],
     )?;
     Ok(world)
 }
@@ -410,14 +410,14 @@ fn add(
                 alias,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(alias),
-                value: ComponentValue::Transform(transform),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(alias),
-                value: ComponentValue::BoundingGeometry(debug),
-            },
+            Command::insert_value(
+                EntityRef::Alias(alias),
+                ComponentValue::Transform(transform),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(alias),
+                ComponentValue::BoundingGeometry(debug),
+            ),
         ],
     )
 }

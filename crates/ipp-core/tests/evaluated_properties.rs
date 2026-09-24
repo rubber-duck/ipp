@@ -103,10 +103,7 @@ fn numeric_patch_keeps_old_storage_until_observers_finish_and_rejects_invalid_ed
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::CustomMaterial(value),
-                },
+                Command::insert_value(EntityRef::Alias(1), ComponentValue::CustomMaterial(value)),
             ],
         })
         .unwrap();

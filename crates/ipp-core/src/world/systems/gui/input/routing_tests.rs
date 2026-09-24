@@ -1495,19 +1495,19 @@ fn newly_populated_panel_routes_same_evaluation() {
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(GuiRoot::default()),
-                    },
+                    ),
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::GuiRoot(GuiRoot::default()),
+                    ),
                 ],
             })
             .unwrap();
@@ -2148,14 +2148,11 @@ fn setup_projected_with(camera: Camera, near_transform: Transform) -> ProjectedF
         world,
         1,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(panel_transform(0.0, 0.0, 10.0)),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Camera(camera),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(panel_transform(0.0, 0.0, 10.0)),
+            ),
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Camera(camera)),
         ],
     );
     let near = spawn_entity(
@@ -2163,18 +2160,18 @@ fn setup_projected_with(camera: Camera, near_transform: Transform) -> ProjectedF
         world,
         2,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(2),
-                value: ComponentValue::Transform(near_transform),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(2),
-                value: ComponentValue::Surface(panel_surface()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(2),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(2),
+                ComponentValue::Transform(near_transform),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(2),
+                ComponentValue::Surface(panel_surface()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(2),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     );
     let far = spawn_entity(
@@ -2182,18 +2179,18 @@ fn setup_projected_with(camera: Camera, near_transform: Transform) -> ProjectedF
         world,
         3,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(3),
-                value: ComponentValue::Transform(panel_transform(0.0, 0.0, 0.0)),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(3),
-                value: ComponentValue::Surface(panel_surface()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(3),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(3),
+                ComponentValue::Transform(panel_transform(0.0, 0.0, 0.0)),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(3),
+                ComponentValue::Surface(panel_surface()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(3),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     );
     insert_full_checkbox(&mut host, world, near);
@@ -2609,13 +2606,13 @@ fn marked_blocker_resolves_from_scene_geometry() {
         fixture.world,
         4,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(4),
-                value: ComponentValue::Transform(panel_transform(0.0, 0.0, 7.5)),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(4),
-                value: ComponentValue::PickingGeometry(PickingGeometry {
+            Command::insert_value(
+                EntityRef::Alias(4),
+                ComponentValue::Transform(panel_transform(0.0, 0.0, 7.5)),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(4),
+                ComponentValue::PickingGeometry(PickingGeometry {
                     geometry: GeometryDefinition::from(GeometryShape::Box {
                         min: [-1.0; 3],
                         max: [1.0; 3],
@@ -2624,7 +2621,7 @@ fn marked_blocker_resolves_from_scene_geometry() {
                     .unwrap(),
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     );
     // A stale caller distance (100.0, far behind both panels) must not

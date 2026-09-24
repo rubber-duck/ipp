@@ -180,56 +180,56 @@ mod scenario {
                             alias: 1,
                             metadata: Default::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(1),
-                            value: ComponentValue::Transform(Transform {
+                        Command::insert_value(
+                            EntityRef::Alias(1),
+                            ComponentValue::Transform(Transform {
                                 z: NEAR,
                                 ..Default::default()
                             }),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(1),
-                            value: ComponentValue::Camera(Camera {
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(1),
+                            ComponentValue::Camera(Camera {
                                 projection: 1,
                                 ortho_height: 3.0,
                                 ..Default::default()
                             }),
-                        },
+                        ),
                         Command::Create {
                             alias: 2,
                             metadata: Default::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(2),
-                            value: ComponentValue::Transform(Transform::default()),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(2),
-                            value: ComponentValue::Surface(panel_surface),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(2),
-                            value: ComponentValue::GuiRoot(GuiRoot::default()),
-                        },
+                        Command::insert_value(
+                            EntityRef::Alias(2),
+                            ComponentValue::Transform(Transform::default()),
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(2),
+                            ComponentValue::Surface(panel_surface),
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(2),
+                            ComponentValue::GuiRoot(GuiRoot::default()),
+                        ),
                         Command::Create {
                             alias: 3,
                             metadata: Default::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(3),
-                            value: ComponentValue::Transform(Transform {
+                        Command::insert_value(
+                            EntityRef::Alias(3),
+                            ComponentValue::Transform(Transform {
                                 z: -1.0,
                                 ..Default::default()
                             }),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(3),
-                            value: ComponentValue::Surface(backdrop),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(3),
-                            value: ComponentValue::GuiRoot(GuiRoot::default()),
-                        },
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(3),
+                            ComponentValue::Surface(backdrop),
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(3),
+                            ComponentValue::GuiRoot(GuiRoot::default()),
+                        ),
                     ],
                 })?;
                 let report = world_context.step(0.0)?;
@@ -606,10 +606,10 @@ mod scenario {
         fn opt_in(&mut self, enabled: bool) -> Result<()> {
             let panel = self.panel;
             self.batch(vec![if enabled {
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(panel),
-                    value: ComponentValue::SurfaceCache(POLICY),
-                }
+                Command::insert_value(
+                    EntityRef::Handle(panel),
+                    ComponentValue::SurfaceCache(POLICY),
+                )
             } else {
                 Command::RemoveComponent {
                     entity: EntityRef::Handle(panel),

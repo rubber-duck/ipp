@@ -37,10 +37,7 @@ fn create(
     operations.extend(
         values
             .into_iter()
-            .map(|value| Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value,
-            }),
+            .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
     );
     run(world, operations).outcomes[0].result.as_ref().unwrap()[0].1
 }
@@ -124,17 +121,17 @@ fn requested_view_planes_use_camera_forward_independent_of_pointer_and_scale() {
         run(
             &mut world,
             vec![
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(active),
-                    value: ComponentValue::Camera(Camera {
+                Command::insert_value(
+                    EntityRef::Handle(active),
+                    ComponentValue::Camera(Camera {
                         projection,
                         ortho_height: 4.0,
                         ..Camera::default()
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(active),
-                    value: ComponentValue::Transform(Transform {
+                ),
+                Command::insert_value(
+                    EntityRef::Handle(active),
+                    ComponentValue::Transform(Transform {
                         x: 6.0,
                         qy: std::f32::consts::FRAC_1_SQRT_2,
                         qw: std::f32::consts::FRAC_1_SQRT_2,
@@ -143,7 +140,7 @@ fn requested_view_planes_use_camera_forward_independent_of_pointer_and_scale() {
                         sz: 4.0,
                         ..Transform::default()
                     }),
-                },
+                ),
             ],
         );
         let ordinary = pick(&mut world, query(0.52, 0.48)).unwrap().unwrap();
@@ -303,14 +300,14 @@ fn queries_observe_final_camera_and_mutations_regardless_of_submission_position(
     world.enqueue_camera_activate(second).unwrap();
     let report = run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(selected),
-            value: ComponentValue::Transform(Transform {
+        vec![Command::insert_value(
+            EntityRef::Handle(selected),
+            ComponentValue::Transform(Transform {
                 x: 4.0,
                 z: 2.0,
                 ..Transform::default()
             }),
-        }],
+        )],
     );
     let result = &report.geometry_picks[0];
     assert_eq!(result.camera, Some(second));
@@ -380,31 +377,31 @@ fn clipping_uses_camera_planes_and_does_not_invent_clipped_box_surfaces() {
     );
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(camera),
-            value: ComponentValue::Camera(Camera {
+        vec![Command::insert_value(
+            EntityRef::Handle(camera),
+            ComponentValue::Camera(Camera {
                 projection: 1,
                 near: 2.0,
                 far: 4.0,
                 ortho_height: 4.0,
                 ..Camera::default()
             }),
-        }],
+        )],
     );
     // Box occupies distance 1..5, entirely across the clipping interval: neither surface is visible.
     assert_eq!(pick(&mut world, query(0.5, 0.5)), Ok(None));
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(camera),
-            value: ComponentValue::Camera(Camera {
+        vec![Command::insert_value(
+            EntityRef::Handle(camera),
+            ComponentValue::Camera(Camera {
                 projection: 1,
                 near: 2.0,
                 far: 6.0,
                 ortho_height: 4.0,
                 ..Camera::default()
             }),
-        }],
+        )],
     );
     let hit = pick(&mut world, query(0.5, 0.5)).unwrap().unwrap();
     assert_eq!(
@@ -419,15 +416,15 @@ fn perspective_aspect_and_rotated_pose_agree_with_shared_projection() {
     let (mut world, camera) = setup(&mut fixture_host);
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(camera),
-            value: ComponentValue::Camera(Camera {
+        vec![Command::insert_value(
+            EntityRef::Handle(camera),
+            ComponentValue::Camera(Camera {
                 fov_y: std::f32::consts::FRAC_PI_2,
                 near: 0.1,
                 far: 5.0,
                 ..Camera::default()
             }),
-        }],
+        )],
     );
     let target = target(
         &mut world,
@@ -460,15 +457,15 @@ fn perspective_aspect_and_rotated_pose_agree_with_shared_projection() {
 
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(camera),
-            value: ComponentValue::Transform(Transform {
+        vec![Command::insert_value(
+            EntityRef::Handle(camera),
+            ComponentValue::Transform(Transform {
                 x: 6.0,
                 qy: 0.5,
                 qw: 0.5,
                 ..Transform::default()
             }),
-        }],
+        )],
     );
     target_at_origin(&mut world);
     assert!(
@@ -498,9 +495,9 @@ fn compound_geometry_preserves_holes_and_authored_part_identity_after_transforms
     assert_eq!((hit.entity, hit.distance, hit.part), (entity, 6.0, 1));
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::Transform(Transform {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::Transform(Transform {
                 qy: 1.0,
                 qw: 0.0,
                 sx: 2.0,
@@ -508,7 +505,7 @@ fn compound_geometry_preserves_holes_and_authored_part_identity_after_transforms
                 sz: 3.0,
                 ..Transform::default()
             }),
-        }],
+        )],
     );
     let hit = pick(&mut world, query(0.7, 0.5)).unwrap().unwrap();
     assert_eq!(hit.part, 3, "the rotated left rim now intersects the ray");
@@ -536,10 +533,10 @@ fn missing_geometry_cannot_prove_a_miss_and_failed_payloads_remain_unavailable()
     assert!(pick(&mut world, query(0.7, 0.5)).unwrap().is_some());
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::PickingGeometry(resource_geometry("https://fixture/invalid")),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::PickingGeometry(resource_geometry("https://fixture/invalid")),
+        )],
     );
     let request = world.resource_requests_for_test().pop().unwrap();
     world
@@ -705,16 +702,16 @@ fn camera_projection_preserves_plane_coordinates_for_both_projections_and_outsid
         let (mut world, active) = setup(&mut fixture_host);
         run(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(active),
-                value: ComponentValue::Camera(Camera {
+            vec![Command::insert_value(
+                EntityRef::Handle(active),
+                ComponentValue::Camera(Camera {
                     projection,
                     ortho_height: 4.0,
                     fov_y: std::f32::consts::FRAC_PI_2,
                     far: 3.0,
                     ..Camera::default()
                 }),
-            }],
+            )],
         );
         let query = ipp_core::CameraProjectQuery {
             x: 1.5,

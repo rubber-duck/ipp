@@ -13,10 +13,7 @@ use ipp_core::{
 use std::{collections::BTreeSet, io::Write, path::Path, time::Instant};
 
 fn insert(entity: EntityRef, value: ComponentValue) -> Command {
-    Command::InsertComponentValue {
-        entity,
-        value,
-    }
+    Command::insert_value(entity, value)
 }
 
 fn camera(scene: &mut Scene, projection: Camera) -> Result<EntityId> {

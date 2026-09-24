@@ -176,7 +176,11 @@ impl Default for Skeleton {
 /// Private evaluated storage of one Skeleton component incarnation.
 #[derive(Debug, Default)]
 pub struct SkeletonRuntimeState {
-    // Boxed so the out-of-line override table does not widen every ComponentValue.
+    /// Evaluated pose, absent until the rig's assets resolve. Boxed because it
+    /// is runtime state no command or snapshot carries: inline it would add
+    /// 72 bytes to every Skeleton cell and, in builds without `gui`, make
+    /// Skeleton the largest `ComponentValue` variant (152 to 200 bytes on
+    /// 64-bit targets).
     pub(crate) pose: Option<Box<SkeletonPoseState>>,
 }
 

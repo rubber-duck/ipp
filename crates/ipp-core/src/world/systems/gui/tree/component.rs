@@ -41,26 +41,23 @@ pub struct GuiRoot {
     /// Node style rows at slot = node id; rows field 0.
     #[schema(rows)]
     node_style: Rows<GuiNodeStyleRow>,
-    /// Scalar kind-specific node data at slot = node id; rows field 1. Boxed,
-    /// like both skin tables, to keep the root and so every `Command` small.
+    /// Scalar kind-specific node data at slot = node id; rows field 1.
     #[schema(rows)]
-    node_data: Box<Rows<GuiNodeDataRow>>,
+    node_data: Rows<GuiNodeDataRow>,
     /// Theme part rows at slot = theme slot * [`GuiPartId::COUNT`] + part;
     /// rows field 2.
     #[schema(rows)]
-    theme_parts: Box<Rows<GuiThemePartRow>>,
+    theme_parts: Rows<GuiThemePartRow>,
     /// Per-node part rows keyed by their `node` and `part` properties at
     /// monotonically allocated slots; rows field 3.
     #[schema(rows)]
-    part_state: Box<Rows<GuiPartRow>>,
+    part_state: Rows<GuiPartRow>,
     /// Application extension values; the runtime writes no GUI names here.
-    /// Boxed: the set is rarely large and keeps the root, and so every
-    /// `Command`, within its size budget.
     #[schema(ignore)]
-    pub properties: Box<DynamicProperties>,
+    pub properties: DynamicProperties,
     /// Theme and part row lookup, rebuilt whenever either table is replaced.
     #[schema(ignore)]
-    skin_index: Box<GuiSkinIndex>,
+    skin_index: GuiSkinIndex,
 }
 
 /// Lookup from theme handles and (node, base part) keys to row slots,
@@ -676,7 +673,7 @@ impl GuiRoot {
         let mut live: Vec<u32> = self.nodes.as_slice().iter().map(|node| node.id.0).collect();
         live.sort_unstable();
         sync_table(&mut self.node_style, &live);
-        sync_table(&mut *self.node_data, &live);
+        sync_table(&mut self.node_data, &live);
         for node in self.nodes.as_slice() {
             if let Some(row) = self.node_data.get_mut(node.id.0) {
                 row.conform(&node.data);

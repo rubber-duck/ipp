@@ -435,22 +435,22 @@ fn shared_geometry_maps_two_final_joint_origins_and_scales_radius_for_both_compo
     let mut commands = Vec::new();
     for entity in [a, b] {
         commands.extend([
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::BoundingGeometry(BoundingGeometry {
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::BoundingGeometry(BoundingGeometry {
                     source: "asset://6/50".into(),
                     is_rendered: true,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::PickingGeometry(PickingGeometry {
+            ),
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::PickingGeometry(PickingGeometry {
                     source: "asset://6/50".into(),
                     is_rendered: true,
                     ..Default::default()
                 }),
-            },
+            ),
         ]);
     }
     assert!(apply(&mut world, commands).outcomes[0].result.is_ok());
@@ -470,15 +470,15 @@ fn shared_geometry_maps_two_final_joint_origins_and_scales_radius_for_both_compo
     let report = apply(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(a),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Handle(a),
+                ComponentValue::Transform(Transform {
                     x: 5.0,
                     sx: 2.0,
                     sz: 0.5,
                     ..Default::default()
                 }),
-            },
+            ),
             set(
                 a,
                 ComponentValue::SKELETON,
@@ -545,10 +545,10 @@ fn mapped_geometry_invalidates_on_skeleton_replacement_until_explicitly_rebound(
     };
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(a),
-            value: ComponentValue::PickingGeometry(geometry.clone()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(a),
+            ComponentValue::PickingGeometry(geometry.clone()),
+        )],
     );
     assert!(world.picking_geometry(a).is_ok());
     apply(
@@ -586,10 +586,10 @@ fn mapped_geometry_invalidates_on_skeleton_replacement_until_explicitly_rebound(
     );
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(a),
-            value: ComponentValue::PickingGeometry(geometry),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(a),
+            ComponentValue::PickingGeometry(geometry),
+        )],
     );
     assert!(world.picking_geometry(a).is_ok());
 }
@@ -603,13 +603,13 @@ fn generated_bounds_enclose_every_blended_vertex_after_pose_and_nonuniform_scale
     apply(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(a),
-                value: ComponentValue::BoundingGeometry(BoundingGeometry::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(a),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Handle(a),
+                ComponentValue::BoundingGeometry(BoundingGeometry::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(a),
+                ComponentValue::Transform(Transform {
                     x: 2.0,
                     qz: 0.3,
                     qw: 0.9539392,
@@ -618,7 +618,7 @@ fn generated_bounds_enclose_every_blended_vertex_after_pose_and_nonuniform_scale
                     sz: 3.0,
                     ..Default::default()
                 }),
-            },
+            ),
             set(
                 a,
                 ComponentValue::SKELETON,
@@ -712,15 +712,15 @@ fn generated_bounds_enclose_every_blended_vertex_after_pose_and_nonuniform_scale
     );
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(a),
-            value: ComponentValue::BoundingGeometry(BoundingGeometry {
+        vec![Command::insert_value(
+            EntityRef::Handle(a),
+            ComponentValue::BoundingGeometry(BoundingGeometry {
                 geometry: geometry::GeometryDefinition::from(geometry::GeometryShape::default())
                     .encode()
                     .unwrap(),
                 ..Default::default()
             }),
-        }],
+        )],
     );
     assert!(
         world.geometry_visible(a, &planes),

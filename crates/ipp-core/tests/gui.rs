@@ -56,14 +56,11 @@ fn create_root(world: &mut WorldContext<'_>, surface: Surface) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -323,10 +320,10 @@ fn reordering_preserves_identity_and_handles_are_fenced() {
     .unwrap();
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::GuiRoot(GuiRoot::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::GuiRoot(GuiRoot::default()),
+        )],
     )
     .unwrap();
     assert_ne!(incarnation(&world, entity), old_incarnation);
@@ -696,10 +693,10 @@ fn structural_fields_of_a_live_root_change_only_through_gui_commands() {
     // A new incarnation may carry a complete tree and committed values, as snapshot restore does.
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::GuiRoot(saved.clone()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::GuiRoot(saved.clone()),
+        )],
     )
     .unwrap();
     assert_eq!(
@@ -740,10 +737,10 @@ fn surface_content_has_one_owner_while_a_gui_root_is_attached() {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(populated.clone()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(populated.clone()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -753,10 +750,10 @@ fn surface_content_has_one_owner_while_a_gui_root_is_attached() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(raw),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(raw),
+                ComponentValue::GuiRoot(GuiRoot::default())
+            )],
         )
         .is_err()
     );
@@ -782,10 +779,10 @@ fn surface_content_has_one_owner_while_a_gui_root_is_attached() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Surface(populated),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Surface(populated)
+            )],
         )
         .is_err()
     );
@@ -1186,14 +1183,14 @@ fn overlays_override_gui_properties_but_not_gui_structure_or_raw_items() {
                     classes: Vec::new(),
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(Surface::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(Surface::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -1353,10 +1350,7 @@ fn raw_items_hidden_by_an_overlay_block_gui_ownership() {
                     classes: Vec::new(),
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(raw),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(raw)),
         ],
     )
     .unwrap()[0]
@@ -1385,10 +1379,10 @@ fn raw_items_hidden_by_an_overlay_block_gui_ownership() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiRoot(GuiRoot::default())
+            )],
         )
         .is_err()
     );
@@ -1416,14 +1410,14 @@ fn gui_properties_are_validated_on_field_and_overlay_writes() {
                     classes: Vec::new(),
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(Surface::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(Surface::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]

@@ -165,9 +165,11 @@ impl Scene {
                 id: index as u64 + 1,
                 operations: chunk
                     .iter()
-                    .map(|&id| Command::InsertComponentValue {
-                        entity: EntityRef::Handle(id),
-                        value: ComponentValue::BoundingGeometry(BoundingGeometry::default()),
+                    .map(|&id| {
+                        Command::insert_value(
+                            EntityRef::Handle(id),
+                            ComponentValue::BoundingGeometry(BoundingGeometry::default()),
+                        )
                     })
                     .collect(),
             })?;

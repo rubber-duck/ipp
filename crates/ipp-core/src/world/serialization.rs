@@ -206,10 +206,10 @@ impl WorldContext<'_> {
                 self.runtime_access()
                     .apply_operation(
                         None,
-                        &Command::InsertComponentValue {
-                            entity: EntityRef::Handle(ids[&entity.persistent_id]),
+                        &Command::insert_value(
+                            EntityRef::Handle(ids[&entity.persistent_id]),
                             value,
-                        },
+                        ),
                         &mut aliases,
                         &mut created,
                     )

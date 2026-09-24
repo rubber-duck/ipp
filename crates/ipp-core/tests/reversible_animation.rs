@@ -44,12 +44,12 @@ fn fixture() -> (
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Scalar(Scalar {
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Scalar(Scalar {
                         value: 99.0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -160,12 +160,12 @@ fn delayed_reverse_restart_uses_ready_duration_and_explicit_seek_is_preserved() 
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Scalar(Scalar {
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Scalar(Scalar {
                         value: 99.0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();

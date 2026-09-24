@@ -20,13 +20,13 @@ fn run(world: &mut crate::WorldContext<'_>, operations: Vec<Command>) -> WorldUp
 }
 
 fn insert(entity: EntityId, source: &str) -> Command {
-    Command::InsertComponentValue {
-        entity: EntityRef::Handle(entity),
-        value: ComponentValue::CustomMaterial(CustomMaterial {
+    Command::insert_value(
+        EntityRef::Handle(entity),
+        ComponentValue::CustomMaterial(CustomMaterial {
             source: source.into(),
             ..CustomMaterial::default()
         }),
-    }
+    )
 }
 
 fn cutoff(value: f32) -> FieldWrite {
@@ -281,13 +281,13 @@ fn native_insertion_checks_field_policy_even_when_an_overlay_hides_the_base() {
                     classes: vec![],
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            Command::insert_value(
+                EntityRef::Alias(0),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "bundle!mesh?flavour=opaque text".into(),
                     variant: 0,
                 }),
-            },
+            ),
             Command::CreateStateOverlayOwner {
                 alias: 0,
             },
@@ -313,13 +313,13 @@ fn native_insertion_checks_field_policy_even_when_an_overlay_hides_the_base() {
     let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;
     let report = run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::MeshInstance(MeshInstance {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::MeshInstance(MeshInstance {
                 source: "x".repeat(4097),
                 variant: 0,
             }),
-        }],
+        )],
     );
     assert!(report.outcomes[0].result.is_ok());
     let ComponentValue::MeshInstance(base) = world

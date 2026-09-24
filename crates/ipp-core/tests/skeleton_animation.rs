@@ -30,10 +30,7 @@ fn create(world: &mut ipp_core::WorldContext<'_>, values: Vec<ComponentValue>) -
     operations.extend(
         values
             .into_iter()
-            .map(|value| Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value,
-            }),
+            .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
     );
     apply(world, operations).result.unwrap()[0].1
 }
@@ -581,10 +578,10 @@ fn source_replacement_in_failed_batch_invalidates_binding() {
     );
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(a),
-            value: ComponentValue::Transform(Transform::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(a),
+            ComponentValue::Transform(Transform::default()),
+        )],
     )
     .result
     .unwrap();
@@ -598,13 +595,13 @@ fn source_replacement_in_failed_batch_invalidates_binding() {
                 entity: EntityRef::Handle(a),
                 component: ComponentValue::SKELETON,
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(a),
-                value: ComponentValue::Skeleton(Skeleton {
+            Command::insert_value(
+                EntityRef::Handle(a),
+                ComponentValue::Skeleton(Skeleton {
                     source: "asset://3/1".into(),
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )
     .result

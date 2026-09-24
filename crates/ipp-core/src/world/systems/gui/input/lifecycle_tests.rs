@@ -315,10 +315,10 @@ fn root_replacement_without_new_input_does_not_transfer_focus() {
         context
             .enqueue(Batch {
                 id: context.tick() + 1,
-                operations: vec![Command::InsertComponentValue {
-                    entity: EntityRef::Handle(panel),
-                    value: ComponentValue::GuiRoot(GuiRoot::default()),
-                }],
+                operations: vec![Command::insert_value(
+                    EntityRef::Handle(panel),
+                    ComponentValue::GuiRoot(GuiRoot::default()),
+                )],
             })
             .unwrap();
         context.step(0.0).unwrap();

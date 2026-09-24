@@ -130,13 +130,13 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
                     alias: 0,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(0),
-                    value: ComponentValue::CustomMaterial(CustomMaterial {
+                Command::insert_value(
+                    EntityRef::Alias(0),
+                    ComponentValue::CustomMaterial(CustomMaterial {
                         source: SOURCE.into(),
                         ..CustomMaterial::default()
                     }),
-                },
+                ),
             ],
         })
         .unwrap();

@@ -49,13 +49,13 @@ fn later_world_reconciliation_preserves_original_asset_release_subscribers() {
                     alias: 0,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(0),
-                    value: ComponentValue::MeshInstance(MeshInstance {
+                Command::insert_value(
+                    EntityRef::Alias(0),
+                    ComponentValue::MeshInstance(MeshInstance {
                         source: SOURCE.into(),
                         variant: 0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();

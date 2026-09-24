@@ -6,9 +6,13 @@ impl WorldContext<'_> {
         if let Some(reason) = self.world.fault {
             return Err(reason);
         }
+        // An unlimited byte quota admits every size, so skip the walk over every
+        // operation and inserted value.
+        let max_bytes = self.world.limits.max_batch_bytes;
         if self.world.queue.len() >= self.world.limits.max_queued_batches
             || batch.operations.len() > self.world.limits.max_operations
-            || batch_bytes(&batch).is_none_or(|bytes| bytes > self.world.limits.max_batch_bytes)
+            || (max_bytes != usize::MAX
+                && batch_bytes(&batch).is_none_or(|bytes| bytes > max_bytes))
         {
             #[cfg(feature = "diagnostics")]
             if !batch.operations.is_empty() {
@@ -219,7 +223,9 @@ pub(super) fn batch_bytes(batch: &Batch) -> Option<usize> {
             Command::InsertComponentValue {
                 value,
                 ..
-            } => value.retained_bytes()?,
+            } => {
+                std::mem::size_of::<crate::ComponentValue>().checked_add(value.retained_bytes()?)?
+            }
             Command::InsertComponent {
                 fields,
                 ..

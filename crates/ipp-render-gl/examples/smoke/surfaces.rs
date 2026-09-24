@@ -87,14 +87,11 @@ pub(crate) fn run<D: RenderDevice>(
                 alias: 9,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(9),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(9),
-                value: ComponentValue::Surface(surface),
-            },
+            Command::insert_value(
+                EntityRef::Alias(9),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(EntityRef::Alias(9), ComponentValue::Surface(surface)),
         ],
     })?;
     let entity = world.step(0.0)?.outcomes[0]
@@ -254,14 +251,14 @@ fn rear_view<D: RenderDevice>(
                     alias: 77,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(77),
-                    value: ComponentValue::Transform(Transform {
+                Command::insert_value(
+                    EntityRef::Alias(77),
+                    ComponentValue::Transform(Transform {
                         qy: 1.0,
                         qw: 0.0,
                         ..Default::default()
                     }),
-                },
+                ),
             ],
         })?;
         world.step(0.0)?.outcomes[0]
@@ -274,13 +271,13 @@ fn rear_view<D: RenderDevice>(
         let mut world = host.world_mut(id).unwrap();
         super::world::apply(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Hierarchy(Hierarchy {
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Hierarchy(Hierarchy {
                     parent,
                     ..Default::default()
                 }),
-            }],
+            )],
         )?;
     }
     super::world::render_host_frame(
@@ -411,10 +408,10 @@ fn orientation<D: RenderDevice>(
                         entity: EntityRef::Handle(entity),
                         component: ComponentValue::SURFACE,
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Handle(entity),
-                        value: ComponentValue::Surface(surface.clone()),
-                    },
+                    Command::insert_value(
+                        EntityRef::Handle(entity),
+                        ComponentValue::Surface(surface.clone()),
+                    ),
                 ],
             );
         }

@@ -122,20 +122,17 @@ fn setup() -> (
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Surface(surface),
-                },
+                Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
                 Command::Create {
                     alias: 2,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(2),
-                    value: ComponentValue::Scalar(Scalar {
+                Command::insert_value(
+                    EntityRef::Alias(2),
+                    ComponentValue::Scalar(Scalar {
                         value: 1.0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -217,13 +214,13 @@ fn retained_surface_preparation_skips_unrelated_work_and_reuses_glyph_storage() 
                     alias: 3,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(3),
-                    value: ComponentValue::MeshInstance(MeshInstance {
+                Command::insert_value(
+                    EntityRef::Alias(3),
+                    ComponentValue::MeshInstance(MeshInstance {
                         source: "asset://1/999".into(),
                         variant: 0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -464,19 +461,16 @@ fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(root),
-                    },
+                    ),
+                    Command::insert_value(EntityRef::Alias(1), ComponentValue::GuiRoot(root)),
                 ],
             })
             .unwrap();
@@ -1285,10 +1279,10 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
         .unwrap()
         .enqueue(Batch {
             id: 91,
-            operations: vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(panel),
-                value: ComponentValue::GuiRoot(replacement),
-            }],
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(panel),
+                ComponentValue::GuiRoot(replacement),
+            )],
         })
         .unwrap();
     host.world_mut(world)
@@ -1933,19 +1927,16 @@ fn drawing_panel(
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(root),
-                    },
+                    ),
+                    Command::insert_value(EntityRef::Alias(1), ComponentValue::GuiRoot(root)),
                 ],
             })
             .unwrap();
@@ -1999,19 +1990,16 @@ fn demand_only_drawing_panel(
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(root),
-                    },
+                    ),
+                    Command::insert_value(EntityRef::Alias(1), ComponentValue::GuiRoot(root)),
                 ],
             })
             .unwrap();
@@ -2469,10 +2457,10 @@ fn root_replacement_cannot_reuse_a_retained_skin_resource() {
         context
             .enqueue(Batch {
                 id: 3,
-                operations: vec![Command::InsertComponentValue {
-                    entity: EntityRef::Handle(panel),
-                    value: ComponentValue::GuiRoot(replacement),
-                }],
+                operations: vec![Command::insert_value(
+                    EntityRef::Handle(panel),
+                    ComponentValue::GuiRoot(replacement),
+                )],
             })
             .unwrap();
         context.step(0.0).unwrap();
@@ -2514,10 +2502,10 @@ fn root_removal_clears_retained_skin_resources_before_reinsertion() {
         context
             .enqueue(Batch {
                 id: 5,
-                operations: vec![Command::InsertComponentValue {
-                    entity: EntityRef::Handle(panel),
-                    value: ComponentValue::GuiRoot(root_with_icon_asset(pending)),
-                }],
+                operations: vec![Command::insert_value(
+                    EntityRef::Handle(panel),
+                    ComponentValue::GuiRoot(root_with_icon_asset(pending)),
+                )],
             })
             .unwrap();
         context.step(0.0).unwrap();

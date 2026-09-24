@@ -134,9 +134,9 @@ pub fn run<D: RenderDevice>(
                     float(std::mem::offset_of!(Transform, z), 4.0),
                 ],
             ),
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(3),
-                value: ComponentValue::Light(ipp_core::components::Light {
+            Command::insert_value(
+                EntityRef::Alias(3),
+                ComponentValue::Light(ipp_core::components::Light {
                     kind: 2,
                     intensity: 40.0,
                     inner_cone: 0.5,
@@ -144,7 +144,7 @@ pub fn run<D: RenderDevice>(
                     cast_shadows: cfg!(feature = "shadows"),
                     ..Default::default()
                 }),
-            },
+            ),
         ]);
     }
     apply(&mut world, ops)?;

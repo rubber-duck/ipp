@@ -658,18 +658,6 @@ fn node_identities_stop_at_the_row_slot_bound() {
 }
 
 #[test]
-fn gui_root_keeps_commands_within_their_size_budget() {
-    // Commands carry whole component values; the rows tables must not grow
-    // every queued command beyond the batch budget's per-command estimate.
-    assert!(
-        std::mem::size_of::<crate::Command>() <= 248,
-        "Command is {} bytes; GuiRoot is {}",
-        std::mem::size_of::<crate::Command>(),
-        std::mem::size_of::<GuiRoot>()
-    );
-}
-
-#[test]
 fn patch_style_changes_round_trip_by_property() {
     let patch = GuiNodePatch {
         enabled: Some(false),

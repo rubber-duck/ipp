@@ -70,17 +70,17 @@ fn cameras(session: &mut Host<CameraPlatform>) -> [EntityId; 2] {
                     alias,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(alias),
-                    value: ComponentValue::Transform(Transform {
+                Command::insert_value(
+                    EntityRef::Alias(alias),
+                    ComponentValue::Transform(Transform {
                         z: alias as f32 + 4.0,
                         ..Default::default()
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(alias),
-                    value: ComponentValue::Camera(Camera::default()),
-                },
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(alias),
+                    ComponentValue::Camera(Camera::default()),
+                ),
             ]
         })
         .collect();

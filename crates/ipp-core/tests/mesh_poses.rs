@@ -206,14 +206,14 @@ fn invalid_changes_preserve_prior_operations_and_allow_explicit_repair() {
         );
         let repair = apply(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(id),
-                value: ComponentValue::MeshPose(MeshPose {
+            vec![Command::insert_value(
+                EntityRef::Handle(id),
+                ComponentValue::MeshPose(MeshPose {
                     source: "asset://1/2".into(),
                     variant: 0,
                     weight: 0.5,
                 }),
-            }],
+            )],
         );
         assert!(
             repair.outcomes[0].result.is_ok(),

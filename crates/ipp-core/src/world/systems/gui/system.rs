@@ -270,7 +270,7 @@ impl System for GuiSystem {
                 value,
             } => {
                 let entity = staged.resolve(*entity, context.aliases)?;
-                match value {
+                match &**value {
                     Value::GuiRoot(_) if raw_items(entity) => Err(ErrorReason::InvalidValue),
                     Value::GuiRoot(root) => root.validate_complete(),
                     Value::Surface(surface)

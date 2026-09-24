@@ -86,10 +86,10 @@ fn nonconvergent_commit_releases_deleted_entities_and_faults_only_its_world() {
                     alias: 1,
                     metadata: EntityMetadata::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Scalar(Default::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Scalar(Default::default()),
+                ),
             ],
         })
         .unwrap();
@@ -106,10 +106,10 @@ fn nonconvergent_commit_releases_deleted_entities_and_faults_only_its_world() {
                 Command::Delete {
                     entity: EntityRef::Handle(deleted),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(scalar),
-                    value: ComponentValue::Scalar(Default::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Handle(scalar),
+                    ComponentValue::Scalar(Default::default()),
+                ),
             ],
         })
         .unwrap();

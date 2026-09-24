@@ -28,19 +28,19 @@ fn setup() -> (HostRuntime, WorldId, EntityId) {
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 4.0;
                             surface.height = 3.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(GuiRoot::default()),
-                    },
+                    ),
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::GuiRoot(GuiRoot::default()),
+                    ),
                 ],
             })
             .unwrap();
@@ -408,14 +408,11 @@ fn root_membership_follows_component_lifecycle_among_plain_entities() {
         &mut host,
         world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(second),
-                value: panel_surface(),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(second),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Handle(second), panel_surface()),
+            Command::insert_value(
+                EntityRef::Handle(second),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     );
     assert_eq!(evaluated(&mut host, world), vec![first, second]);
@@ -444,10 +441,10 @@ fn root_membership_follows_component_lifecycle_among_plain_entities() {
     apply(
         &mut host,
         world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(first),
-            value: ComponentValue::GuiRoot(GuiRoot::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(first),
+            ComponentValue::GuiRoot(GuiRoot::default()),
+        )],
     );
     assert_eq!(evaluated(&mut host, world), vec![first]);
 }
@@ -490,10 +487,10 @@ fn unchanged_roots_keep_output_without_fingerprinting() {
     apply(
         &mut host,
         world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(panel),
-            value: panel_surface(),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(panel),
+            panel_surface(),
+        )],
     );
     assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
     assert_eq!(

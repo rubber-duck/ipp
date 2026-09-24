@@ -569,10 +569,10 @@ fn world_save_load_preserves_dynamic_descriptors_without_shader_availability() {
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::CustomMaterial(material),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::CustomMaterial(material),
+                ),
             ],
         );
     }
@@ -734,10 +734,10 @@ fn auto_overlay_does_not_reuse_dynamic_identities_after_component_replacement() 
         .unwrap();
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::CustomMaterial(replacement),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::CustomMaterial(replacement),
+        )],
     );
     assert_eq!(
         material(&world, entity, false).get("other"),

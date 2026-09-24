@@ -751,15 +751,24 @@ fn discrete_driver_binding_and_continuous_source_share_the_frozen_seek_time() {
     seek(&mut world, continuous, 1.0);
     seek(&mut world, p, 1.0);
     assert_eq!(scalar(&world, target), (0.0, 5.0));
-    #[cfg(debug_assertions)]
-    {
-        let invalid = seek(&mut world, p, 2.0);
-        assert!(invalid.playback_events.iter().any(|event| {
-            event.controller.id == p
-                && event.kind == AnimationPlaybackEventKind::Failed
-                && event.reason == Some(ErrorReason::UnsupportedDependency)
-        }));
-    }
+    // Animating the source onto the target itself makes the driver inactive
+    // without failing playback; the target keeps its underlying value.
+    let invalid = seek(&mut world, p, 2.0);
+    assert!(
+        invalid
+            .playback_events
+            .iter()
+            .all(|event| event.kind != AnimationPlaybackEventKind::Failed)
+    );
+    assert_eq!(scalar(&world, target), (0.0, 0.0));
+    let recovered = seek(&mut world, p, 1.0);
+    assert!(
+        recovered
+            .playback_events
+            .iter()
+            .all(|event| event.kind != AnimationPlaybackEventKind::Failed)
+    );
+    assert_eq!(scalar(&world, target), (0.0, 5.0));
     world
         .enqueue_playback(p, AnimationPlaybackControl::Stop)
         .unwrap();

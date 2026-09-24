@@ -164,6 +164,18 @@ impl WorldMutationState {
                 .and_then(|layer| layer.inputs.input_value())
             {
                 let value = input.clone();
+
+                // Test-only oracle: ingress validation must already have made
+                // every committed value whole-valid.
+                #[cfg(feature = "checked-invariants")]
+                if let Err(reason) = value.validate_lifecycle() {
+                    panic!(
+                        "checked invariant: component {} of entity {} fails whole validation ({reason})",
+                        key.1,
+                        key.0.to_bits()
+                    );
+                }
+
                 self.entities_state.prepared.insert(key, value);
             }
         }

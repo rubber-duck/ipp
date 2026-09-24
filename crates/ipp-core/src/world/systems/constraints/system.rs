@@ -79,7 +79,7 @@ impl System for ConstraintSystem {
         }
         let _ = self.reconcile(&context.world_data.components, context.staged);
         self.state.restores.retain(|entity, original| {
-            if !self.state.bindings.contains_key(entity) {
+            if !self.state.bindings.contains_key(entity) || self.state.invalid.contains(entity) {
                 return false;
             }
             if !context.is_evaluated()
@@ -105,16 +105,6 @@ impl System for ConstraintSystem {
         }
     }
 
-    fn validate_commit(
-        &self,
-        context: &crate::systems::SystemCommitContext<'_>,
-    ) -> Result<(), crate::ErrorReason> {
-        #[cfg(debug_assertions)]
-        self.validate(&context.world_data.components, context.staged)?;
-        let _ = context;
-        Ok(())
-    }
-
     fn prepare_mutation(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         self.restore_inputs(context.world.world);
     }
@@ -122,6 +112,7 @@ impl System for ConstraintSystem {
     fn teardown(&mut self, _context: &mut SystemTeardownContext<'_>) {
         self.state.restores.clear();
         self.state.bindings.clear();
+        self.state.invalid.clear();
         self.state.declarations.clear();
     }
 

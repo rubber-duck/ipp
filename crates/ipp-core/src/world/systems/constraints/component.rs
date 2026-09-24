@@ -22,4 +22,15 @@ impl Default for LinearDriver {
     }
 }
 
-impl crate::components::schema::ComponentLifecycle for LinearDriver {}
+impl crate::components::schema::ComponentLifecycle for LinearDriver {
+    /// Scale and bias are finite. Evaluated results are not validated: a finite
+    /// driver may still overflow, and dependency cycles are diagnosed by the
+    /// ConstraintSystem instead of rejecting the batch.
+    fn validate(&self) -> Result<(), crate::ErrorReason> {
+        if self.scale.is_finite() && self.bias.is_finite() {
+            Ok(())
+        } else {
+            Err(crate::ErrorReason::InvalidValue)
+        }
+    }
+}

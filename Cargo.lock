@@ -122,6 +122,7 @@ dependencies = [
 name = "ipp-core"
 version = "0.1.0"
 dependencies = [
+ "ipp-core",
  "ipp-schema-derive",
  "miniz_oxide",
  "unicode-segmentation",

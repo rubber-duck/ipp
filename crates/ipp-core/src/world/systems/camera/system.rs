@@ -49,33 +49,6 @@ impl SystemFactory for CameraSystemFactory {
 }
 
 impl System for CameraSystem {
-    fn validate_commit(
-        &self,
-        context: &crate::systems::SystemCommitContext<'_>,
-    ) -> Result<(), crate::ErrorReason> {
-        #[cfg(debug_assertions)]
-        if let Some(entity) = self.state.active_camera {
-            let Some(crate::ComponentValue::Camera(camera)) = context.staged.input_value(
-                &context.world_data.components,
-                entity,
-                crate::ComponentValue::CAMERA,
-            ) else {
-                return Err(crate::ErrorReason::ActiveCamera);
-            };
-            let Some(crate::ComponentValue::Transform(transform)) = context.staged.input_value(
-                &context.world_data.components,
-                entity,
-                crate::ComponentValue::TRANSFORM,
-            ) else {
-                return Err(crate::ErrorReason::ActiveCamera);
-            };
-            super::prepare(entity, &camera, &transform, 1, 1)
-                .map_err(|_| crate::ErrorReason::ActiveCamera)?;
-        }
-        let _ = context;
-        Ok(())
-    }
-
     fn command(
         &mut self,
         _context: &mut crate::systems::SystemCommandContext<'_>,

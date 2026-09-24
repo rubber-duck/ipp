@@ -119,10 +119,13 @@ impl<'a> AnimationReadAccess<'a> {
             return Err(ErrorReason::Capacity);
         }
         if let Some((_, description)) = replace {
-            add_description_demand(description, &mut demand);
+            // Retained controllers were validated when admitted; check only the
+            // demand this description adds, proportionally to the controller.
+            let mut added = BTreeSet::new();
+            add_description_demand(description, &mut added);
+            self.validate_animation_demand(&added)?;
+            demand.extend(added);
         }
-        #[cfg(debug_assertions)]
-        self.validate_animation_demand(&demand)?;
         Ok(demand)
     }
 

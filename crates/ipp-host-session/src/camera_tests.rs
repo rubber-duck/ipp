@@ -135,11 +135,11 @@ fn activation_interleaves_with_partial_batches_and_reports_each_selection() {
         session.test_session().take_response().unwrap(),
         camera_change(second, 2)
     );
-    let rejected = session.test_session().take_response().unwrap();
-    assert_eq!(&rejected[8..16], &12u64.to_le_bytes());
-    assert_eq!(rejected[24], 1);
-    assert_eq!(rejected[41], 1);
-    assert!(String::from_utf8_lossy(&rejected).contains("ActiveCamera"));
+    // Deleting the active camera is accepted; the later activation selects again.
+    let accepted = session.test_session().take_response().unwrap();
+    assert_eq!(&accepted[8..16], &12u64.to_le_bytes());
+    assert_eq!(accepted[24], 1);
+    assert_eq!(accepted[41], 0);
     let deleted = session.test_session().take_response().unwrap();
     assert_eq!(&deleted[8..16], &14u64.to_le_bytes());
     assert_eq!(deleted[41], 1);

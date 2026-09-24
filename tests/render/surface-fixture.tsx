@@ -1,3 +1,8 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
+import {
+  presentationTesting,
+  type GlyphAtlasLimits,
+} from "@ipp/client/testing";
 import {
   createRoot,
   Entity,
@@ -31,7 +36,6 @@ import { probeErrorCheckBridge } from "./error-check-bridge.js";
 import { probeSurfaceCacheBridge } from "./surface-cache-bridge.js";
 import type {
   FrameCapture,
-  GlyphAtlasLimits,
   PickingWorldClient,
   RenderWorldClient,
   WorldPersistenceHostClient,
@@ -234,12 +238,14 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
     devicePixelRatio: window.devicePixelRatio,
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
+    failedDrawCalls: frame.failedDrawCalls,
+    invalidCamera: frame.invalidCamera,
     // Cache records carry bigint entity identities; report them as decimal text.
-    backend: JSON.parse(
-      JSON.stringify(frame.backend, (_, value) =>
+    statistics: JSON.parse(
+      JSON.stringify(frame.statistics ?? null, (_, value) =>
         typeof value === "bigint" ? value.toString() : value,
       ),
-    ) as Record<string, unknown>,
+    ) as RenderStatisticsSnapshot | null,
     textPixels,
     inPage: {
       // Update start to pixels delivered to the page, measured in the page,
@@ -249,10 +255,7 @@ export async function capture(label: string, options: { next?: boolean } = {}) {
       updateMs:
         update === undefined ? null : update.appliedAt - update.startedAt,
       captureMs: presentedAt - captureStarted,
-      readbackMs:
-        typeof frame.backend.readbackMs === "number"
-          ? frame.backend.readbackMs
-          : null,
+      readbackMs: frame.statistics?.readbackMs ?? null,
     },
     background: sample(frame.width >> 1, Math.round(frame.height * 0.875)),
     corner: sample(0, 0),
@@ -318,7 +321,7 @@ export function glyphSets() {
 
 /** Bound the renderer's shared glyph atlas through the presentation channel. */
 export function glyphAtlasLimits(limits: GlyphAtlasLimits) {
-  client.presentation!.setGlyphAtlasLimits(limits);
+  presentationTesting(client.presentation!).setGlyphAtlasLimits(limits);
 }
 
 export async function clearWorkload(viewport?: {
@@ -894,11 +897,11 @@ export async function provideFont() {
 
 export async function recover() {
   const previous = await client.presentation!.capture();
-  client.presentation!.loseContext();
+  presentationTesting(client.presentation!).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  client.presentation!.restoreContext();
+  presentationTesting(client.presentation!).restoreContext();
   while (
     (await client.presentation!.capture()).contextGeneration <=
     previous.contextGeneration
@@ -929,7 +932,7 @@ export async function loadPendingSurfaceAssetsAcrossContextLoss() {
   items[2] = { ...items[2]!, asset: font };
   await present(<Terminal assets={assets} items={items} />);
   const before = await client.presentation!.capture();
-  client.presentation!.loseContext();
+  presentationTesting(client.presentation!).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
@@ -946,7 +949,7 @@ export async function loadPendingSurfaceAssetsAcrossContextLoss() {
       resource.source === font.source || resource.source === drawing.source,
   );
 
-  client.presentation!.restoreContext();
+  presentationTesting(client.presentation!).restoreContext();
   await waitSurfaceAssets(client, [font.source, drawing.source]);
   let after = await client.presentation!.capture();
   while (after.contextGeneration <= before.contextGeneration) {
@@ -1115,7 +1118,7 @@ export async function hoverPanel(active: boolean) {
 
 /** Bound resident cache image bytes on this graphics context. */
 export function surfaceCacheBudget(bytes: number) {
-  client.presentation!.setSurfaceCacheBudget(bytes);
+  presentationTesting(client.presentation!).setSurfaceCacheBudget(bytes);
 }
 
 /** Run the device-level cache target and error-check oracles against a build's shipped WebGL bridge. */

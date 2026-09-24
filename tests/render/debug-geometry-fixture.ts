@@ -1,3 +1,4 @@
+import { presentationTesting } from "@ipp/client/testing";
 import type {
   GeometryEncoder,
   Command,
@@ -258,11 +259,11 @@ export function differenceDataUrl(first: string, second: string) {
 
 export async function recoverContext() {
   const current = state();
-  current.client.presentation!.loseContext();
+  presentationTesting(current.client.presentation!).loseContext();
   // Match the maintained texture fixture's actual browser presentation barrier.
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  current.client.presentation!.restoreContext();
+  presentationTesting(current.client.presentation!).restoreContext();
 }
 
 export async function close() {

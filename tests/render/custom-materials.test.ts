@@ -144,8 +144,8 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
         const editorValue = await capture("react-editor-value");
         await rgb(editorValue.left, [0, 255, 0]);
         assert.equal(
-          editorValue.backend.shaderProgramsCreated,
-          editorFirst.backend.shaderProgramsCreated,
+          editorValue.statistics!.device.shaderProgramsCreated,
+          editorFirst.statistics!.device.shaderProgramsCreated,
         );
         await call("shaderEditor", [
           "vec4 materialFragment() { return p_tint * vec4(0.25,0.25,0.25,1); }",
@@ -345,8 +345,8 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
         const restored = await capture("restored");
         await rgb(restored.left, [255, 255, 0]);
         assert.equal(
-          restored.backend.shaderProgramsCreated,
-          beforeWrites.backend.shaderProgramsCreated,
+          restored.statistics!.device.shaderProgramsCreated,
+          beforeWrites.statistics!.device.shaderProgramsCreated,
         );
         await call("select", [
           {
@@ -366,8 +366,8 @@ test("custom materials use named instance values, sparse overlays, fallback, lin
         assert.ok(failed.left[2]! > 40 && failed.left[0] === 0);
         const cachedFailure = await capture("cached-compile-failure");
         assert.equal(
-          cachedFailure.backend.shaderProgramAttempts,
-          failed.backend.shaderProgramAttempts,
+          cachedFailure.statistics!.device.shaderProgramAttempts,
+          failed.statistics!.device.shaderProgramAttempts,
         );
         await call("remove", ["left", "UnlitMaterial"]);
         await rgb((await capture("red-fallback")).left, [255, 0, 0]);

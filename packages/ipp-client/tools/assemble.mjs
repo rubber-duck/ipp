@@ -64,6 +64,8 @@ export async function assembleBrowserHost(
     "wasm-worker.ts",
     "logging.ts",
     "resource-worker.ts",
+    // Loaded only when a profiling runtime exports its benchmark hooks.
+    "profile-worker.ts",
     "source-availability.ts",
     "resource-urls.ts",
     ...(rendering ? ["render-worker.ts", "presentation.ts"] : []),

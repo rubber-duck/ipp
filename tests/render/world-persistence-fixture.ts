@@ -1,3 +1,4 @@
+import { presentationTesting } from "@ipp/client/testing";
 import type {
   AnimationWorldClient,
   AnimationControllerSnapshot,
@@ -247,9 +248,9 @@ export async function restore() {
 }
 
 export async function recoverAndStop() {
-  client.presentation!.loseContext();
+  presentationTesting(client.presentation!).loseContext();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  client.presentation!.restoreContext();
+  presentationTesting(client.presentation!).restoreContext();
   await ready();
   await capture("recovered-paused");
   const recovery = compareImages(

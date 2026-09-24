@@ -1,3 +1,4 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import {
   compareFrames,
@@ -15,7 +16,10 @@ export interface WorkloadFrame {
   textPixels: number;
   triangles: number;
   drawCalls: number;
-  backend: Record<string, unknown>;
+  failedDrawCalls: number;
+  invalidCamera: boolean;
+  /** Null in builds without diagnostics statistics. */
+  statistics: RenderStatisticsSnapshot | null;
   /** Timings taken inside the page; see {@link TIMING_DEFINITIONS}. */
   inPage?: {
     updateToReadbackMs: number | null;
@@ -23,6 +27,13 @@ export interface WorkloadFrame {
     captureMs: number;
     readbackMs: number | null;
   };
+}
+
+/** GUI and Surface counters of a frame by name; absent groups contribute none. */
+export function counters(frame: {
+  readonly statistics: RenderStatisticsSnapshot | null;
+}): Readonly<Record<string, unknown>> {
+  return { ...frame.statistics?.gui, ...frame.statistics?.surfaces };
 }
 
 /** What each reported timing measures. */
@@ -156,13 +167,13 @@ export async function exerciseRetainedGui(
   const number = (
     frame: WorkloadFrame,
     key: (typeof RETAINED_COUNTERS)[number],
-  ) => frame.backend[key] as number;
+  ) => counters(frame)[key] as number;
   const checkFrame = (label: string, frame: WorkloadFrame) => {
-    assert.equal(frame.backend.failedDrawCalls, 0, label);
+    assert.equal(frame.failedDrawCalls, 0, label);
     // Missing statistics are unavailable, never a report of zero work.
     for (const key of RETAINED_COUNTERS)
       assert.equal(
-        typeof frame.backend[key],
+        typeof counters(frame)[key],
         retained ? "number" : "undefined",
         `${label}: ${key}`,
       );
@@ -211,15 +222,15 @@ export async function exerciseRetainedGui(
           number(frame, "glyphPopulates") === 0 &&
           number(frame, "glyphPopulationFailures") === 0 &&
           number(frame, "guiRebuilds") === 0 &&
-          frame.backend.uploadedBytes === 0)
+          frame.statistics!.frame.uploadedBytes === 0)
       )
         return { frame, attempts: attempt };
     }
     throw new Error(`${label}: retained presentation did not settle`);
   };
   const upload = (after: WorkloadFrame, before: WorkloadFrame) =>
-    Number(after.backend.totalUploadedBytes) -
-    Number(before.backend.totalUploadedBytes);
+    Number(after.statistics!.frame.totalUploadedBytes) -
+    Number(before.statistics!.frame.totalUploadedBytes);
   /** Work accumulated by every rendered tick between two captures. */
   const since = (
     after: WorkloadFrame,
@@ -503,7 +514,10 @@ export async function exerciseRetainedGui(
     ? {
         policy: options.surfaceCache,
         warm: Object.fromEntries(
-          SURFACE_CACHE_COUNTERS.map((key) => [key, warm.backend[key] ?? null]),
+          SURFACE_CACHE_COUNTERS.map((key) => [
+            key,
+            counters(warm)[key] ?? null,
+          ]),
         ),
         totals: Object.fromEntries(
           [
@@ -512,9 +526,13 @@ export async function exerciseRetainedGui(
             "totalSurfaceCacheDirect",
             "totalSurfaceCacheFallbacks",
             "totalSurfaceCacheAllocations",
-          ].map((key) => [key, samples.at(-1)?.frame.backend[key] ?? null]),
+          ].map((key) => [
+            key,
+            (samples.at(-1) ? counters(samples.at(-1)!.frame)[key] : null) ??
+              null,
+          ]),
         ),
-        records: warm.backend.surfaceCaches ?? null,
+        records: warm.statistics!.surfaces!.surfaceCaches ?? null,
       }
     : null;
   return {
@@ -598,7 +616,7 @@ async function exerciseRetainedControls(
     );
     const { frame } = await settle(label);
     assert.ok(
-      Number(frame.backend.guiBatches) > 0,
+      Number(frame.statistics!.gui!.guiBatches) > 0,
       `${label}: retained GUI batches`,
     );
     return { frame, pixelsPerMetre, pixels: driver.pixels(label) };
@@ -735,11 +753,11 @@ async function exercisePresentedWorldSwitch(
 ) {
   const { call } = driver;
   const stats = (frame: WorkloadFrame) => ({
-    failedDrawCalls: Number(frame.backend.failedDrawCalls),
-    guiBatches: Number(frame.backend.guiBatches),
-    guiResidentBytes: Number(frame.backend.guiResidentBytes),
-    glyphPages: Number(frame.backend.glyphPages),
-    glyphResidentBytes: Number(frame.backend.glyphResidentBytes),
+    failedDrawCalls: Number(frame.failedDrawCalls),
+    guiBatches: Number(frame.statistics!.gui!.guiBatches),
+    guiResidentBytes: Number(frame.statistics!.gui!.guiResidentBytes),
+    glyphPages: Number(frame.statistics!.gui!.glyphPages),
+    glyphResidentBytes: Number(frame.statistics!.gui!.glyphResidentBytes),
   });
   const panel = { shape: GUI_SHAPE };
 

@@ -1,3 +1,4 @@
+import { presentationTesting } from "@ipp/client/testing";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {
   AnimationWorldClient,
@@ -478,8 +479,8 @@ export async function run(configuration: {
       ...fixture.set(a, "MeshPose", { source: target, weight: 0.5 }),
     ]);
     const before = await capture("before-recovery");
-    presentation.loseContext();
-    presentation.restoreContext();
+    presentationTesting(presentation).loseContext();
+    presentationTesting(presentation).restoreContext();
     const deadline = performance.now() + 10_000;
     while (
       (await presentation.capture()).contextGeneration <=

@@ -1,3 +1,4 @@
+import { presentationTesting } from "@ipp/client/testing";
 import {
   type CanvasRuntimeInput,
   type TransferObservation,
@@ -386,8 +387,8 @@ export async function setCanvasContextLost(
   lost: boolean,
 ): Promise<void> {
   const client = requireHandle(id).client;
-  if (lost) client.presentation!.loseContext();
-  else client.presentation!.restoreContext();
+  if (lost) presentationTesting(client.presentation!).loseContext();
+  else presentationTesting(client.presentation!).restoreContext();
   await client.inspect();
 }
 

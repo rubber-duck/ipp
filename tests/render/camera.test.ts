@@ -1,3 +1,4 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -38,7 +39,9 @@ interface CaptureReport {
   height: number;
   drawCalls: number;
   triangles: number;
-  backend: Record<string, unknown>;
+  failedDrawCalls: number;
+  invalidCamera: boolean;
+  statistics?: RenderStatisticsSnapshot;
   summary: ImageSummary;
 }
 
@@ -182,7 +185,7 @@ export function createWebGlDevice(canvas) {
             assert.ok(selected.selection.ok);
             assertHit(selected.pick, declared.target);
             const valid = await capture("tiny-camera-valid");
-            assert.equal(valid.backend.invalidCamera, false);
+            assert.equal(valid.invalidCamera, false);
             assert.equal(valid.drawCalls, 1);
             const resized =
               await call<CameraQueryObservation>("resizeTinyCamera");
@@ -197,7 +200,7 @@ export function createWebGlDevice(canvas) {
             const invalid = await capture("tiny-camera-invalid-viewport");
             assert.equal(invalid.width, 1);
             assert.equal(invalid.height, 2048);
-            assert.equal(invalid.backend.invalidCamera, true);
+            assert.equal(invalid.invalidCamera, true);
             assert.equal(invalid.drawCalls, 0);
             assert.equal(invalid.triangles, 0);
             requireBlank(
@@ -217,7 +220,7 @@ export function createWebGlDevice(canvas) {
             const restored = await capture("tiny-camera-repaired");
             assert.equal(restored.width, 1);
             assert.equal(restored.height, 2048);
-            assert.equal(restored.backend.invalidCamera, false);
+            assert.equal(restored.invalidCamera, false);
             assert.equal(restored.drawCalls, 1);
             assert.equal(restored.triangles, 12);
             requireVisible(
@@ -242,14 +245,23 @@ export function createWebGlDevice(canvas) {
             const ready = await capture("gpu-unaffected-ready");
             requireVisible(ready.summary, "Unaffected ready geometry");
             assert.equal(ready.drawCalls, 1);
-            assert.equal(ready.backend.testMeshAllocationAttempts, 1);
+            assert.equal(
+              ready.statistics!.device.testMeshAllocationAttempts,
+              1,
+            );
             const failed = await call<GpuFailureObservation>("failGpuMesh");
             assertGpuFailureObservation(failed, selection.session, false);
             const unavailable = await capture("gpu-allocation-failed");
             assert.equal(unavailable.drawCalls, 1);
-            assert.equal(unavailable.backend.failedDrawCalls, 1);
-            assert.equal(unavailable.backend.testInjectedMeshFailures, 1);
-            assert.equal(unavailable.backend.testMeshAllocationAttempts, 2);
+            assert.equal(unavailable.failedDrawCalls, 1);
+            assert.equal(
+              unavailable.statistics!.device.testInjectedMeshFailures,
+              1,
+            );
+            assert.equal(
+              unavailable.statistics!.device.testMeshAllocationAttempts,
+              2,
+            );
             assert.ok(
               (await compare("gpu-unaffected-ready", "gpu-allocation-failed"))
                 .changedFraction < 0.002,
@@ -261,11 +273,11 @@ export function createWebGlDevice(canvas) {
             assert.equal(continued.entity, failed.entity);
             const stillFailed = await capture("gpu-failure-retained");
             assert.equal(
-              stillFailed.backend.testMeshAllocationAttempts,
+              stillFailed.statistics!.device.testMeshAllocationAttempts,
               2,
               "A failed resource must not retry GPU allocation every frame",
             );
-            assert.equal(stillFailed.backend.failedDrawCalls, 1);
+            assert.equal(stillFailed.failedDrawCalls, 1);
             const recovered =
               await call<GpuFailureObservation>("recoverGpuFailure");
             assertGpuFailureObservation(recovered, selection.session, true);
@@ -277,9 +289,15 @@ export function createWebGlDevice(canvas) {
             );
             assert.equal(restored.drawCalls, 2);
             assert.equal(restored.triangles, 20);
-            assert.equal(restored.backend.failedDrawCalls, 0);
-            assert.equal(restored.backend.testInjectedMeshFailures, 1);
-            assert.equal(restored.backend.testMeshAllocationAttempts, 4);
+            assert.equal(restored.failedDrawCalls, 0);
+            assert.equal(
+              restored.statistics!.device.testInjectedMeshFailures,
+              1,
+            );
+            assert.equal(
+              restored.statistics!.device.testMeshAllocationAttempts,
+              4,
+            );
             assert.ok(
               (await compare("gpu-allocation-failed", "gpu-recovered"))
                 .changedFraction > 0.03,
@@ -310,7 +328,7 @@ export function createWebGlDevice(canvas) {
             );
             const pendingFrame = await capture("pending-cpu-interaction");
             requireBlank(pendingFrame.summary, "Pending interaction geometry");
-            assert.equal(pendingFrame.backend.totalUploadedBytes, 0);
+            assert.equal(pendingFrame.statistics!.frame.totalUploadedBytes, 0);
             releaseResponse();
             const completed = await call<{
               resource: AssetResourceSnapshot;
@@ -328,7 +346,7 @@ export function createWebGlDevice(canvas) {
             assert.equal(cpuOnly.drawCalls, 0);
             assert.equal(cpuOnly.triangles, 0);
             assert.equal(
-              cpuOnly.backend.totalUploadedBytes,
+              cpuOnly.statistics!.frame.totalUploadedBytes,
               0,
               "Picking-only mesh must not allocate GPU buffers",
             );

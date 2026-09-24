@@ -499,7 +499,7 @@ export async function controlPaintObservation(flush = true): Promise<{
   if (checked?.kind !== "bool" || scalar?.kind !== "scalar")
     throw new Error("GUI control paint values disappeared");
   const pixels = new Uint8Array(frame.pixels);
-  const failedDrawCalls = frame.backend.failedDrawCalls;
+  const failedDrawCalls = frame.failedDrawCalls;
   if (typeof failedDrawCalls !== "number")
     throw new Error("GUI control paint capture omitted failed draw calls");
   return {

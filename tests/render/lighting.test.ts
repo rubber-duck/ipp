@@ -259,8 +259,8 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           "Supplied normals must smooth the same sphere triangles",
         );
         assert.equal(
-          Number(flat.backend.totalUploadedBytes) -
-            Number(smooth.backend.totalUploadedBytes),
+          Number(flat.statistics!.frame.totalUploadedBytes) -
+            Number(smooth.statistics!.frame.totalUploadedBytes),
           559 * 32 + 2880 * 2,
         );
 
@@ -444,7 +444,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         try {
           await call("recoverContext");
           const limited = await capture("shadow-allocation-fallback");
-          assert.equal(limited.backend.unshadowedLights, 6);
+          assert.equal(limited.statistics!.frame.unshadowedLights, 6);
           assert.ok(
             (
               await shadowDifference(
@@ -455,7 +455,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
             "exhausted shadow slots leave lights illuminating",
           );
           const again = await capture("shadow-allocation-fallback-stable");
-          assert.equal(again.backend.unshadowedLights, 6);
+          assert.equal(again.statistics!.frame.unshadowedLights, 6);
           assert.ok(
             (
               await difference(
@@ -475,7 +475,7 @@ test("direct lights and spotlight depth maps follow authored state and recover i
         }
         await call("recoverContext");
         const recoveredShadows = await capture("shadow-capacity-recovered");
-        assert.equal(recoveredShadows.backend.unshadowedLights, 0);
+        assert.equal(recoveredShadows.statistics!.frame.unshadowedLights, 0);
         assert.ok(
           (
             await difference(

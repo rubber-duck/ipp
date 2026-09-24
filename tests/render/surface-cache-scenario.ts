@@ -4,7 +4,8 @@ import {
   type FrameDifference,
   type RgbaFrame,
 } from "./retained-gui-images.js";
-import { SURFACE_CACHE_COUNTERS } from "./retained-gui-scenario.js";
+import type { RenderStatisticsSnapshot } from "@ipp/client";
+import { counters, SURFACE_CACHE_COUNTERS } from "./retained-gui-scenario.js";
 
 export interface CacheFrame {
   width: number;
@@ -12,7 +13,9 @@ export interface CacheFrame {
   devicePixelRatio: number;
   drawCalls: number;
   triangles: number;
-  backend: Record<string, unknown>;
+  failedDrawCalls: number;
+  invalidCamera: boolean;
+  statistics: RenderStatisticsSnapshot | null;
 }
 
 /** Decimal-text entity identities: the fixture reports bigint values as text. */
@@ -110,17 +113,17 @@ export type SurfaceCacheReport = Awaited<
 export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
   const { call } = driver;
   const records = (frame: CacheFrame) =>
-    frame.backend.surfaceCaches as CacheRecord[];
+    frame.statistics!.surfaces!.surfaceCaches as unknown as CacheRecord[];
   const counter = (
     frame: CacheFrame,
     key: (typeof SURFACE_CACHE_COUNTERS)[number] | `total${string}`,
-  ) => frame.backend[key] as number;
+  ) => counters(frame)[key] as number;
   const capture = async (label: string, next = false) => {
     const frame = await driver.capture(label, next);
-    assert.equal(frame.backend.failedDrawCalls, 0, label);
+    assert.equal(frame.failedDrawCalls, 0, label);
     for (const key of SURFACE_CACHE_COUNTERS)
-      assert.equal(typeof frame.backend[key], "number", `${label}: ${key}`);
-    assert.ok(Array.isArray(frame.backend.surfaceCaches), label);
+      assert.equal(typeof counters(frame)[key], "number", `${label}: ${key}`);
+    assert.ok(Array.isArray(frame.statistics!.surfaces!.surfaceCaches), label);
     return frame;
   };
   /**
@@ -136,7 +139,7 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
       previous = frame;
     }
     throw new Error(
-      `${label}: presentation did not settle: ${JSON.stringify(previous.backend.uploadedBytes)}`,
+      `${label}: presentation did not settle: ${JSON.stringify(previous.statistics!.frame.uploadedBytes)}`,
     );
   };
   const compare = (expected: string, actual: string): FrameDifference =>
@@ -285,7 +288,11 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
   assert.equal(record(warm)?.mode, "reused");
   assert.equal(counter(warm, "surfaceCacheRepaints"), 0);
   assert.equal(counter(warm, "surfaceCacheReuses"), 1);
-  assert.equal(warm.backend.uploadedBytes, 0, "warm cached frame uploads");
+  assert.equal(
+    warm.statistics!.frame.uploadedBytes,
+    0,
+    "warm cached frame uploads",
+  );
   identical("cache-band1", "cache-band1-warm");
 
   // Camera motion inside the band composites without repainting or allocating.
@@ -495,7 +502,7 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
   const recovered = await until(
     "cache-recovered",
     (current, frame) =>
-      current.mode === "reused" && frame.backend.uploadedBytes === 0,
+      current.mode === "reused" && frame.statistics!.frame.uploadedBytes === 0,
   );
   assert.equal(counter(recovered.frame, "surfaceCacheEntries"), 1);
   const recovery = compareFrames(
@@ -616,7 +623,7 @@ async function exerciseCachedGui(
     await call("hoverPanel", [true]);
     return until("gui-hovered", "interaction");
   })();
-  assert.equal(hovered.frame.backend.surfaceCacheRepaints, 0);
+  assert.equal(hovered.frame.statistics!.surfaces!.surfaceCacheRepaints, 0);
   await call("cameraDistance", [DISTANCE.near]);
   const nearHovered = await until("gui-direct-hovered", "interaction");
   const promoted = compareFrames(

@@ -76,7 +76,7 @@ export async function runRetainedGui(
       build: string;
       evidence: string;
       browser: string | null;
-      backend: Record<string, unknown>;
+      device: Record<string, unknown>;
     } & RetainedGuiReport
   > = [];
   const frames = new Map<string, Map<string, RgbaFrame>>();
@@ -159,8 +159,8 @@ export async function runRetainedGui(
             build: name,
             evidence: env.evidence.directory,
             browser: env.page.context().browser()?.version() ?? null,
-            backend: Object.fromEntries(
-              Object.entries(report.warm.backend).filter(
+            device: Object.fromEntries(
+              Object.entries(report.warm.statistics?.device ?? {}).filter(
                 ([, value]) => typeof value === "string",
               ),
             ),

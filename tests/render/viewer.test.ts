@@ -1,3 +1,4 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
 import { invoke, writeDataUrl } from "./evidence.js";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
@@ -1286,22 +1287,22 @@ function assertViewerProgramCounts(
   live: number,
 ): void {
   assert.equal(
-    viewerBackendNumber(capture.frame.backend, "shaderProgramsCreated"),
+    viewerDeviceNumber(capture.frame.statistics, "shaderProgramsCreated"),
     created,
   );
   assert.equal(
-    viewerBackendNumber(capture.frame.backend, "shaderProgramsLive"),
+    viewerDeviceNumber(capture.frame.statistics, "shaderProgramsLive"),
     live,
   );
 }
 
-function viewerBackendNumber(
-  backend: Readonly<Record<string, unknown>>,
+function viewerDeviceNumber(
+  statistics: RenderStatisticsSnapshot | undefined,
   field: string,
 ): number {
-  const value = backend[field];
+  const value = statistics?.device[field];
   if (typeof value !== "number") {
-    throw new Error(`viewer capture backend.${field} is not numeric`);
+    throw new Error(`viewer capture statistics.device.${field} is not numeric`);
   }
   return value;
 }

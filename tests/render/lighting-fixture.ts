@@ -1,3 +1,4 @@
+import { presentationTesting } from "@ipp/client/testing";
 import type { RenderWorldClient, Command, FrameCapture } from "@ipp/client";
 import {
   activateFixtureCamera,
@@ -312,10 +313,10 @@ export function captureDataUrl(label: string) {
 }
 
 export async function recoverContext() {
-  active().presentation!.loseContext();
+  presentationTesting(active().presentation!).loseContext();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  active().presentation!.restoreContext();
+  presentationTesting(active().presentation!).restoreContext();
 }
 
 export async function close() {

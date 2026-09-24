@@ -25,7 +25,7 @@ The optional `gui` capability provides GuiRoot trees with fenced node handles, r
 
 [Workspace architecture](../architecture/rust-workspace.md) owns crate responsibilities and the baseline. Plain `cargo check` selects the default workspace members; `--workspace` includes rendering, WASM and tooling. Build individual packages with explicit features when checking lean distributions.
 
-Core/protocol/session/hosts default to `builtin-assets`; renderer/build tools have empty defaults. Use `--no-default-features` to omit defaults. Scene selections include `skeletal-animation`, `mesh-poses`, `particles`, `surfaces`, `shadows` and `builtin-assets`. Hosts forward the relevant selections; `shadows` enables host rendering. Platform/tooling selections include `render`, native `websocket`, core `zip-data-source`, `diagnostics` and `schema-export`. Exact declarations live in the [core](../../crates/ipp-core/Cargo.toml), [renderer](../../crates/ipp-render-gl/Cargo.toml), [native](../../crates/ipp-server/Cargo.toml) and [WASM](../../crates/ipp-wasm/Cargo.toml) manifests.
+Core/protocol/session/hosts default to `builtin-assets`; renderer/build tools have empty defaults. Use `--no-default-features` to omit defaults. Scene selections include `skeletal-animation`, `mesh-poses`, `particles`, `surfaces`, `shadows` and `builtin-assets`. Hosts forward the relevant selections; `shadows` enables host rendering. Platform/tooling selections include `render`, native `websocket`, core `zip-data-source`, `diagnostics` (logging, render/resource/ingress statistics, Surface cache records and testing overrides), `profiling` (allocator, timers and benchmark exports) and `schema-export`. Exact declarations live in the [core](../../crates/ipp-core/Cargo.toml), [renderer](../../crates/ipp-render-gl/Cargo.toml), [native](../../crates/ipp-server/Cargo.toml) and [WASM](../../crates/ipp-wasm/Cargo.toml) manifests.
 
 [Browser configurations](../../tools/pipeline/profiles.json) own distribution names and flags. For example:
 
@@ -43,6 +43,8 @@ Follow the [logging policy](../architecture/runtime.md#diagnostic-logging) and [
 Native: `IPP_LOG=debug cargo run -p ipp-server --features websocket,diagnostics --locked`. Levels: `error`, `warn`, `info` (default), `debug`, `trace`, `off`.
 
 Prepared browser render builds enable diagnostics: set `logLevel` in connection options or `IppCanvas.runtime`. Headless browser builds compile Rust logging out.
+
+The same feature compiles in renderer, resource and ingress statistics, Surface cache records and the renderer testing overrides; lean and headless builds omit them. The worker reads statistics only inside a frame capture, where `FrameCapture.statistics` carries them as typed groups, and `@ipp/client/testing` sends loss simulation and budget overrides that only such builds honour. `profiling` is separate and loads the worker profiler module only when its exports exist.
 
 ## Pipeline setup and commands
 

@@ -19,6 +19,9 @@ use std::{
     rc::Rc,
 };
 
+#[cfg(feature = "diagnostics")]
+use super::custom_material::CustomMaterialFallback;
+
 #[cfg(feature = "particles")]
 use super::assets::GlMeshData;
 use super::frame_scratch::RenderFrameScratch;
@@ -59,117 +62,7 @@ impl fmt::Display for RenderError {
 }
 
 impl std::error::Error for RenderError {}
-/// Work submitted by one successful render call.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct RenderStats {
-    /// GPU draw submissions, in stable prepared order.
-    pub draw_calls: u32,
-    /// Submitted triangles, including repeated instances of shared geometry.
-    pub triangles: u32,
-    /// Vertex/index/pixel uploads accounted by this submission, including pending
-    /// shared service work once. Later worlds do not recount the same allocation.
-    /// Analytic Surface glyph runs count when their retained instance stream is
-    /// created or replaced; unchanged runs upload nothing.
-    pub uploaded_bytes: u32,
-    /// Instances skipped because their mesh could not acquire GPU residency.
-    /// CPU geometry remains usable; resource reload permits another upload.
-    pub failed_draw_calls: u32,
-    /// Selected shadow-requesting lights left unshadowed by capacity/allocation fallback.
-    pub unshadowed_lights: u32,
-    /// The selected camera cannot represent this viewport; the frame is clear.
-    /// Selection and session state remain available for repair or resize.
-    pub invalid_camera: bool,
-    /// Depth-only mesh submissions, separate from visible forward draws.
-    #[cfg(feature = "shadows")]
-    pub shadow_draw_calls: u32,
-    /// Private depth allocation estimate (four bytes per texel).
-    #[cfg(feature = "shadows")]
-    pub shadow_resident_bytes: u32,
-    /// Private debug GPU bytes, separately bounded and absent from world assets.
-    pub debug_resident_bytes: u32,
-    /// Retained GUI box and glyph batches drawn. Consecutive batches of a Surface
-    /// share draws, which [`Self::draw_calls`] counts.
-    #[cfg(feature = "gui")]
-    pub gui_batches: u32,
-    /// GUI box primitives whose CPU geometry was regenerated, plus glyph batches
-    /// rebuilt after a text edit or the retirement of an atlas page they sampled.
-    #[cfg(feature = "gui")]
-    pub gui_rebuilds: u32,
-    /// Retained GUI batches written to GPU storage during this frame.
-    #[cfg(feature = "gui")]
-    pub gui_allocations: u32,
-    /// Resident bytes of retained per-Surface GUI GPU storage across every World
-    /// presented through this context.
-    #[cfg(feature = "gui")]
-    pub gui_resident_bytes: u32,
-    /// Distinct glyph atlas entries that visible text demanded but did not find
-    /// during this submission, including entries the population budget or a failure
-    /// back-off defers to a later frame.
-    #[cfg(feature = "gui")]
-    pub glyph_misses: u32,
-    /// Glyph atlas entries rasterized during this submission, before the main pass.
-    /// A frame populates at least [`crate::glyph_atlas::MIN_POPULATES_PER_FRAME`]
-    /// missing entries, then as many as the population time budget covers, up to
-    /// [`crate::glyph_atlas::MAX_POPULATES_PER_FRAME`]; later entries count as misses
-    /// and their text stays analytic until a following frame populates them.
-    #[cfg(feature = "gui")]
-    pub glyph_populates: u32,
-    /// Recoverable glyph atlas allocation or rasterization failures during this
-    /// submission. Each glyph backs off and its text uses analytic glyphs meanwhile.
-    #[cfg(feature = "gui")]
-    pub glyph_population_failures: u32,
-    /// Glyph atlas pages retired since the previous completed submission: idle past
-    /// the configured limit, reclaimed under allocation pressure or released when no
-    /// World demands any glyph. Context loss is not counted.
-    #[cfg(feature = "gui")]
-    pub glyph_page_retirements: u32,
-    /// Number of resident glyph atlas pages shared by every World on this context.
-    #[cfg(feature = "gui")]
-    pub glyph_pages: u32,
-    /// Total resident bytes occupied by the shared glyph atlas page textures: one
-    /// byte per texel of single-channel coverage.
-    #[cfg(feature = "gui")]
-    pub glyph_resident_bytes: usize,
-    /// Resident bytes of retained analytic Surface glyph instance streams across every
-    /// World presented through this context, sixteen `f32` lanes per instance.
-    #[cfg(feature = "surfaces")]
-    pub analytic_glyph_resident_bytes: u32,
-    /// Opted-in Surfaces repainted into their cache images during this submission,
-    /// before the main pass. Each repaint also counts its primitive draws.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_repaints: u32,
-    /// Opted-in Surfaces composited from an unchanged cache image, without repainting.
-    /// A composite is one draw call of two triangles.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_reuses: u32,
-    /// Opted-in visible Surfaces presented directly: inside their direct distance,
-    /// under GUI interaction, after a fallback, while animated or without cache
-    /// support. Culled Surfaces count in none of the cache counters.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_direct: u32,
-    /// Opted-in Surfaces presented directly because the byte budget, a zero budget,
-    /// or a recoverable allocation, repaint or composite failure and its retry
-    /// interval left no usable image. Also counted in `surface_cache_direct`.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_fallbacks: u32,
-    /// Opted-in visible Surfaces presented directly because their paint changed and
-    /// was repainted at the refresh cap on every recent frame, where repainting costs
-    /// more than drawing directly. Also counted in `surface_cache_direct`.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_animated: u32,
-    /// Cache images created or resized during this submission; each is repainted
-    /// before it is shown.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_allocations: u32,
-    /// Resident cache images across every World presented through this context,
-    /// after this submission's releases.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_entries: u32,
-    /// Resident bytes of cache images across every World presented through this
-    /// context, four per texel.
-    #[cfg(feature = "surfaces")]
-    pub surface_cache_resident_bytes: u32,
-}
+
 /// Host-owned rendering of evaluated World inputs through one graphics context.
 ///
 /// Resource providers prepare GPU representations before graphics readiness.
@@ -178,7 +71,6 @@ pub struct RenderStats {
 pub struct RenderService<D: RenderDevice> {
     pub(super) device: Rc<RefCell<D>>,
     asset_context_active: Rc<Cell<bool>>,
-    custom_program_count: Rc<Cell<usize>>,
     pub(super) recipe_scratch: Vec<(RenderShaderConfig, bool)>,
     pub(super) program_keys: Vec<AssetKey>,
     // Rebuilt from this World's demand before submission. Keys only: payload and
@@ -186,8 +78,16 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) program_lookup: Vec<Option<AssetKey>>,
     pub(super) custom_materials:
         BTreeMap<ipp_core::EntityId, super::custom_material::PreparedCustomMaterial>,
-    pub(super) custom_diagnostics: BTreeMap<ipp_core::EntityId, String>,
-    uploaded: Rc<Cell<u32>>,
+    /// Retained custom-material fallbacks, so each changed reason is logged once.
+    #[cfg(feature = "diagnostics")]
+    pub(super) custom_fallbacks: BTreeMap<ipp_core::EntityId, CustomMaterialFallback>,
+    uploads: super::frame_statistics::RenderUploadCounter,
+    /// Statistics of the last completed render.
+    #[cfg(feature = "diagnostics")]
+    statistics: super::frame_statistics::RenderStatistics,
+    /// Context-wide retained Surface residency, maintained per World render.
+    #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+    retained_surface_residency: surface::RetainedSurfaceResidency,
     frame_scratch: RenderFrameScratch,
     #[cfg(feature = "particles")]
     pub(super) particle_quad_metadata:

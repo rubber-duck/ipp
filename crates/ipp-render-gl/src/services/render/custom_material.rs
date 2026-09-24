@@ -29,6 +29,16 @@ pub(super) struct CustomDrawState {
     pub conservative_bounds: bool,
 }
 
+/// Why an entity's custom material falls back to default drawing.
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomMaterialFallback {
+    /// Authored shader source of the material.
+    pub source: String,
+    /// Preparation failure; formatted only when logged.
+    pub error: RenderError,
+}
+
 #[derive(Default)]
 pub(super) struct PreparedCustomMaterial {
     pub material: CustomDrawState,
@@ -56,8 +66,13 @@ impl<D: RenderDevice> RenderService<D> {
                 .is_ok()
                 && world.custom_material(*entity).is_some()
         });
+        #[cfg(feature = "diagnostics")]
+        self.custom_fallbacks.retain(|entity, _| {
+            items
+                .binary_search_by_key(entity, |item| item.entity)
+                .is_ok()
+        });
         let mut previous = None;
-        let mut diagnostics = BTreeMap::new();
         for item in items {
             if previous == Some(item.entity) {
                 continue;
@@ -66,12 +81,17 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "particles")]
             if item.particle.is_some_and(|p| p.sprite) {
                 ready.remove(&item.entity);
+                #[cfg(feature = "diagnostics")]
+                self.custom_fallbacks.remove(&item.entity);
                 continue;
             }
-            if !item.custom_material {
-                continue;
-            }
-            let Some(material) = world.custom_material(item.entity) else {
+            let material = item
+                .custom_material
+                .then(|| world.custom_material(item.entity))
+                .flatten();
+            let Some(material) = material else {
+                #[cfg(feature = "diagnostics")]
+                self.custom_fallbacks.remove(&item.entity);
                 continue;
             };
             let prepared = ready.entry(item.entity).or_default();
@@ -193,21 +213,45 @@ impl<D: RenderDevice> RenderService<D> {
                 Ok(())
             })();
             match result {
-                Ok(()) => {}
+                Ok(()) => {
+                    #[cfg(feature = "diagnostics")]
+                    self.custom_fallbacks.remove(&item.entity);
+                }
                 Err(RenderError::ContextLost) => return Err(RenderError::ContextLost),
+                #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
                 Err(error) => {
                     ready.remove(&item.entity);
-                    diagnostics.insert(item.entity, format!("{}: {error}", material.source));
+                    #[cfg(feature = "diagnostics")]
+                    self.record_custom_fallback(item.entity, &material.source, error);
                 }
             }
         }
-        for (entity, reason) in &diagnostics {
-            if self.custom_diagnostics.get(entity) != Some(reason) {
-                ipp_core::diagnostic!(Warn, "custom material fallback entity={entity:?}: {reason}");
-            }
-        }
-        self.custom_diagnostics = diagnostics;
+
         Ok(ready)
+    }
+
+    /// Retain a fallback reason, logging it only when it changes.
+    #[cfg(feature = "diagnostics")]
+    fn record_custom_fallback(&mut self, entity: EntityId, source: &str, error: RenderError) {
+        if self
+            .custom_fallbacks
+            .get(&entity)
+            .is_some_and(|fallback| fallback.source == source && fallback.error == error)
+        {
+            return;
+        }
+
+        ipp_core::diagnostic!(
+            Warn,
+            "custom material fallback entity={entity:?}: {source}: {error}"
+        );
+        self.custom_fallbacks.insert(
+            entity,
+            CustomMaterialFallback {
+                source: source.to_owned(),
+                error,
+            },
+        );
     }
 
     pub(super) fn custom_program<'a>(
@@ -267,7 +311,8 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Most recent material fallback reasons, separate from semantic World outcomes.
-    pub fn custom_material_diagnostics(&self) -> &BTreeMap<EntityId, String> {
-        &self.custom_diagnostics
+    #[cfg(feature = "diagnostics")]
+    pub fn custom_material_diagnostics(&self) -> &BTreeMap<EntityId, CustomMaterialFallback> {
+        &self.custom_fallbacks
     }
 }

@@ -10,7 +10,6 @@ type DebugGeometryRenderKey = [u32; 6];
 pub(crate) struct DebugGeometryRenderMesh<D: RenderDevice> {
     pub(crate) gpu: Option<D::Mesh>,
     pub(crate) triangles: u32,
-    bytes: usize,
     device: SharedRenderDevice<D>,
 }
 
@@ -38,16 +37,6 @@ impl<D: RenderDevice> DebugGeometryRenderCache<D> {
         self.entries.clear();
     }
 
-    pub(crate) fn resident_bytes(&self) -> usize {
-        self.entries
-            .values()
-            .map(|entry| match entry {
-                DebugGeometryRenderEntry::Ready(mesh) => mesh.bytes,
-                _ => 0,
-            })
-            .sum()
-    }
-
     pub(crate) fn retain(&mut self, items: &[DebugRenderItem]) {
         self.used.clear();
         self.used
@@ -61,7 +50,7 @@ impl<D: RenderDevice> DebugGeometryRenderCache<D> {
     pub(crate) fn get(
         &mut self,
         shape: &GeometryPrimitiveVisual,
-    ) -> Result<(Option<&DebugGeometryRenderMesh<D>>, u32), RenderError> {
+    ) -> Result<(Option<&DebugGeometryRenderMesh<D>>, usize), RenderError> {
         let key = shape.mesh_key();
         let mut uploaded = 0;
         if !self.entries.contains_key(&key) {
@@ -70,11 +59,10 @@ impl<D: RenderDevice> DebugGeometryRenderCache<D> {
                     .map_err(|error| RenderError::RenderDevice(error.to_string()))?;
                 let bytes = mesh.vertex_bytes() + std::mem::size_of_val(mesh.indices());
                 let gpu = self.device.borrow_mut().create_mesh(&mesh)?;
-                uploaded = bytes as u32;
+                uploaded = bytes;
                 Ok(DebugGeometryRenderEntry::Ready(DebugGeometryRenderMesh {
                     gpu: Some(gpu),
                     triangles: (mesh.indices().len() / 3) as u32,
-                    bytes,
                     device: self.device.clone(),
                 }))
             })();

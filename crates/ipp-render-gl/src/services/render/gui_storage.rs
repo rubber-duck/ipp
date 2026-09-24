@@ -16,7 +16,8 @@
 use std::collections::HashMap;
 
 use super::gui_batch::GuiVertex;
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::services::render::frame_statistics::RenderFrameWork;
+use crate::{RenderDevice, RenderError};
 use ipp_core::systems::surface::SurfacePrimitiveIdentity;
 
 /// Stable identity of one retained piece within its Surface.
@@ -132,6 +133,7 @@ pub(crate) struct GuiCommitScratch {
 
 impl<D: RenderDevice> GuiSurfaceStorage<D> {
     /// Allocated GPU bytes.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn bytes(&self) -> usize {
         self.capacity * std::mem::size_of::<GuiVertex>()
     }
@@ -151,7 +153,7 @@ impl<D: RenderDevice> GuiSurfaceStorage<D> {
         range: std::ops::Range<usize>,
         atlas: impl Fn(usize) -> Option<&'t D::Texture>,
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError>
     where
         D::Texture: 't,
@@ -181,7 +183,7 @@ impl<D: RenderDevice> GuiSurfaceStorage<D> {
         page: Option<usize>,
         atlas: &impl Fn(usize) -> Option<&'t D::Texture>,
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError>
     where
         D::Texture: 't,
@@ -206,11 +208,15 @@ impl<D: RenderDevice> GuiSurfaceStorage<D> {
             first,
             last.start + last.len - first,
         )?;
-        stats.draw_calls += 1;
-        for slot in &self.slots[slots.clone()] {
-            stats.triangles += (slot.len / 3) as u32;
+        let triangles = self.slots[slots.clone()]
+            .iter()
+            .map(|slot| (slot.len / 3) as u32)
+            .sum();
+        stats.draw(triangles);
+        #[cfg(feature = "diagnostics")]
+        {
+            stats.statistics.gui_batches += slots.len() as u32;
         }
-        stats.gui_batches += slots.len() as u32;
         Ok(())
     }
 }
@@ -226,7 +232,7 @@ pub(crate) fn commit_surface_storage<D: RenderDevice>(
     pieces: &[GuiPiece],
     fill: &mut dyn FnMut(usize, &mut Vec<GuiVertex>),
     scratch: &mut GuiCommitScratch,
-    stats: &mut RenderStats,
+    stats: &mut RenderFrameWork,
 ) -> Result<(), RenderError> {
     // Unchanged submissions keep every slot and write nothing.
     if let Some(current) = storage.as_ref()
@@ -428,7 +434,7 @@ fn replace_storage<D: RenderDevice>(
     pieces: &[GuiPiece],
     fill: &mut dyn FnMut(usize, &mut Vec<GuiVertex>),
     scratch: &mut GuiCommitScratch,
-    stats: &mut RenderStats,
+    stats: &mut RenderFrameWork,
 ) -> Result<(), RenderError> {
     scratch.starts.clear();
     let mut end = 0;
@@ -464,7 +470,7 @@ fn write_planned<D: RenderDevice>(
     pieces: &[GuiPiece],
     fill: &mut dyn FnMut(usize, &mut Vec<GuiVertex>),
     scratch: &mut GuiCommitScratch,
-    stats: &mut RenderStats,
+    stats: &mut RenderFrameWork,
 ) -> Result<(), RenderError> {
     let mut index = 0;
     while index < scratch.writes.len() {
@@ -482,7 +488,10 @@ fn write_planned<D: RenderDevice>(
                     let before = scratch.vertices.len();
                     fill(piece, &mut scratch.vertices);
                     debug_assert_eq!(scratch.vertices.len() - before, pieces[piece].len);
-                    stats.gui_allocations += 1;
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        stats.statistics.gui_allocations += 1;
+                    }
                 }
                 GuiWrite::Clear {
                     len,
@@ -504,9 +513,7 @@ fn write_planned<D: RenderDevice>(
         }
         device.write_gui_batch(&mut storage.gpu, start, &scratch.vertices)?;
         storage.written = storage.written.max(end);
-        stats.uploaded_bytes = stats
-            .uploaded_bytes
-            .saturating_add(std::mem::size_of_val(scratch.vertices.as_slice()) as u32);
+        stats.uploaded(std::mem::size_of_val(scratch.vertices.as_slice()));
     }
 
     Ok(())

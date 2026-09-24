@@ -307,7 +307,7 @@ struct TestWorld {
 impl TestWorld {
     fn new(device: &Rc<RefCell<MockAtlasDevice>>) -> Self {
         Self {
-            cache: GlyphBatchRenderCache::new(),
+            cache: GlyphBatchRenderCache::default(),
             gui: GuiBatchRenderCache::new(device.clone()),
             work: GlyphFrameWork::default(),
         }

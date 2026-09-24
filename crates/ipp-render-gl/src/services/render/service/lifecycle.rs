@@ -57,13 +57,17 @@ impl<D: RenderDevice> RenderService<D> {
             asset_context_active: Rc::new(Cell::new(true)),
             #[cfg(feature = "particles")]
             particle_quad: None,
-            custom_program_count: Rc::new(Cell::new(0)),
             recipe_scratch: Vec::new(),
             program_keys: Vec::new(),
             program_lookup: vec![None; super::super::shader::PROGRAM_RECIPE_COUNT],
             custom_materials: BTreeMap::new(),
-            custom_diagnostics: BTreeMap::new(),
-            uploaded: Rc::new(Cell::new(0)),
+            #[cfg(feature = "diagnostics")]
+            custom_fallbacks: BTreeMap::new(),
+            uploads: Default::default(),
+            #[cfg(feature = "diagnostics")]
+            statistics: Default::default(),
+            #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+            retained_surface_residency: Default::default(),
             frame_scratch: Default::default(),
             #[cfg(feature = "particles")]
             particle_quad_metadata: None,
@@ -80,7 +84,7 @@ impl<D: RenderDevice> RenderService<D> {
     pub fn install(&self, world: &mut ipp_core::HostRuntime) -> Result<(), RenderError> {
         {
             let device = self.device.clone();
-            let uploaded = self.uploaded.clone();
+            let uploads = self.uploads.clone();
             let context_active = self.asset_context_active.clone();
             // Demanded meshes keep CPU metadata available to picking and layout
             // while detached; the loader itself gates only device creation.
@@ -89,7 +93,7 @@ impl<D: RenderDevice> RenderService<D> {
                 .register_loader(ipp_core::MESH_TYPE, move || {
                     crate::services::render::assets::mesh_asset_loader(
                         device.clone(),
-                        uploaded.clone(),
+                        uploads.clone(),
                         context_active.clone(),
                     )
                 })
@@ -98,13 +102,13 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "surfaces")]
         {
             let device = self.device.clone();
-            let uploaded = self.uploaded.clone();
+            let uploads = self.uploads.clone();
             world
                 .asset_resources_mut()
                 .register_graphics_loader(
                     ipp_core::services::asset_management::font::FONT_TYPE,
                     move || {
-                        super::super::surface_assets::font_loader(device.clone(), uploaded.clone())
+                        super::super::surface_assets::font_loader(device.clone(), uploads.clone())
                     },
                 )
                 .map_err(RenderError::RenderDevice)?;
@@ -112,7 +116,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "surfaces")]
         {
             let device = self.device.clone();
-            let uploaded = self.uploaded.clone();
+            let uploads = self.uploads.clone();
             world
                 .asset_resources_mut()
                 .register_graphics_loader(
@@ -120,7 +124,7 @@ impl<D: RenderDevice> RenderService<D> {
                     move || {
                         super::super::surface_assets::drawing_loader(
                             device.clone(),
-                            uploaded.clone(),
+                            uploads.clone(),
                         )
                     },
                 )
@@ -128,32 +132,30 @@ impl<D: RenderDevice> RenderService<D> {
         }
         {
             let device = self.device.clone();
-            let uploaded = self.uploaded.clone();
+            let uploads = self.uploads.clone();
             world
                 .asset_resources_mut()
                 .register_graphics_loader(ipp_core::TEXTURE_TYPE, move || {
                     crate::services::render::assets::texture_asset_loader(
                         device.clone(),
-                        uploaded.clone(),
+                        uploads.clone(),
                     )
                 })
                 .map_err(RenderError::RenderDevice)?;
         }
         let device = self.device.clone();
-        let count = self.custom_program_count.clone();
         world
             .asset_resources_mut()
             .register_graphics_loader(
                 ipp_core::services::asset_management::shader::SHADER_TYPE,
-                move || super::super::shader_asset::loader(device.clone(), count.clone()),
+                move || super::super::shader_asset::loader(device.clone()),
             )
             .map_err(RenderError::RenderDevice)?;
         let device = self.device.clone();
-        let count = self.custom_program_count.clone();
         world
             .asset_resources_mut()
             .register_graphics_loader(super::super::program_assets::PROGRAM_TYPE, move || {
-                super::super::program_assets::loader(device.clone(), count.clone())
+                super::super::program_assets::loader(device.clone())
             })
             .map_err(RenderError::RenderDevice)?;
         world.set_renderer_asset_loading(true);
@@ -208,6 +210,10 @@ impl<D: RenderDevice> RenderService<D> {
         }
         #[cfg(feature = "gui")]
         self.gui_batch_cache.clear();
+        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        {
+            self.retained_surface_residency = Default::default();
+        }
         // Glyph atlas layout, demand and run bands survive, so recovered text
         // repopulates its original slots.
         #[cfg(feature = "gui")]
@@ -247,7 +253,8 @@ impl<D: RenderDevice> RenderService<D> {
         for key in keys {
             resources.invalidate_graphics(key);
         }
-        self.custom_diagnostics.clear();
+        #[cfg(feature = "diagnostics")]
+        self.custom_fallbacks.clear();
         self.light_selections.clear();
         #[cfg(feature = "shadows")]
         {
@@ -274,7 +281,10 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(())
     }
 
-    /// Diagnostic mode; normal submissions validate at pass boundaries.
+    /// Testing mode attributing each GL error to its failing call; normal
+    /// submissions validate at pass boundaries (see
+    /// [`crate::RenderDevice::set_exhaustive_draw_checks`]).
+    #[cfg(feature = "diagnostics")]
     pub fn set_exhaustive_draw_checks(&mut self, enabled: bool) {
         self.device.borrow_mut().set_exhaustive_draw_checks(enabled);
     }
@@ -284,6 +294,8 @@ impl<D: RenderDevice> RenderService<D> {
     /// The World's glyph demand leaves the shared atlas; pages other Worlds still use
     /// stay resident. Its Surface cache images are released.
     pub fn forget_world(&mut self, world: ipp_core::WorldId) {
+        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        let before = self.retained_surface_residency(world);
         self.light_selections.remove(&world);
         #[cfg(feature = "surfaces")]
         self.forget_surface_caches(world);
@@ -300,14 +312,18 @@ impl<D: RenderDevice> RenderService<D> {
             }
             self.glyph_atlas.release_if_unused();
         }
+
+        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        self.track_retained_surface_residency(world, before);
     }
 
-    /// Bound the shared glyph atlas of this context: its resident page budget and how
-    /// many demand publications a page without demand stays resident.
+    /// Testing override of the renderer-owned glyph atlas bounds of this context: its
+    /// resident page budget and how many demand publications a page without demand
+    /// stays resident.
     ///
     /// A lowered budget retires pages at the next publication; zero pages is treated
     /// as one.
-    #[cfg(feature = "gui")]
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
     pub fn set_glyph_atlas_limits(&mut self, limits: super::super::glyph_atlas::GlyphAtlasLimits) {
         self.glyph_atlas.set_limits(limits);
     }
@@ -315,22 +331,25 @@ impl<D: RenderDevice> RenderService<D> {
     /// Bound the time one frame spends populating glyph atlas entries beyond
     /// [`super::super::glyph_atlas::MIN_POPULATES_PER_FRAME`], in milliseconds.
     ///
-    /// The default is [`super::super::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero
-    /// populates only that floor per frame; an infinite budget populates up to
+    /// A testing override: the renderer default is
+    /// [`super::super::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero populates only
+    /// that floor per frame; an infinite budget populates up to
     /// [`super::super::glyph_atlas::MAX_POPULATES_PER_FRAME`].
-    #[cfg(feature = "gui")]
+    #[cfg(all(feature = "gui", feature = "diagnostics"))]
     pub fn set_glyph_population_budget_ms(&mut self, budget_ms: f64) {
         self.glyph_population.set_budget_ms(budget_ms);
     }
 
-    /// Linked programs actually demanded in this graphics context.
-    pub fn cached_program_count(&self) -> usize {
-        self.custom_program_count.get()
+    /// Largest drawing-buffer size the attached device accepts; `None` until a
+    /// device context can report it, such as while the context is lost.
+    pub fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        self.device.borrow().viewport_limits()
     }
 
-    /// Begin frame-local accounting and return uploads completed between frames.
-    pub fn begin_frame(&mut self) -> u32 {
-        self.uploaded.replace(0)
+    /// Statistics of the last completed render; reset when a render starts.
+    #[cfg(feature = "diagnostics")]
+    pub fn statistics(&self) -> &crate::RenderStatistics {
+        &self.statistics
     }
 }
 

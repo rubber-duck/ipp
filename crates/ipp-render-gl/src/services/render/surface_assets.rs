@@ -1,6 +1,6 @@
 //! Renderer-owned GPU providers for immutable Surface resources.
 
-use std::{any::Any, cell::Cell, rc::Rc, task::Poll};
+use std::{any::Any, task::Poll};
 
 use ipp_core::services::asset_management::{
     Asset, AssetLoader, BufferedAssetLoader, DataReader,
@@ -9,7 +9,7 @@ use ipp_core::services::asset_management::{
     quadratic::{QuadraticContour, QuadraticSegment},
 };
 
-use super::{assets::SharedRenderDevice, surface_path};
+use super::{assets::SharedRenderDevice, frame_statistics::RenderUploadCounter, surface_path};
 use crate::RenderDevice;
 
 pub(super) struct GlFontData<D: RenderDevice> {
@@ -109,7 +109,7 @@ impl<D: RenderDevice> Drop for GlDrawingData<D> {
 struct SurfaceLoader<D: RenderDevice, A: Asset> {
     decoder: BufferedAssetLoader<A>,
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
     pending: Option<A>,
     failed_font: Option<GlFontData<D>>,
     failed_drawing: Option<GlDrawingData<D>>,
@@ -117,14 +117,14 @@ struct SurfaceLoader<D: RenderDevice, A: Asset> {
 
 pub(super) fn font_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
 ) -> impl AssetLoader<Data = GlFontData<D>> {
     SurfaceLoader {
         decoder: BufferedAssetLoader::new(|bytes| {
             FontAsset::decode(bytes).map_err(|error| error.to_string())
         }),
         device,
-        uploaded,
+        uploads,
         pending: None,
         failed_font: None,
         failed_drawing: None,
@@ -194,8 +194,7 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, FontAsset> {
                 }
             }
         };
-        self.uploaded
-            .set(self.uploaded.get().saturating_add(bytes as u32));
+        self.uploads.add(bytes);
         Poll::Ready(Ok(GlFontData {
             font,
             path,
@@ -237,14 +236,14 @@ fn normalize_glyph_contours(contours: &[QuadraticContour]) -> Vec<QuadraticConto
 
 pub(super) fn drawing_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
 ) -> impl AssetLoader<Data = GlDrawingData<D>> {
     SurfaceLoader {
         decoder: BufferedAssetLoader::new(|bytes| {
             DrawingAsset::decode(bytes).map_err(|error| error.to_string())
         }),
         device,
-        uploaded,
+        uploads,
         pending: None,
         failed_font: None,
         failed_drawing: None,
@@ -307,8 +306,7 @@ impl<D: RenderDevice> AssetLoader for SurfaceLoader<D, DrawingAsset> {
                 }
             }
         };
-        self.uploaded
-            .set(self.uploaded.get().saturating_add(bytes as u32));
+        self.uploads.add(bytes);
         Poll::Ready(Ok(GlDrawingData {
             drawing,
             path,

@@ -22,6 +22,7 @@ mod device;
 mod draw_lighting;
 mod draw_order;
 mod frame_scratch;
+mod frame_statistics;
 mod light_selection;
 mod lighting;
 
@@ -41,23 +42,31 @@ mod surface_path;
 mod template;
 
 #[cfg(feature = "gui")]
-pub mod glyph_atlas;
+pub(crate) mod glyph_atlas;
 #[cfg(feature = "gui")]
-pub mod gui_batch;
+pub(crate) mod gui_batch;
 #[cfg(feature = "gui")]
 mod gui_storage;
 #[cfg(feature = "surfaces")]
-pub mod retained_surfaces;
+pub(crate) mod retained_surfaces;
 
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathDescriptor;
 #[cfg(feature = "surfaces")]
 pub use device::SurfacePathInstance;
-pub use device::{PlatformRenderDevice, RenderDevice};
+pub use device::{PlatformRenderDevice, RenderDevice, ViewportLimits};
+pub use frame_statistics::RenderFrameSummary;
+#[cfg(feature = "diagnostics")]
+pub use frame_statistics::RenderStatistics;
+#[cfg(all(feature = "gui", feature = "diagnostics"))]
+pub use glyph_atlas::{GlyphAtlasLimits, MIN_POPULATES_PER_FRAME as GLYPH_MIN_POPULATES_PER_FRAME};
+/// Retained GUI vertices are the layout of the public [`RenderDevice`] GUI batch
+/// operations; device-level hosts generate box geometry and interpret its fill
+/// code through these.
 #[cfg(feature = "gui")]
-pub use glyph_atlas::GlyphAtlasLimits;
-#[cfg(feature = "gui")]
-pub use gui_batch::GuiVertex;
+pub use gui_batch::{
+    GUI_FILL_GLYPH, GuiVertex, generate_box_vertices as generate_gui_box_vertices,
+};
 #[cfg(feature = "surfaces")]
 pub use surface_path::{
     SurfaceBandTexels, SurfaceCurveTexels, SurfacePathAtlas, SurfacePathTexels, pack_surface_paths,
@@ -69,10 +78,12 @@ pub use device::WebGlRenderDevice;
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::GlesRenderDevice;
 
+#[cfg(feature = "diagnostics")]
+pub use custom_material::CustomMaterialFallback;
 pub use lighting::RenderLightingFrame;
-pub use service::{RenderError, RenderService, RenderStats};
-#[cfg(feature = "surfaces")]
+pub use service::{RenderError, RenderService};
+#[cfg(all(feature = "surfaces", feature = "diagnostics"))]
 pub use surface_cache::{
-    DEFAULT_SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_SETTLE_FRAMES,
+    SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,
 };

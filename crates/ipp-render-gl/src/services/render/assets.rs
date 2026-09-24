@@ -1,5 +1,6 @@
 //! RenderService-owned concrete resource factories and GPU allocation lifetimes.
 
+use super::frame_statistics::RenderUploadCounter;
 use crate::RenderDevice;
 use ipp_core::{MeshAsset, services::asset_management::*};
 use std::{
@@ -81,7 +82,7 @@ impl<D: RenderDevice> Drop for GlMeshData<D> {
 
 pub(crate) fn mesh_asset_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
     context_active: Rc<Cell<bool>>,
 ) -> impl AssetLoader<Data = GlMeshData<D>> {
     GlMeshLoader {
@@ -89,7 +90,7 @@ pub(crate) fn mesh_asset_loader<D: RenderDevice>(
             MeshAsset::decode(bytes).map_err(|error| error.to_string())
         }),
         device,
-        uploaded,
+        uploads,
         failed_data: None,
         pending_mesh: None,
         context_active,
@@ -99,7 +100,7 @@ pub(crate) fn mesh_asset_loader<D: RenderDevice>(
 struct GlMeshLoader<D: RenderDevice> {
     decoder: BufferedAssetLoader<MeshAsset>,
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
     failed_data: Option<GlMeshData<D>>,
     pending_mesh: Option<MeshAsset>,
     context_active: Rc<Cell<bool>>,
@@ -155,8 +156,7 @@ impl<D: RenderDevice> AssetLoader for GlMeshLoader<D> {
         };
         match gpu {
             Ok(gpu) => {
-                self.uploaded
-                    .set(self.uploaded.get().saturating_add(gpu_bytes as u32));
+                self.uploads.add(gpu_bytes);
                 data.gpu_bytes = gpu_bytes;
                 *data.gpu.get_mut() = Some(gpu);
                 Poll::Ready(Ok(data))
@@ -217,11 +217,11 @@ impl<D: RenderDevice> Drop for GlTextureData<D> {
 
 pub(crate) fn texture_asset_loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
 ) -> impl AssetLoader<Data = GlTextureData<D>> {
     GlTextureLoader {
         device,
-        uploaded,
+        uploads,
         decoder: ipp_core::TextureDecoder::new(),
         data: None,
         row: Vec::new(),
@@ -232,7 +232,7 @@ pub(crate) fn texture_asset_loader<D: RenderDevice>(
 
 struct GlTextureLoader<D: RenderDevice> {
     device: SharedRenderDevice<D>,
-    uploaded: Rc<Cell<u32>>,
+    uploads: RenderUploadCounter,
     decoder: ipp_core::TextureDecoder,
     data: Option<GlTextureData<D>>,
     row: Vec<u8>,
@@ -305,8 +305,7 @@ impl<D: RenderDevice> AssetLoader for GlTextureLoader<D> {
                 ) {
                     return Poll::Ready(Err(error.to_string()));
                 }
-                self.uploaded
-                    .set(self.uploaded.get().saturating_add(self.row.len() as u32));
+                self.uploads.add(self.row.len());
                 self.row_index += 1;
                 self.filled = 0;
             }

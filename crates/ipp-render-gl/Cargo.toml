@@ -13,6 +13,7 @@ ipp-core.workspace = true
 surfaces = ["ipp-core/surfaces"]
 gui = ["ipp-core/gui", "surfaces"]
 profiling = ["ipp-core/profiling"]
+diagnostics = ["ipp-core/diagnostics"]
 mesh-poses = ["ipp-core/mesh-poses"]
 particles = ["ipp-core/particles"]
 default = []

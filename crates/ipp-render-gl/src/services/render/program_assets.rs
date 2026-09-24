@@ -8,14 +8,13 @@ use ipp_core::{
         Asset, AssetLoader, AssetSource, AssetTypeId, BufferedAssetLoader,
     },
 };
-use std::{any::Any, cell::Cell, rc::Rc};
+use std::any::Any;
 
 pub(super) const PROGRAM_TYPE: AssetTypeId = AssetTypeId(14);
 
 pub(super) struct GlProgramData<D: RenderDevice> {
     pub program: Option<D::Program>,
     device: SharedRenderDevice<D>,
-    count: Rc<Cell<usize>>,
 }
 
 impl<D: RenderDevice> Asset for GlProgramData<D> {
@@ -30,7 +29,6 @@ impl<D: RenderDevice> Asset for GlProgramData<D> {
     fn invalidate_graphics(&mut self) {
         if let Some(program) = self.program.take() {
             self.device.borrow_mut().delete_program(program);
-            self.count.set(self.count.get().saturating_sub(1));
         }
     }
 
@@ -51,14 +49,12 @@ impl<D: RenderDevice> Drop for GlProgramData<D> {
     fn drop(&mut self) {
         if let Some(program) = self.program.take() {
             self.device.borrow_mut().delete_program(program);
-            self.count.set(self.count.get().saturating_sub(1));
         }
     }
 }
 
 pub(super) fn loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    count: Rc<Cell<usize>>,
 ) -> impl AssetLoader<Data = GlProgramData<D>> {
     BufferedAssetLoader::new(move |bytes| {
         let bits = u32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid program recipe")?);
@@ -80,11 +76,9 @@ pub(super) fn loader<D: RenderDevice>(
             .borrow_mut()
             .create_program(&vertex, &fragment)
             .map_err(|error| error.to_string())?;
-        count.set(count.get() + 1);
         Ok(GlProgramData {
             program: Some(program),
             device: device.clone(),
-            count: count.clone(),
         })
     })
 }

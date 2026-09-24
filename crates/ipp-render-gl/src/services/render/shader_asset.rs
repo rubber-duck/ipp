@@ -9,7 +9,7 @@ use ipp_core::{
         shader::{ShaderDefinition, ShaderParameterKind as Kind},
     },
 };
-use std::{any::Any, cell::Cell, rc::Rc};
+use std::any::Any;
 
 pub(super) struct GlShaderData<D: RenderDevice> {
     pub definition: ShaderDefinition,
@@ -17,7 +17,6 @@ pub(super) struct GlShaderData<D: RenderDevice> {
     pub shadow: Option<D::Program>,
     pub custom_vertex: bool,
     device: SharedRenderDevice<D>,
-    count: Rc<Cell<usize>>,
 }
 
 impl<D: RenderDevice> Asset for GlShaderData<D> {
@@ -30,8 +29,6 @@ impl<D: RenderDevice> Asset for GlShaderData<D> {
     }
 
     fn invalidate_graphics(&mut self) {
-        let count = usize::from(self.surface.is_some()) + usize::from(self.shadow.is_some());
-        self.count.set(self.count.get().saturating_sub(count));
         let mut device = self.device.borrow_mut();
         if let Some(program) = self.surface.take() {
             device.delete_program(program);
@@ -132,7 +129,6 @@ fn defaults(definition: &ShaderDefinition) -> Result<DynamicProperties, String> 
 
 pub(super) fn loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    count: Rc<Cell<usize>>,
 ) -> impl AssetLoader<Data = GlShaderData<D>> {
     BufferedAssetLoader::new(move |bytes| {
         let mut definition = ShaderDefinition::decode(bytes)?;
@@ -163,14 +159,12 @@ pub(super) fn loader<D: RenderDevice>(
             .get(&definition.recipe.backend)
             .is_some_and(|source| !source.vertex.trim().is_empty());
         definition.backends.clear();
-        count.set(count.get() + 1 + usize::from(shadow.is_some()));
         Ok(GlShaderData {
             definition,
             surface: Some(surface),
             shadow,
             custom_vertex,
             device: device.clone(),
-            count: count.clone(),
         })
     })
 }

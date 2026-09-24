@@ -17,10 +17,11 @@
 //! text uses the atlas like direct presentation. The store and its policy are
 //! documented beside it in `render/surface_cache.rs`.
 
-use super::super::surface_cache::{
-    SurfaceCacheAction, SurfaceCacheDiagnostic, SurfaceCacheInput, SurfaceCacheTargets,
-};
-use super::{RenderError, RenderService, RenderStats};
+use super::super::frame_statistics::RenderFrameWork;
+#[cfg(feature = "diagnostics")]
+use super::super::surface_cache::SurfaceCacheDiagnostic;
+use super::super::surface_cache::{SurfaceCacheAction, SurfaceCacheInput, SurfaceCacheTargets};
+use super::{RenderError, RenderService};
 use crate::RenderDevice;
 use ipp_core::services::asset_management::AssetKey;
 use ipp_core::{SurfaceRenderItem, WorldContext, systems::camera};
@@ -120,6 +121,7 @@ pub(super) fn surface_raster<T>(
 impl<D: RenderDevice> RenderService<D> {
     /// Append the cache state of one World's opted-in Surfaces after the last
     /// completed frame, in entity order. Read-only; it never changes presentation.
+    #[cfg(feature = "diagnostics")]
     pub fn surface_cache_diagnostics(
         &self,
         world: ipp_core::WorldId,
@@ -128,16 +130,19 @@ impl<D: RenderDevice> RenderService<D> {
         self.surface_cache.diagnostics(world, out);
     }
 
-    /// Bound the resident bytes of Surface cache images on this context.
+    /// Testing override of the renderer-owned Surface cache image budget
+    /// ([`crate::SURFACE_CACHE_BUDGET_BYTES`]) on this context.
     ///
     /// Images beyond the budget are evicted, least recently presented first,
     /// before new allocations; Surfaces that still do not fit present directly.
     /// Zero disables caching. The budget survives context loss.
+    #[cfg(feature = "diagnostics")]
     pub fn set_surface_cache_budget(&mut self, bytes: usize) {
         self.surface_cache.set_budget(bytes);
     }
 
     /// Current Surface cache image budget in bytes.
+    #[cfg(feature = "diagnostics")]
     pub fn surface_cache_budget(&self) -> usize {
         self.surface_cache.budget()
     }
@@ -233,14 +238,14 @@ impl<D: RenderDevice> RenderService<D> {
     ///
     /// Recoverable failures release the image and present that Surface
     /// directly; context loss fails the frame. The returned work seeds the
-    /// frame's stats.
+    /// frame's work.
     pub(super) fn repaint_surface_caches(
         &mut self,
         world: &WorldContext<'_>,
         surfaces: &[SurfaceRenderItem],
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
-    ) -> Result<RenderStats, RenderError> {
-        let mut stats = RenderStats::default();
+    ) -> Result<RenderFrameWork, RenderError> {
+        let mut stats = RenderFrameWork::default();
         let world_id = world.id();
         let time = world.time();
         for item in surfaces {
@@ -326,7 +331,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &WorldContext<'_>,
         item: &SurfaceRenderItem,
         view_projection: [f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<bool, RenderError> {
         let world_id = world.id();
         let action = item
@@ -365,8 +370,7 @@ impl<D: RenderDevice> RenderService<D> {
         };
         match outcome {
             Ok(()) => {
-                stats.draw_calls += 1;
-                stats.triangles += 2;
+                stats.draw(2);
                 self.surface_cache
                     .presented(world_id, item.entity, world.time());
                 // A repainted Surface used its retained batches this frame; a
@@ -393,42 +397,45 @@ impl<D: RenderDevice> RenderService<D> {
         }
     }
 
-    /// Finish the World's cache frame and publish context-wide residency.
+    /// Finish the World's cache frame.
     ///
-    /// A completed planned frame releases entries of Surfaces no longer live
-    /// or opted in and idle images, and publishes its counts. Failed and
-    /// cameraless frames keep every entry, as retained batches do.
+    /// A `completed` planned frame releases entries of Surfaces no longer live
+    /// or opted in and idle images. Failed and cameraless frames keep every
+    /// entry, as retained batches do. Returns whether the plan completed.
     pub(super) fn finish_surface_caches(
         &mut self,
         world: &WorldContext<'_>,
-        stats: Option<&mut RenderStats>,
+        completed: bool,
+    ) -> bool {
+        let mut device = self.device.borrow_mut();
+        self.surface_cache.finish_frame(
+            world.id(),
+            world.time(),
+            completed,
+            &mut DeviceCacheTargets(&mut *device),
+        )
+    }
+
+    /// Publish a completed plan's counts and context-wide cache residency.
+    #[cfg(feature = "diagnostics")]
+    pub(super) fn publish_surface_cache_statistics(
+        &self,
+        planned: bool,
+        statistics: &mut crate::RenderStatistics,
     ) {
-        let counts = {
-            let mut device = self.device.borrow_mut();
-            self.surface_cache.finish_frame(
-                world.id(),
-                world.time(),
-                stats.is_some(),
-                &mut DeviceCacheTargets(&mut *device),
-            )
-        };
-
-        let Some(stats) = stats else {
-            return;
-        };
-
-        if let Some(counts) = counts {
-            stats.surface_cache_repaints = counts.repaints;
-            stats.surface_cache_reuses = counts.reuses;
-            stats.surface_cache_direct = counts.direct;
-            stats.surface_cache_fallbacks = counts.fallbacks;
-            stats.surface_cache_animated = counts.animated;
-            stats.surface_cache_allocations = counts.allocations;
+        if planned {
+            let counts = self.surface_cache.counts();
+            statistics.surface_cache_repaints = counts.repaints;
+            statistics.surface_cache_reuses = counts.reuses;
+            statistics.surface_cache_direct = counts.direct;
+            statistics.surface_cache_fallbacks = counts.fallbacks;
+            statistics.surface_cache_animated = counts.animated;
+            statistics.surface_cache_allocations = counts.allocations;
         }
 
         (
-            stats.surface_cache_entries,
-            stats.surface_cache_resident_bytes,
+            statistics.surface_cache_entries,
+            statistics.surface_cache_resident_bytes,
         ) = self.surface_cache.resident();
     }
 

@@ -2,26 +2,38 @@
 
 use super::super::assets::{GlMeshData, GlTextureData};
 use super::super::frame_scratch::{RenderDrawItem as Item, RenderFrameScratch};
+use super::super::frame_statistics::{RenderFrameSummary, RenderFrameWork};
 use super::super::shader::RenderShaderConfig;
-use super::{BACKGROUND, RenderError, RenderService, RenderStats, prepared_model, prepared_normal};
+use super::{BACKGROUND, RenderError, RenderService, prepared_model, prepared_normal};
 use crate::RenderDevice;
 use ipp_core::systems::camera;
 use ipp_core::{WorldContext, services::asset_management::AssetKey};
 
 impl<D: RenderDevice> RenderService<D> {
     /// Draw final effective world components using the world's active camera.
+    ///
+    /// Returns the completed frame's summary. In `diagnostics` builds the rest of
+    /// its work is available from [`Self::statistics`] afterwards.
     pub fn render(
         &mut self,
         world: &mut WorldContext<'_>,
         width: u32,
         height: u32,
-    ) -> Result<RenderStats, RenderError> {
+    ) -> Result<RenderFrameSummary, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(209, "gl.render");
+
+        #[cfg(feature = "diagnostics")]
+        {
+            self.statistics = Default::default();
+        }
 
         if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
             return Err(RenderError::InvalidViewport);
         }
+
+        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        let residency = self.retained_surface_residency(world.id());
 
         world.set_render_viewport(Some((width, height)));
         self.prepare_programs(world)?;
@@ -69,7 +81,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "surfaces")]
         let prepass = planned.and_then(|()| {
             if !early {
-                return Ok(RenderStats::default());
+                return Ok(RenderFrameWork::default());
             }
 
             #[cfg(feature = "gui")]
@@ -80,7 +92,7 @@ impl<D: RenderDevice> RenderService<D> {
             repainted
         });
         #[cfg(not(feature = "surfaces"))]
-        let prepass = planned.map(|()| RenderStats::default());
+        let prepass = planned.map(|()| RenderFrameWork::default());
 
         let begun = prepass.and_then(|stats| {
             self.device
@@ -92,9 +104,11 @@ impl<D: RenderDevice> RenderService<D> {
             Ok(stats) => stats,
             Err(error) => {
                 #[cfg(feature = "surfaces")]
-                self.finish_retained_surfaces(world.id(), surface_items, None);
+                self.finish_retained_surfaces(world.id(), surface_items, false);
                 #[cfg(feature = "surfaces")]
-                self.finish_surface_caches(world, None);
+                self.finish_surface_caches(world, false);
+                #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+                self.track_retained_surface_residency(world.id(), residency);
                 return Err(error);
             }
         };
@@ -109,8 +123,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(not(feature = "gui"))]
         let populated = Ok(());
         // Always release draw bindings, including when upload/draw fails.
-        #[cfg_attr(not(feature = "surfaces"), allow(unused_mut))]
-        let mut result = populated.and_then(|()| {
+        let result = populated.and_then(|()| {
             self.draw_items(
                 world,
                 items,
@@ -121,14 +134,36 @@ impl<D: RenderDevice> RenderService<D> {
             )
         });
         let finish = self.device.borrow_mut().end_frame();
+        // Submission completion, not statistics, drives retained release and eviction.
         #[cfg(feature = "surfaces")]
-        self.finish_retained_surfaces(world.id(), surface_items, result.as_mut().ok());
+        let completed = result.is_ok();
         #[cfg(feature = "surfaces")]
-        self.finish_surface_caches(world, result.as_mut().ok());
+        self.finish_retained_surfaces(world.id(), surface_items, completed);
+        #[cfg(feature = "surfaces")]
+        #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
+        let cache_planned = self.finish_surface_caches(world, completed);
+        #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
+        self.track_retained_surface_residency(world.id(), residency);
 
-        let stats = result?;
+        #[cfg_attr(not(feature = "diagnostics"), allow(unused_mut))]
+        let mut work = result?;
         finish?;
-        Ok(stats)
+
+        #[cfg(feature = "diagnostics")]
+        {
+            work.statistics.uploaded_bytes = work
+                .statistics
+                .uploaded_bytes
+                .saturating_add(self.uploads.take());
+            #[cfg(feature = "surfaces")]
+            {
+                self.publish_surface_cache_statistics(cache_planned, &mut work.statistics);
+                self.publish_retained_surface_statistics(&mut work.statistics);
+            }
+            self.statistics = work.statistics;
+        }
+
+        Ok(work.summary)
     }
 
     #[cfg(feature = "mesh-poses")]
@@ -154,8 +189,8 @@ impl<D: RenderDevice> RenderService<D> {
         items: &[ipp_core::RenderItem],
         #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
-        prepass: RenderStats,
-    ) -> Result<RenderStats, RenderError> {
+        prepass: RenderFrameWork,
+    ) -> Result<RenderFrameWork, RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(210, "gl.draw");
 
@@ -181,30 +216,23 @@ impl<D: RenderDevice> RenderService<D> {
         items: &[ipp_core::RenderItem],
         #[cfg(feature = "surfaces")] surfaces: &[ipp_core::SurfaceRenderItem],
         camera: Option<Result<[f32; 16], ipp_core::ErrorReason>>,
-        prepass: RenderStats,
+        prepass: RenderFrameWork,
         scratch: &mut RenderFrameScratch,
-    ) -> Result<RenderStats, RenderError> {
+    ) -> Result<RenderFrameWork, RenderError> {
         // `render` publishes retained GUI residency after every completed frame.
         let view_projection = match camera {
             None => {
                 #[cfg(feature = "shadows")]
                 self.clear_shadows();
-                return Ok(RenderStats {
-                    uploaded_bytes: self.uploaded.replace(0),
-                    debug_resident_bytes: self.debug.resident_bytes() as u32,
-                    ..RenderStats::default()
-                });
+                return Ok(RenderFrameWork::default());
             }
             Some(Ok(view_projection)) => view_projection,
             Some(Err(_)) => {
                 // A host resize can make a previously usable projection exceed
                 // f32 representation. Preserve the world and correlated replies.
-                return Ok(RenderStats {
-                    uploaded_bytes: self.uploaded.replace(0),
-                    invalid_camera: true,
-                    debug_resident_bytes: self.debug.resident_bytes() as u32,
-                    ..RenderStats::default()
-                });
+                let mut work = RenderFrameWork::default();
+                work.summary.invalid_camera = true;
+                return Ok(work);
             }
         };
         // From here every visible Surface reaches submission unless the frame fails.
@@ -247,10 +275,13 @@ impl<D: RenderDevice> RenderService<D> {
                 .get_mut(&world.id())
                 .expect("prepared lighting")
                 .assign_shadows(&mut lighting);
-            stats.unshadowed_lights = lighting
-                .requested_shadows
-                .saturating_sub(lighting.shadows.len())
-                as u32;
+            #[cfg(feature = "diagnostics")]
+            {
+                stats.statistics.unshadowed_lights = lighting
+                    .requested_shadows
+                    .saturating_sub(lighting.shadows.len())
+                    as u32;
+            }
             #[cfg(feature = "shadows")]
             if !lighting.shadows.is_empty() {
                 self.draw_shadow_map(world, items, &customs, &lighting, &mut stats, scratch)?;
@@ -384,7 +415,7 @@ impl<D: RenderDevice> RenderService<D> {
                     data
                 };
                 let Some(data) = data else {
-                    stats.failed_draw_calls += 1;
+                    stats.failed_draw();
                     continue;
                 };
                 let asset = &data.mesh;
@@ -394,7 +425,7 @@ impl<D: RenderDevice> RenderService<D> {
                 let target_gpu = match target {
                     Some(target) => {
                         let Some(gpu) = target.gpu()? else {
-                            stats.failed_draw_calls += 1;
+                            stats.failed_draw();
                             continue;
                         };
                         Some(gpu)
@@ -402,7 +433,7 @@ impl<D: RenderDevice> RenderService<D> {
                     None => None,
                 };
                 let Some(gpu) = data.gpu()? else {
-                    stats.failed_draw_calls += 1;
+                    stats.failed_draw();
                     continue;
                 };
 
@@ -447,8 +478,7 @@ impl<D: RenderDevice> RenderService<D> {
                             .zip(item.pose.map(|(_, weight)| weight)),
                         None,
                     )?;
-                    stats.draw_calls += 1;
-                    stats.triangles += (asset.index_count() / 3) as u32 * instance_count;
+                    stats.draw((asset.index_count() / 3) as u32 * instance_count);
                     continue;
                 }
                 self.device.borrow_mut().set_alpha_blend(false)?;
@@ -474,7 +504,7 @@ impl<D: RenderDevice> RenderService<D> {
                 let texture = match texture {
                     Ok(texture) => texture,
                     Err(_) => {
-                        stats.failed_draw_calls += 1;
+                        stats.failed_draw();
                         continue;
                     }
                 };
@@ -489,7 +519,7 @@ impl<D: RenderDevice> RenderService<D> {
                     .then(|| world.skin_palette(item.entity))
                     .flatten();
                 let Some(program) = self.builtin_program(world, config, false) else {
-                    stats.failed_draw_calls += 1;
+                    stats.failed_draw();
                     continue;
                 };
 
@@ -535,15 +565,8 @@ impl<D: RenderDevice> RenderService<D> {
                         .zip(item.pose.map(|(_, weight)| weight)),
                     texture,
                 )?;
-                stats.draw_calls += 1;
-                stats.triangles += (asset.index_count() / 3) as u32 * instance_count;
+                stats.draw((asset.index_count() / 3) as u32 * instance_count);
             }
-
-            stats.uploaded_bytes = stats
-                .uploaded_bytes
-                .saturating_add(self.uploaded.replace(0));
-
-            stats.debug_resident_bytes = self.debug.resident_bytes() as u32;
 
             Ok(stats)
         })();
@@ -559,16 +582,16 @@ impl<D: RenderDevice> RenderService<D> {
         world: &WorldContext<'_>,
         item: &ipp_core::DebugRenderItem,
         view_projection: [f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         let config = RenderShaderConfig::default().with_debug_geometry(true);
         let Some(program) = self.builtin_program(world, config, false) else {
-            stats.failed_draw_calls += 1;
+            stats.failed_draw();
             return Ok(());
         };
         let (mesh, uploaded) = self.debug.get(&item.geometry)?;
         let Some(mesh) = mesh else {
-            stats.failed_draw_calls += 1;
+            stats.failed_draw();
             return Ok(());
         };
         let mvp = camera::multiply(view_projection, item.model);
@@ -581,9 +604,8 @@ impl<D: RenderDevice> RenderService<D> {
             None,
             None,
         )?;
-        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(uploaded);
-        stats.draw_calls += 1;
-        stats.triangles += mesh.triangles;
+        stats.uploaded(uploaded);
+        stats.draw(mesh.triangles);
         Ok(())
     }
 }

@@ -29,7 +29,8 @@ use super::gui_storage::{
 };
 pub use super::retained_surfaces::RetainedSurfaceSubmission;
 use super::retained_surfaces::SurfacePaint;
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::services::render::frame_statistics::RenderFrameWork;
+use crate::{RenderDevice, RenderError};
 use ipp_core::systems::surface::{
     GuiShapeFill, GuiShapeGlow, SurfaceClipRect, SurfacePrimitiveIdentity, SurfacePrimitiveStyle,
     SurfaceRenderPrimitive,
@@ -155,6 +156,7 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     cpu_primitives: BTreeMap<PrimitiveKey, CachedPrimitiveGeometry>,
     storage: BTreeMap<ipp_core::EntityId, GuiSurfaceStorage<D>>,
     /// Sum of allocated bytes over `storage`.
+    #[cfg(feature = "diagnostics")]
     resident: usize,
     /// Surface whose pieces are being collected.
     entity: ipp_core::EntityId,
@@ -174,6 +176,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             device,
             cpu_primitives: BTreeMap::new(),
             storage: BTreeMap::new(),
+            #[cfg(feature = "diagnostics")]
             resident: 0,
             entity: ipp_core::EntityId::from_bits(0),
             pieces: Vec::new(),
@@ -191,13 +194,17 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             storage.delete(&mut device);
         }
         self.cpu_primitives.clear();
-        self.resident = 0;
+        #[cfg(feature = "diagnostics")]
+        {
+            self.resident = 0;
+        }
         self.pieces.clear();
         self.piece_boxes.clear();
         self.run_boxes.clear();
     }
 
     /// Total resident bytes occupied by retained GPU storage.
+    #[cfg(feature = "diagnostics")]
     pub fn resident_bytes(&self) -> usize {
         self.resident
     }
@@ -220,11 +227,12 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     /// Stable boxes split at identity-selected boundaries; volatile boxes form their own
     /// small batches. Boxes whose retained hash was computed under the Surface's reusable
     /// `paint` revision are not hashed again.
+    #[cfg_attr(not(feature = "diagnostics"), allow(unused_variables))]
     pub fn push_boxes(
         &mut self,
         paint: SurfacePaint,
         boxes: &[(&SurfaceRenderPrimitive, SurfaceClipRect)],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) {
         // Refresh every box's geometry and volatility before choosing batch boundaries.
         self.run_boxes.clear();
@@ -279,14 +287,20 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                             cached.hash = hash;
                             cached.vertices = generate();
                             cached.volatile_until = self.frame + VOLATILE_FRAMES;
-                            stats.gui_rebuilds += 1;
+                            #[cfg(feature = "diagnostics")]
+                            {
+                                stats.statistics.gui_rebuilds += 1;
+                            }
                         }
                         cached.revision = paint.revision;
                     }
                     cached
                 }
                 Entry::Vacant(entry) => {
-                    stats.gui_rebuilds += 1;
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        stats.statistics.gui_rebuilds += 1;
+                    }
                     entry.insert(CachedPrimitiveGeometry {
                         hash: hash(),
                         revision: paint.revision,
@@ -371,7 +385,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     pub fn commit_surface<'g>(
         &mut self,
         glyphs: impl Fn(SurfacePrimitiveIdentity, u32) -> &'g [GuiVertex],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         if self.pieces.is_empty() {
             return Ok(());
@@ -379,6 +393,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
 
         let entity = self.entity;
         let mut storage = self.storage.remove(&entity);
+        #[cfg(feature = "diagnostics")]
         let before = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
         let cpu_primitives = &self.cpu_primitives;
         let piece_boxes = &self.piece_boxes;
@@ -408,8 +423,11 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             stats,
         );
 
-        let after = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
-        self.resident = self.resident - before + after;
+        #[cfg(feature = "diagnostics")]
+        {
+            let after = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
+            self.resident = self.resident - before + after;
+        }
         if let Some(mut storage) = storage {
             storage.seen = self.frame;
             self.storage.insert(entity, storage);
@@ -426,7 +444,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         range: std::ops::Range<usize>,
         atlas: impl Fn(usize) -> Option<&'t D::Texture>,
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError>
     where
         D::Texture: 't,
@@ -467,7 +485,10 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             let mut device = self.device.borrow_mut();
             for entity in stale {
                 if let Some(storage) = self.storage.remove(&entity) {
-                    self.resident -= storage.bytes();
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        self.resident -= storage.bytes();
+                    }
                     storage.delete(&mut device);
                 }
             }

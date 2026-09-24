@@ -146,6 +146,16 @@ pub type PlatformRenderDevice = GlesRenderDevice;
 #[cfg(target_arch = "wasm32")]
 pub type PlatformRenderDevice = WebGlRenderDevice;
 
+/// Largest drawing-buffer size the attached device accepts, per axis: the minimum of
+/// `MAX_VIEWPORT_DIMS`, `MAX_RENDERBUFFER_SIZE` and `MAX_TEXTURE_SIZE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewportLimits {
+    /// Largest drawing-buffer width in pixels.
+    pub max_width: u32,
+    /// Largest drawing-buffer height in pixels.
+    pub max_height: u32,
+}
+
 /// The GL operations used by the shared GL renderer, statically dispatched.
 ///
 /// Implementations copy uploads synchronously and retain no borrowed CPU views.
@@ -196,6 +206,10 @@ pub trait RenderDevice: 'static {
     /// reported at a later frame end. Context loss is still reported within the
     /// frame in which the device observes it.
     fn set_exhaustive_draw_checks(&mut self, _enabled: bool) {}
+
+    /// Largest drawing-buffer size this context accepts; `None` while the context
+    /// cannot report limits, such as after loss.
+    fn viewport_limits(&self) -> Option<ViewportLimits>;
 
     /// Bind per-frame lights and per-draw model/material uniforms.
     fn set_lighting(

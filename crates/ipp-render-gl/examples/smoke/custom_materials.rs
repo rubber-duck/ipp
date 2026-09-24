@@ -113,7 +113,7 @@ pub fn run<D: RenderDevice>(
         renderer.custom_material_diagnostics()
     );
     center(&green, [0, 255, 0]);
-    let programs = renderer.cached_program_count();
+    let programs = super::world::resident_programs(world.asset_resources());
     apply(
         &mut world,
         vec![Command::SetDynamicProperty {
@@ -128,7 +128,7 @@ pub fn run<D: RenderDevice>(
     save(output, "custom-red", &red)?;
     center(&red, [255, 0, 0]);
     assert_eq!(
-        renderer.cached_program_count(),
+        super::world::resident_programs(world.asset_resources()),
         programs,
         "uniform values must not create programs"
     );
@@ -396,7 +396,12 @@ pub fn run<D: RenderDevice>(
     for _ in 0..8 {
         super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     }
-    assert!(renderer.custom_material_diagnostics()[&entity].contains("limits"));
+    assert!(
+        renderer.custom_material_diagnostics()[&entity]
+            .error
+            .to_string()
+            .contains("limits")
+    );
     let limited = capture()?;
     save(output, "custom-device-limit-fallback", &limited)?;
     center(&limited, [255, 0, 0]);

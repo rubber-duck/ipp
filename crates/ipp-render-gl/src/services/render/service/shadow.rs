@@ -2,10 +2,11 @@
 
 use super::super::assets::GlMeshData;
 use super::super::frame_scratch::RenderFrameScratch;
+use super::super::frame_statistics::RenderFrameWork;
 use super::super::shader::RenderShaderConfig;
 #[cfg(feature = "particles")]
 use super::prepared_model;
-use super::{RenderError, RenderService, RenderStats, prepared_normal};
+use super::{RenderError, RenderService, prepared_normal};
 use crate::RenderDevice;
 use ipp_core::systems::camera;
 use ipp_core::{WorldContext, services::asset_management::AssetKey};
@@ -60,16 +61,20 @@ impl<D: RenderDevice> RenderService<D> {
             super::super::custom_material::PreparedCustomMaterial,
         >,
         lighting: &super::super::light_selection::PreparedLighting,
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
         scratch: &mut RenderFrameScratch,
     ) -> Result<(), RenderError> {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(226, "gl.shadow-pass");
 
-        stats.shadow_resident_bytes = self
-            .shadow_map_size
-            .saturating_mul(self.shadow_map_size)
-            .saturating_mul(4);
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            stats.statistics.shadow_resident_bytes = self
+                .shadow_map_size
+                .saturating_mul(self.shadow_map_size)
+                .saturating_mul(4);
+        }
+
         use ipp_core::systems::geometry::GeometryBounds;
 
         let frames = &lighting.shadows;
@@ -163,7 +168,7 @@ impl<D: RenderDevice> RenderService<D> {
             super::super::custom_material::PreparedCustomMaterial,
         >,
         view: (usize, &crate::RenderLightingFrame),
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
         scratch: &mut RenderFrameScratch,
     ) -> Result<(), RenderError> {
         let (view_index, frame) = view;
@@ -185,14 +190,14 @@ impl<D: RenderDevice> RenderService<D> {
                 .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
                 .ok_or(RenderError::MissingMesh)?;
             let Some(_gpu) = data.gpu()? else {
-                stats.failed_draw_calls += 1;
+                stats.failed_draw();
                 continue;
             };
             #[cfg(feature = "mesh-poses")]
             let _target = match self.pose_data(world, item)? {
                 Some(target) => {
                     let Some(gpu) = target.gpu()? else {
-                        stats.failed_draw_calls += 1;
+                        stats.failed_draw();
                         continue;
                     };
                     Some(gpu)
@@ -306,7 +311,10 @@ impl<D: RenderDevice> RenderService<D> {
                     target.as_deref().zip(item.pose.map(|(_, weight)| weight)),
                     None,
                 )?;
-                stats.shadow_draw_calls += 1;
+                #[cfg(any(test, feature = "diagnostics"))]
+                {
+                    stats.statistics.shadow_draw_calls += 1;
+                }
             }
             Ok(())
         });

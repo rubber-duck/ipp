@@ -1,5 +1,6 @@
 use super::*;
 use ipp_core::services::data_source::MemoryDataReader;
+use std::rc::Rc;
 
 #[derive(Default)]
 struct Device {
@@ -7,6 +8,10 @@ struct Device {
 }
 
 impl RenderDevice for Device {
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        None
+    }
+
     type Program = ();
     type Mesh = ();
     type Texture = ();
@@ -161,7 +166,7 @@ fn load(
     let device = Rc::new(std::cell::RefCell::new(Device {
         fail_path,
     }));
-    let mut loader = drawing_loader(device, Rc::new(Cell::new(0)));
+    let mut loader = drawing_loader(device, Default::default());
     let mut reader = MemoryDataReader::new(bytes);
     let waker = std::task::Waker::noop();
     let mut context = std::task::Context::from_waker(waker);

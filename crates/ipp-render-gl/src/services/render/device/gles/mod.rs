@@ -62,6 +62,7 @@ pub struct GlesRenderDevice {
     presentation_target: Option<targets::GlesTarget>,
     max_viewport: [i32; 2],
     max_texture_size: u32,
+    max_renderbuffer_size: u32,
     error_checks: super::error_checks::RenderDeviceErrorChecks,
     /// `glGetGraphicsResetStatus` for contexts that report loss by reset
     /// notification; unchecked frame ends query it instead of the error state.

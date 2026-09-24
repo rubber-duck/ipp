@@ -345,7 +345,7 @@ impl crate::services::asset_management::Asset for ParticleEmissionSurface {
 pub(crate) fn particle_surface_loader()
 -> impl crate::services::asset_management::AssetLoader<Data = ParticleEmissionSurface> {
     crate::services::asset_management::BufferedAssetLoader::new(|bytes| {
-        let (mesh, _) = crate::MeshAsset::decode(bytes).map_err(|e| e.to_string())?;
+        let mesh = crate::MeshAsset::decode(bytes).map_err(|e| e.to_string())?;
         let surface = ParticleEmissionSurface::new(&mesh);
         if !surface.area.is_finite() || surface.area <= 0.0 {
             return Err("Particle emission mesh has invalid area".into());

@@ -580,7 +580,7 @@ fn plane_pointer_offset_preserves_length_and_square_geometry() {
                 "ipp://mesh/{recipe}?size=2&normalLength={length}&stroke=0.05&normalOffset={offset}"
             ))
             .unwrap();
-            ipp_core::MeshAsset::decode(&bytes).unwrap().0
+            ipp_core::MeshAsset::decode(&bytes).unwrap()
         };
         let attached = decode(1.25, 0.0);
         for length in [0.75, 1.25, 2.0] {
@@ -686,8 +686,7 @@ fn standalone_arrow_matches_both_plane_normal_meshes() {
                 ))
                 .unwrap(),
             )
-            .unwrap()
-            .0;
+            .unwrap();
             assert_eq!(arrow.positions(), &plane.positions()[base..]);
             assert_eq!(arrow.normals().unwrap(), &plane.normals().unwrap()[base..]);
             assert_eq!(arrow.colors().unwrap(), &plane.colors().unwrap()[base..]);

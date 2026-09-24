@@ -355,7 +355,7 @@ pub fn run<D: RenderDevice>(
 fn ready<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     world: &mut WorldContext<'_>,
-) -> Result<ipp_render_gl::RenderStats> {
+) -> Result<crate::smoke::frame_stats::FrameStats> {
     for _ in 0..512 {
         let stats = super::world::render_frame(renderer, world, WIDTH, HEIGHT)?;
         if stats.draw_calls == 2 {

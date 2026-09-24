@@ -238,7 +238,7 @@ pub fn debug_mesh(
     } else {
         shapes::debug_mesh(value)?
     };
-    crate::MeshAsset::decode(&bytes).map(|(mesh, _)| mesh)
+    crate::MeshAsset::decode(&bytes)
 }
 
 #[cfg(all(test, feature = "builtin-assets"))]
@@ -280,7 +280,7 @@ mod tests {
                 }
 
                 let private = debug_mesh(&value).unwrap();
-                let (recipe, _) =
+                let recipe =
                     crate::MeshAsset::decode(&mesh_with_attributes(&uri, true).unwrap()).unwrap();
                 assert_eq!(private.positions(), recipe.positions(), "{uri}");
                 assert_eq!(private.indices(), recipe.indices(), "{uri}");

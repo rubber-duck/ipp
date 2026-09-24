@@ -1,7 +1,6 @@
 //! Controlled submissions of identical evaluated scenes through real native GLES.
 use super::{HEIGHT, Renderer, Result, WIDTH, draw_probe as probe, fixture::Scene, measurement};
 use ipp_core::systems::animation::AnimationPlaybackControl;
-use ipp_render_gl::RenderStats;
 use std::{io::Write, path::Path, time::Instant};
 
 struct Sample {
@@ -9,7 +8,7 @@ struct Sample {
     completion_ms: f64,
     attempted: u64,
     submitted: u64,
-    stats: RenderStats,
+    stats: measurement::FrameStats,
     metrics: [probe::Metric; 48],
 }
 
@@ -32,7 +31,7 @@ fn render(
     let waiting = Instant::now();
     context.finish()?;
     let completion_ms = waiting.elapsed().as_secs_f64() * 1000.0;
-    let stats = result?;
+    let stats = measurement::FrameStats::read(renderer, result?);
     measurement::validate(stats)?;
     if attempted != u64::from(stats.draw_calls + stats.shadow_draw_calls) {
         return Err(format!("draw interception count differs: {attempted}, {stats:?}").into());
@@ -74,7 +73,6 @@ fn workload(
     }
     let mut rows = Vec::with_capacity(count * 7);
     for index in 0..count {
-        renderer.begin_frame();
         let started = Instant::now();
         scene.update(dt)?;
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;

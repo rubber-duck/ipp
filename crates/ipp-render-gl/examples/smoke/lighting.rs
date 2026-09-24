@@ -406,7 +406,7 @@ pub fn normals<D: RenderDevice>(
         ("sphere-baked", false),
     ] {
         let bytes = std::fs::read(fixtures.join(format!("{name}.mesh")))?;
-        let (mesh, _) = ipp_core::MeshAsset::decode(&bytes)?;
+        let mesh = ipp_core::MeshAsset::decode(&bytes)?;
         let mut world_host = ipp_core::HostRuntime::new();
         renderer.install(&mut world_host)?;
         let mut world = super::world::fixture_world(&mut world_host)?;

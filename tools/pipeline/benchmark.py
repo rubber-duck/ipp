@@ -60,7 +60,7 @@ def build_native(instrumented: bool) -> None:
             "--example",
             "profile_scene",
             "--features",
-            ",".join(["websocket", "render", *features]),
+            ",".join(["websocket", "diagnostics", *features]),
         )
         suffix = ".exe" if os.name == "nt" else ""
         for source, destination in (

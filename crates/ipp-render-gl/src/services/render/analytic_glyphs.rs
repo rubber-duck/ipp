@@ -20,7 +20,8 @@ use std::rc::Rc;
 
 use super::device::SurfacePathInstance;
 use super::retained_surfaces::{RetainedSurfaceSubmission, SurfacePaint};
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::services::render::frame_statistics::RenderFrameWork;
+use crate::{RenderDevice, RenderError};
 use ipp_core::EntityId;
 use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::surface::{
@@ -96,6 +97,7 @@ pub struct AnalyticGlyphCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     runs: BTreeMap<(EntityId, SurfacePrimitiveIdentity), RetainedAnalyticRun<D>>,
     /// Sum of `bytes` over every retained stream.
+    #[cfg(any(test, feature = "diagnostics"))]
     resident: usize,
     frame: u64,
 }
@@ -106,12 +108,14 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         Self {
             device,
             runs: BTreeMap::new(),
+            #[cfg(any(test, feature = "diagnostics"))]
             resident: 0,
             frame: 0,
         }
     }
 
     /// Resident bytes of every retained instance stream.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn resident_bytes(&self) -> usize {
         self.resident
     }
@@ -124,7 +128,10 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
                 device.delete_surface_instances(stream);
             }
         }
-        self.resident = 0;
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.resident = 0;
+        }
     }
 
     /// Draw one run from its retained stream, replacing the stream first when the
@@ -139,7 +146,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         mvp: &[f32; 16],
         scratch: &mut Vec<SurfacePathInstance>,
         build: impl FnOnce(&mut Vec<SurfacePathInstance>),
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         let key = (run.entity, run.style.identity);
         let current = self.runs.get(&key).and_then(|retained| {
@@ -172,8 +179,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         self.device
             .borrow_mut()
             .draw_surface_instances(program, path, stream, mvp, &clip, 0)?;
-        stats.draw_calls += 1;
-        stats.triangles += retained.instances * 2;
+        stats.draw(retained.instances * 2);
         Ok(())
     }
 
@@ -185,7 +191,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         hash: u64,
         scratch: &mut Vec<SurfacePathInstance>,
         build: impl FnOnce(&mut Vec<SurfacePathInstance>),
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         scratch.clear();
         build(scratch);
@@ -198,7 +204,10 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
             bytes: 0,
             seen: self.frame,
         });
-        self.resident -= retained.bytes;
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.resident -= retained.bytes;
+        }
         retained.bytes = 0;
         retained.instances = 0;
 
@@ -228,8 +237,11 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         let bytes = scratch.len() * ANALYTIC_INSTANCE_BYTES;
         retained.instances = scratch.len() as u32;
         retained.bytes = bytes;
-        self.resident += bytes;
-        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(bytes as u32);
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.resident += bytes;
+        }
+        stats.uploaded(bytes);
         Ok(())
     }
 
@@ -241,13 +253,17 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
         if let Some(surfaces) = surfaces {
             let frame = self.frame;
             let mut device = self.device.borrow_mut();
+            #[cfg(any(test, feature = "diagnostics"))]
             let resident = &mut self.resident;
             self.runs.retain(|&(entity, _), run| {
                 if !surfaces.is_stale(entity, run.seen == frame) {
                     return true;
                 }
 
-                *resident -= run.bytes;
+                #[cfg(any(test, feature = "diagnostics"))]
+                {
+                    *resident -= run.bytes;
+                }
                 if let Some(stream) = run.stream.take() {
                     device.delete_surface_instances(stream);
                 }

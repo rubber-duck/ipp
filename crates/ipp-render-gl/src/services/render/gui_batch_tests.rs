@@ -11,7 +11,8 @@ use super::{
     GUI_FILL_GLYPH, GuiBatchRenderCache, GuiVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
     VOLATILE_FRAMES, generate_box_vertices,
 };
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::services::render::frame_statistics::RenderFrameWork;
+use crate::{RenderDevice, RenderError};
 use ipp_core::systems::gui::GuiNodeId;
 use ipp_core::systems::surface::{
     GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, GuiShapeGlow, SurfaceClipRect,
@@ -39,6 +40,10 @@ struct MockGuiBatch {
 }
 
 impl RenderDevice for MockGuiDevice {
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        None
+    }
+
     type Program = u32;
     type Mesh = u32;
     type Texture = u32;
@@ -277,7 +282,7 @@ trait DrawBoxBatch {
         paint: SurfacePaint,
         boxes: &[&SurfaceRenderPrimitive],
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError>;
 }
 
@@ -290,7 +295,7 @@ impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
         paint: SurfacePaint,
         boxes: &[&SurfaceRenderPrimitive],
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         let clipped: Vec<_> = boxes.iter().map(|&primitive| (primitive, clip)).collect();
         self.begin_surface(entity);
@@ -601,7 +606,7 @@ fn warm_frame_uploads_zero_geometry_bytes() {
     let mvp = [0.0; 16];
 
     // Frame 1: Cold upload
-    let mut stats1 = RenderStats::default();
+    let mut stats1 = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -614,17 +619,17 @@ fn warm_frame_uploads_zero_geometry_bytes() {
         )
         .unwrap();
 
-    assert_eq!(stats1.gui_allocations, 1);
-    assert_eq!(stats1.gui_rebuilds, 2);
-    assert_eq!(stats1.gui_batches, 1);
-    assert_eq!(stats1.triangles, 4); // 2 boxes * 2 triangles
+    assert_eq!(stats1.statistics.gui_allocations, 1);
+    assert_eq!(stats1.statistics.gui_rebuilds, 2);
+    assert_eq!(stats1.statistics.gui_batches, 1);
+    assert_eq!(stats1.summary.triangles, 4); // 2 boxes * 2 triangles
     let expected_bytes = 12 * std::mem::size_of::<GuiVertex>() as u32;
-    assert_eq!(stats1.uploaded_bytes, expected_bytes);
+    assert_eq!(stats1.statistics.uploaded_bytes, expected_bytes);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().writes, [(1, 0, 12)]);
 
     // Frame 2: Warm unchanged frame
-    let mut stats2 = RenderStats::default();
+    let mut stats2 = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -637,11 +642,14 @@ fn warm_frame_uploads_zero_geometry_bytes() {
         )
         .unwrap();
 
-    assert_eq!(stats2.gui_allocations, 0);
-    assert_eq!(stats2.gui_rebuilds, 0);
-    assert_eq!(stats2.gui_batches, 1);
-    assert_eq!(stats2.triangles, 4);
-    assert_eq!(stats2.uploaded_bytes, 0, "warm frame must upload 0 bytes");
+    assert_eq!(stats2.statistics.gui_allocations, 0);
+    assert_eq!(stats2.statistics.gui_rebuilds, 0);
+    assert_eq!(stats2.statistics.gui_batches, 1);
+    assert_eq!(stats2.summary.triangles, 4);
+    assert_eq!(
+        stats2.statistics.uploaded_bytes, 0,
+        "warm frame must upload 0 bytes"
+    );
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().writes.len(), 1);
 }
@@ -670,7 +678,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
 
-    let mut stats1 = RenderStats::default();
+    let mut stats1 = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -682,7 +690,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
             &mut stats1,
         )
         .unwrap();
-    assert_eq!(stats1.gui_rebuilds, 2);
+    assert_eq!(stats1.statistics.gui_rebuilds, 2);
 
     // Modify only box2 (e.g. hovered fill colour or slider thumb position)
     let mut box2_modified = box2.clone();
@@ -695,7 +703,7 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
     }
     let boxes_modified = [&box1, &box2_modified];
 
-    let mut stats2 = RenderStats::default();
+    let mut stats2 = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -709,18 +717,18 @@ fn local_change_replaces_batch_storage_and_rebuilds_only_affected_primitive() {
         .unwrap();
 
     assert_eq!(
-        stats2.gui_rebuilds, 1,
+        stats2.statistics.gui_rebuilds, 1,
         "only the modified primitive geometry rebuilds"
     );
     // The changed box turns volatile and leaves its stable neighbour's batch: that
     // batch rewrites its slot without it, and the changed box's own batch follows it
     // in the same storage, in one upload.
-    assert_eq!(stats2.gui_allocations, 2);
+    assert_eq!(stats2.statistics.gui_allocations, 2);
     assert_eq!(device.borrow().writes[1..], [(1, 0, 12)]);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert_eq!(stats2.draw_calls, 1);
+    assert_eq!(stats2.summary.draw_calls, 1);
     let expected_bytes = 12 * std::mem::size_of::<GuiVertex>() as u32;
-    assert_eq!(stats2.uploaded_bytes, expected_bytes);
+    assert_eq!(stats2.statistics.uploaded_bytes, expected_bytes);
 }
 
 #[test]
@@ -748,7 +756,7 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
         };
     }
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
-        let mut stats = RenderStats::default();
+        let mut stats = RenderFrameWork::default();
         cache
             .draw_box_batch(
                 &1,
@@ -774,9 +782,9 @@ fn colour_only_change_on_gradient_box_keeps_retained_geometry() {
         style.color = [1.0, 0.0, 0.0, 1.0];
     }
     let stats = draw(&mut cache, &transitioning);
-    assert_eq!(stats.gui_rebuilds, 0);
-    assert_eq!(stats.gui_allocations, 0);
-    assert_eq!(stats.uploaded_bytes, 0);
+    assert_eq!(stats.statistics.gui_rebuilds, 0);
+    assert_eq!(stats.statistics.gui_allocations, 0);
+    assert_eq!(stats.statistics.uploaded_bytes, 0);
     assert_eq!(device.borrow().writes.len(), 1);
 }
 
@@ -798,7 +806,7 @@ fn boxes_of_every_part_class_share_one_batch() {
         part_box(3, GuiPrimitivePart::FocusRing, 1.0),
     ];
     let boxes: Vec<_> = row.iter().collect();
-    let mut stats = RenderStats::default();
+    let mut stats = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -811,8 +819,8 @@ fn boxes_of_every_part_class_share_one_batch() {
         )
         .unwrap();
 
-    assert_eq!(stats.gui_batches, 1, "{stats:?}");
-    assert_eq!(stats.draw_calls, 1);
+    assert_eq!(stats.statistics.gui_batches, 1, "{stats:?}");
+    assert_eq!(stats.summary.draw_calls, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().writes, [(1, 0, 5 * 6)]);
 }
@@ -826,7 +834,7 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
     let draw = |cache: &mut GuiBatchRenderCache<MockGuiDevice>,
                 paint: SurfacePaint,
                 boxes: &[&SurfaceRenderPrimitive]| {
-        let mut stats = RenderStats::default();
+        let mut stats = RenderFrameWork::default();
         cache
             .draw_box_batch(&1, entity, clip, paint, boxes, &[0.0; 16], &mut stats)
             .unwrap();
@@ -840,7 +848,9 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
     };
 
     assert_eq!(
-        draw(&mut cache, revision(5, false), &[&first, &second]).gui_rebuilds,
+        draw(&mut cache, revision(5, false), &[&first, &second])
+            .statistics
+            .gui_rebuilds,
         2
     );
 
@@ -849,18 +859,26 @@ fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
     let mut edited = second.clone();
     set_fill(&mut edited, 0.9);
     let reused = draw(&mut cache, revision(5, true), &[&first, &edited]);
-    assert_eq!((reused.gui_rebuilds, reused.uploaded_bytes), (0, 0));
+    assert_eq!(
+        (
+            reused.statistics.gui_rebuilds,
+            reused.statistics.uploaded_bytes
+        ),
+        (0, 0)
+    );
 
     // A new revision hashes every box and rebuilds only the edited one.
     let rebuilt = draw(&mut cache, revision(6, false), &[&first, &edited]);
-    assert_eq!(rebuilt.gui_rebuilds, 1);
-    assert!(rebuilt.uploaded_bytes > 0);
+    assert_eq!(rebuilt.statistics.gui_rebuilds, 1);
+    assert!(rebuilt.statistics.uploaded_bytes > 0);
 
     // Hashes from another revision are never reused.
     let mut again = edited.clone();
     set_fill(&mut again, 0.1);
     assert_eq!(
-        draw(&mut cache, revision(7, true), &[&first, &again]).gui_rebuilds,
+        draw(&mut cache, revision(7, true), &[&first, &again])
+            .statistics
+            .gui_rebuilds,
         1
     );
 }
@@ -881,7 +899,7 @@ fn root_replacement_prevents_reusing_a_node_batch() {
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
 
-    let mut stats1 = RenderStats::default();
+    let mut stats1 = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -893,7 +911,7 @@ fn root_replacement_prevents_reusing_a_node_batch() {
             &mut stats1,
         )
         .unwrap();
-    assert_eq!(stats1.gui_allocations, 1);
+    assert_eq!(stats1.statistics.gui_allocations, 1);
 
     // The root is replaced: the same node identity under a new incarnation.
     let mut box_gen2 = sample_box_primitive(
@@ -912,7 +930,7 @@ fn root_replacement_prevents_reusing_a_node_batch() {
         id.root_incarnation = 2;
     }
 
-    let mut stats2 = RenderStats::default();
+    let mut stats2 = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -927,7 +945,7 @@ fn root_replacement_prevents_reusing_a_node_batch() {
 
     // A new incarnation creates a new batch rather than reusing or overwriting stale handles
     assert_eq!(
-        stats2.gui_allocations, 1,
+        stats2.statistics.gui_allocations, 1,
         "new root incarnation requires new batch allocation"
     );
 }
@@ -956,7 +974,7 @@ fn finish_frame_prunes_unreferenced_batches_and_tracks_resident_bytes() {
     let clip = [0.0, 0.0, 4.0, 2.0];
     let mvp = [0.0; 16];
 
-    let mut stats = RenderStats::default();
+    let mut stats = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -1034,7 +1052,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     };
     let live = BTreeSet::from([shown, culled]);
 
-    let mut cold = RenderStats::default();
+    let mut cold = RenderFrameWork::default();
     draw(&mut cache, shown, &mut cold);
     draw(&mut cache, culled, &mut cold);
     cache.finish_frame(Some(&RetainedSurfaceSubmission {
@@ -1044,7 +1062,7 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     assert_eq!(device.borrow().created_batches.len(), 2);
 
     // One frame outside the frustum: the culled Surface is live but never submitted.
-    draw(&mut cache, shown, &mut RenderStats::default());
+    draw(&mut cache, shown, &mut RenderFrameWork::default());
     cache.finish_frame(Some(&RetainedSurfaceSubmission {
         live: &live,
         submitted: &BTreeSet::from([shown]),
@@ -1054,12 +1072,12 @@ fn culled_surfaces_keep_retained_batches_and_incomplete_frames_prune_nothing() {
     cache.finish_frame(None);
     assert!(device.borrow().deleted_batches.is_empty());
 
-    let mut visible_again = RenderStats::default();
+    let mut visible_again = RenderFrameWork::default();
     draw(&mut cache, culled, &mut visible_again);
-    assert_eq!(visible_again.uploaded_bytes, 0);
-    assert_eq!(visible_again.gui_rebuilds, 0);
-    assert_eq!(visible_again.gui_allocations, 0);
-    assert_eq!(visible_again.gui_batches, 1);
+    assert_eq!(visible_again.statistics.uploaded_bytes, 0);
+    assert_eq!(visible_again.statistics.gui_rebuilds, 0);
+    assert_eq!(visible_again.statistics.gui_allocations, 0);
+    assert_eq!(visible_again.statistics.gui_batches, 1);
     assert_eq!(device.borrow().created_batches.len(), 2);
     assert_eq!(device.borrow().writes.len(), 2);
 
@@ -1105,7 +1123,7 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
             SurfacePaint::UNKNOWN,
             &[primitive],
             &mvp,
-            &mut RenderStats::default(),
+            &mut RenderFrameWork::default(),
         )
     };
 
@@ -1168,10 +1186,10 @@ fn draw_run_frame(
     cache: &mut GuiBatchRenderCache<MockGuiDevice>,
     boxes: &[SurfaceRenderPrimitive],
     clip: SurfaceClipRect,
-) -> RenderStats {
+) -> RenderFrameWork {
     let entity = ipp_core::EntityId::from_bits(1);
     let refs: Vec<_> = boxes.iter().collect();
-    let mut stats = RenderStats::default();
+    let mut stats = RenderFrameWork::default();
     cache
         .draw_box_batch(
             &1,
@@ -1200,10 +1218,16 @@ fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
     let boxes = box_run(1..=400);
 
     let cold = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    assert!(cold.gui_batches >= 4, "{cold:?}");
-    assert_eq!(cold.draw_calls, 1, "one Surface storage draws as one range");
-    assert_eq!(cold.uploaded_bytes, 400 * BOX_BYTES);
-    assert_eq!(device.borrow().writes.len(), cold.gui_batches as usize);
+    assert!(cold.statistics.gui_batches >= 4, "{cold:?}");
+    assert_eq!(
+        cold.summary.draw_calls, 1,
+        "one Surface storage draws as one range"
+    );
+    assert_eq!(cold.statistics.uploaded_bytes, 400 * BOX_BYTES);
+    assert_eq!(
+        device.borrow().writes.len(),
+        cold.statistics.gui_batches as usize
+    );
     assert!(
         device
             .borrow()
@@ -1213,8 +1237,14 @@ fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
     );
 
     let warm = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    assert_eq!((warm.uploaded_bytes, warm.gui_allocations), (0, 0));
-    assert_eq!(warm.gui_batches, cold.gui_batches);
+    assert_eq!(
+        (
+            warm.statistics.uploaded_bytes,
+            warm.statistics.gui_allocations
+        ),
+        (0, 0)
+    );
+    assert_eq!(warm.statistics.gui_batches, cold.statistics.gui_batches);
 }
 
 #[test]
@@ -1243,14 +1273,14 @@ fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
         *size = [0.008, 0.008];
     }
     let resized = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    assert_eq!(resized.gui_rebuilds, 1);
+    assert_eq!(resized.statistics.gui_rebuilds, 1);
     assert!(
-        resized.uploaded_bytes <= first_batches(&device, 1) * BOX_BYTES,
+        resized.statistics.uploaded_bytes <= first_batches(&device, 1) * BOX_BYTES,
         "{resized:?}"
     );
     assert!(device.borrow().writes.len() - written <= 2);
     assert_eq!(device.borrow().created_batches.len(), 1);
-    assert!(resized.gui_batches <= cold.gui_batches + 1);
+    assert!(resized.statistics.gui_batches <= cold.statistics.gui_batches + 1);
 
     // Inserting a box before the first one rewrites at most the batches around it.
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
@@ -1261,8 +1291,8 @@ fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
     let bound = (first_batches(&device, 2) + 1) * BOX_BYTES;
     boxes.insert(0, box_run(1000..=1000).remove(0));
     let inserted = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    assert_eq!(inserted.gui_rebuilds, 1);
-    assert!(inserted.uploaded_bytes <= bound, "{inserted:?}");
+    assert_eq!(inserted.statistics.gui_rebuilds, 1);
+    assert!(inserted.statistics.uploaded_bytes <= bound, "{inserted:?}");
     assert!(device.borrow().writes.len() - written <= 2);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert!(device.borrow().deleted_batches.is_empty());
@@ -1271,7 +1301,7 @@ fn early_box_edits_insertions_and_removals_rebuild_only_nearby_batches() {
     boxes.remove(3);
     let written = device.borrow().writes.len();
     let removed = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    assert!(removed.uploaded_bytes <= bound, "{removed:?}");
+    assert!(removed.statistics.uploaded_bytes <= bound, "{removed:?}");
     assert!(device.borrow().writes.len() - written <= 2);
 }
 
@@ -1286,30 +1316,44 @@ fn animating_one_box_in_a_large_run_uploads_only_that_box_each_frame() {
     set_fill(&mut boxes[200], 0.0);
     let split = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
     assert!(
-        split.uploaded_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES,
+        split.statistics.uploaded_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES,
         "{split:?}"
     );
-    assert!(split.gui_batches <= cold.gui_batches + 2);
+    assert!(split.statistics.gui_batches <= cold.statistics.gui_batches + 2);
 
     // Every later frame replaces only the animated box's own batch.
     for frame in 1..=30 {
         set_fill(&mut boxes[200], frame as f32 / 30.0);
         let animated = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-        assert_eq!(animated.uploaded_bytes, BOX_BYTES, "frame {frame}");
-        assert_eq!((animated.gui_rebuilds, animated.gui_allocations), (1, 1));
-        assert_eq!(animated.gui_batches, split.gui_batches);
-        assert_eq!(animated.draw_calls, 1);
+        assert_eq!(
+            animated.statistics.uploaded_bytes, BOX_BYTES,
+            "frame {frame}"
+        );
+        assert_eq!(
+            (
+                animated.statistics.gui_rebuilds,
+                animated.statistics.gui_allocations
+            ),
+            (1, 1)
+        );
+        assert_eq!(
+            animated.statistics.gui_batches,
+            split.statistics.gui_batches
+        );
+        assert_eq!(animated.summary.draw_calls, 1);
     }
 
     // At rest the box rejoins its neighbours once, after which frames upload nothing.
     let mut rest_bytes = 0;
     for _ in 0..VOLATILE_FRAMES + 2 {
-        rest_bytes += draw_run_frame(&mut cache, &boxes, RUN_CLIP).uploaded_bytes;
+        rest_bytes += draw_run_frame(&mut cache, &boxes, RUN_CLIP)
+            .statistics
+            .uploaded_bytes;
     }
     assert!(rest_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES);
     let settled = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
-    assert_eq!(settled.uploaded_bytes, 0);
-    assert_eq!(settled.gui_batches, cold.gui_batches);
+    assert_eq!(settled.statistics.uploaded_bytes, 0);
+    assert_eq!(settled.statistics.gui_batches, cold.statistics.gui_batches);
     assert_eq!(device.borrow().created_batches.len(), 1);
 }
 
@@ -1323,8 +1367,8 @@ fn clip_changes_rewrite_only_the_boxes_they_clip() {
     // Scrolling a container changes the clip its boxes carry in every vertex.
     let scrolled = [0.5, 0.0, 3.0, 1.0];
     let stats = draw_run_frame(&mut cache, &boxes, scrolled);
-    assert_eq!(stats.gui_rebuilds, 40);
-    assert_eq!(stats.uploaded_bytes, 40 * BOX_BYTES);
+    assert_eq!(stats.statistics.gui_rebuilds, 40);
+    assert_eq!(stats.statistics.uploaded_bytes, 40 * BOX_BYTES);
     assert_eq!(device.borrow().created_batches.len(), 1);
     let drawn = device.borrow().draws.last().unwrap().1.clone();
     assert!(
@@ -1340,13 +1384,13 @@ fn clip_changes_rewrite_only_the_boxes_they_clip() {
         .map(|&primitive| (primitive, scrolled))
         .collect();
     clipped[20].1 = [1.0, 0.0, 2.0, 1.0];
-    let mut stats = RenderStats::default();
+    let mut stats = RenderFrameWork::default();
     cache.begin_surface(ipp_core::EntityId::from_bits(1));
     cache.push_boxes(SurfacePaint::UNKNOWN, &clipped, &mut stats);
     cache.commit_surface(|_, _| &[], &mut stats).unwrap();
-    assert_eq!(stats.gui_rebuilds, 1);
+    assert_eq!(stats.statistics.gui_rebuilds, 1);
     assert!(
-        stats.uploaded_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES,
+        stats.statistics.uploaded_bytes <= (MAX_BATCH_BOXES as u32 + 1) * BOX_BYTES,
         "{stats:?}"
     );
 }
@@ -1387,7 +1431,7 @@ fn text_identity(node: u32) -> SurfacePrimitiveIdentity {
 /// One submitted Surface: its stats, its draws' vertices and whether each bound an
 /// atlas, and the painter-order vertices its work should paint.
 struct SubmittedWork {
-    stats: RenderStats,
+    stats: RenderFrameWork,
     draws: Vec<(Vec<GuiVertex>, bool)>,
     expected: Vec<GuiVertex>,
 }
@@ -1398,7 +1442,7 @@ fn submit_work(
     device: &Rc<RefCell<MockGuiDevice>>,
     work: &[TestWork],
 ) -> SubmittedWork {
-    let mut stats = RenderStats::default();
+    let mut stats = RenderFrameWork::default();
     let entity = ipp_core::EntityId::from_bits(1);
     cache.begin_surface(entity);
     let mut expected = Vec::new();
@@ -1514,8 +1558,8 @@ fn boxes_and_text_under_different_clips_draw_once_per_atlas_page() {
         draws,
         expected,
     } = submit_work(&mut cache, &device, &work);
-    assert_eq!(stats.draw_calls, 1, "{stats:?}");
-    assert_eq!(stats.gui_batches, 4);
+    assert_eq!(stats.summary.draw_calls, 1, "{stats:?}");
+    assert_eq!(stats.statistics.gui_batches, 4);
     assert!(draws[0].1, "the range samples its atlas page");
     let painted: Vec<_> = draws[0]
         .0
@@ -1537,7 +1581,7 @@ fn boxes_and_text_under_different_clips_draw_once_per_atlas_page() {
         draws,
         ..
     } = submit_work(&mut cache, &device, &work);
-    assert_eq!(stats.draw_calls, 2, "{stats:?}");
+    assert_eq!(stats.summary.draw_calls, 2, "{stats:?}");
     assert!(draws.iter().all(|(_, atlas)| *atlas));
 }
 
@@ -1611,7 +1655,7 @@ fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
             draws,
             expected,
         } = submit_work(&mut cache, &device, &work);
-        assert_eq!(stats.draw_calls, 1, "frame {frame}");
+        assert_eq!(stats.summary.draw_calls, 1, "frame {frame}");
         let painted: Vec<_> = draws[0]
             .0
             .iter()

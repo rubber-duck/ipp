@@ -367,8 +367,8 @@ fn invalid_override_keeps_neighbor_edits_and_malformed_assets_reject() {
 #[test]
 fn optional_joint_streams_validate_all_slots_and_preserve_rigid_byte_cost() {
     let bytes = builtin::rig(MESH_TYPE, "ipp://mesh/rig-strip").unwrap();
-    let (mesh, stats) = MeshAsset::decode(&bytes).unwrap();
-    assert_eq!(stats.vertex_bytes, 18 * (12 + 12 + 4 + 16));
+    let mesh = MeshAsset::decode(&bytes).unwrap();
+    assert_eq!(mesh.vertex_bytes(), 18 * (12 + 12 + 4 + 16));
     assert!(
         mesh.joint_weights()
             .unwrap()
@@ -389,10 +389,10 @@ fn optional_joint_streams_validate_all_slots_and_preserve_rigid_byte_cost() {
         assert!(MeshAsset::decode(&bad).is_err());
     }
     let cube = builtin::mesh("ipp://mesh/cube?width=1&height=1&length=1").unwrap();
-    let (mesh, stats) = MeshAsset::decode(&cube).unwrap();
+    let mesh = MeshAsset::decode(&cube).unwrap();
     assert!(mesh.joint_indices().is_none());
     assert!(mesh.normals().is_some());
-    assert_eq!(stats.vertex_bytes, mesh.vertex_count() as u32 * 44);
+    assert_eq!(mesh.vertex_bytes(), mesh.vertex_count() * 44);
 }
 
 fn mapped_geometry() -> Vec<u8> {

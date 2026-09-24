@@ -1,7 +1,8 @@
 //! Surface primitive submission for text, drawings, bitmaps and GUI boxes.
 
 use super::super::assets::GlTextureData;
-use super::{RenderError, RenderService, RenderStats};
+use super::super::frame_statistics::RenderFrameWork;
+use super::{RenderError, RenderService};
 use crate::RenderDevice;
 use ipp_core::WorldContext;
 
@@ -23,7 +24,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &WorldContext<'_>,
         item: &ipp_core::SurfaceRenderItem,
         mvp: [f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
         self.prepare_surface_program()?;
@@ -64,7 +65,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &WorldContext<'_>,
         item: &ipp_core::SurfaceRenderItem,
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
         self.surface_missing.clear();
@@ -141,7 +142,7 @@ impl<D: RenderDevice> RenderService<D> {
         clip: ipp_core::systems::surface::SurfaceClipRect,
         paint: super::super::retained_surfaces::SurfacePaint,
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
         instances: &mut Vec<super::super::device::SurfacePathInstance>,
     ) -> Result<(), RenderError> {
         use ipp_core::services::asset_management::Asset as _;
@@ -163,7 +164,7 @@ impl<D: RenderDevice> RenderService<D> {
                             .downcast_ref::<super::super::surface_assets::GlFontData<D>>()
                     })
                 else {
-                    stats.failed_draw_calls += 1;
+                    stats.failed_draw();
                     self.surface_missing.push(font.key);
                     return Ok(());
                 };
@@ -252,7 +253,7 @@ impl<D: RenderDevice> RenderService<D> {
                             .downcast_ref::<super::super::surface_assets::GlDrawingData<D>>()
                     })
                 else {
-                    stats.failed_draw_calls += 1;
+                    stats.failed_draw();
                     self.surface_missing.push(drawing.key);
                     return Ok(());
                 };
@@ -299,8 +300,7 @@ impl<D: RenderDevice> RenderService<D> {
                     self.device.borrow_mut().draw_surface_path(
                         program, path, &bounds, range, mvp, &placement, &clip, &color, fill_rule,
                     )?;
-                    stats.draw_calls += 1;
-                    stats.triangles += 2;
+                    stats.draw(2);
                 }
             }
             ipp_core::SurfaceRenderPrimitive::Bitmap {
@@ -315,7 +315,7 @@ impl<D: RenderDevice> RenderService<D> {
                     .and_then(|asset| asset.as_any().downcast_ref::<GlTextureData<D>>())
                     .and_then(|data| data.gpu.as_ref())
                 else {
-                    stats.failed_draw_calls += 1;
+                    stats.failed_draw();
                     self.surface_missing.push(bitmap.key);
                     return Ok(());
                 };
@@ -341,8 +341,7 @@ impl<D: RenderDevice> RenderService<D> {
                 self.device
                     .borrow_mut()
                     .draw_surface_bitmap(program, texture, mvp, &placement, &clip, &color)?;
-                stats.draw_calls += 1;
-                stats.triangles += 2;
+                stats.draw(2);
             }
             // A GUI box reaching a renderer built without the gui
             // capability cannot draw: core and renderer features compose
@@ -351,7 +350,7 @@ impl<D: RenderDevice> RenderService<D> {
             // instead of breaking the frame.
             #[allow(unreachable_patterns)]
             _ => {
-                stats.failed_draw_calls += 1;
+                stats.failed_draw();
             }
         }
 
@@ -371,7 +370,7 @@ impl<D: RenderDevice> RenderService<D> {
         item: &ipp_core::SurfaceRenderItem,
         paint: super::super::retained_surfaces::SurfacePaint,
         ops: &mut Vec<SurfaceOp>,
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         let device = &self.device;
         let cache = self
@@ -472,7 +471,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: ipp_core::WorldId,
         range: std::ops::Range<usize>,
         mvp: &[f32; 16],
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         if self.surface_gui_program.is_none() {
             self.surface_gui_program = Some(self.device.borrow_mut().create_program(
@@ -841,10 +840,10 @@ impl<D: RenderDevice> RenderService<D> {
         Ok(())
     }
 
-    /// Publish context-wide retained Surface residency and this frame's glyph work.
+    /// Finish this World's retained Surface frame.
     ///
-    /// Only a successful submission that reached its Surfaces can distinguish stale GUI
-    /// batches and analytic text streams from those of culled Surfaces. Failed,
+    /// Only a `completed` submission that reached its Surfaces can distinguish stale
+    /// GUI batches and analytic text streams from those of culled Surfaces. Failed,
     /// cameraless and invalid-camera frames keep everything, so a transient failure or
     /// pan never forces re-uploads. Atlas text runs follow the demand published before
     /// drawing.
@@ -852,9 +851,9 @@ impl<D: RenderDevice> RenderService<D> {
         &mut self,
         world: ipp_core::WorldId,
         items: &[ipp_core::SurfaceRenderItem],
-        stats: Option<&mut RenderStats>,
+        completed: bool,
     ) {
-        let submitted = self.submitted_surfaces.take().filter(|_| stats.is_some());
+        let submitted = self.submitted_surfaces.take().filter(|_| completed);
         let live: std::collections::BTreeSet<_> = items.iter().map(|item| item.entity).collect();
         let surfaces = submitted.as_ref().map(|submitted| {
             super::super::retained_surfaces::RetainedSurfaceSubmission {
@@ -875,32 +874,70 @@ impl<D: RenderDevice> RenderService<D> {
         if let (Some(tracker), Some(_)) = (self.surface_paint.get_mut(&world), &surfaces) {
             tracker.retain(&live);
         }
+    }
 
-        let Some(stats) = stats else {
-            return;
-        };
-        stats.analytic_glyph_resident_bytes = self
-            .analytic_glyphs
-            .values()
-            .map(|cache| cache.resident_bytes())
-            .sum::<usize>() as u32;
+    /// Retained GUI and analytic glyph bytes of one World.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub(super) fn retained_surface_residency(
+        &self,
+        world: ipp_core::WorldId,
+    ) -> RetainedSurfaceResidency {
+        RetainedSurfaceResidency {
+            #[cfg(feature = "gui")]
+            gui: self
+                .gui_batch_cache
+                .get(&world)
+                .map_or(0, |cache| cache.resident_bytes()),
+            analytic: self
+                .analytic_glyphs
+                .get(&world)
+                .map_or(0, |cache| cache.resident_bytes()),
+        }
+    }
+
+    /// Fold one World's residency change since `before` into the context totals.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub(super) fn track_retained_surface_residency(
+        &mut self,
+        world: ipp_core::WorldId,
+        before: RetainedSurfaceResidency,
+    ) {
+        let after = self.retained_surface_residency(world);
+        let total = &mut self.retained_surface_residency;
         #[cfg(feature = "gui")]
-        self.publish_glyph_work(stats);
+        {
+            total.gui = total.gui - before.gui + after.gui;
+        }
+        total.analytic = total.analytic - before.analytic + after.analytic;
     }
 
-    /// Publish retained GUI and glyph residency and this frame's atlas work.
-    #[cfg(feature = "gui")]
-    fn publish_glyph_work(&mut self, stats: &mut RenderStats) {
-        stats.gui_resident_bytes = self
-            .gui_batch_cache
-            .values()
-            .map(|cache| cache.resident_bytes())
-            .sum::<usize>() as u32;
-        self.glyph_frame.publish(stats);
-        stats.glyph_page_retirements = self.glyph_atlas.take_retired_pages();
-        stats.glyph_pages = self.glyph_atlas.page_count();
-        stats.glyph_resident_bytes = self.glyph_atlas.resident_bytes();
+    /// Publish context-wide retained Surface residency and this frame's glyph work.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub(super) fn publish_retained_surface_statistics(
+        &mut self,
+        statistics: &mut crate::RenderStatistics,
+    ) {
+        let total = self.retained_surface_residency;
+        statistics.analytic_glyph_resident_bytes =
+            u32::try_from(total.analytic).unwrap_or(u32::MAX);
+        #[cfg(feature = "gui")]
+        {
+            statistics.gui_resident_bytes = u32::try_from(total.gui).unwrap_or(u32::MAX);
+            self.glyph_frame.publish(statistics);
+            statistics.glyph_page_retirements = self.glyph_atlas.take_retired_pages();
+            statistics.glyph_pages = self.glyph_atlas.page_count();
+            statistics.glyph_resident_bytes = self.glyph_atlas.resident_bytes();
+        }
     }
+}
+
+/// Resident bytes of retained per-Surface GPU storage, per World or context-wide.
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct RetainedSurfaceResidency {
+    #[cfg(feature = "gui")]
+    gui: usize,
+    analytic: usize,
 }
 
 fn srgb(value: u8) -> f32 {

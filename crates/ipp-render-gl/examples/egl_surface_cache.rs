@@ -34,9 +34,9 @@ mod scenario {
         WorldId,
     };
     use ipp_render_gl::{
-        GlesRenderDevice, RenderService, RenderStats, SurfaceCacheDiagnostic,
-        SurfaceCachePresentation,
+        GlesRenderDevice, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation,
     };
+    use smoke::frame_stats::{FrameStats, RenderFrameStats};
     use std::collections::BTreeMap;
     use std::mem::offset_of;
     use std::path::Path;
@@ -632,7 +632,7 @@ mod scenario {
 
         /// One Host frame: deliver requested bytes, advance World time by `dt`
         /// and present once, so per-frame cache counters describe this frame.
-        fn frame(&mut self, dt: f64) -> Result<RenderStats> {
+        fn frame(&mut self, dt: f64) -> Result<FrameStats> {
             let stats = self.present(dt)?;
             if stats.failed_draw_calls != 0 {
                 return Err(format!("failed draws: {stats:?}").into());
@@ -641,8 +641,7 @@ mod scenario {
         }
 
         /// One frame that may still skip draws while resources are re-uploaded.
-        fn present(&mut self, dt: f64) -> Result<RenderStats> {
-            self.renderer.begin_frame();
+        fn present(&mut self, dt: f64) -> Result<FrameStats> {
             self.host
                 .world_mut(self.world)
                 .unwrap()
@@ -663,7 +662,7 @@ mod scenario {
                     .as_ref()
                     .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
             }
-            Ok(self.renderer.render(&mut world, WIDTH, HEIGHT)?)
+            Ok(self.renderer.render_stats(&mut world, WIDTH, HEIGHT)?)
         }
 
         /// Present until the panel's presentation satisfies `done`: routed GUI
@@ -672,7 +671,7 @@ mod scenario {
             &mut self,
             label: &str,
             done: impl Fn(SurfaceCachePresentation) -> bool,
-        ) -> Result<RenderStats> {
+        ) -> Result<FrameStats> {
             for _ in 0..4 {
                 let stats = self.frame(DT)?;
                 if done(self.record()?.presentation) {
@@ -712,8 +711,8 @@ mod scenario {
         }
 
         /// Present until every asset is ready and a frame uploads nothing.
-        fn settle(&mut self, sources: &[AssetSource]) -> Result<RenderStats> {
-            let mut last = RenderStats::default();
+        fn settle(&mut self, sources: &[AssetSource]) -> Result<FrameStats> {
+            let mut last = FrameStats::default();
             for _ in 0..256 {
                 last = self.present(DT)?;
                 if self.resident(sources)
@@ -824,7 +823,7 @@ mod scenario {
         fn expect(
             &mut self,
             label: &str,
-            stats: &RenderStats,
+            stats: &FrameStats,
             presentation: SurfaceCachePresentation,
             repaints: u32,
             allocations: u32,

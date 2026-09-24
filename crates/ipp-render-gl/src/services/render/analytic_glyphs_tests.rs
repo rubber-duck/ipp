@@ -6,8 +6,9 @@ use std::rc::Rc;
 
 use super::{ANALYTIC_INSTANCE_BYTES, AnalyticGlyphCache, AnalyticGlyphRun};
 use crate::services::render::device::{SurfacePathDescriptor, SurfacePathInstance};
+use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::services::render::retained_surfaces::{RetainedSurfaceSubmission, SurfacePaint};
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::{RenderDevice, RenderError};
 use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::surface::{SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle};
 use ipp_core::{EntityId, SurfaceItemId};
@@ -25,6 +26,10 @@ struct MockDevice {
 }
 
 impl RenderDevice for MockDevice {
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        None
+    }
+
     type Program = ();
     type Mesh = ();
     type Texture = ();
@@ -223,8 +228,8 @@ fn run<'a>(
 type Cache = AnalyticGlyphCache<MockDevice>;
 
 /// Draw `run` with one instance per glyph; returns the frame's stats.
-fn draw(cache: &mut Cache, run: &AnalyticGlyphRun<'_>, paint: SurfacePaint) -> RenderStats {
-    let mut stats = RenderStats::default();
+fn draw(cache: &mut Cache, run: &AnalyticGlyphRun<'_>, paint: SurfacePaint) -> RenderFrameWork {
+    let mut stats = RenderFrameWork::default();
     let mut scratch = Vec::new();
     let glyphs = run.glyphs;
     cache
@@ -266,14 +271,17 @@ fn unchanged_runs_keep_their_stream_and_upload_nothing() {
     let text = glyphs(&[1, 2, 3, 4]);
 
     let cold = draw(&mut cache, &run(1, &style, &text), SurfacePaint::UNKNOWN);
-    assert_eq!(cold.uploaded_bytes as usize, 4 * ANALYTIC_INSTANCE_BYTES);
-    assert_eq!((cold.draw_calls, cold.triangles), (1, 8));
+    assert_eq!(
+        cold.statistics.uploaded_bytes as usize,
+        4 * ANALYTIC_INSTANCE_BYTES
+    );
+    assert_eq!((cold.summary.draw_calls, cold.summary.triangles), (1, 8));
     submitted(&mut cache, &[1], &[1]);
 
     for _ in 0..3 {
         let idle = draw(&mut cache, &run(1, &style, &text), SurfacePaint::UNKNOWN);
-        assert_eq!(idle.uploaded_bytes, 0);
-        assert_eq!(idle.draw_calls, 1);
+        assert_eq!(idle.statistics.uploaded_bytes, 0);
+        assert_eq!(idle.summary.draw_calls, 1);
         submitted(&mut cache, &[1], &[1]);
     }
 
@@ -294,9 +302,15 @@ fn edited_runs_replace_their_stream_in_place() {
 
     draw(&mut cache, &run(1, &first, &text), SurfacePaint::UNKNOWN);
     let edited = draw(&mut cache, &run(1, &moved, &text), SurfacePaint::UNKNOWN);
-    assert_eq!(edited.uploaded_bytes as usize, 2 * ANALYTIC_INSTANCE_BYTES);
+    assert_eq!(
+        edited.statistics.uploaded_bytes as usize,
+        2 * ANALYTIC_INSTANCE_BYTES
+    );
     let typed = draw(&mut cache, &run(1, &moved, &longer), SurfacePaint::UNKNOWN);
-    assert_eq!(typed.uploaded_bytes as usize, 3 * ANALYTIC_INSTANCE_BYTES);
+    assert_eq!(
+        typed.statistics.uploaded_bytes as usize,
+        3 * ANALYTIC_INSTANCE_BYTES
+    );
 
     let device = device.borrow();
     assert_eq!((device.created, device.updated, device.live), (1, 2, 1));
@@ -320,12 +334,12 @@ fn reusable_paint_revisions_skip_hashing_until_the_revision_changes() {
 
     // A reusable revision promises unchanged inputs, so they are not hashed.
     let reused = draw(&mut cache, &run(1, &moved, &text), paint(7, true));
-    assert_eq!(reused.uploaded_bytes, 0);
+    assert_eq!(reused.statistics.uploaded_bytes, 0);
 
     // A new revision hashes the run and replaces the stream.
     let replaced = draw(&mut cache, &run(1, &moved, &text), paint(8, false));
     assert_eq!(
-        replaced.uploaded_bytes as usize,
+        replaced.statistics.uploaded_bytes as usize,
         2 * ANALYTIC_INSTANCE_BYTES
     );
     assert_eq!(device.borrow().updated, 1);
@@ -341,13 +355,22 @@ fn runs_without_visible_instances_hold_no_stream() {
 
     draw(&mut cache, &run(1, &style, &text), SurfacePaint::UNKNOWN);
     let cleared = draw(&mut cache, &run(1, &style, &empty), SurfacePaint::UNKNOWN);
-    assert_eq!((cleared.uploaded_bytes, cleared.draw_calls), (0, 0));
+    assert_eq!(
+        (
+            cleared.statistics.uploaded_bytes,
+            cleared.summary.draw_calls
+        ),
+        (0, 0)
+    );
     assert_eq!(device.borrow().live, 0);
     assert_eq!(cache.resident_bytes(), 0);
 
     // An unchanged empty run neither rebuilds nor draws.
     let idle = draw(&mut cache, &run(1, &style, &empty), SurfacePaint::UNKNOWN);
-    assert_eq!((idle.uploaded_bytes, idle.draw_calls), (0, 0));
+    assert_eq!(
+        (idle.statistics.uploaded_bytes, idle.summary.draw_calls),
+        (0, 0)
+    );
     assert_eq!(device.borrow().created, 1);
 }
 
@@ -395,7 +418,7 @@ fn failed_replacement_releases_the_stream_instead_of_drawing_stale_instances() {
 
     draw(&mut cache, &run(1, &first, &text), SurfacePaint::UNKNOWN);
     device.borrow_mut().fail_update = true;
-    let mut stats = RenderStats::default();
+    let mut stats = RenderFrameWork::default();
     let failed = cache.draw_run(
         &(),
         &(),

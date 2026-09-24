@@ -1,7 +1,29 @@
 use super::{HEIGHT, Renderer, Result, WIDTH, fixture::Scene};
 use ipp_core::systems::animation::AnimationPlaybackControl;
-use ipp_render_gl::RenderStats;
 use std::{io::Write, path::Path, time::Instant};
+
+/// A completed frame's summary and the shadow submissions reported beside it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct FrameStats {
+    pub(super) draw_calls: u32,
+    pub(super) triangles: u32,
+    pub(super) failed_draw_calls: u32,
+    pub(super) invalid_camera: bool,
+    pub(super) shadow_draw_calls: u32,
+}
+
+impl FrameStats {
+    /// Combine a render's summary with the renderer's statistics of that render.
+    pub(super) fn read(renderer: &Renderer, summary: ipp_render_gl::RenderFrameSummary) -> Self {
+        Self {
+            draw_calls: summary.draw_calls,
+            triangles: summary.triangles,
+            failed_draw_calls: summary.failed_draw_calls,
+            invalid_camera: summary.invalid_camera,
+            shadow_draw_calls: renderer.statistics().shadow_draw_calls,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct Frame {
@@ -9,7 +31,7 @@ pub(super) struct Frame {
     render: f64,
     completion: f64,
     total: f64,
-    stats: RenderStats,
+    stats: FrameStats,
 }
 
 pub(super) fn frame(
@@ -20,20 +42,18 @@ pub(super) fn frame(
     render: bool,
 ) -> Result<Frame> {
     let started = Instant::now();
-    if render {
-        renderer.begin_frame();
-    }
     scene.update(dt)?;
     let update = started.elapsed().as_secs_f64() * 1000.0;
     let submitted = Instant::now();
     let stats = if render {
-        renderer.render(
+        let summary = renderer.render(
             &mut scene.host.world_mut(scene.world).unwrap(),
             WIDTH,
             HEIGHT,
-        )?
+        )?;
+        FrameStats::read(renderer, summary)
     } else {
-        RenderStats::default()
+        FrameStats::default()
     };
     let render_ms = submitted.elapsed().as_secs_f64() * 1000.0;
     let waiting = Instant::now();
@@ -50,7 +70,7 @@ pub(super) fn frame(
     })
 }
 
-pub(super) fn validate(stats: RenderStats) -> Result<()> {
+pub(super) fn validate(stats: FrameStats) -> Result<()> {
     if stats.failed_draw_calls != 0 || stats.invalid_camera {
         return Err(format!("invalid native frame: {stats:?}").into());
     }

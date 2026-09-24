@@ -62,13 +62,21 @@ export async function generateClient(name, features = [], transformContract) {
       "--outDir",
       resolve(output, "js"),
       resolve(output, "generated.ts"),
+      resolve(output, "generated-manifest.ts"),
     ],
     { cwd: root, stdio: "inherit", timeout: 30_000 },
   );
   return {
     codec: await import(pathToFileURL(resolve(output, "js/generated.js"))),
+    manifest: await import(
+      pathToFileURL(resolve(output, "js/generated-manifest.js"))
+    ),
     logging: await import(pathToFileURL(resolve(output, "js/logging.js"))),
     source: readFileSync(resolve(output, "generated.ts"), "utf8"),
+    manifestSource: readFileSync(
+      resolve(output, "generated-manifest.ts"),
+      "utf8",
+    ),
   };
 }
 
@@ -245,14 +253,17 @@ const TAG_SPACES = {
   29: "playback-event",
 };
 
-export function manifestVariant(codec, name) {
-  const descriptor = codec.WIRE_TAG_LAYOUTS[name];
+export function manifestVariant(client, name) {
+  const descriptor = client.manifest.WIRE_TAG_LAYOUTS[name];
   if (!descriptor) throw new Error(`unknown manifest tag ${name}`);
-  return { space: TAG_SPACES[descriptor.space], value: codec.WIRE[name] };
+  return {
+    space: TAG_SPACES[descriptor.space],
+    value: client.codec.WIRE[name],
+  };
 }
 
-export function encodeManifestLayout(codec, name, values) {
-  const descriptor = codec.WIRE_LAYOUTS[name];
+export function encodeManifestLayout(client, name, values) {
+  const descriptor = client.manifest.WIRE_LAYOUTS[name];
   if (!descriptor) throw new Error(`unknown manifest layout ${name}`);
   const fields = descriptor.fields;
   const chunks = [];
@@ -264,7 +275,7 @@ export function encodeManifestLayout(codec, name, values) {
     else if (field.encoding === "masked") {
       if (Boolean(values.mask & field.limit) !== (value !== null))
         throw new Error("manifest presence mask");
-      if (value !== null) chunks.push(nested(codec, field.target, value));
+      if (value !== null) chunks.push(nested(client, field.target, value));
     } else if (field.encoding === "u16") chunks.push(integer(value, 2));
     else if (field.encoding === "u32") chunks.push(integer(value, 4));
     else if (field.encoding === "u64") chunks.push(integer(value, 8));
@@ -280,32 +291,34 @@ export function encodeManifestLayout(codec, name, values) {
         throw new Error("manifest byte limit");
       chunks.push(integer(value.length, 4), value);
     } else if (field.encoding === "named")
-      chunks.push(nested(codec, field.target, value));
+      chunks.push(nested(client, field.target, value));
     else if (field.encoding === "list") {
       if (!Array.isArray(value) || value.length > field.limit)
         throw new Error("manifest list limit");
       chunks.push(integer(value.length, 4));
-      for (const item of value) chunks.push(nested(codec, field.target, item));
+      for (const item of value) chunks.push(nested(client, field.target, item));
     } else if (field.encoding === "option") {
       chunks.push(
         integer(
-          value === null ? codec.WIRE.OPTION_NONE : codec.WIRE.OPTION_SOME,
+          value === null
+            ? client.codec.WIRE.OPTION_NONE
+            : client.codec.WIRE.OPTION_SOME,
           1,
         ),
       );
-      if (value !== null) chunks.push(nested(codec, field.target, value));
+      if (value !== null) chunks.push(nested(client, field.target, value));
     } else if (field.encoding === "variant") {
       if (value.space !== field.target)
         throw new Error(`manifest variant space ${name}.${field.name}`);
       chunks.push(integer(value.value, 1));
     } else if (field.encoding === "union") {
-      chunks.push(nested(codec, field.target, value));
+      chunks.push(nested(client, field.target, value));
     } else throw new Error(`unknown manifest encoding ${field.encoding}`);
   }
   return { layout: name, bytes: concatenate(chunks) };
 }
 
-function nested(codec, target, value) {
+function nested(client, target, value) {
   if (target === "bool") return integer(value ? 1 : 0, 1);
   if (["u16", "u32", "u64", "utf8-65536"].includes(target)) {
     if (target === "u16") return integer(value, 2);
@@ -321,7 +334,7 @@ function nested(codec, target, value) {
   if (!value || !(value.bytes instanceof Uint8Array))
     throw new Error(`manifest nested value for ${target}`);
   if (value.layout === target) return value.bytes;
-  const tag = Object.values(codec.WIRE_TAG_LAYOUTS).find(
+  const tag = Object.values(client.manifest.WIRE_TAG_LAYOUTS).find(
     (entry) =>
       entry.layout === value.layout && TAG_SPACES[entry.space] === target,
   );

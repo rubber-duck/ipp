@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { generateClient, replyToHostCreate } from "./generated-client.mjs";
 
-const { codec, logging } = await generateClient("frames");
+const client = await generateClient("frames");
+const { codec, manifest, logging } = client;
 const { IppClient } = codec;
 
 test("diagnostic filtering is lazy and console failures cannot poison a session", async () => {
@@ -108,7 +109,7 @@ test("generated codec reserves events and rejects retired tags, invalid times, a
   assert.equal("connect" in IppClient, false);
   assert.equal(codec.WIRE.RESPONSE_FRAME, 4);
   assert.equal(codec.WIRE.VALUE_BYTES, 6);
-  assert.deepEqual(codec.WIRE_TAG_LAYOUTS.RESPONSE_FRAME, {
+  assert.deepEqual(manifest.WIRE_TAG_LAYOUTS.RESPONSE_FRAME, {
     space: 5,
     capability: "base",
     layout: "response-frame",
@@ -116,7 +117,7 @@ test("generated codec reserves events and rejects retired tags, invalid times, a
   assert.equal("REQUEST_STEP" in codec.WIRE, false);
   assert.equal("RESPONSE_STEP" in codec.WIRE, false);
   assert.match(
-    codec.ENCODING,
+    manifest.WIRE_CONVENTIONS["request-id"],
     /nonzero-rpc-and-query;zero-command-and-unsolicited-event;commands-no-reply/,
   );
   assert.deepEqual(codec.decodeResponse(packet(), 7n).body, {

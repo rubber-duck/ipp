@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { generateClient, replyToHostCreate } from "./generated-client.mjs";
 
-const { codec, source } = await generateClient("texture", ["builtin-assets"]);
+const { codec, source, manifestSource } = await generateClient("texture", [
+  "builtin-assets",
+]);
 const minimal = await generateClient("texture-minimal");
 const key = { kind: 2, asset: 0x7fffffffffffffffn, variant: 3 };
 const stats = { sourceBytes: 664, residentBytes: 648 };
@@ -87,10 +89,10 @@ test("baseline texture contract retains component ID6 while built-in providers r
   assert.equal(minimal.codec.CAPABILITIES.textures, true);
   assert.equal(minimal.codec.CAPABILITIES.builtinAssets, false);
   assert.notEqual(codec.SCHEMA_HASH, minimal.codec.SCHEMA_HASH);
-  assert.match(source, /IPPT;version=3/);
-  assert.match(source, /rgba8-srgb-linear-alpha/);
-  assert.match(source, /exact-payload/);
-  assert.doesNotMatch(source, /exact-rgba8|max-dimension=1024/);
+  assert.match(manifestSource, /IPPT;version=3/);
+  assert.match(manifestSource, /rgba8-srgb-linear-alpha/);
+  assert.match(manifestSource, /exact-payload/);
+  assert.doesNotMatch(manifestSource, /exact-rgba8|max-dimension=1024/);
   assert.doesNotMatch(
     source,
     /REQUEST_LOAD_BUILTIN_TEXTURE|REQUEST_LOAD_BUILTIN_MESH/,

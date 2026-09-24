@@ -9,9 +9,10 @@ import {
 } from "./generated-client.mjs";
 
 const minimal = await generateClient("render-state-minimal");
-const { codec, source } = await generateClient("render-state", []);
-const layout = (name, values) => encodeManifestLayout(codec, name, values);
-const tag = (name) => manifestVariant(codec, name);
+const client = await generateClient("render-state", []);
+const { codec, source } = client;
+const layout = (name, values) => encodeManifestLayout(client, name, values);
+const tag = (name) => manifestVariant(client, name);
 const command = (changes) => ({ type: "RenderStateUpdateCommand", changes });
 const request = (changes) =>
   codec.encodeRequest({

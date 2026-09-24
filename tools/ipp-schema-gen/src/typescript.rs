@@ -1,9 +1,9 @@
 use std::fmt::Write as _;
 
+use crate::codec_limits;
 use crate::export_reader::ROWS_KIND;
 use crate::model::{Capabilities, Export, RowsLayout};
 use crate::typescript_names::{identifier, js_string};
-use crate::wire_contract;
 
 pub(super) fn render(export: Export) -> Result<String, String> {
     let Export {
@@ -50,73 +50,6 @@ function freezeContract<T>(value: T): T {\n\
     }
     for format in &wire.asset_formats {
         writeln!(out, "  {}: {},", format.name, format.type_id).unwrap();
-    }
-    out.push_str("} as const);\n");
-    out.push_str("export const WIRE_TAG_LAYOUTS = freezeContract({\n");
-    for tag in &wire.tags {
-        writeln!(
-            out,
-            "  {}: {{ space: {}, capability: {}, layout: {} }},",
-            tag.name,
-            tag.space,
-            js_string(wire_contract::capability_name(tag.capability).unwrap()),
-            js_string(&tag.layout),
-        )
-        .unwrap();
-    }
-    out.push_str("} as const);\n");
-    writeln!(
-        out,
-        "export const ENCODING = {};",
-        js_string(
-            &wire
-                .conventions
-                .iter()
-                .map(|(name, value)| format!("{name}={value}"))
-                .collect::<Vec<_>>()
-                .join(";")
-        )
-    )
-    .unwrap();
-    out.push_str("export const WIRE_CONVENTIONS = freezeContract({\n");
-    for (name, value) in &wire.conventions {
-        writeln!(out, "  {}: {},", js_string(name), js_string(value)).unwrap();
-    }
-    out.push_str("} as const);\n");
-    out.push_str("export const WIRE_LAYOUTS = freezeContract({\n");
-    for layout in &wire.layouts {
-        writeln!(
-            out,
-            "  {}: {{ capability: {}, fields: [",
-            js_string(&layout.name),
-            js_string(wire_contract::capability_name(layout.capability).unwrap()),
-        )
-        .unwrap();
-        for field in &layout.fields {
-            writeln!(
-                out,
-                "    {{ name: {}, encoding: {}, limit: {}, target: {} }},",
-                js_string(&field.name),
-                js_string(field.encoding.name()),
-                field.limit,
-                js_string(&field.target),
-            )
-            .unwrap();
-        }
-        out.push_str("  ] },\n");
-    }
-    out.push_str("} as const);\n");
-    out.push_str("export const ASSET_FORMATS = freezeContract({\n");
-    for format in &wire.asset_formats {
-        writeln!(
-            out,
-            "  {}: {{ capability: {}, typeId: {}, format: {} }},",
-            format.name,
-            js_string(wire_contract::capability_name(format.capability).unwrap()),
-            format.type_id,
-            js_string(&format.format),
-        )
-        .unwrap();
     }
     out.push_str("} as const);\n");
 
@@ -198,6 +131,7 @@ function freezeContract<T>(value: T): T {\n\
         gui,
         ..wire.capabilities
     };
+    codec_limits::render(&mut out, &wire, gui)?;
     out.push_str(&render_template(
         include_str!("codec.template.ts"),
         capabilities,

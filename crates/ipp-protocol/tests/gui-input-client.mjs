@@ -8,9 +8,10 @@ import {
   manifestVariant,
 } from "./generated-client.mjs";
 
-const { codec } = await generateClient("gui-input", ["surfaces", "gui"]);
-const layout = (name, values) => encodeManifestLayout(codec, name, values);
-const tag = (name) => manifestVariant(codec, name);
+const client = await generateClient("gui-input", ["surfaces", "gui"]);
+const { codec, manifest } = client;
+const layout = (name, values) => encodeManifestLayout(client, name, values);
+const tag = (name) => manifestVariant(client, name);
 
 function concatenate(chunks) {
   const total = chunks.reduce((sum, part) => sum + part.length, 0);
@@ -104,8 +105,8 @@ test("gui input tags, layouts and capability selection are generated", () => {
   assert.equal(codec.CAPABILITIES.gui, true);
   assert.equal(codec.WIRE.REQUEST_GUI_INPUT, 30);
   assert.equal(codec.WIRE.RESPONSE_GUI_INPUT, 30);
-  assert.ok("request-gui-input" in codec.WIRE_LAYOUTS);
-  assert.ok("response-gui-input" in codec.WIRE_LAYOUTS);
+  assert.ok("request-gui-input" in manifest.WIRE_LAYOUTS);
+  assert.ok("response-gui-input" in manifest.WIRE_LAYOUTS);
   assert.equal("submitGuiInput" in codec.IppClient.prototype, true);
   assert.equal(typeof codec.encodeGuiInput, "function");
 });

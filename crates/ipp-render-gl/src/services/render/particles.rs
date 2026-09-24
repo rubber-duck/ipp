@@ -21,9 +21,7 @@ pub(super) fn quad_asset() -> ipp_core::MeshAsset {
     for i in [0u16, 1, 2, 0, 2, 3] {
         bytes.extend_from_slice(&i.to_le_bytes());
     }
-    ipp_core::MeshAsset::decode(&bytes)
-        .expect("private particle quad")
-        .0
+    ipp_core::MeshAsset::decode(&bytes).expect("private particle quad")
 }
 
 pub(super) fn quad<D: RenderDevice>(

@@ -105,13 +105,12 @@ pub use systems::geometry::queries::{
     GeometryPickQuery, WorldPlane,
 };
 
-pub use services::asset_management::mesh::{MESH_TYPE, MeshAsset, MeshKey, MeshStats, MeshUpload};
+pub use services::asset_management::mesh::{MESH_TYPE, MeshAsset, MeshKey, MeshUpload};
 
 pub use world::{DebugRenderItem, RenderDiagnostic, RenderItem};
 
 pub use services::asset_management::texture::{
-    TEXTURE_TYPE, TextureAsset, TextureDecoder, TextureHeader, TextureKey, TextureStats,
-    TextureUpload,
+    TEXTURE_TYPE, TextureAsset, TextureDecoder, TextureHeader, TextureKey, TextureUpload,
 };
 
 pub use services::asset_management::service::{

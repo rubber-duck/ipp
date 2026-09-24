@@ -86,9 +86,7 @@ pub(crate) fn mesh_asset_loader<D: RenderDevice>(
 ) -> impl AssetLoader<Data = GlMeshData<D>> {
     GlMeshLoader {
         decoder: BufferedAssetLoader::new(|bytes| {
-            MeshAsset::decode(bytes)
-                .map(|(mesh, _)| mesh)
-                .map_err(|error| error.to_string())
+            MeshAsset::decode(bytes).map_err(|error| error.to_string())
         }),
         device,
         uploaded,

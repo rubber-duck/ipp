@@ -651,7 +651,7 @@ fn device_replacement_releases_old_payloads_before_swapping_and_waits_for_worlds
 }
 
 fn metadata_bytes() -> usize {
-    let (mesh, _) = MeshAsset::decode(&triangle()).unwrap();
+    let mesh = MeshAsset::decode(&triangle()).unwrap();
     ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(mesh)
         .resident_bytes()
 }

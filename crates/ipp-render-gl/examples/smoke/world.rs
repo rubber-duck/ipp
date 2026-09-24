@@ -131,7 +131,7 @@ pub fn run<D: RenderDevice>(
         world.mesh(key).is_none(),
         "GPU resources discard bulk CPU streams"
     );
-    let mesh_asset = ipp_core::MeshAsset::decode(&fixture)?.0;
+    let mesh_asset = ipp_core::MeshAsset::decode(&fixture)?;
     assert_eq!(
         (mesh_asset.vertex_count(), mesh_asset.indices().len()),
         (24, 36)

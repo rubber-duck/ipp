@@ -86,14 +86,14 @@ pub fn run<D: RenderDevice>(
         world.mesh(item.mesh).is_none(),
         "GPU upload releases CPU vertex streams"
     );
-    let decoded_mesh = MeshAsset::decode(&mesh)?.0;
+    let decoded_mesh = MeshAsset::decode(&mesh)?;
     let mesh_bytes =
         (decoded_mesh.vertex_bytes() + std::mem::size_of_val(decoded_mesh.indices())) as u32;
     assert_eq!(
         mesh_bytes, 1128,
         "24 UV/normal cube vertices and 36 indices"
     );
-    let decoded_texture = TextureAsset::decode(&texture)?.0;
+    let decoded_texture = TextureAsset::decode(&texture)?;
     let asset = &decoded_texture;
     let checker_source = |x, y| checker_rgb(x, y, asset.width(), asset.height());
     assert_payload(asset, checker_source);
@@ -221,7 +221,7 @@ fn streaming_reload<D: RenderDevice>(
         variant: 0,
     };
     let key = world.asset_resources().find(&source).unwrap();
-    let row_bytes = TextureAsset::decode(texture)?.0.width() as usize * 4;
+    let row_bytes = TextureAsset::decode(texture)?.width() as usize * 4;
     let first = 16 + row_bytes;
     assert!(
         texture.len() > STREAM_CAPACITY,
@@ -587,7 +587,7 @@ fn optional_streams<D: RenderDevice>(
             .flat_map(|rgb| rgb.into_iter().chain([255])),
     );
     std::fs::write(output.join("odd-rgb.texture"), &texture)?;
-    let decoded_texture = TextureAsset::decode(&texture)?.0;
+    let decoded_texture = TextureAsset::decode(&texture)?;
     let odd_source = |x, y| ODD_RGB[(y * 3 + x) as usize];
 
     let mut source_host = ipp_core::HostRuntime::new();
@@ -691,7 +691,7 @@ fn optional_streams<D: RenderDevice>(
         assert!(world.render_items().is_empty());
         let stats = deliver!(renderer, world_host, world, &bytes, Some(&texture))?;
         assert!(world.mesh(world.render_items()[0].mesh).is_none());
-        let decoded_mesh = MeshAsset::decode(&bytes)?.0;
+        let decoded_mesh = MeshAsset::decode(&bytes)?;
         assert_eq!(decoded_mesh.vertex_bytes(), vertex_bytes);
         if uv {
             assert_payload(&decoded_texture, odd_source);

@@ -752,6 +752,7 @@
       "licences/fonts/",
       "tests/browser/",
       "crates/ipp-wasm/src/services/render.rs",
+      "crates/ipp-wasm/src/services/render_statistics.rs",
       "packages/ipp-client/tools/assemble.mjs",
       "packages/ipp-react/src/gui/theme.ts",
       "tools/build/verify-browser.mjs",
@@ -778,6 +779,7 @@
       "tests/browser/",
       "examples/surface-terminal/",
       "crates/ipp-wasm/src/services/render.rs",
+      "crates/ipp-wasm/src/services/render_statistics.rs",
       "packages/ipp-client/tools/assemble.mjs",
       "tools/build/verify-browser.mjs",
       "tests/render/retained-gui-images.ts",
@@ -819,7 +821,7 @@
           "-p",
           "ipp-render-gl",
           "--features",
-          "gui",
+          "gui,diagnostics",
           "--test",
           "surface_cache",
           "--locked"
@@ -838,7 +840,7 @@
           "ipp-render-gl",
           "--no-default-features",
           "--features",
-          "surfaces",
+          "surfaces,diagnostics",
           "--test",
           "surface_cache",
           "--locked"
@@ -865,7 +867,7 @@
           "-p",
           "ipp-render-gl",
           "--features",
-          "gui,shadows",
+          "gui,shadows,diagnostics",
           "--test",
           "mesh_residency",
           "--locked"

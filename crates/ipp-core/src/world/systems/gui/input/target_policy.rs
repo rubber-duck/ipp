@@ -7,6 +7,10 @@ use crate::{ComponentValue, EntityId};
 use std::borrow::Cow;
 
 /// Current status of one fully fenced input target.
+///
+/// A short-lived return value: the owned root is a restored copy that callers
+/// consume immediately, so boxing it would add an allocation per validation.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum GuiTargetStatus<'a> {
     /// Producer identity and evaluated eligibility all match.
     Eligible(Cow<'a, GuiRoot>),

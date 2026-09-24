@@ -329,20 +329,6 @@ fn ingress_budgets_reject_complete_batches_and_allow_world_growth() {
     let id = report.outcomes[0].result.as_ref().unwrap()[0].1;
     assert!(run(&mut world, vec![create(0, "b")]).result.is_ok());
     assert!(world.inspect(id).is_some());
-    let tiny_activation = WorldLimits {
-        max_staging_bytes: 1,
-        ..WorldLimits::default()
-    };
-    let mut host = ipp_core::HostRuntime::new();
-    let id = host.create_world(tiny_activation).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    world
-        .set_capacity_hints(ipp_core::WorldCapacityHints {
-            entities: 1024,
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(run(&mut world, vec![create(0, "reserved")]).result.is_ok());
 }
 
 #[test]

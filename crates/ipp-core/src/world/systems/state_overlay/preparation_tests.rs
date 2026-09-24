@@ -1,10 +1,13 @@
+//! Commit-time preparation of heap-owning components: one stable effective
+//! value per component, released through ordinary ownership, with overlays
+//! retaining only their hidden producer fields.
+
 use crate::world::*;
 use crate::{
     ComponentOverlayMode, EntityOverlayMode, StateOverlayRef,
-    components::schema::SchemaComponent,
-    components::{BufferCounters, PreparedBuffer},
+    components::{CustomMaterial, dynamic_properties::clone_count},
 };
-use std::{mem::offset_of, rc::Rc};
+use std::mem::offset_of;
 
 fn run(world: &mut crate::WorldContext<'_>, operations: Vec<Command>) -> WorldUpdateReport {
     world
@@ -16,27 +19,35 @@ fn run(world: &mut crate::WorldContext<'_>, operations: Vec<Command>) -> WorldUp
     world.step(0.0).unwrap()
 }
 
-fn insert(entity: EntityId, counters: &Rc<BufferCounters>, length: u32) -> Command {
+fn insert(entity: EntityId, source: &str) -> Command {
     Command::InsertComponentValue {
         entity: EntityRef::Handle(entity),
-        value: ComponentValue::PreparedBuffer(PreparedBuffer {
-            length,
-            counters: counters.clone(),
-            allocation: None,
+        value: ComponentValue::CustomMaterial(CustomMaterial {
+            source: source.into(),
+            ..CustomMaterial::default()
         }),
     }
 }
 
-fn length(value: u32) -> FieldWrite {
+fn cutoff(value: f32) -> FieldWrite {
     FieldWrite {
-        offset: offset_of!(PreparedBuffer, length) as u32,
-        value: FieldValue::U32(value),
+        offset: offset_of!(CustomMaterial, alpha_cutoff) as u32,
+        value: FieldValue::F32(value),
     }
 }
 
+fn material<'a>(
+    world: &'a crate::WorldContext<'_>,
+    entity: EntityId,
+) -> Option<&'a CustomMaterial> {
+    world
+        .world
+        .components
+        .custom_material(entity.index() as usize)
+}
+
 #[test]
-fn noncreatable_component_prepares_privately_binds_and_releases_owned_effective_resources() {
-    let counters = Rc::new(BufferCounters::default());
+fn heap_owning_component_keeps_one_stable_value_through_failures_overlays_and_removal() {
     let mut world_host = crate::HostRuntime::new();
     let world_id = world_host
         .create_world(crate::WorldLimits::default())
@@ -47,72 +58,40 @@ fn noncreatable_component_prepares_privately_binds_and_releases_owned_effective_
         vec![Command::Create {
             alias: 0,
             metadata: EntityMetadata {
-                symbolic_id: Some("native".into()),
+                symbolic_id: Some("material".into()),
                 classes: vec![],
             },
         }],
     );
     let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;
-    assert!(PreparedBuffer::create().is_none());
-    assert!(ComponentValue::has_field(
-        ComponentValue::PREPARED_BUFFER,
-        offset_of!(PreparedBuffer, length) as u32
-    ));
-    assert_eq!(
-        registry::create(ComponentValue::PREPARED_BUFFER),
-        Err(ErrorReason::MissingCreationContract)
-    );
     assert!(
-        run(&mut world, vec![insert(entity, &counters, 64)]).outcomes[0]
+        run(
+            &mut world,
+            vec![insert(entity, "file:///materials/a.shader")]
+        )
+        .outcomes[0]
             .result
             .is_ok()
     );
-    assert_eq!((counters.prepared.get(), counters.released.get()), (1, 0));
-    let address = world
-        .world
-        .components
-        .prepared_buffer(entity.index() as usize)
-        .unwrap() as *const PreparedBuffer;
-    let allocation = Rc::downgrade(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap()
-            .allocation
-            .as_ref()
-            .unwrap(),
-    );
+    let address = material(&world, entity).unwrap() as *const CustomMaterial;
 
-    // A failed later operation retains the applied replacement and releases the old allocation.
+    // A failed later operation retains the applied replacement in the same slot.
     let report = run(
         &mut world,
         vec![
-            insert(entity, &counters, 128),
+            insert(entity, "file:///materials/b.shader"),
             Command::Delete {
                 entity: EntityRef::Alias(99),
             },
         ],
     );
     assert!(report.outcomes[0].result.is_err());
-    assert_eq!((counters.prepared.get(), counters.released.get()), (2, 1));
-    assert!(allocation.upgrade().is_none());
-    let report = run(&mut world, vec![insert(entity, &counters, 13)]);
-    assert!(report.outcomes[0].result.is_err());
-    assert_eq!((counters.prepared.get(), counters.released.get()), (3, 3));
-    assert!(allocation.upgrade().is_none());
-
-    assert!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .is_none()
+    assert_eq!(address, material(&world, entity).unwrap() as *const _);
+    assert_eq!(
+        material(&world, entity).unwrap().source,
+        "file:///materials/b.shader"
     );
-    run(&mut world, vec![insert(entity, &counters, 64)]).outcomes[0]
-        .result
-        .as_ref()
-        .unwrap();
+
     let report = run(
         &mut world,
         vec![
@@ -122,55 +101,31 @@ fn noncreatable_component_prepares_privately_binds_and_releases_owned_effective_
             Command::AttachEntityOverlayBinding {
                 owner: StateOverlayRef::Alias(0),
                 alias: 1,
-                symbolic_id: "native".into(),
+                symbolic_id: "material".into(),
                 mode: EntityOverlayMode::Bound,
             },
             Command::AttachComponentStateOverlay {
                 owner: StateOverlayRef::Alias(0),
                 binding: StateOverlayRef::Alias(1),
                 alias: 2,
-                component: ComponentValue::PREPARED_BUFFER,
+                component: ComponentValue::CUSTOM_MATERIAL,
                 mode: ComponentOverlayMode::Bound,
-                fields: vec![length(256)],
+                fields: vec![cutoff(0.25)],
             },
         ],
     );
     assert!(report.outcomes[0].result.is_ok(), "{report:?}");
-    assert!(allocation.upgrade().is_none());
-    assert_eq!(
-        address,
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap() as *const PreparedBuffer
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap()
-            .allocation
-            .as_ref()
-            .unwrap()
-            .bytes
-            .len(),
-        256
-    );
+    assert_eq!(address, material(&world, entity).unwrap() as *const _);
+    assert_eq!(material(&world, entity).unwrap().alpha_cutoff, 0.25);
     let inputs =
-        &world.world.state.entities[&entity].layers[&ComponentValue::PREPARED_BUFFER].inputs;
+        &world.world.state.entities[&entity].layers[&ComponentValue::CUSTOM_MATERIAL].inputs;
     assert_eq!(
         inputs.hidden_fields.len(),
         1,
-        "only the overridden length is retained"
+        "only the overridden cutoff is retained"
     );
     assert!(inputs.retained_inputs().next().is_none());
-    assert_eq!(
-        Rc::strong_count(&counters),
-        3,
-        "one live component and its allocation"
-    );
+
     let resources = &report.outcomes[0].state_overlays;
     let owner = StateOverlayRef::Handle(resources[0].id);
     let overlay = StateOverlayRef::Handle(resources[2].id);
@@ -180,7 +135,7 @@ fn noncreatable_component_prepares_privately_binds_and_releases_owned_effective_
             vec![Command::UpdateComponentStateOverlay {
                 owner,
                 overlay,
-                fields: vec![length(512)],
+                fields: vec![cutoff(0.75)],
                 clear: vec![]
             }]
         )
@@ -188,6 +143,7 @@ fn noncreatable_component_prepares_privately_binds_and_releases_owned_effective_
             .result
             .is_ok()
     );
+    assert_eq!(material(&world, entity).unwrap().alpha_cutoff, 0.75);
     assert!(
         run(
             &mut world,
@@ -199,40 +155,32 @@ fn noncreatable_component_prepares_privately_binds_and_releases_owned_effective_
             .result
             .is_ok()
     );
+    let released = material(&world, entity).unwrap();
+    assert_eq!(address, released as *const _);
     assert_eq!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap()
-            .length,
-        64
+        (released.source.as_str(), released.alpha_cutoff),
+        (
+            "file:///materials/b.shader",
+            CustomMaterial::default().alpha_cutoff
+        )
     );
     assert!(
         run(
             &mut world,
             vec![Command::RemoveComponent {
                 entity: EntityRef::Handle(entity),
-                component: ComponentValue::PREPARED_BUFFER
+                component: ComponentValue::CUSTOM_MATERIAL
             }]
         )
         .outcomes[0]
             .result
             .is_ok()
     );
-    assert_eq!(counters.prepared.get(), counters.released.get());
-    assert!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .is_none()
-    );
+    assert!(material(&world, entity).is_none());
 }
 
 #[test]
-fn scalar_batches_do_not_clone_prepare_or_replace_unrelated_payloads() {
-    let counters = Rc::new(BufferCounters::default());
+fn scalar_batches_do_not_clone_or_replace_unrelated_payloads() {
     let mut world_host = crate::HostRuntime::new();
     let world_id = world_host
         .create_world(crate::WorldLimits::default())
@@ -259,7 +207,16 @@ fn scalar_batches_do_not_clone_prepare_or_replace_unrelated_payloads() {
             run(
                 &mut world,
                 vec![
-                    insert(entity, &counters, 4096),
+                    insert(
+                        entity,
+                        &format!("file:///materials/{}.shader", entity.index())
+                    ),
+                    Command::SetDynamicProperty {
+                        entity: EntityRef::Handle(entity),
+                        component: ComponentValue::CUSTOM_MATERIAL,
+                        name: "seed".into(),
+                        value: crate::DynamicValue::F32(1.0),
+                    },
                     Command::InsertComponent {
                         entity: EntityRef::Handle(entity),
                         component: ComponentValue::SCALAR,
@@ -272,23 +229,17 @@ fn scalar_batches_do_not_clone_prepare_or_replace_unrelated_payloads() {
                 .is_ok()
         );
     }
-    let addresses: Vec<_> = entities
-        .iter()
-        .map(|entity| {
-            let buffer = world
-                .world
-                .components
-                .prepared_buffer(entity.index() as usize)
-                .unwrap();
-            (
-                buffer as *const PreparedBuffer,
-                Rc::as_ptr(buffer.allocation.as_ref().unwrap()),
-            )
-        })
-        .collect();
-    counters.clones.set(0);
-    let prepared = counters.prepared.get();
-    let released = counters.released.get();
+    let addresses = |world: &crate::WorldContext<'_>| -> Vec<_> {
+        entities
+            .iter()
+            .map(|&entity| {
+                let value = material(world, entity).unwrap();
+                (value as *const CustomMaterial, value.source.as_ptr())
+            })
+            .collect()
+    };
+    let before = addresses(&world);
+    clone_count::take();
     for _ in 0..2 {
         let operations = (0..256)
             .map(|i| Command::SetField {
@@ -304,207 +255,11 @@ fn scalar_batches_do_not_clone_prepare_or_replace_unrelated_payloads() {
     }
     world.step(0.0).unwrap();
     assert_eq!(
-        counters.clones.get(),
+        clone_count::take(),
         0,
         "unrelated authored/effective values must not be cloned"
     );
-    assert_eq!(counters.prepared.get(), prepared);
-    assert_eq!(counters.released.get(), released);
-    for (entity, addresses) in entities.iter().zip(addresses) {
-        let buffer = world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap();
-        assert_eq!(
-            addresses,
-            (
-                buffer as *const PreparedBuffer,
-                Rc::as_ptr(buffer.allocation.as_ref().unwrap())
-            )
-        );
-    }
-}
-
-#[test]
-fn noncreatable_auto_follows_native_base_but_cannot_invent_a_fallback() {
-    let mut world_host = crate::HostRuntime::new();
-    let world_id = world_host
-        .create_world(crate::WorldLimits::default())
-        .unwrap();
-    let mut world = world_host.world_mut(world_id).unwrap();
-    let counters = Rc::new(BufferCounters::default());
-    let report = run(
-        &mut world,
-        vec![Command::Create {
-            alias: 0,
-            metadata: EntityMetadata {
-                symbolic_id: Some("native".into()),
-                classes: vec![],
-            },
-        }],
-    );
-    let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;
-    assert!(
-        run(&mut world, vec![insert(entity, &counters, 32)]).outcomes[0]
-            .result
-            .is_ok()
-    );
-    let report = run(
-        &mut world,
-        vec![
-            Command::CreateStateOverlayOwner {
-                alias: 0,
-            },
-            Command::AttachEntityOverlayBinding {
-                owner: StateOverlayRef::Alias(0),
-                alias: 1,
-                symbolic_id: "native".into(),
-                mode: EntityOverlayMode::Bound,
-            },
-            Command::AttachComponentStateOverlay {
-                owner: StateOverlayRef::Alias(0),
-                binding: StateOverlayRef::Alias(1),
-                alias: 2,
-                component: ComponentValue::PREPARED_BUFFER,
-                mode: ComponentOverlayMode::Auto,
-                fields: vec![length(64)],
-            },
-        ],
-    );
-    assert!(report.outcomes[0].result.is_ok());
-    let owner = StateOverlayRef::Handle(report.outcomes[0].state_overlays[0].id);
-    let binding = StateOverlayRef::Handle(report.outcomes[0].state_overlays[1].id);
-    let result = run(
-        &mut world,
-        vec![Command::RemoveComponent {
-            entity: EntityRef::Handle(entity),
-            component: ComponentValue::PREPARED_BUFFER,
-        }],
-    );
-    assert_eq!(
-        result.outcomes[0].result.as_ref().unwrap_err().reason,
-        ErrorReason::MissingCreationContract
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap()
-            .length,
-        64
-    );
-    assert!(
-        run(&mut world, vec![insert(entity, &counters, 128)]).outcomes[0]
-            .result
-            .is_ok()
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap()
-            .length,
-        64
-    );
-    assert!(
-        run(
-            &mut world,
-            vec![Command::ReleaseStateOverlayOwner {
-                owner
-            }]
-        )
-        .outcomes[0]
-            .result
-            .is_ok()
-    );
-    assert_eq!(
-        world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap()
-            .length,
-        128
-    );
-    // The old released association cannot be reused to acquire another component.
-    assert!(
-        run(
-            &mut world,
-            vec![Command::AttachComponentStateOverlay {
-                owner,
-                binding,
-                alias: 3,
-                component: ComponentValue::PREPARED_BUFFER,
-                mode: ComponentOverlayMode::Owned,
-                fields: vec![]
-            }]
-        )
-        .outcomes[0]
-            .result
-            .is_err()
-    );
-}
-
-#[test]
-fn activation_budget_failure_keeps_earlier_components_and_releases_failed_work() {
-    let mut world_host = crate::HostRuntime::new();
-    let world_id = world_host
-        .create_world(crate::WorldLimits {
-            max_staging_bytes: 2 << 20,
-            ..Default::default()
-        })
-        .unwrap();
-    let mut world = world_host.world_mut(world_id).unwrap();
-    let counters = Rc::new(BufferCounters::default());
-    let report = run(
-        &mut world,
-        (0..64)
-            .map(|alias| Command::Create {
-                alias,
-                metadata: Default::default(),
-            })
-            .collect(),
-    );
-    let entities: Vec<_> = report.outcomes[0]
-        .result
-        .as_ref()
-        .unwrap()
-        .iter()
-        .map(|(_, entity)| *entity)
-        .collect();
-    let before = world.world.state.activation_budget;
-    assert!(before > 65_536 && before < 64 * 65_536);
-    let report = run(
-        &mut world,
-        entities
-            .iter()
-            .map(|&entity| insert(entity, &counters, 65_536))
-            .collect(),
-    );
-    assert_eq!(
-        report.outcomes[0].result.as_ref().unwrap_err().reason,
-        ErrorReason::Capacity
-    );
-    let applied = entities
-        .iter()
-        .filter(|entity| {
-            world
-                .world
-                .components
-                .prepared_buffer(entity.index() as usize)
-                .is_some()
-        })
-        .count();
-    assert_eq!(applied, before / 65_536);
-    assert_eq!(counters.prepared.get() - counters.released.get(), applied);
-    assert!(
-        run(&mut world, vec![insert(entities[0], &counters, 65_536)]).outcomes[0]
-            .result
-            .is_ok()
-    );
+    assert_eq!(addresses(&world), before);
 }
 
 #[test]

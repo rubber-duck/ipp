@@ -1196,14 +1196,9 @@ fn reservation_hints_have_no_estimated_byte_ceiling() {
 }
 
 #[test]
-fn bound_animation_state_does_not_consume_the_activation_budget() {
+fn producer_write_under_bound_animation_is_revealed_when_playback_stops() {
     let mut host = HostRuntime::new();
-    let id = host
-        .create_world(WorldLimits {
-            max_staging_bytes: 1,
-            ..Default::default()
-        })
-        .unwrap();
+    let id = host.create_world(WorldLimits::default()).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let target = create(&mut world, 7.0);
     let clip = curve(AnimationInterpolation::Linear);

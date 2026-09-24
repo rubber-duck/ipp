@@ -5,8 +5,6 @@ ipp_schema_derive::component_registry! {
     pub ComponentValue {
         Scalar = 1,
         #[cfg(test)]
-        PreparedBuffer = 60000,
-        #[cfg(test)]
         RowsFixture = 60001,
         LinearDriver = 2,
         #[runtime(crate::systems::hierarchy::ObjectTransformRuntime)]
@@ -150,6 +148,19 @@ pub(crate) fn write_field(
         Some(before) => stored(component) != before,
         None => component.field(field.offset).ok().as_ref() != Some(&previous),
     })
+}
+
+/// Assign a field of a value that is not yet visible, such as a component
+/// being created, without validating it. The caller validates every assigned
+/// field once all assignments are complete, so the result does not depend on
+/// their order.
+pub(crate) fn assign(
+    component: &mut ComponentValue,
+    field: &crate::FieldWrite,
+) -> Result<(), crate::ErrorReason> {
+    component
+        .set_field(field.offset, schema_value(field)?)
+        .map_err(field_error)
 }
 
 /// Replay a field write that already passed validation on an identical value.

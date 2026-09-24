@@ -46,11 +46,14 @@ impl WorldMutationState {
                     let id = self.resolve(*entity, aliases)?;
                     let mut value = registry::create(*component)?;
                     for field in fields {
-                        registry::write(
+                        registry::assign(
                             &mut value,
                             &self.field(*component, field.clone(), aliases)?,
                         )?;
                     }
+                    // A whole insertion validates the complete value once,
+                    // independently of the order of its field assignments.
+                    value.validate_lifecycle()?;
                     self.insert_component_value(components, id, value)?;
                 }
                 Command::InsertComponentValue {
@@ -71,6 +74,7 @@ impl WorldMutationState {
                             self.resolve(EntityRef::Handle(entity), aliases)?;
                         }
                     }
+                    value.validate_lifecycle()?;
                     self.insert_component_value(components, id, value.clone())?;
                 }
                 Command::SetField {

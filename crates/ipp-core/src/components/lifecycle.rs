@@ -71,41 +71,21 @@ pub(crate) trait ComponentLifecycle: Clone {
     /// may move allocations into this value; they must not clone evaluated buffers.
     fn preserve_runtime(&mut self, _previous: &mut Self) {}
 
-    /// Prepare a private effective value, including its owned activation resources.
-    /// Failure or superseded preparation drops only private resources. The world
-    /// installs the result after invalidating bindings; replacing/removing effective
-    /// storage releases its old resources through ordinary Rust ownership.
-    /// Implementations that override this also override [`Self::defers_preparation`].
-    fn prepare_effective(&self, _max_activation_bytes: usize) -> Result<Self, crate::ErrorReason> {
-        Ok(self.clone())
-    }
-
-    /// Whether preparation is an infallible copy without activation resources, so a
-    /// batch copies the staged value once at commit instead of after every
-    /// operation. Types with fallible or resource-owning preparation return false
-    /// and prepare after each operation, which attributes failure to it.
-    fn defers_preparation() -> bool {
-        true
-    }
-
-    /// Owned internal allocations in a prepared effective value. Exposed fields
-    /// are bounded at ingress. Asset-bearing types check the supplied transient
-    /// preparation allowance before allocating.
-    fn activation_bytes(&self) -> usize {
-        0
-    }
-
     /// Keep derived storage consistent after a field was replaced, before
     /// field-local validation. Every field write through the registry runs it.
     fn after_field_write(&mut self, _offset: u32) {}
 
-    /// Validate field-local semantics after typed replacement.
+    /// Validate the component after `offset` was written, at ingress and for
+    /// overlay contributions. The default validates the complete value, which
+    /// suits small components; components with large or indexed state override
+    /// it with field-local checks proportional to the write.
     fn validate_field(&self, _offset: u32) -> Result<(), crate::ErrorReason> {
-        Ok(())
+        self.validate()
     }
 
-    /// Validate a complete authored/effective value before commit.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    /// Validate a complete value: evaluated replacements, restored persistence
+    /// and, through the default [`Self::validate_field`], ingress writes. The
+    /// `checked-invariants` test oracle asserts that committed values pass it.
     fn validate(&self) -> Result<(), crate::ErrorReason> {
         Ok(())
     }

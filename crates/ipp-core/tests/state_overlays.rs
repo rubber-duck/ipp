@@ -918,7 +918,6 @@ fn frame_diagnostic_budget_rejects_overflowing_batch_and_resets_next_frame() {
             max_operations: 1100,
             // The largest registered component determines Command's inline size.
             max_batch_bytes: 512 * 1024,
-            max_staging_bytes: 48 * 1024 * 1024,
             ..WorldLimits::default()
         })
         .unwrap();

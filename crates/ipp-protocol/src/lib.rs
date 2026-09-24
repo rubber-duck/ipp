@@ -298,14 +298,21 @@ fn write_contract(sink: &mut impl ContractSink) {
 /// Identity of this target's actual compiled registry, defaults and wire contract.
 ///
 /// The contract is fixed for a compiled build, so it is hashed once per process.
+/// Zero marks the unset cache; concurrent first reads compute the same value.
 pub fn schema_hash() -> u64 {
-    static HASH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-    *HASH.get_or_init(|| {
-        let mut hash = ContractHash::default();
-        write_contract(&mut hash);
-        hash.0
-    })
+    static HASH: AtomicU64 = AtomicU64::new(0);
+
+    let cached = HASH.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached;
+    }
+
+    let mut hash = ContractHash::default();
+    write_contract(&mut hash);
+    HASH.store(hash.0, Ordering::Relaxed);
+    hash.0
 }
 
 /// Fixed 16-byte bootstrap, always checked before schema-dependent decoding.

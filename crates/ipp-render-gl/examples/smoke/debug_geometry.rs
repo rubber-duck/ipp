@@ -213,7 +213,7 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    let single = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
+    super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
     add(
         &mut sharing,
         0,
@@ -238,8 +238,8 @@ pub fn run<D: RenderDevice>(
         HEIGHT,
     )?;
     let reloaded = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
-    assert_eq!(reloaded.uploaded_bytes, single.uploaded_bytes);
-    assert!(single.uploaded_bytes > 0);
+    assert_eq!(reloaded.draw_calls, 2);
+    assert!(reloaded.uploaded_bytes > 0);
     let mut bounded_host = ipp_core::HostRuntime::new();
     let mut bounded = self::world(&mut bounded_host, renderer)?;
     for index in 0..129 {

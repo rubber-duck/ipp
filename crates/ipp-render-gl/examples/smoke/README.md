@@ -14,7 +14,7 @@ cargo run -q -p ipp-core --features builtin-assets --example export_builtin --lo
 cargo run -q -p ipp-core --features builtin-assets --example export_builtin --locked -- \
   texture 'ipp://texture/checkerboard?width=256&height=256&cellsX=8&cellsY=8' > /tmp/checker.texture
 LIBGL_ALWAYS_SOFTWARE=1 \
-  cargo run -p ipp-render-gl --example egl_smoke --locked -- \
+  cargo run -p ipp-render-gl --example egl_smoke --features diagnostics --locked -- \
   /usr/lib/x86_64-linux-gnu /tmp/cube.mesh \
   target/integration-artifacts/render/native /tmp/checker.texture
 ```
@@ -26,7 +26,7 @@ For shapes and spotlight shadows, build the maintained corpus and supply its dir
 ```sh
 node tools/build_shapes.mjs
 LIBGL_ALWAYS_SOFTWARE=1 \
-  cargo run -p ipp-render-gl --example egl_smoke --features shadows --locked -- \
+  cargo run -p ipp-render-gl --example egl_smoke --features shadows,diagnostics --locked -- \
   /usr/lib/x86_64-linux-gnu target/shapes-build/cube.mesh \
   target/integration-artifacts/render/native-shapes \
   target/shapes-build/checker.texture target/shapes-build

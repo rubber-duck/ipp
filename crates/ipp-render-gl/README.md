@@ -1,6 +1,6 @@
 # Shared GL renderer
 
-`ipp-render-gl` provides shared WebGL 2 and GLES 3 rendering through a compile-time device boundary. Rust consumes final evaluated World state; platform Hosts own contexts, surfaces, clocks and presentation. Rendering never advances simulation. The crate depends only on `ipp-core`; [Cargo features](Cargo.toml) select optional deformation, shadows and particles. The [rendering architecture](../../docs/architecture/rendering.md) owns system boundaries and color conventions.
+`ipp-render-gl` provides shared WebGL 2 and GLES 3 rendering through a compile-time device boundary. Rust consumes final evaluated World state; platform Hosts own contexts, surfaces, clocks and presentation. Rendering never advances simulation. The crate depends only on `ipp-core`; [Cargo features](Cargo.toml) select optional deformation, shadows and particles. Every render returns a frame summary; the `diagnostics` feature adds render statistics, Surface cache records, custom-material fallback reasons and testing overrides of renderer-owned budgets, and the integration tests and EGL examples require it. The [rendering architecture](../../docs/architecture/rendering.md) owns system boundaries and color conventions.
 
 ## Resources and recovery
 

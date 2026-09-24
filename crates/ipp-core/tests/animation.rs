@@ -1109,6 +1109,33 @@ fn pending_clip_waits_without_advancing_and_samples_the_saved_seek_when_ready() 
 }
 
 #[test]
+fn controller_asset_demand_is_validated_when_the_controller_is_admitted() {
+    let mut host = HostRuntime::new();
+    let id = host.create_world(WorldLimits::default()).unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    let target = create(&mut world, 7.0);
+    let clip = curve(AnimationInterpolation::Linear);
+    let valid = description(target, &clip, 1);
+    let controller = world.create_animation_controller(valid.clone()).unwrap();
+
+    // An owned asset URI whose type differs from the clip type cannot be demanded.
+    let mut invalid = valid.clone();
+    invalid.drivers[0].source = "asset://11/1".into();
+    assert_eq!(
+        world.create_animation_controller(invalid.clone()),
+        Err(ErrorReason::Capacity)
+    );
+    assert_eq!(world.animation_controllers().len(), 1);
+    assert!(world.animation_controller(controller).is_some());
+    invalid.drivers[0].source = "asset://10/not-a-number".into();
+    assert_eq!(
+        world.create_animation_controller(invalid),
+        Err(ErrorReason::Capacity)
+    );
+    assert_eq!(world.animation_controllers().len(), 1);
+}
+
+#[test]
 fn controller_descriptions_grow_while_ingress_remains_bounded() {
     let mut host = HostRuntime::new();
     let id = host

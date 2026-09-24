@@ -75,17 +75,27 @@ pub(crate) trait ComponentLifecycle: Clone {
     /// field-local validation. Every field write through the registry runs it.
     fn after_field_write(&mut self, _offset: u32) {}
 
-    /// Validate the component after `offset` was written, at ingress and for
-    /// overlay contributions. The default validates the complete value, which
-    /// suits small components; components with large or indexed state override
-    /// it with field-local checks proportional to the write.
+    /// Validate field-local semantics after `offset` was written, independently
+    /// of other fields. Ingress and overlay contributions apply it to every
+    /// field write, so it must accept any other valid field combination.
     fn validate_field(&self, _offset: u32) -> Result<(), crate::ErrorReason> {
-        self.validate()
+        Ok(())
     }
 
-    /// Validate a complete value: evaluated replacements, restored persistence
-    /// and, through the default [`Self::validate_field`], ingress writes. The
-    /// `checked-invariants` test oracle asserts that committed values pass it.
+    /// Whether ingress validates the complete value after every operation that
+    /// changes it. The default suits small components whose invariants span
+    /// several fields, such as a camera's clip planes: an operation's writes may
+    /// pass through intermediate combinations, and the checked result does not
+    /// depend on their order. Components with large or indexed state return
+    /// false; [`Self::validate_field`] then checks each write proportionally and
+    /// whole insertions still run [`Self::validate`].
+    fn validates_after_operation() -> bool {
+        true
+    }
+
+    /// Validate a complete value: whole insertions, evaluated replacements,
+    /// restored persistence and, per [`Self::validates_after_operation`], each
+    /// operation's result.
     fn validate(&self) -> Result<(), crate::ErrorReason> {
         Ok(())
     }

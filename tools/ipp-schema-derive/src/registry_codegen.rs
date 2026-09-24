@@ -450,6 +450,12 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         quote! { #(#attrs)* #id => <crate::components::#component as ::ipp_core::components::schema::ComponentLifecycle>::supports_dynamic_properties(), }
     });
 
+    let operation_validation = entries.iter().map(|e| {
+        let attrs = &e.attrs;
+        let component = &e.name;
+        quote! { #(#attrs)* Self::#component(_) => <crate::components::#component as ::ipp_core::components::schema::ComponentLifecycle>::validates_after_operation(), }
+    });
+
     let lifecycle_validation = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
@@ -724,6 +730,11 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 match id { #(#has_fields)* _ => false }
+            }
+
+            /// Whether ingress validates the complete value after each operation.
+            pub(crate) fn validates_after_operation(&self) -> bool {
+                match self { #(#operation_validation)* }
             }
 
             /// Run typed lifecycle validation without descriptive schema traversal.

@@ -7,9 +7,12 @@
 //! its staged producer in place. Preparation is a plain copy: each affected
 //! component's effective value is copied into the commit's `prepared` map once,
 //! when the batch commits, and installed into stable storage from there. Until
-//! then readers use the staged input, which has the same content. Preparation
-//! never fails and owns no activation resources; ingress validation is
-//! field-local.
+//! then readers use the staged input, which has the same content. The copy
+//! never fails and owns no activation resources. After each operation, small
+//! components validate their complete value (see
+//! `ComponentLifecycle::validates_after_operation`); an invalid result stops
+//! the batch at that operation and leaves the incarnation inactive until
+//! corrected.
 
 use super::super::*;
 
@@ -128,14 +131,15 @@ impl WorldMutationState {
             .insert_if_absent((id, component), incarnation);
     }
 
-    /// Defer every component this operation affected to the commit copy.
-    /// Preparation cannot fail; the parameters and result follow the operation
-    /// pipeline in [`crate::world::mutation`].
+    /// Validate each component this operation affected and defer its copy to
+    /// commit. The unused parameters follow the operation pipeline in
+    /// [`crate::world::mutation`].
     pub(in crate::world) fn prepare_changes(
         &mut self,
         _components: &registry::ComponentStorage,
         _limits: WorldLimits,
     ) -> Result<(), ErrorReason> {
+        let mut result = Ok(());
         for key in std::mem::take(&mut self.entities_state.dirty) {
             self.entities_state.prepared.remove(&key);
             let active = self
@@ -144,13 +148,47 @@ impl WorldMutationState {
                 .get(&key.0)
                 .and_then(|record| record.layers.get(&key.1))
                 .is_some_and(|layer| layer.inputs.input_value().is_some());
-            if active {
-                self.entities_state.deferred_preparation.insert(key);
-            } else {
+            if !active {
                 self.entities_state.deferred_preparation.remove(&key);
+                continue;
             }
+            if let Err(reason) = self.validate_operation_result(key) {
+                // No rollback value exists: the invalid incarnation stays
+                // inactive until a later producer edit makes it valid again.
+                self.deactivate_input(key);
+                self.entities_state.deferred_preparation.remove(&key);
+                result = result.and(Err(reason));
+                continue;
+            }
+            self.entities_state.deferred_preparation.insert(key);
         }
-        Ok(())
+        result
+    }
+
+    /// Check the complete value an operation produced for components whose
+    /// invariants span several fields; others were checked field by field.
+    fn validate_operation_result(&self, key: (EntityId, u16)) -> Result<(), ErrorReason> {
+        match self
+            .entities_state
+            .entities
+            .get(&key.0)
+            .and_then(|record| record.layers.get(&key.1))
+            .and_then(|layer| layer.inputs.input_value())
+        {
+            Some(input) if input.validates_after_operation() => input.validate_lifecycle(),
+            _ => Ok(()),
+        }
+    }
+
+    fn deactivate_input(&mut self, key: (EntityId, u16)) {
+        if let Some(layer) = self
+            .entities_state
+            .entities
+            .get_mut(&key.0)
+            .and_then(|record| record.layers.get_mut(&key.1))
+        {
+            layer.inputs.deactivate();
+        }
     }
 
     /// Make the effective copies deferred by earlier operations, once per commit.

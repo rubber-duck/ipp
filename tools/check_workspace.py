@@ -277,6 +277,8 @@ def main():
                 ["render", "diagnostics", *scene],
                 ["diagnostics", *scene],
                 [
+                    # The WASM host forwards diagnostics to its renderer statistics.
+                    *(["diagnostics"] if host == "ipp-wasm" else []),
                     "skeletal-animation",
                     "mesh-poses",
                     "shadows",

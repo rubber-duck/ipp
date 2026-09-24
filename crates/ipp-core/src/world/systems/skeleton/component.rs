@@ -1,5 +1,7 @@
 use crate::{
     ErrorReason,
+    components::Transform,
+    components::rows::{Rows, SchemaRow, row_address, row_region_relative},
     components::schema::ComponentLifecycle,
     services::asset_management::service::{AssetDemandSelection, validate_source},
 };
@@ -8,7 +10,7 @@ use std::collections::BTreeSet;
 
 /// Per-instance skeleton source, optional reusable pose, and sparse local overrides.
 #[repr(C)]
-#[derive(Debug, Default, SchemaComponent)]
+#[derive(Debug, SchemaComponent)]
 pub struct Skeleton {
     /// Immutable hierarchy/rest-pose URI; empty leaves the instance inactive.
     pub source: String,
@@ -18,17 +20,164 @@ pub struct Skeleton {
     pub pose_source: String,
     /// Reusable pose variant.
     pub pose_variant: u32,
-    /// Sparse joint-local TRS replacements, encoded in ascending joint order.
-    pub joints: Vec<u8>,
+    /// Joint-local overrides; the slot is the joint ordinal in the skeleton asset.
+    ///
+    /// Every ordinal below [`crate::MAX_JOINTS`] starts as a live row with no
+    /// properties, so clients set and clear override properties by slot without
+    /// creating rows; a row may never occupy a higher slot. Clear an override with
+    /// `Unset` rather than removing its row: a removed ordinal cannot hold a row
+    /// again within this component incarnation.
+    ///
+    /// Override properties are never animation targets: `animatable_field`
+    /// rejects every offset in this rows region at bind, for numeric and discrete
+    /// tracks alike. Joint animation samples the evaluated local pose through
+    /// `AnimationTrackTarget::Joints`, so the pose keeps one animation writer and
+    /// these rows stay authored input.
+    #[schema(rows)]
+    pub joints: Rows<JointOverrideRow>,
     /// Component-owned evaluated data, excluded from authored copies and wire access.
     #[schema(ignore)]
     pub runtime: SkeletonRuntimeState,
 }
 
+/// One joint's local TRS override. Each present property replaces that part of
+/// the selected pose or rest transform; absent properties keep it.
+#[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
+pub struct JointOverrideRow {
+    /// Local translation in metres.
+    pub translation: Option<[f32; 3]>,
+    /// Local xyzw rotation; any nonzero finite quaternion, normalized during evaluation.
+    #[schema(rotation)]
+    pub rotation: Option<[f32; 4]>,
+    /// Positive local scale.
+    pub scale: Option<[f32; 3]>,
+}
+
+impl JointOverrideRow {
+    /// Whether this row overrides any property.
+    pub fn is_empty(&self) -> bool {
+        self.translation.is_none() && self.rotation.is_none() && self.scale.is_none()
+    }
+
+    /// Replace the present properties of a local joint transform.
+    pub fn apply(&self, local: &mut Transform) {
+        if let Some([x, y, z]) = self.translation {
+            (local.x, local.y, local.z) = (x, y, z);
+        }
+
+        if let Some([qx, qy, qz, qw]) = self.rotation {
+            (local.qx, local.qy, local.qz, local.qw) = (qx, qy, qz, qw);
+        }
+
+        if let Some([sx, sy, sz]) = self.scale {
+            (local.sx, local.sy, local.sz) = (sx, sy, sz);
+        }
+    }
+
+    /// The Transform rule for each present property: finite values, a nonzero
+    /// rotation and a positive scale.
+    fn validate(&self) -> Result<(), ErrorReason> {
+        let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
+        if self.translation.is_some_and(|value| !finite(&value))
+            || self
+                .rotation
+                .is_some_and(|value| !finite(&value) || value.iter().all(|&v| v == 0.0))
+            || self
+                .scale
+                .is_some_and(|value| !finite(&value) || value.iter().any(|&v| v <= 0.0))
+        {
+            return Err(ErrorReason::InvalidValue);
+        }
+
+        Ok(())
+    }
+}
+
+impl Skeleton {
+    /// Whether every present override names a joint below `joint_count`.
+    pub(crate) fn joint_overrides_fit(&self, joint_count: usize) -> bool {
+        self.joints
+            .iter()
+            .all(|(joint, row)| (joint as usize) < joint_count || row.is_empty())
+    }
+
+    /// Merge overrides into a complete local pose in the skeleton's joint order.
+    pub(crate) fn apply_joint_overrides(&self, local: &mut [Transform]) -> Result<(), ErrorReason> {
+        if !self.joint_overrides_fit(local.len()) {
+            return Err(ErrorReason::InvalidValue);
+        }
+
+        for (joint, row) in self.joints.iter() {
+            if let Some(local) = local.get_mut(joint as usize) {
+                row.apply(local);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Merge overrides into the selected ascending joints of a local pose.
+    pub(crate) fn apply_selected_joint_overrides(
+        &self,
+        joint_count: usize,
+        joints: &[u32],
+        selected: &mut [Transform],
+    ) -> Result<(), ErrorReason> {
+        if !self.joint_overrides_fit(joint_count) {
+            return Err(ErrorReason::InvalidValue);
+        }
+
+        for (&joint, local) in joints.iter().zip(selected) {
+            if let Some(row) = self.joints.get(joint) {
+                row.apply(local);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_joint_overrides(&self) -> Result<(), ErrorReason> {
+        for (joint, row) in self.joints.iter() {
+            if joint as usize >= crate::MAX_JOINTS {
+                return Err(ErrorReason::InvalidValue);
+            }
+
+            row.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+/// An empty live override row at every addressable joint ordinal.
+fn joint_override_rows() -> Rows<JointOverrideRow> {
+    let mut rows = Rows::new();
+    for joint in 0..crate::MAX_JOINTS as u32 {
+        rows.insert(joint, JointOverrideRow::default())
+            .expect("joint ordinals lie within the rows region");
+    }
+
+    rows
+}
+
+impl Default for Skeleton {
+    fn default() -> Self {
+        Self {
+            source: String::new(),
+            variant: 0,
+            pose_source: String::new(),
+            pose_variant: 0,
+            joints: joint_override_rows(),
+            runtime: SkeletonRuntimeState::default(),
+        }
+    }
+}
+
 /// Private evaluated storage of one Skeleton component incarnation.
 #[derive(Debug, Default)]
 pub struct SkeletonRuntimeState {
-    pub(crate) pose: Option<SkeletonPoseState>,
+    // Boxed so the out-of-line override table does not widen every ComponentValue.
+    pub(crate) pose: Option<Box<SkeletonPoseState>>,
 }
 
 /// Allocations remain stable while their source and component incarnation survive.
@@ -67,6 +216,10 @@ impl PartialEq for Skeleton {
 }
 
 impl ComponentLifecycle for Skeleton {
+    fn animatable_field(offset: u32) -> bool {
+        row_region_relative(offset, 0).is_none()
+    }
+
     fn preserve_runtime(&mut self, previous: &mut Self) {
         if self.source == previous.source && self.variant == previous.variant {
             self.runtime = std::mem::take(&mut previous.runtime);
@@ -96,7 +249,17 @@ impl ComponentLifecycle for Skeleton {
             validate_source(&self.pose_source)?;
         }
         if offset == std::mem::offset_of!(Self, joints) as u32 {
-            crate::services::asset_management::skeleton::overrides(&self.joints)?;
+            self.validate_joint_overrides()?;
+        } else if let Some(relative) = row_region_relative(offset, 0) {
+            let address = row_address(relative, JointOverrideRow::LAYOUT.property_count())
+                .ok_or(ErrorReason::InvalidField)?;
+            if address.slot as usize >= crate::MAX_JOINTS {
+                return Err(ErrorReason::InvalidValue);
+            }
+
+            if let Some(row) = self.joints.get(address.slot) {
+                row.validate()?;
+            }
         }
         Ok(())
     }
@@ -104,7 +267,7 @@ impl ComponentLifecycle for Skeleton {
     fn validate(&self) -> Result<(), ErrorReason> {
         validate_source(&self.source)?;
         validate_source(&self.pose_source)?;
-        crate::services::asset_management::skeleton::overrides(&self.joints)?;
+        self.validate_joint_overrides()?;
         Ok(())
     }
 
@@ -141,14 +304,14 @@ mod tests {
         let value = Skeleton {
             source: "asset://3/1".into(),
             runtime: SkeletonRuntimeState {
-                pose: Some(SkeletonPoseState {
+                pose: Some(Box::new(SkeletonPoseState {
                     valid: true,
                     source: crate::services::asset_management::AssetKey::from_u64(1),
                     local: vec![Transform::default()].into_boxed_slice(),
                     global: vec![[0.0; 16]].into_boxed_slice(),
                     evaluation: vec![Transform::default()].into_boxed_slice(),
                     sampled: vec![false].into_boxed_slice(),
-                }),
+                })),
             },
             ..Default::default()
         };

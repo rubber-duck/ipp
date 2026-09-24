@@ -6,6 +6,8 @@ ipp_schema_derive::component_registry! {
         Scalar = 1,
         #[cfg(test)]
         PreparedBuffer = 60000,
+        #[cfg(test)]
+        RowsFixture = 60001,
         LinearDriver = 2,
         #[runtime(crate::systems::hierarchy::ObjectTransformRuntime)]
         Transform = 3,
@@ -42,6 +44,22 @@ ipp_schema_derive::component_registry! {
         #[cfg(feature = "surfaces")]
         SurfaceCache = 27,
     }
+}
+
+/// Receives one occupied stable component cell typed as its component, from
+/// [`ComponentStorage::visit_cell`]. Implementations bind through the derived
+/// schema and lifecycle accessors of `C`; the pointer carries the storage
+/// cell's binding contract (see `ComponentStorage` bound pointers).
+pub(crate) trait ComponentCellVisitor {
+    /// Result produced from the typed cell.
+    type Output;
+
+    /// Visit the stable cell of one component value.
+    fn visit<C>(self, cell: std::ptr::NonNull<C>) -> Self::Output
+    where
+        C: crate::components::schema::SchemaComponent
+            + crate::components::schema::ComponentLifecycle
+            + 'static;
 }
 
 /// Streams target/build identity and the feature-conditioned compiled registry.
@@ -91,6 +109,9 @@ pub fn write(
 }
 
 /// [`write`], also reporting whether the component's value equality changed.
+///
+/// [`crate::FieldValue::Unset`] clears an optional row property; a rejected
+/// write restores the previous value, including its absence.
 pub(crate) fn write_field(
     component: &mut ComponentValue,
     field: &crate::FieldWrite,
@@ -152,6 +173,8 @@ fn schema_value(
         crate::FieldValue::String(v) => crate::components::schema::FieldValue::String(v),
         crate::FieldValue::Bytes(v) => crate::components::schema::FieldValue::Bytes(v),
         crate::FieldValue::Bool(v) => crate::components::schema::FieldValue::Bool(v),
+        crate::FieldValue::Rows(v) => crate::components::schema::FieldValue::Rows(v),
+        crate::FieldValue::Unset => crate::components::schema::FieldValue::Unset,
         crate::FieldValue::Entity(crate::EntityRef::Handle(id)) => {
             crate::components::schema::FieldValue::Entity(id)
         }

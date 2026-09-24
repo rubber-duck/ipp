@@ -5,7 +5,7 @@ mod support;
 use support::WorldTestDriver;
 
 use ipp_core::{
-    components::{MeshInstance, Skeleton, Skin, Transform},
+    components::{JointOverrideRow, MeshInstance, Skeleton, Skin, Transform},
     services::asset_management::{self as assets, AssetUpload, AssetUploadIdentity, builtin},
     systems::camera,
     *,
@@ -237,7 +237,7 @@ fn failed_pose_propagation_hides_outputs_and_reuses_buffers_after_recovery() {
             entity,
             ComponentValue::SKELETON,
             std::mem::offset_of!(Skeleton, joints),
-            FieldValue::Bytes(joint_overrides(&[(0, huge), (1, huge)])),
+            joint_overrides(&[(0, huge), (1, huge)]),
         )],
     );
     assert!(report.outcomes[0].result.is_ok());
@@ -250,7 +250,7 @@ fn failed_pose_propagation_hides_outputs_and_reuses_buffers_after_recovery() {
             entity,
             ComponentValue::SKELETON,
             std::mem::offset_of!(Skeleton, joints),
-            FieldValue::Bytes(Vec::new()),
+            joint_overrides(&[]),
         )],
     );
     assert!(report.outcomes[0].result.is_ok());
@@ -313,10 +313,6 @@ fn invalid_override_keeps_neighbor_edits_and_malformed_assets_reject() {
     let mut fixture_host = ipp_core::HostRuntime::new();
     let (mut world, a, _) = fixture(&mut fixture_host);
 
-    let mut joints = 31u32.to_le_bytes().to_vec();
-    for v in [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0] {
-        joints.extend(v.to_le_bytes());
-    }
     let report = apply(
         &mut world,
         vec![
@@ -330,7 +326,7 @@ fn invalid_override_keeps_neighbor_edits_and_malformed_assets_reject() {
                 a,
                 ComponentValue::SKELETON,
                 std::mem::offset_of!(Skeleton, joints),
-                FieldValue::Bytes(joints),
+                joint_overrides(&[(31, Transform::default())]),
             ),
         ],
     );
@@ -350,7 +346,7 @@ fn invalid_override_keeps_neighbor_edits_and_malformed_assets_reject() {
             a,
             ComponentValue::SKELETON,
             std::mem::offset_of!(Skeleton, joints),
-            FieldValue::Bytes(Vec::new()),
+            joint_overrides(&[]),
         )],
     );
     assert!(world.skin_palette(a).is_some());
@@ -416,15 +412,17 @@ fn mapped_geometry() -> Vec<u8> {
     .unwrap()
 }
 
-fn joint_overrides(values: &[(u32, Transform)]) -> Vec<u8> {
-    let mut bytes = Vec::new();
+/// A whole override table: complete TRS at the listed joints, empty rows elsewhere.
+fn joint_overrides(values: &[(u32, Transform)]) -> FieldValue {
+    let mut rows = Skeleton::default().joints;
     for &(joint, t) in values {
-        bytes.extend(joint.to_le_bytes());
-        for value in [t.x, t.y, t.z, t.qx, t.qy, t.qz, t.qw, t.sx, t.sy, t.sz] {
-            bytes.extend(value.to_le_bytes());
-        }
+        *rows.get_mut(joint).unwrap() = JointOverrideRow {
+            translation: Some([t.x, t.y, t.z]),
+            rotation: Some([t.qx, t.qy, t.qz, t.qw]),
+            scale: Some([t.sx, t.sy, t.sz]),
+        };
     }
-    bytes
+    FieldValue::Rows(rows.encode())
 }
 
 #[test]
@@ -485,7 +483,7 @@ fn shared_geometry_maps_two_final_joint_origins_and_scales_radius_for_both_compo
                 a,
                 ComponentValue::SKELETON,
                 std::mem::offset_of!(Skeleton, joints),
-                FieldValue::Bytes(joint_overrides(&[(0, root), (1, child)])),
+                joint_overrides(&[(0, root), (1, child)]),
             ),
         ],
     );
@@ -733,4 +731,192 @@ fn generated_bounds_enclose_every_blended_vertex_after_pose_and_nonuniform_scale
         world.render_geometry(a).mesh_bounds,
         world.mesh_bounds(a).unwrap()
     );
+}
+
+/// One joint override property written through its row field offset.
+fn joint_property(entity: EntityId, joint: u32, property: u32, value: FieldValue) -> Command {
+    let offset =
+        ipp_core::components::rows::Rows::<JointOverrideRow>::offset(0, joint, property).unwrap();
+    set(entity, ComponentValue::SKELETON, offset as usize, value)
+}
+
+fn skeleton_value(world: &ipp_core::WorldContext<'_>, entity: EntityId) -> Skeleton {
+    world
+        .inspect(entity)
+        .unwrap()
+        .base
+        .into_iter()
+        .find_map(|value| match value {
+            ComponentValue::Skeleton(value) => Some(value),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn rotation_only_override_keeps_pose_translation_and_scale_until_cleared() {
+    const ROTATION: u32 = 1;
+    let mut fixture_host = ipp_core::HostRuntime::new();
+    let (mut world, a, _) = fixture(&mut fixture_host);
+    let report = apply(
+        &mut world,
+        vec![set(
+            a,
+            ComponentValue::SKELETON,
+            std::mem::offset_of!(Skeleton, pose_source),
+            FieldValue::String("asset://4/4".into()),
+        )],
+    );
+    assert!(report.outcomes[0].result.is_ok());
+    let bent = world.skeleton_pose(a).unwrap().to_vec();
+
+    let quarter = [
+        0.0,
+        0.0,
+        -std::f32::consts::FRAC_1_SQRT_2,
+        std::f32::consts::FRAC_1_SQRT_2,
+    ];
+    let report = apply(
+        &mut world,
+        vec![joint_property(
+            a,
+            1,
+            ROTATION,
+            FieldValue::Dynamic(DynamicValue::Vec4(quarter)),
+        )],
+    );
+    assert!(report.outcomes[0].result.is_ok());
+    let posed = world.skeleton_pose(a).unwrap();
+    assert_eq!(posed[0], bent[0]);
+    assert_eq!(
+        posed[1],
+        Transform {
+            qx: quarter[0],
+            qy: quarter[1],
+            qz: quarter[2],
+            qw: quarter[3],
+            ..bent[1]
+        }
+    );
+    let row = skeleton_value(&world, a).joints.get(1).cloned().unwrap();
+    assert_eq!(
+        row,
+        JointOverrideRow {
+            rotation: Some(quarter),
+            ..Default::default()
+        }
+    );
+
+    // Clearing the property restores the pose value; the ordinal stays writable.
+    let report = apply(
+        &mut world,
+        vec![joint_property(a, 1, ROTATION, FieldValue::Unset)],
+    );
+    assert!(report.outcomes[0].result.is_ok());
+    assert_eq!(world.skeleton_pose(a).unwrap(), bent.as_slice());
+
+    // Invalid values reject their write; slots past MAX_JOINTS are never rows.
+    for (joint, property, value) in [
+        (1, ROTATION, DynamicValue::Vec4([0.0; 4])),
+        (1, 2, DynamicValue::Vec3([1.0, 0.0, 1.0])),
+        (1, 0, DynamicValue::Vec4(quarter)),
+        (MAX_JOINTS as u32, 0, DynamicValue::Vec3([0.0; 3])),
+    ] {
+        let report = apply(
+            &mut world,
+            vec![joint_property(
+                a,
+                joint,
+                property,
+                FieldValue::Dynamic(value),
+            )],
+        );
+        assert!(report.outcomes[0].result.is_err());
+    }
+    assert!(
+        skeleton_value(&world, a)
+            .joints
+            .iter()
+            .all(|(_, row)| row.is_empty())
+    );
+
+    // A present property beyond the rig's joints suppresses the pose until cleared.
+    let report = apply(
+        &mut world,
+        vec![joint_property(
+            a,
+            5,
+            0,
+            FieldValue::Dynamic(DynamicValue::Vec3([0.0; 3])),
+        )],
+    );
+    assert!(report.outcomes[0].result.is_err());
+    assert!(world.skeleton_pose(a).is_none());
+    apply(&mut world, vec![joint_property(a, 5, 0, FieldValue::Unset)]);
+    assert_eq!(world.skeleton_pose(a).unwrap(), bent.as_slice());
+}
+
+#[test]
+fn partial_joint_overrides_survive_world_persistence() {
+    use ipp_core::services::world_serialization::{WorldLoadOptions, WorldPersistenceLimits};
+
+    let mut fixture_host = ipp_core::HostRuntime::new();
+    let (mut world, a, _) = fixture(&mut fixture_host);
+    let report = apply(
+        &mut world,
+        vec![
+            joint_property(
+                a,
+                0,
+                0,
+                FieldValue::Dynamic(DynamicValue::Vec3([0.5, 0.0, 0.0])),
+            ),
+            joint_property(
+                a,
+                1,
+                2,
+                FieldValue::Dynamic(DynamicValue::Vec3([1.0, 2.0, 1.0])),
+            ),
+        ],
+    );
+    assert!(report.outcomes[0].result.is_ok());
+    let expected = skeleton_value(&world, a);
+    assert_eq!(expected.joints.len(), MAX_JOINTS);
+    assert_eq!(
+        expected.joints.get(0),
+        Some(&JointOverrideRow {
+            translation: Some([0.5, 0.0, 0.0]),
+            ..Default::default()
+        })
+    );
+    let posed = world.skeleton_pose(a).unwrap();
+    assert_eq!((posed[0].x, posed[0].sy), (0.5, 1.0));
+    assert_eq!((posed[1].y, posed[1].sy), (1.0, 2.0));
+    let id = world.id();
+    drop(world);
+
+    let saved = fixture_host
+        .save_world(id, 7, WorldPersistenceLimits::default())
+        .unwrap();
+    let loaded = fixture_host
+        .load_world(
+            &saved,
+            7,
+            WorldLoadOptions {
+                symbolic_id: Some("restored".into()),
+                ..Default::default()
+            },
+            ipp_core::WorldLimits::default(),
+            WorldPersistenceLimits::default(),
+        )
+        .unwrap();
+    let world = fixture_host.world_mut(loaded).unwrap();
+    let restored = world
+        .entities()
+        .iter()
+        .map(|entity| skeleton_value(&world, entity.id))
+        .find(|value| value.joints.get(0) != Some(&JointOverrideRow::default()))
+        .unwrap();
+    assert_eq!(restored, expected);
+    assert!(restored.joints.get(1).unwrap().translation.is_none());
 }

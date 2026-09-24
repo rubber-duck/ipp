@@ -208,6 +208,21 @@ fn scope_gui_command(
             patch,
             ..
         } => patch.asset.as_ref().and_then(Option::as_ref),
+        GuiCommand::UpdateTheme {
+            patch,
+            ..
+        }
+        | GuiCommand::UpdatePart {
+            patch,
+            ..
+        } => {
+            for value in patch.changes.values().flatten() {
+                if let ipp_core::DynamicValue::Asset(asset) = value {
+                    scope_source(world, &asset.uri)?;
+                }
+            }
+            None
+        }
         GuiCommand::MoveNode {
             ..
         }
@@ -215,6 +230,9 @@ fn scope_gui_command(
             ..
         }
         | GuiCommand::SetControlValue {
+            ..
+        }
+        | GuiCommand::RemoveTheme {
             ..
         } => None,
     };
@@ -372,14 +390,15 @@ mod tests {
         use ipp_core::services::asset_management::AssetSource;
         use ipp_core::systems::gui::*;
 
-        let handle = GuiNodeHandle::new(1, ipp_core::EntityId::from_bits(1), 1, GuiNodeId(1), 1);
+        let handle = GuiNodeHandle::new(1, ipp_core::EntityId::from_bits(1), 1, GuiNodeId(1));
         let insert = |uri: &str| GuiCommand::InsertNode {
             entity: ipp_core::EntityId::from_bits(1),
             root_incarnation: 1,
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Drawing,
+            data: GuiNodeData::Drawing,
+            values: ipp_core::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 asset: Some(AssetSource {
                     uri: uri.into(),

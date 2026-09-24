@@ -1,5 +1,5 @@
 /** P04 effect subscription coverage: real React controls through callback
- * retention into the lifetime-fenced listener registry, then through
+ * retention into the node-fenced listener registry, then through
  * GuiCommits acknowledgement wiring fed by client-shaped observation batches.
  *
  * Headless and node-runnable: control factories describe nodes, the
@@ -177,7 +177,6 @@ test("guards accept pinned paths and ticks, fail closed otherwise", () => {
       entity: 100n,
       rootIncarnation: EFFECT_ROOT,
       node: 20,
-      lifetime: 1,
       path: [10, 20],
       sourceTick: 11n,
       effectTick: 12n,
@@ -190,7 +189,6 @@ test("guards accept pinned paths and ticks, fail closed otherwise", () => {
       entity: 100n,
       rootIncarnation: EFFECT_ROOT,
       node: 30,
-      lifetime: 1,
       value: { kind: "bool", value: true },
       revision: 2,
       path: [10, 30],
@@ -205,7 +203,6 @@ test("guards accept pinned paths and ticks, fail closed otherwise", () => {
       entity: 100n,
       rootIncarnation: EFFECT_ROOT,
       node: 20,
-      lifetime: 1,
       path: [10, 20.5],
     }),
     false,
@@ -216,7 +213,6 @@ test("guards accept pinned paths and ticks, fail closed otherwise", () => {
       entity: 100n,
       rootIncarnation: EFFECT_ROOT,
       node: 20,
-      lifetime: 1,
       sourceTick: 11,
     }),
     false,
@@ -235,13 +231,11 @@ function feedHarness(): FeedHarness {
   const seen: string[] = [];
   const errors: Error[] = [];
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 10, {
-    lifetime: 1,
     kind: "container",
     onActionCapture: () => void seen.push("capture:10"),
     onAction: () => void seen.push("bubble:10"),
   });
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 20, {
-    lifetime: 1,
     kind: "button",
     name: "Go",
     onPress: (event) =>
@@ -249,7 +243,6 @@ function feedHarness(): FeedHarness {
     onAction: () => void seen.push("bubble:20"),
   });
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 30, {
-    lifetime: 1,
     kind: "checkbox",
     onToggle: (event) =>
       void seen.push(`toggle:${event.value}@${event.revision}`),
@@ -277,7 +270,6 @@ test("exactly-once press follows the pinned runtime path with ticks", () => {
         entity: 100n,
         rootIncarnation: EFFECT_ROOT,
         node: 20,
-        lifetime: 1,
         path: [10, 20],
         sourceTick: 11n,
         effectTick: 12n,
@@ -305,7 +297,6 @@ test("change commits deliver values and revisions through the registry", () => {
         entity: 100n,
         rootIncarnation: EFFECT_ROOT,
         node: 30,
-        lifetime: 1,
         value: { kind: "bool", value: true },
         revision: 2,
         path: [10, 30],
@@ -326,7 +317,6 @@ test("same entity and node identities stay isolated across root incarnations", (
   const seen: bigint[] = [];
   for (const rootIncarnation of [3n, 4n]) {
     subs.subscribe(EFFECT_ENTITY, rootIncarnation, 20, {
-      lifetime: 1,
       kind: "button",
       onPress: (event) => void seen.push(event.rootIncarnation),
     });
@@ -338,7 +328,6 @@ test("same entity and node identities stay isolated across root incarnations", (
         entity: EFFECT_ENTITY,
         rootIncarnation: 4n,
         node: 20,
-        lifetime: 1,
       },
     ],
     () => new Map([[20, undefined]]),
@@ -354,7 +343,6 @@ test("pinned path wins over stale acknowledged ancestry", () => {
   // The acknowledged tree moved on (20 now under 99), but the effect pins
   // the committed ancestry: capture runs on 10, never on 99.
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 99, {
-    lifetime: 1,
     kind: "container",
     onActionCapture: () => void seen.push("capture:99"),
   });
@@ -365,7 +353,6 @@ test("pinned path wins over stale acknowledged ancestry", () => {
         entity: 100n,
         rootIncarnation: EFFECT_ROOT,
         node: 20,
-        lifetime: 1,
         path: [10, 20],
         sourceTick: 11n,
         effectTick: 12n,
@@ -394,7 +381,6 @@ test("stale pinned path falls back to acknowledged ancestry with a report", () =
         entity: 100n,
         rootIncarnation: EFFECT_ROOT,
         node: 20,
-        lifetime: 1,
         // Names a retired tree: the last entry is not the target.
         path: [10, 30],
         sourceTick: 11n,
@@ -418,7 +404,6 @@ test("delayed effects dispatch; teardown skips without redelivery", () => {
     entity: 100n,
     rootIncarnation: EFFECT_ROOT,
     node: 20,
-    lifetime: 1,
     path: [10, 20],
     sourceTick: 11n,
     effectTick: 12n,
@@ -435,28 +420,26 @@ test("delayed effects dispatch; teardown skips without redelivery", () => {
     subs.feed([effect], parentOf, (error) => void errors.push(error)),
     { delivered: 0, skipped: 1 },
   );
-  // Re-acknowledgement under a new lifetime retires the old one: delayed
-  // effects naming it report stale, current ones deliver.
+  // Re-acknowledgement replaces the record; effects of a replaced root
+  // incarnation name another root and never reach it.
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 20, {
-    lifetime: 2,
     kind: "button",
     onPress: () => void seen.push("press:20v2"),
   });
   assert.deepEqual(
-    subs.feed([effect], parentOf, (error) => void errors.push(error)),
-    { delivered: 0, skipped: 1 },
-  );
-  assert.equal(errors.length, 1);
-  assert.match(errors[0]!.message, /Stale GUI control effect for node 20/);
-  assert.deepEqual(
     subs.feed(
-      [{ ...effect, lifetime: 2 }],
+      [{ ...effect, rootIncarnation: EFFECT_ROOT + 1n }],
       parentOf,
       (error) => void errors.push(error),
     ),
+    { delivered: 0, skipped: 1 },
+  );
+  assert.deepEqual(
+    subs.feed([effect], parentOf, (error) => void errors.push(error)),
     { delivered: 1, skipped: 0 },
   );
   assert.ok(seen.includes("press:20v2"), `saw ${seen}`);
+  assert.equal(errors.length, 0);
   // Unmount teardown drops everything.
   subs.clear();
   assert.equal(subs.size, 0);
@@ -469,7 +452,6 @@ test("delayed effects dispatch; teardown skips without redelivery", () => {
 test("stopPropagation still controls callbacks only; commits stand", () => {
   const { subs, parentOf, seen, errors } = feedHarness();
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 10, {
-    lifetime: 1,
     kind: "container",
     onActionCapture: (event) => {
       seen.push("capture:10");
@@ -484,7 +466,6 @@ test("stopPropagation still controls callbacks only; commits stand", () => {
         entity: 100n,
         rootIncarnation: EFFECT_ROOT,
         node: 20,
-        lifetime: 1,
         path: [10, 20],
         sourceTick: 11n,
         effectTick: 12n,
@@ -504,7 +485,6 @@ test("stopPropagation still controls callbacks only; commits stand", () => {
 test("throwing control and action listeners do not abort later effects", () => {
   const { subs, parentOf, seen, errors } = feedHarness();
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 10, {
-    lifetime: 1,
     kind: "container",
     onActionCapture: () => {
       throw new Error("capture failed");
@@ -512,7 +492,6 @@ test("throwing control and action listeners do not abort later effects", () => {
     onAction: () => void seen.push("bubble:10"),
   });
   subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 20, {
-    lifetime: 1,
     kind: "button",
     onPress: () => {
       throw new Error("press failed");
@@ -525,14 +504,12 @@ test("throwing control and action listeners do not abort later effects", () => {
         entity: EFFECT_ENTITY,
         rootIncarnation: EFFECT_ROOT,
         node: 20,
-        lifetime: 1,
       },
       {
         kind: "controlCommitted",
         entity: EFFECT_ENTITY,
         rootIncarnation: EFFECT_ROOT,
         node: 30,
-        lifetime: 1,
         value: { kind: "bool", value: false },
         revision: 3,
       },
@@ -571,7 +548,6 @@ test("conflicts and unhandled scene input report once, never as effects", () => 
         entity: 100n,
         rootIncarnation: EFFECT_ROOT,
         node: 30,
-        lifetime: 1,
         value: { kind: "bool", value: true },
         revision: 2,
         path: [10, 30],
@@ -588,7 +564,6 @@ test("conflicts and unhandled scene input report once, never as effects", () => 
           entity: 100n,
           rootIncarnation: EFFECT_ROOT,
           node: 30,
-          lifetime: 1,
         },
         reason: { kind: "revisionMismatch", expected: 1, found: 2 },
       },
@@ -602,7 +577,6 @@ test("conflicts and unhandled scene input report once, never as effects", () => 
           entity: 100n,
           rootIncarnation: EFFECT_ROOT,
           node: 30,
-          lifetime: 1,
         },
         reason: "gestureCancelled",
       },
@@ -665,7 +639,6 @@ test("free dispatch routes observations without a registry", () => {
         [
           10,
           {
-            lifetime: 1,
             kind: "container",
             onActionCapture: () => void seen.push("capture:10"),
           },
@@ -673,7 +646,6 @@ test("free dispatch routes observations without a registry", () => {
         [
           20,
           {
-            lifetime: 1,
             kind: "button",
             onPress: () => void seen.push("press:20"),
           },
@@ -688,7 +660,6 @@ test("free dispatch routes observations without a registry", () => {
           entity: 100n,
           rootIncarnation: EFFECT_ROOT,
           node: 20,
-          lifetime: 1,
           path: [10, 20],
           sourceTick: 11n,
           effectTick: 12n,
@@ -719,7 +690,7 @@ test("free dispatch routes observations without a registry", () => {
  *
  * A minimal producer runtime applies GUI edits and answers inspections; the
  * observation batches below mirror core report fields (sessions, ticks,
- * pinned paths, lifetimes, revisions). The byte-exact wire proof lives in
+ * pinned paths, revisions). The byte-exact wire proof lives in
  * the protocol client suite.
  */
 
@@ -732,9 +703,9 @@ function commitsRejected(): Error {
 interface CommitsStoredNode {
   id: number;
   parent: number | undefined;
-  content: unknown;
+  data: unknown;
+  values: unknown;
   style: GuiNodeStyle;
-  lifetime: number;
 }
 
 class CommitsProducer {
@@ -751,9 +722,9 @@ class CommitsProducer {
       this.nodes.set(edit.id, {
         id: edit.id,
         parent: edit.parent,
-        content: edit.content,
+        data: edit.data,
+        values: edit.values ?? {},
         style: { ...(edit.style ?? {}) },
-        lifetime: 1,
       });
       return;
     }
@@ -767,10 +738,13 @@ class CommitsProducer {
       for (const gone of doomed) this.nodes.delete(gone);
       return;
     }
+    // Themes are root-owned; this fake keeps no skin state.
+    if (edit.action === "updateTheme" || edit.action === "removeTheme") return;
     const node = this.nodes.get(edit.handle.nodeId);
     if (!node) throw commitsRejected();
     if (edit.action === "update") {
-      if (edit.patch.content !== undefined) node.content = edit.patch.content;
+      if (edit.patch.data !== undefined) node.data = edit.patch.data;
+      if (edit.patch.values !== undefined) node.values = edit.patch.values;
       if (edit.patch.style !== undefined)
         node.style = {
           ...node.style,
@@ -815,11 +789,11 @@ class CommitsProducer {
             children: [...this.nodes.values()]
               .filter((child) => child.parent === node.id)
               .map((child) => child.id),
-            content: node.content,
+            data: node.data,
+            values: node.values,
             style: { ...node.style },
             controlValue: { kind: "none" },
             controlRevision: 0,
-            lifetime: node.lifetime,
           }) as unknown as GuiInspectedNode,
       );
     return {
@@ -1010,16 +984,15 @@ function pressBatch(
   wired: WiredControls,
   node: number,
   path: number[],
-  lifetime = 1,
+  rootIncarnation = wired.producer.rootIncarnation,
 ): GuiObservationBatch {
   return {
     effects: [
       {
         kind: "buttonPressed",
         entity: 100n,
-        rootIncarnation: wired.producer.rootIncarnation,
+        rootIncarnation,
         node,
-        lifetime,
         path,
         sourceTick: 11n,
         effectTick: 12n,
@@ -1037,7 +1010,6 @@ test("GuiCommits dispatches committed observations into real control callbacks",
         entity: 100n,
         rootIncarnation: wired.producer.rootIncarnation,
         node: wired.buttonId,
-        lifetime: 1,
         path: [wired.columnId, wired.buttonId],
         sourceTick: 11n,
         effectTick: 12n,
@@ -1047,7 +1019,6 @@ test("GuiCommits dispatches committed observations into real control callbacks",
         entity: 100n,
         rootIncarnation: wired.producer.rootIncarnation,
         node: wired.checkboxId,
-        lifetime: 1,
         value: { kind: "bool", value: true },
         revision: 2,
         path: [wired.columnId, wired.checkboxId],
@@ -1068,7 +1039,6 @@ test("GuiCommits dispatches committed observations into real control callbacks",
     entity: 100n,
     rootIncarnation: wired.producer.rootIncarnation,
     node: wired.buttonId,
-    lifetime: 1,
     name: "Go",
     sourceTick: 11n,
     effectTick: 12n,
@@ -1077,7 +1047,6 @@ test("GuiCommits dispatches committed observations into real control callbacks",
     entity: 100n,
     rootIncarnation: wired.producer.rootIncarnation,
     node: wired.checkboxId,
-    lifetime: 1,
     revision: 2,
     value: true,
     sourceTick: 11n,
@@ -1103,15 +1072,19 @@ test("GuiCommits keeps delayed callbacks until diff removals tear them down", as
     { delivered: 1, skipped: 0, conflicts: 0, cancelled: 0, unhandled: 0 },
   );
   assert.equal(wired.presses.length, 1);
-  // A stale lifetime reports without dispatching while subscribed.
+  // An effect of another root incarnation never dispatches.
   assert.deepEqual(
     wired.emit(
-      pressBatch(wired, wired.buttonId, [wired.columnId, wired.buttonId], 9),
+      pressBatch(
+        wired,
+        wired.buttonId,
+        [wired.columnId, wired.buttonId],
+        wired.producer.rootIncarnation + 1n,
+      ),
     ),
     { delivered: 0, skipped: 1, conflicts: 0, cancelled: 0, unhandled: 0 },
   );
-  assert.equal(wired.errors.length, 1);
-  assert.match(wired.errors[0]!.message, /Stale GUI control effect/);
+  assert.deepEqual(wired.errors, []);
 });
 
 test("older acknowledged GUI work cannot restore superseded callbacks or refs", async () => {
@@ -1169,7 +1142,6 @@ test("GuiCommits reports conflicts and cancellations once, never as effects", as
           entity: 100n,
           rootIncarnation: wired.producer.rootIncarnation,
           node: wired.checkboxId,
-          lifetime: 1,
         },
         reason: { kind: "revisionMismatch", expected: 1, found: 2 },
       },

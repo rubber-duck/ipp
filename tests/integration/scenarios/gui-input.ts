@@ -47,8 +47,8 @@ export async function exerciseGuiInput(
   const empty = await client.inspectGui({ entity });
   expect(empty.nodes.length === 0, "A new GuiRoot must start empty");
   const rootIncarnation = empty.rootIncarnation;
-  const handle = (id: number, lifetime: number) =>
-    client.createGuiNodeHandle(entity, rootIncarnation, id, lifetime);
+  const handle = (id: number) =>
+    client.createGuiNodeHandle(entity, rootIncarnation, id);
 
   await client.editGui({
     action: "insert",
@@ -56,7 +56,7 @@ export async function exerciseGuiInput(
     rootIncarnation,
     id: 1,
     index: 0,
-    content: { kind: "container", containerKind: "column" },
+    data: { kind: "container", containerKind: "column" },
     style: { width: 4, height: 3 },
   });
   await client.editGui({
@@ -66,7 +66,8 @@ export async function exerciseGuiInput(
     id: 2,
     parent: 1,
     index: 0,
-    content: { kind: "checkbox", checked: false },
+    data: { kind: "checkbox" },
+    values: { checked: false },
     style: { width: 4, height: 3 },
   });
 
@@ -185,7 +186,7 @@ export async function exerciseGuiInput(
   await client.submitGuiInput({ kind: "key", key: "tab", pressed: true });
   await client.submitGuiInput({
     kind: "focus",
-    handle: handle(2, checkbox.lifetime),
+    handle: handle(2),
   });
   await client.submitGuiInput({ kind: "key", key: "enter", pressed: true });
   checkbox = await inspected(client, entity, 2);
@@ -210,7 +211,7 @@ export async function exerciseGuiInput(
   // full-height sibling is intentionally not eligible.
   await client.editGui({
     action: "update",
-    handle: handle(2, checkbox.lifetime),
+    handle: handle(2),
     patch: { style: { height: 1.5 } },
   });
   await client.editGui({
@@ -220,13 +221,13 @@ export async function exerciseGuiInput(
     id: 3,
     parent: 1,
     index: 1,
-    content: { kind: "textInput", text: "", placeholder: "" },
+    data: { kind: "textInput", text: "", placeholder: "" },
     style: { width: 4, height: 1.5, asset: font },
   });
   let field = await inspected(client, entity, 3);
   await client.submitGuiInput({
     kind: "focus",
-    handle: handle(3, field.lifetime),
+    handle: handle(3),
   });
   await client.submitGuiInput({ kind: "text", text: "Hi" });
   field = await inspected(client, entity, 3);
@@ -299,7 +300,7 @@ export async function exerciseGuiInput(
   });
   await client.submitGuiInput({
     kind: "focus",
-    handle: handle(2, checkbox.lifetime),
+    handle: handle(2),
   });
   await client.submitGuiInput({ kind: "commitComposition" });
   field = await inspected(client, entity, 3);
@@ -315,7 +316,7 @@ export async function exerciseGuiInput(
   );
   await client.submitGuiInput({
     kind: "focus",
-    handle: handle(3, field.lifetime),
+    handle: handle(3),
   });
   await client.submitGuiInput({ kind: "cancelComposition" });
 
@@ -326,7 +327,7 @@ export async function exerciseGuiInput(
   field = await inspected(client, entity, 3);
   await client.editGui({
     action: "setControlValue",
-    handle: handle(3, field.lifetime),
+    handle: handle(3),
     expectedRevision: field.controlRevision,
     value: { kind: "text", value: "Hpqrstuv" },
   });
@@ -352,7 +353,7 @@ export async function exerciseGuiInput(
   field = await inspected(client, entity, 3);
   await client.editGui({
     action: "setControlValue",
-    handle: handle(3, field.lifetime),
+    handle: handle(3),
     expectedRevision: field.controlRevision,
     value: { kind: "text", value: "123456789" },
   });

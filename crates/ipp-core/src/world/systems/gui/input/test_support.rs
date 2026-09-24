@@ -6,13 +6,14 @@ use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetKey, AssetSource};
 use crate::systems::surface::Surface;
 use crate::systems::surface::SurfaceRenderResource;
+use crate::world::systems::gui::test_support::AuthoredNode;
 use crate::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, HostRuntime, WorldId,
     WorldLimits,
 };
 use crate::{
-    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiFontResolution, GuiNodeContent,
-    GuiNodeId, GuiNodeStyle, GuiResourceResolver,
+    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiFontResolution, GuiNodeData, GuiNodeId,
+    GuiNodeStyle, GuiResourceResolver,
 };
 use std::collections::BTreeMap;
 
@@ -84,7 +85,8 @@ pub(super) fn insert_nodes(fixture: &mut Fixture, with_slider: bool, with_second
         id: GuiNodeId(1),
         parent: None,
         index: 0,
-        content: GuiNodeContent::Container(GuiContainerKind::Column),
+        data: GuiNodeData::Container(GuiContainerKind::Column),
+        values: crate::GuiNodeDataRow::default(),
         style: GuiNodeStyle {
             width: Some(10.0),
             height: Some(10.0),
@@ -97,9 +99,8 @@ pub(super) fn insert_nodes(fixture: &mut Fixture, with_slider: bool, with_second
         id: GuiNodeId(2),
         parent: Some(GuiNodeId(1)),
         index: 0,
-        content: GuiNodeContent::Checkbox {
-            checked: false,
-        },
+        data: GuiNodeData::Checkbox,
+        values: GuiNodeDataRow::checkbox(false),
         style: GuiNodeStyle::default(),
     });
     if with_slider {
@@ -109,12 +110,8 @@ pub(super) fn insert_nodes(fixture: &mut Fixture, with_slider: bool, with_second
             id: GuiNodeId(3),
             parent: Some(GuiNodeId(1)),
             index: 1,
-            content: GuiNodeContent::Slider {
-                value: 0.5,
-                min: 0.0,
-                max: 1.0,
-                step: 0.0,
-            },
+            data: GuiNodeData::Slider,
+            values: GuiNodeDataRow::slider(0.5, 0.0, 1.0, 0.0),
             style: GuiNodeStyle::default(),
         });
     }
@@ -129,9 +126,8 @@ pub(super) fn insert_nodes(fixture: &mut Fixture, with_slider: bool, with_second
             }),
             parent: Some(GuiNodeId(1)),
             index: 2,
-            content: GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
             style: GuiNodeStyle::default(),
         });
     }
@@ -325,7 +321,8 @@ pub(super) fn font_style() -> GuiNodeStyle {
 }
 
 /// Insert a column panel holding one font-backed control node.
-pub(super) fn insert_font_control(fixture: &mut Fixture, content: GuiNodeContent) {
+pub(super) fn insert_font_control(fixture: &mut Fixture, node: impl Into<AuthoredNode>) {
+    let node = node.into();
     let root_incarnation = incarnation(fixture);
     let panel = fixture.panel;
     let commands = vec![
@@ -335,7 +332,8 @@ pub(super) fn insert_font_control(fixture: &mut Fixture, content: GuiNodeContent
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(10.0),
                 height: Some(10.0),
@@ -348,7 +346,8 @@ pub(super) fn insert_font_control(fixture: &mut Fixture, content: GuiNodeContent
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content,
+            data: node.data,
+            values: node.values,
             style: font_style(),
         },
     ];

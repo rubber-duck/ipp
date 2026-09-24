@@ -5,21 +5,21 @@
  */
 import type {
   GuiEdit,
-  GuiNodeContent,
+  GuiNodeData,
   GuiNodeHandle,
   GuiNodePatchStyle,
   GuiNodeStyle,
+  GuiNodeValues,
 } from "@ipp/client";
 import {
   equalGuiAsset,
-  equalGuiContent,
+  equalGuiNode,
   normalizeGuiStyle,
   type GuiDescribedNode,
 } from "./description.js";
 import type { GuiDeclarationStyle } from "./components.js";
 
-/** Style patch lanes including the authoring-only enabled lane, which
- * rides the runtime object until the shared contract regenerates it. */
+/** Style patch properties including the authoring-only enabled property. */
 export type GuiDeclarationPatchStyle = GuiNodePatchStyle & {
   enabled?: boolean | undefined;
 };
@@ -30,8 +30,8 @@ export interface GuiAcknowledgedNode {
   /** Parent instance identity, or undefined for the root node. */
   readonly parent: number | undefined;
   readonly parentId: number | undefined;
-  readonly lifetime: number;
-  readonly content: GuiNodeContent;
+  readonly data: GuiNodeData;
+  readonly values: GuiNodeValues;
   readonly style: GuiDeclarationStyle;
 }
 
@@ -115,6 +115,10 @@ function stylePatch(
     set("asset", desired.asset ?? null);
   if (!Object.is(desired.enabled ?? true, acked.enabled ?? true))
     set("enabled", desired.enabled ?? true);
+  if (!tuplesEqual(desired.position, acked.position))
+    set("position", [...(desired.position ?? [0, 0])]);
+  if (!tuplesEqual(desired.scale, acked.scale))
+    set("scale", [...(desired.scale ?? [1, 1])]);
   return changed ? patch : undefined;
 }
 
@@ -154,7 +158,7 @@ export function diffGuiTree(
   ids: ReadonlyMap<number, number>,
   nextId: number,
   order: ReadonlyMap<number | undefined, readonly number[]>,
-  makeHandle: (nodeId: number, lifetime: number) => GuiNodeHandle,
+  makeHandle: (nodeId: number) => GuiNodeHandle,
 ): GuiDiffResult {
   const assigned = new Map(ids);
   let counter = nextId;
@@ -180,7 +184,7 @@ export function diffGuiTree(
     .sort((a, b) => a.ack.nodeId - b.ack.nodeId);
   const edits: GuiEdit[] = topmost.map(({ ack }) => ({
     action: "remove" as const,
-    handle: makeHandle(ack.nodeId, ack.lifetime),
+    handle: makeHandle(ack.nodeId),
   }));
 
   // Desired children per parent, and each node's desired sibling position.
@@ -274,7 +278,8 @@ export function diffGuiTree(
       id: nodeIdOf(node.identity),
       ...(node.parent === undefined ? {} : { parent: nodeIdOf(node.parent) }),
       index,
-      content: node.content,
+      data: node.data,
+      values: node.values,
       style: node.style,
     });
   }
@@ -296,7 +301,7 @@ export function diffGuiTree(
       node.parent === undefined ? undefined : nodeIdOf(node.parent);
     edits.push({
       action: "move",
-      handle: makeHandle(ack.nodeId, ack.lifetime),
+      handle: makeHandle(ack.nodeId),
       ...(nextParentId === undefined ? {} : { parent: nextParentId }),
       index,
     });
@@ -305,15 +310,21 @@ export function diffGuiTree(
   for (const node of desired) {
     const ack = acked.get(node.identity);
     if (!ack) continue;
-    const patch: { content?: GuiNodeContent; style?: GuiNodePatchStyle } = {};
-    if (!equalGuiContent(node.content, ack.content))
-      patch.content = node.content;
+    const patch: {
+      data?: GuiNodeData;
+      values?: GuiNodeValues;
+      style?: GuiNodePatchStyle;
+    } = {};
+    if (!equalGuiNode(node, ack)) {
+      patch.data = node.data;
+      patch.values = node.values;
+    }
     const style = stylePatch(node.style, ack.style);
     if (style) patch.style = style;
-    if (patch.content !== undefined || patch.style !== undefined) {
+    if (patch.data !== undefined || patch.style !== undefined) {
       edits.push({
         action: "update",
-        handle: makeHandle(ack.nodeId, ack.lifetime),
+        handle: makeHandle(ack.nodeId),
         patch,
       });
     }

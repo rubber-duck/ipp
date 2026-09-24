@@ -5,8 +5,6 @@ import type {
   GuiWorldClient,
   SurfaceWorldClient,
   WorldPersistenceHostClient,
-  guiPartProperty,
-  guiProperty,
 } from "@ipp/client";
 import {
   aliasId,
@@ -20,11 +18,16 @@ export type GuiTestClient = GuiWorldClient &
   SurfaceWorldClient &
   AssetWorldClient;
 
-/** Property naming exported by the generated contract under test. */
+/** Property addressing exported by the generated contract under test. */
 export interface GuiContractNames {
-  guiProperty: typeof guiProperty;
-  guiPartProperty: typeof guiPartProperty;
+  /** Generated GuiRoot row helpers: node style properties by offset. */
+  GuiRoot: {
+    node_styleOffset(slot: number, property: "opacity"): number;
+  };
 }
+
+/** One decoded `GuiRoot.node_style` row as inspection reports it. */
+type NodeStyleRow = Readonly<Record<string, unknown>>;
 
 function expect(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -55,13 +58,25 @@ async function guiProperties(client: GuiTestClient, entity: bigint) {
   return { fields: component.fields, properties: component.properties ?? {} };
 }
 
+/** Decoded node style rows of one GuiRoot, keyed by node identity. */
+async function guiStyleRows(
+  client: GuiTestClient,
+  entity: bigint,
+): Promise<ReadonlyMap<number, NodeStyleRow>> {
+  const table = (await guiProperties(client, entity)).fields.node_style as
+    | { rows: ReadonlyMap<number, NodeStyleRow> }
+    | undefined;
+  expect(table?.rows instanceof Map, "GuiRoot inspection omitted node_style");
+  return table.rows;
+}
+
 /**
  * Exercise root identity, pipelined edits, revision-gated values, ownership
  * rejection, property invalidation and persistence against a live World.
  */
 export async function exerciseGuiLifecycle(
   host: WorldPersistenceHostClient<GuiTestClient>,
-  { guiProperty, guiPartProperty }: GuiContractNames,
+  { GuiRoot }: GuiContractNames,
 ) {
   const client = await host.createWorld({ symbolicId: "gui-lifecycle" });
   const batchRef = { kind: "alias", alias: 80 } as const;
@@ -82,7 +97,7 @@ export async function exerciseGuiLifecycle(
           rootIncarnation: batchRoot.rootIncarnation,
           id: 1,
           index: 0,
-          content: {
+          data: {
             kind: "container" as const,
             containerKind: "column" as const,
           },
@@ -94,7 +109,7 @@ export async function exerciseGuiLifecycle(
           id: index + 1,
           parent: 1,
           index: index - 1,
-          content: { kind: "text" as const, text: `node ${index}` },
+          data: { kind: "text" as const, text: `node ${index}` },
         },
   );
   const batchOutcome = await client.editGuiBatch(batchEdits);
@@ -114,12 +129,12 @@ export async function exerciseGuiLifecycle(
     "The completed GUI batch frame omitted nodes",
   );
   const batchHandle = (id: number) =>
-    client.createGuiNodeHandle(batchEntity, batchRoot.rootIncarnation, id, 1);
+    client.createGuiNodeHandle(batchEntity, batchRoot.rootIncarnation, id);
   const failedBatch = await client.editGuiBatch([
     {
       action: "update",
       handle: batchHandle(2),
-      patch: { content: { kind: "text", text: "prefix applied" } },
+      patch: { data: { kind: "text", text: "prefix applied" } },
     },
     {
       action: "insert",
@@ -128,12 +143,12 @@ export async function exerciseGuiLifecycle(
       id: 2,
       parent: 1,
       index: 0,
-      content: { kind: "text", text: "must fail" },
+      data: { kind: "text", text: "must fail" },
     },
     {
       action: "update",
       handle: batchHandle(3),
-      patch: { content: { kind: "text", text: "suffix must not apply" } },
+      patch: { data: { kind: "text", text: "suffix must not apply" } },
     },
   ]);
   expect(!failedBatch.ok, "The invalid middle GUI edit was accepted");
@@ -145,19 +160,19 @@ export async function exerciseGuiLifecycle(
   const prefixNode = batchedTree.nodes.find((node) => node.id === 2);
   const suffixNode = batchedTree.nodes.find((node) => node.id === 3);
   expect(
-    prefixNode?.content.kind === "text" &&
-      prefixNode.content.text === "prefix applied",
+    prefixNode?.data.kind === "text" &&
+      prefixNode.data.text === "prefix applied",
     "The acknowledged GUI prefix was lost",
   );
   expect(
-    suffixNode?.content.kind === "text" && suffixNode.content.text === "node 2",
+    suffixNode?.data.kind === "text" && suffixNode.data.text === "node 2",
     "A GUI edit after the failed operation was applied",
   );
   const recoveredBatch = await client.editGuiBatch([
     {
       action: "update",
       handle: batchHandle(3),
-      patch: { content: { kind: "text", text: "recovered" } },
+      patch: { data: { kind: "text", text: "recovered" } },
     },
   ]);
   expect(
@@ -172,7 +187,7 @@ export async function exerciseGuiLifecycle(
       action: "update" as const,
       handle: batchHandle(2),
       patch: {
-        content: {
+        data: {
           kind: "text" as const,
           text: `${character.repeat(60_000)}${index}`,
         },
@@ -183,7 +198,7 @@ export async function exerciseGuiLifecycle(
     {
       action: "update",
       handle: batchHandle(3),
-      patch: { content: { kind: "text", text: "queued after multi-page" } },
+      patch: { data: { kind: "text", text: "queued after multi-page" } },
     },
   ]);
   const queuedInspectionPromise = client.inspectGui({ entity: batchEntity });
@@ -203,12 +218,12 @@ export async function exerciseGuiLifecycle(
   const largeNode = batchedTree.nodes.find((node) => node.id === 2);
   const queuedNode = batchedTree.nodes.find((node) => node.id === 3);
   expect(
-    largeNode?.content.kind === "text" && largeNode.content.text.endsWith("17"),
+    largeNode?.data.kind === "text" && largeNode.data.text.endsWith("17"),
     "The completed multi-page GUI edit lost its final value",
   );
   expect(
-    queuedNode?.content.kind === "text" &&
-      queuedNode.content.text === "queued after multi-page",
+    queuedNode?.data.kind === "text" &&
+      queuedNode.data.text === "queued after multi-page",
     "An ordinary request overtook a queued direct GUI edit",
   );
 
@@ -221,13 +236,13 @@ export async function exerciseGuiLifecycle(
       id: 2,
       parent: 1,
       index: 0,
-      content: { kind: "text" as const, text: "must fail" },
+      data: { kind: "text" as const, text: "must fail" },
     },
     {
       action: "update" as const,
       handle: batchHandle(4),
       patch: {
-        content: {
+        data: {
           kind: "text" as const,
           text: "multi-page suffix must not apply",
         },
@@ -239,7 +254,7 @@ export async function exerciseGuiLifecycle(
       action: "update",
       handle: batchHandle(3),
       patch: {
-        content: { kind: "text", text: "multi-page recovered" },
+        data: { kind: "text", text: "multi-page recovered" },
       },
     },
   ]);
@@ -261,18 +276,18 @@ export async function exerciseGuiLifecycle(
   const failedLargeRecovery = batchedTree.nodes.find((node) => node.id === 3);
   const failedLargeSuffix = batchedTree.nodes.find((node) => node.id === 4);
   expect(
-    failedLargePrefix?.content.kind === "text" &&
-      failedLargePrefix.content.text.endsWith("17"),
+    failedLargePrefix?.data.kind === "text" &&
+      failedLargePrefix.data.text.endsWith("17"),
     "The successful prefix on the failed second GUI page was lost",
   );
   expect(
-    failedLargeSuffix?.content.kind === "text" &&
-      failedLargeSuffix.content.text === "node 3",
+    failedLargeSuffix?.data.kind === "text" &&
+      failedLargeSuffix.data.text === "node 3",
     "A suffix after a failed second GUI page was applied",
   );
   expect(
-    failedLargeRecovery?.content.kind === "text" &&
-      failedLargeRecovery.content.text === "multi-page recovered",
+    failedLargeRecovery?.data.kind === "text" &&
+      failedLargeRecovery.data.text === "multi-page recovered",
     "An ordinary request overtook queued recovery after batch failure",
   );
   const reusedGateOutcome = await client.editGuiBatch([
@@ -280,7 +295,7 @@ export async function exerciseGuiLifecycle(
       action: "update",
       handle: batchHandle(3),
       patch: {
-        content: { kind: "text", text: "automatic gate reused" },
+        data: { kind: "text", text: "automatic gate reused" },
       },
     },
   ]);
@@ -296,7 +311,7 @@ export async function exerciseGuiLifecycle(
     {
       action: "update",
       handle: batchHandle(4),
-      patch: { content: { kind: "text", text: "stream page one" } },
+      patch: { data: { kind: "text", text: "stream page one" } },
     },
   ]);
   expect(firstStreamPage.ok, "The first explicit GUI buffer failed");
@@ -320,7 +335,7 @@ export async function exerciseGuiLifecycle(
     {
       action: "update",
       handle: batchHandle(5),
-      patch: { content: { kind: "text", text: "stream page two" } },
+      patch: { data: { kind: "text", text: "stream page two" } },
     },
   ]);
   expect(secondStreamPage.ok, "The second explicit GUI buffer failed");
@@ -334,10 +349,10 @@ export async function exerciseGuiLifecycle(
   const streamedFirst = streamedTree.nodes.find((node) => node.id === 4);
   const streamedSecond = streamedTree.nodes.find((node) => node.id === 5);
   expect(
-    streamedFirst?.content.kind === "text" &&
-      streamedFirst.content.text === "stream page one" &&
-      streamedSecond?.content.kind === "text" &&
-      streamedSecond.content.text === "stream page two",
+    streamedFirst?.data.kind === "text" &&
+      streamedFirst.data.text === "stream page one" &&
+      streamedSecond?.data.kind === "text" &&
+      streamedSecond.data.text === "stream page two",
     "Explicit GUI buffers did not become visible together",
   );
   successfulBatch(
@@ -364,7 +379,7 @@ export async function exerciseGuiLifecycle(
   expect(empty.nodes.length === 0, "A new GuiRoot must start empty");
   const rootIncarnation = empty.rootIncarnation;
   const handle = (id: number) =>
-    client.createGuiNodeHandle(entity, rootIncarnation, id, 1);
+    client.createGuiNodeHandle(entity, rootIncarnation, id);
 
   // Edits and inspection pipelined in one ingress drain observe every edit.
   const [, , , pipelined] = await Promise.all([
@@ -374,7 +389,7 @@ export async function exerciseGuiLifecycle(
       rootIncarnation,
       id: 1,
       index: 0,
-      content: { kind: "container", containerKind: "column" },
+      data: { kind: "container", containerKind: "column" },
     }),
     client.editGui({
       action: "insert",
@@ -383,7 +398,8 @@ export async function exerciseGuiLifecycle(
       id: 2,
       parent: 1,
       index: 0,
-      content: { kind: "checkbox", checked: false },
+      data: { kind: "checkbox" },
+      values: { checked: false },
       style: { color: [0.2, 0.4, 0.6, 1], fontSize: 0.2 },
     }),
     client.editGui({
@@ -393,14 +409,15 @@ export async function exerciseGuiLifecycle(
       id: 3,
       parent: 1,
       index: 1,
-      content: { kind: "slider", value: 0.25, min: 0, max: 1, step: 0 },
+      data: { kind: "slider" },
+      values: { value: 0.25, min: 0, max: 1, step: 0 },
     }),
     client.inspectGui({ entity }),
   ]);
   expect(ids(pipelined) === "1,2,3", `Pipelined inspection ${ids(pipelined)}`);
 
-  // A regular styled panel may have more than the legacy 256 snapshot fields:
-  // inspection must preserve every named lane through the generated client.
+  // A styled panel keeps every node's style in one row table: inspection
+  // decodes all rows through the generated client, not named properties.
   const denseStyle = {
     enabled: true,
     width: 1,
@@ -427,27 +444,32 @@ export async function exerciseGuiLifecycle(
       id,
       parent: 1,
       index: id - 2,
-      content: { kind: "text", text: `dense ${id}` },
+      data: { kind: "text", text: `dense ${id}` },
       style: denseStyle,
     });
   }
-  const denseProperties = (await guiProperties(client, entity)).properties;
-  const densePropertyCount = Object.keys(denseProperties).length;
+  const denseRows = await guiStyleRows(client, entity);
   expect(
-    densePropertyCount > 256,
-    `Dense GuiRoot exposed only ${densePropertyCount} named properties`,
+    denseRows.size === 19,
+    `Dense GuiRoot exposed ${denseRows.size} node style rows`,
+  );
+  const lastBackground = denseRows.get(19)?.background_color;
+  expect(
+    Array.isArray(lastBackground) && lastBackground.length === 4,
+    "Dense GuiRoot inspection omitted the last node's style",
   );
   expect(
-    denseProperties[guiProperty(19, "background_color")]?.kind === "vec4",
-    "Dense GuiRoot inspection omitted the last node's style",
+    Object.keys((await guiProperties(client, entity)).properties).length === 0,
+    "Node style was also stored as named properties",
   );
   for (let id = 19; id >= 4; id--) {
     await client.editGui({ action: "remove", handle: handle(id) });
   }
 
-  // Long named-part lanes make one panel's descriptor table exceed the former
-  // 64 KiB byte bound. Beyond the message budget, inspection fails explicitly
-  // without truncating state, and the same connection remains usable.
+  // Long extension property names make one panel's descriptor table exceed
+  // the former 64 KiB byte bound. Beyond the message budget, inspection fails
+  // explicitly without truncating state, and the same connection remains
+  // usable.
   const denseRef = { kind: "alias", alias: 81 } as const;
   const denseEntity = aliasId(
     await client.batch([
@@ -464,11 +486,10 @@ export async function exerciseGuiLifecycle(
       .rootIncarnation,
     id: 1,
     index: 0,
-    content: { kind: "container", containerKind: "column" },
+    data: { kind: "container", containerKind: "column" },
   });
-  const densePart = (index: number) =>
-    guiPartProperty(1, `dense_${index}_${"x".repeat(4000)}`, "color");
-  const setDenseLanes = async (from: number, to: number) => {
+  const densePart = (index: number) => `dense_${index}_${"x".repeat(4000)}`;
+  const setDenseProperties = async (from: number, to: number) => {
     for (let start = from; start < to; start += 50)
       successfulBatch(
         await client.batch(
@@ -482,7 +503,7 @@ export async function exerciseGuiLifecycle(
         ),
       );
   };
-  const denseLanes = async () => {
+  const denseProperties = async () => {
     const snapshot = (await client.inspect()).entities.find(
       (item) => item.id === denseEntity,
     );
@@ -492,12 +513,12 @@ export async function exerciseGuiLifecycle(
         components.find(
           (item) => item.component === client.components.GuiRoot!.id,
         )?.properties ?? {},
-      ).filter((name) => name.includes("_part_dense_")),
+      ).filter((name) => name.startsWith("dense_")),
     );
   };
-  await setDenseLanes(0, 20);
+  await setDenseProperties(0, 20);
   const encoder = new TextEncoder();
-  const [denseBase, denseEffective] = await denseLanes();
+  const [denseBase, denseEffective] = await denseProperties();
   // UTF-8 property names alone bound the descriptor table from below.
   const denseNameBytes = denseEffective!.reduce(
     (total, name) => total + encoder.encode(name).length,
@@ -508,9 +529,9 @@ export async function exerciseGuiLifecycle(
       denseBase!.length === 20 &&
       denseEffective!.length === 20 &&
       denseEffective!.includes(densePart(19)),
-    `Dense inspection decoded ${denseBase!.length}/${denseEffective!.length} lanes and ${denseNameBytes} name bytes`,
+    `Dense inspection decoded ${denseBase!.length}/${denseEffective!.length} properties and ${denseNameBytes} name bytes`,
   );
-  await setDenseLanes(20, 300);
+  await setDenseProperties(20, 300);
   let oversized: unknown;
   try {
     await client.inspect();
@@ -538,10 +559,10 @@ export async function exerciseGuiLifecycle(
         })),
       ),
     );
-  const [restoredBase] = await denseLanes();
+  const [restoredBase] = await denseProperties();
   expect(
     restoredBase!.length === 20 && restoredBase!.includes(densePart(19)),
-    "Inspection after the oversized record lost or truncated named lanes",
+    "Inspection after the oversized record lost or truncated named properties",
   );
   successfulBatch(
     await client.batch([
@@ -592,13 +613,14 @@ export async function exerciseGuiLifecycle(
     client.editGui({
       action: "update",
       handle: handle(3),
-      patch: { content: { kind: "text", text: "paused" } },
+      patch: { data: { kind: "text", text: "paused" } },
     }),
     client.editGui({
       action: "update",
       handle: handle(3),
       patch: {
-        content: { kind: "slider", value: 0.25, min: 0, max: 1, step: 0 },
+        data: { kind: "slider" },
+        values: { value: 0.25, min: 0, max: 1, step: 0 },
       },
     }),
     client.editGui({
@@ -619,7 +641,7 @@ export async function exerciseGuiLifecycle(
     value: { kind: "scalar", value: 0.75 },
   });
 
-  // A partial style patch preserves omitted lanes.
+  // A partial style patch preserves omitted properties.
   await client.editGui({
     action: "update",
     handle: handle(2),
@@ -631,7 +653,7 @@ export async function exerciseGuiLifecycle(
     checkbox.style.opacity === 0.5 &&
       Math.abs(checkbox.style.fontSize! - 0.2) < 1e-6 &&
       Math.abs(checkbox.style.color![1] - 0.4) < 1e-6,
-    `Style patch replaced omitted lanes: ${JSON.stringify(checkbox.style)}`,
+    `Style patch replaced omitted properties: ${JSON.stringify(checkbox.style)}`,
   );
 
   // Clearing the tree through a generic write or adding raw Surface items is rejected.
@@ -668,24 +690,30 @@ export async function exerciseGuiLifecycle(
     "Rejected writes changed the tree",
   );
 
-  // Named-part properties die with their node; stale handles cannot retarget.
-  const part = guiPartProperty(2, "background", "color");
-  successfulBatch(
-    await client.batch([
-      {
-        kind: "setDynamicProperty",
-        entity: { kind: "handle", id: entity },
-        component: client.components.GuiRoot!.id,
-        name: part,
-        value: { kind: "vec4", value: [1, 0, 0, 1] },
-      },
-    ]),
+  // Part rows die with their node; stale handles cannot retarget.
+  await client.editGui({
+    action: "updatePart",
+    handle: handle(2),
+    part: "background",
+    patch: { color: [1, 0, 0, 1] },
+  });
+  const partNodes = async () => {
+    const table = (await guiProperties(client, entity)).fields.part_state as
+      | { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
+      | undefined;
+    expect(table?.rows instanceof Map, "GuiRoot inspection omitted part_state");
+    return [...table.rows.values()].map((row) => row.node);
+  };
+  expect(
+    (await partNodes()).includes(2),
+    "A part override did not create the node's part row",
   );
   await client.editGui({ action: "remove", handle: handle(2) });
-  const properties = (await guiProperties(client, entity)).properties;
+  const remaining = await guiStyleRows(client, entity);
+  const parts = await partNodes();
   expect(
-    !(part in properties) && !(guiProperty(2, "opacity") in properties),
-    `Removed node properties survived: ${Object.keys(properties).join()}`,
+    !parts.includes(2) && !remaining.has(2),
+    `Removed node rows survived: parts ${parts.join()}`,
   );
   await rejects(
     client.editGui({
@@ -703,12 +731,12 @@ export async function exerciseGuiLifecycle(
       id: 2,
       parent: 1,
       index: 0,
-      content: { kind: "text", text: "reused" },
+      data: { kind: "text", text: "reused" },
     }),
     "A removed node identity was reused",
   );
 
-  // Overlays cannot write out-of-range GUI lanes, and raw items hidden by an
+  // Overlays cannot write out-of-range GUI properties, and raw items hidden by an
   // overlay keep GUI ownership from being acquired until they are gone.
   const gui = client.components.GuiRoot!.id;
   const overlay = (
@@ -736,21 +764,17 @@ export async function exerciseGuiLifecycle(
       },
     ] as const;
   const invalid = await client.batch([
-    ...overlay("gui-panel", gui, []),
-    {
-      kind: "updateDynamicComponentStateOverlay",
-      owner: { kind: "alias", alias: 1 },
-      overlay: { kind: "alias", alias: 3 },
-      properties: { [guiProperty(3, "opacity")]: { kind: "f32", value: 2 } },
-      clear: [],
-    },
+    ...overlay("gui-panel", gui, [
+      {
+        offset: GuiRoot.node_styleOffset(3, "opacity"),
+        value: { kind: "dynamic", value: { kind: "f32", value: 2 } },
+      },
+    ]),
   ]);
   expect(!invalid.ok, "An out-of-range GUI overlay value was accepted");
-  const opacity = (await guiProperties(client, entity)).properties[
-    guiProperty(3, "opacity")
-  ];
+  const opacity = (await guiStyleRows(client, entity)).get(3)?.opacity;
   expect(
-    opacity?.value === 1,
+    opacity === 1,
     `Rejected overlay changed opacity: ${JSON.stringify(opacity)}`,
   );
 
@@ -835,7 +859,7 @@ export async function exerciseGuiLifecycle(
   );
   await restored.editGui({
     action: "setControlValue",
-    handle: restored.createGuiNodeHandle(panel.id, after.rootIncarnation, 3, 1),
+    handle: restored.createGuiNodeHandle(panel.id, after.rootIncarnation, 3),
     expectedRevision: 5,
     value: { kind: "scalar", value: 0.5 },
   });
@@ -850,7 +874,7 @@ export async function exerciseGuiLifecycle(
     rootIncarnation: String(rootIncarnation),
     restoredIncarnation: String(after.rootIncarnation),
     nodes: ids(after),
-    densePropertyCount,
+    denseStyleRows: denseRows.size,
     denseNameBytes,
   };
 }

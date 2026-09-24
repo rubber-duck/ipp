@@ -637,7 +637,7 @@ fn validate_skin_sample(
 fn skin_samples_match(actual: &crate::DynamicValue, expected: &crate::DynamicValue) -> bool {
     const EPSILON: f32 = 1.0e-5;
 
-    let lanes = |actual: &[f32], expected: &[f32]| {
+    let components_match = |actual: &[f32], expected: &[f32]| {
         actual
             .iter()
             .zip(expected)
@@ -648,10 +648,10 @@ fn skin_samples_match(actual: &crate::DynamicValue, expected: &crate::DynamicVal
             (*actual - *expected).abs() <= EPSILON
         }
         (crate::DynamicValue::Vec2(actual), crate::DynamicValue::Vec2(expected)) => {
-            lanes(actual, expected)
+            components_match(actual, expected)
         }
         (crate::DynamicValue::Vec4(actual), crate::DynamicValue::Vec4(expected)) => {
-            lanes(actual, expected)
+            components_match(actual, expected)
         }
         _ => false,
     }
@@ -676,6 +676,5 @@ fn skin_animation_owner_live(
         .world
         .components
         .gui_root(owner.entity.index() as usize)
-        .and_then(|root| root.nodes().node(owner.primitive.node))
-        .is_some_and(|node| node.lifetime == owner.primitive.lifetime)
+        .is_some_and(|root| root.nodes().node(owner.primitive.node).is_some())
 }

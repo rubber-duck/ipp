@@ -2,7 +2,12 @@
  * runtime's child-list semantics. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { GuiEdit, GuiNodeContent, GuiNodeHandle } from "@ipp/client";
+import type {
+  GuiEdit,
+  GuiNodeData,
+  GuiNodeHandle,
+  GuiNodeValues,
+} from "@ipp/client";
 import {
   GUI_COLUMN_HOST_TYPE,
   GUI_SLIDER_HOST_TYPE,
@@ -16,13 +21,12 @@ import { diffGuiTree, type GuiAcknowledgedNode } from "../src/gui/diff.js";
 
 const NEXT_ID = 100;
 
-function handle(nodeId: number, lifetime: number): GuiNodeHandle {
+function handle(nodeId: number): GuiNodeHandle {
   return {
     session: 1n,
     entity: 100n,
     rootIncarnation: 1n,
     nodeId,
-    nodeLifetime: lifetime,
   };
 }
 
@@ -40,18 +44,20 @@ function text(identity: number, parent: number, value = `line ${identity}`) {
 function node(
   identity: number,
   parent: number | undefined,
-  content: GuiNodeContent,
+  data: GuiNodeData,
+  values: GuiNodeValues = {},
 ): GuiDescribedNode {
   return {
     identity,
     parent,
     type:
-      content.kind === "container"
+      data.kind === "container"
         ? GUI_COLUMN_HOST_TYPE
-        : content.kind === "slider"
+        : data.kind === "slider"
           ? GUI_SLIDER_HOST_TYPE
           : GUI_TEXT_HOST_TYPE,
-    content,
+    data,
+    values,
     style: normalizeGuiStyle({}),
     nodeRef: null,
     onAction: undefined,
@@ -68,8 +74,8 @@ function acknowledge(nodes: readonly GuiDescribedNode[], withOrder = true) {
         nodeId: entry.identity,
         parent: entry.parent,
         parentId: entry.parent,
-        lifetime: 1,
-        content: entry.content,
+        data: entry.data,
+        values: entry.values,
         style: entry.style,
       },
     ]),
@@ -203,7 +209,8 @@ const insert = (id: number, index: number, identity: number) => ({
   id,
   parent: 1,
   index,
-  content: { kind: "text", text: `line ${identity}` },
+  data: { kind: "text", text: `line ${identity}` },
+  values: {},
   style: normalizeGuiStyle({}),
 });
 
@@ -225,24 +232,24 @@ test("inserts at the head, middle and tail emit one insert and no moves", () => 
 
 test("a removal emits one remove and no moves", () => {
   assert.deepEqual(converge(log([2, 3, 4]), log([2, 4])).edits, [
-    { action: "remove", handle: handle(3, 1) },
+    { action: "remove", handle: handle(3) },
   ]);
 });
 
 test("a prepended log line with the oldest dropped emits no moves", () => {
   assert.deepEqual(converge(log([2, 3, 4, 5]), log([6, 2, 3, 4])).edits, [
-    { action: "remove", handle: handle(5, 1) },
+    { action: "remove", handle: handle(5) },
     insert(NEXT_ID, 0, 6),
   ]);
 });
 
 test("a reorder moves only the children leaving their relative order", () => {
   assert.deepEqual(converge(log([2, 3, 4, 5]), log([5, 2, 3, 4])).edits, [
-    { action: "move", handle: handle(5, 1), parent: 1, index: 0 },
+    { action: "move", handle: handle(5), parent: 1, index: 0 },
   ]);
   assert.deepEqual(converge(log([2, 3, 4, 5]), log([3, 2, 5, 4])).edits, [
-    { action: "move", handle: handle(2, 1), parent: 1, index: 1 },
-    { action: "move", handle: handle(4, 1), parent: 1, index: 3 },
+    { action: "move", handle: handle(2), parent: 1, index: 1 },
+    { action: "move", handle: handle(4), parent: 1, index: 3 },
   ]);
 });
 
@@ -252,14 +259,14 @@ test("a slider drag frame emits one value edit and no moves", () => {
   const panel = (value: number) => [
     column(1),
     text(2, 1, `GAIN ${Math.round(value * 100)} PERCENT`),
-    node(3, 1, { kind: "slider", value, min: 0, max: 1, step: 0 }),
+    node(3, 1, { kind: "slider" }, { value, min: 0, max: 1, step: 0 }),
     text(4, 1, "footer"),
   ];
   assert.deepEqual(converge(panel(0.25), panel(0.5)).edits, [
     {
       action: "update",
-      handle: handle(2, 1),
-      patch: { content: { kind: "text", text: "GAIN 50 PERCENT" } },
+      handle: handle(2),
+      patch: { data: { kind: "text", text: "GAIN 50 PERCENT" }, values: {} },
     },
   ]);
 });

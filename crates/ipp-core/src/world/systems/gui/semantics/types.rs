@@ -5,7 +5,7 @@
 //! [`super::snapshot`] for snapshots and
 //! [`super::actions`] for action translation.
 
-use crate::{EntityId, GuiControlValue, GuiInputTarget, GuiNodeContent, GuiNodeId};
+use crate::{EntityId, GuiControlValue, GuiInputTarget, GuiNodeData, GuiNodeId};
 
 /// Semantic role of one GUI node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,8 +48,6 @@ pub enum GuiSemanticActionKind {
 pub struct GuiSemanticNode {
     /// Stable root-local identity.
     pub id: GuiNodeId,
-    /// Node lifetime fencing reuse.
-    pub lifetime: u32,
     /// Logical parent, or None for the root.
     pub parent: Option<GuiNodeId>,
     /// Semantic role derived from structural content.
@@ -83,8 +81,6 @@ pub struct GuiSemanticNode {
 pub struct GuiSemanticFocus {
     /// Focused node identity.
     pub id: GuiNodeId,
-    /// Node lifetime fencing reuse.
-    pub lifetime: u32,
 }
 
 /// Headless semantic snapshot of one panel.
@@ -120,38 +116,32 @@ impl GuiSemanticTree {
     }
 }
 
-/// Role for one structural declaration.
-pub fn role_for_content(content: &GuiNodeContent) -> GuiSemanticRole {
-    match content {
-        GuiNodeContent::Container(_) => GuiSemanticRole::Container,
-        GuiNodeContent::Text(_) => GuiSemanticRole::Text,
-        GuiNodeContent::Drawing => GuiSemanticRole::Drawing,
-        GuiNodeContent::Image {
-            ..
-        } => GuiSemanticRole::Image,
-        GuiNodeContent::Button {
+/// Role for one node kind.
+pub fn role_for_data(data: &GuiNodeData) -> GuiSemanticRole {
+    match data {
+        GuiNodeData::Container(_) => GuiSemanticRole::Container,
+        GuiNodeData::Text(_) => GuiSemanticRole::Text,
+        GuiNodeData::Drawing => GuiSemanticRole::Drawing,
+        GuiNodeData::Image => GuiSemanticRole::Image,
+        GuiNodeData::Button {
             ..
         } => GuiSemanticRole::Button,
-        GuiNodeContent::Checkbox {
-            ..
-        } => GuiSemanticRole::Checkbox,
-        GuiNodeContent::Slider {
-            ..
-        } => GuiSemanticRole::Slider,
-        GuiNodeContent::TextInput {
+        GuiNodeData::Checkbox => GuiSemanticRole::Checkbox,
+        GuiNodeData::Slider => GuiSemanticRole::Slider,
+        GuiNodeData::TextInput {
             ..
         } => GuiSemanticRole::TextInput,
     }
 }
 
-/// Human-readable name for one structural declaration, if any.
-pub fn name_for_content(content: &GuiNodeContent) -> Option<String> {
-    match content {
-        GuiNodeContent::Button {
+/// Human-readable name for one node's authored strings, if any.
+pub fn name_for_data(data: &GuiNodeData) -> Option<String> {
+    match data {
+        GuiNodeData::Button {
             label,
         } => Some(label.clone()),
-        GuiNodeContent::Text(text) => Some(text.clone()),
-        GuiNodeContent::TextInput {
+        GuiNodeData::Text(text) => Some(text.clone()),
+        GuiNodeData::TextInput {
             placeholder,
             ..
         } if !placeholder.is_empty() => Some(placeholder.clone()),
@@ -251,8 +241,6 @@ pub struct GuiSemanticActionRequest {
     pub root_incarnation: u64,
     /// Snapshot node identity.
     pub node: GuiNodeId,
-    /// Snapshot node lifetime fencing reuse.
-    pub lifetime: u32,
     /// Caller-observed committed revision the action addresses.
     pub expected_revision: u32,
     /// Action to dispatch through the validated control policy.

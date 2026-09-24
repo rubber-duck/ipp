@@ -446,7 +446,7 @@ fn resource_revisions_repaint_immediately() {
 /// (node 2), and its root incarnation.
 #[cfg(feature = "gui")]
 fn gui_panel(world: &mut WorldContext<'_>, z: f32) -> (EntityId, u64) {
-    use ipp_core::{GuiCommand, GuiContainerKind, GuiNodeContent, GuiNodeId, GuiNodeStyle};
+    use ipp_core::{GuiCommand, GuiContainerKind, GuiNodeData, GuiNodeId, GuiNodeStyle};
 
     let panel = create(
         world,
@@ -471,19 +471,19 @@ fn gui_panel(world: &mut WorldContext<'_>, z: f32) -> (EntityId, u64) {
         background_color: Some([0.2, 0.3, 0.4, 1.0]),
         ..Default::default()
     };
-    for (id, parent, content, style) in [
+    for (id, parent, data, values, style) in [
         (
             1,
             None,
-            GuiNodeContent::Container(GuiContainerKind::Column),
+            GuiNodeData::Container(GuiContainerKind::Column),
+            ipp_core::GuiNodeDataRow::default(),
             style(1.0, 1.0),
         ),
         (
             2,
             Some(GuiNodeId(1)),
-            GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            GuiNodeData::Checkbox,
+            ipp_core::GuiNodeDataRow::checkbox(false),
             style(1.0, 1.0),
         ),
     ] {
@@ -496,7 +496,8 @@ fn gui_panel(world: &mut WorldContext<'_>, z: f32) -> (EntityId, u64) {
                     id: GuiNodeId(id),
                     parent,
                     index: 0,
-                    content,
+                    data,
+                    values,
                     style,
                 },
             )
@@ -519,7 +520,7 @@ fn interaction_presents_directly_and_returns_only_to_current_images() {
     let (mut renderer, state, world_id, _) = scene(&mut host);
     let mut world = host.world_mut(world_id).unwrap();
     let (panel, incarnation) = gui_panel(&mut world, -1.0);
-    let checkbox = GuiNodeHandle::new(GUI_SESSION, panel, incarnation, GuiNodeId(2), 1);
+    let checkbox = GuiNodeHandle::new(GUI_SESSION, panel, incarnation, GuiNodeId(2));
     let input = |world: &mut WorldContext<'_>, command| {
         world
             .enqueue_gui_input_command(GUI_SESSION, command)
@@ -632,7 +633,7 @@ fn published_paint_revisions_rebuild_retained_boxes_exactly_when_paint_changes()
             ..ALWAYS
         }),
     );
-    let checkbox = GuiNodeHandle::new(GUI_SESSION, panel, incarnation, GuiNodeId(2), 1);
+    let checkbox = GuiNodeHandle::new(GUI_SESSION, panel, incarnation, GuiNodeId(2));
 
     let cold = frame(&mut renderer, &mut world, 0.01);
     assert!(cold.gui_rebuilds > 0, "{cold:?}");

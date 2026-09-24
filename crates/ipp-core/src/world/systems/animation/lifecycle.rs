@@ -338,10 +338,7 @@ impl AnimationSystem {
                             driver.identity().entity,
                             driver.identity().property.component(),
                         )))
-                        && matches!(
-                            driver.description().property,
-                            AnimationTrackTarget::DynamicProperty { .. }
-                        )
+                        && departs_individually(&driver.description().property)
                         && !read.animation_binding_alive(*driver, context.staged)
                 })
                 .map(|driver| driver.description().clone())
@@ -490,4 +487,16 @@ impl AnimationSystem {
             context.restore_evaluated_component(entity, value);
         }
     }
+}
+
+/// A departed dynamic property, removed row or cleared optional row property
+/// drops only its own drivers; other targets invalidate the whole controller.
+fn departs_individually(target: &AnimationTrackTarget) -> bool {
+    matches!(target, AnimationTrackTarget::DynamicProperty { .. })
+        || target.property().is_some_and(|property| {
+            property
+                .offsets
+                .iter()
+                .any(|offset| crate::components::rows::row_region(*offset).is_some())
+        })
 }

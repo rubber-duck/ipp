@@ -28,6 +28,10 @@ pub enum FieldKind {
     Bytes = 6,
     /// Canonical boolean flag.
     Bool = 7,
+    /// Encoded schema rows table at a rows field's real offset.
+    Rows = 8,
+    /// Absence of an optional row property; only valid at row property addresses.
+    Unset = 9,
 }
 
 /// Fully owned, resolved field replacement.
@@ -49,6 +53,10 @@ pub enum FieldValue {
     Bytes(Vec<u8>),
     /// Boolean replacement.
     Bool(bool),
+    /// Whole schema rows table in the [`Rows`](super::rows::Rows) table encoding.
+    Rows(Vec<u8>),
+    /// Clear an optional row property, or read one that is absent.
+    Unset,
 }
 
 impl FieldValue {
@@ -63,6 +71,8 @@ impl FieldValue {
             Self::String(_) => FieldKind::String,
             Self::Bytes(_) => FieldKind::Bytes,
             Self::Bool(_) => FieldKind::Bool,
+            Self::Rows(_) => FieldKind::Rows,
+            Self::Unset => FieldKind::Unset,
         }
     }
 }
@@ -145,6 +155,13 @@ pub trait SchemaComponent: Sized {
 
     /// Stream target size/alignment, exposed offsets/types, and actual defaults.
     fn write_contract(sink: &mut impl ContractSink);
+
+    /// Visit present asset properties held in schema rows fields.
+    fn visit_row_assets(
+        &self,
+        _visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
+    ) {
+    }
 }
 
 /// Sealed-by-convention primitive field codec used by the derive.

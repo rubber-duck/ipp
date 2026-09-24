@@ -1,10 +1,12 @@
-//! Skin transitions under interruption, streamed lane edits, node and root
+//! Skin transitions under interruption, streamed theme edits, node and root
 //! removal, and asset progression between input admission and evaluation.
-//! Every destination shares one motion clip that animates the idle
-//! `background` lanes, like the gallery skins, and every frame commits a
+//! Every destination shares one motion clip that animates node 2's
+//! `background` channels, like the gallery skins, and every frame commits a
 //! second control's value through GUI input, like a dragged slider.
 
 use super::*;
+use crate::GuiNodeDataRow;
+use crate::world::systems::gui::test_support::checkbox_node;
 
 const FRAME: f64 = 1.0 / 60.0;
 
@@ -24,7 +26,8 @@ const SAMPLES: [SkinMotionSample; 5] = [
     (0.4, [0.2, 0.8, 0.94, 1.0], 1.0, [1.0, 1.0]),
 ];
 
-/// Node 2 skin lanes authored from the shared clip's samples.
+/// Theme 2, which node 2 references, authored from the shared clip's
+/// samples.
 fn shared_skin_root(source: &AssetSource) -> GuiRoot {
     let mut root = GuiRoot::default();
     for (part, sample) in [
@@ -73,19 +76,18 @@ fn insert_skin_tree(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
         .inspect_gui(panel, None, 1, 1)
         .unwrap()
         .root_incarnation;
-    let checkbox = GuiNodeContent::Checkbox {
-        checked: false,
-    };
-    for (id, parent, index, content) in [
+    let checkbox = checkbox_node(false);
+    for (id, parent, index, node) in [
         (
             1,
             None,
             0,
-            GuiNodeContent::Container(GuiContainerKind::Column),
+            GuiNodeData::Container(GuiContainerKind::Column).into(),
         ),
         (2, Some(GuiNodeId(1)), 0, checkbox.clone()),
         (3, Some(GuiNodeId(1)), 1, checkbox),
     ] {
+        let node: crate::world::systems::gui::test_support::AuthoredNode = node;
         context
             .enqueue_gui_command(
                 SESSION,
@@ -95,8 +97,10 @@ fn insert_skin_tree(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
                     id: GuiNodeId(id),
                     parent,
                     index,
-                    content,
+                    data: node.data,
+                    values: node.values,
                     style: GuiNodeStyle {
+                        theme: Some(id),
                         width: Some(if id == 1 {
                             10.0
                         } else {
@@ -133,9 +137,8 @@ fn insert_committing_control(host: &mut HostRuntime, world: WorldId, panel: crat
                 id: GuiNodeId(3),
                 parent: Some(GuiNodeId(1)),
                 index: 1,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle {
                     width: Some(2.0),
                     height: Some(1.0),
@@ -228,8 +231,8 @@ fn assert_between(paint: [f32; 4], from: SkinMotionSample, to: SkinMotionSample)
     );
 }
 
-/// The paint and effective idle lanes rest on `state`; the authored idle
-/// lanes stay the idle sample.
+/// The paint and the effective live channels rest on `state`; the authored
+/// idle theme values stay the idle sample.
 fn assert_settled(
     host: &mut HostRuntime,
     world: WorldId,
@@ -237,7 +240,7 @@ fn assert_settled(
     state: SkinMotionSample,
 ) {
     assert_color_near(panel_box_color(host, world, panel), state.1);
-    let [base, effective] = idle_background_lanes(host, world, panel);
+    let [base, effective] = idle_background_properties(host, world, panel);
     assert_eq!(
         (base.color, base.opacity, base.scale),
         (Some(IDLE.1), Some(IDLE.2), Some(IDLE.3))
@@ -309,10 +312,19 @@ fn streamed_edit_of_the_animated_idle_opacity_mid_transition_keeps_the_authored_
     let partway = *frames(&mut host, world, panel, 6).last().unwrap();
     assert_between(partway, DISABLED, IDLE);
 
-    // A Host command chunk edits the idle opacity lane the in-flight
-    // transition animates. It stages the authored value, never the
-    // retained transition output.
-    let opacity = GuiRoot::part_property_name(GuiNodeId(2), "background", "opacity").unwrap();
+    // A Host command chunk edits the idle opacity of the theme whose
+    // channels the in-flight transition animates, by row offset. It stages
+    // the authored theme value, never the retained transition output.
+    let opacity = {
+        let context = host.world_mut(world).unwrap();
+        let root = context.gui_root(panel).unwrap();
+        let slot = GuiRoot::theme_part_slot(
+            root.theme_slot(2).unwrap(),
+            crate::systems::gui::GuiPartId::base(GuiPrimitivePart::Background),
+        )
+        .unwrap();
+        GuiRoot::theme_part_offset(slot, crate::systems::gui::GuiPartProperty::Opacity).unwrap()
+    };
     {
         let mut context = host.world_mut(world).unwrap();
         // Like the Host, defer the chunk while earlier ingress drains.
@@ -325,11 +337,13 @@ fn streamed_edit_of_the_animated_idle_opacity_mid_transition_keeps_the_authored_
         let outcome = context
             .apply_command_chunk(Batch {
                 id: 60,
-                operations: vec![Command::SetDynamicProperty {
+                operations: vec![Command::SetField {
                     entity: EntityRef::Handle(panel),
                     component: ComponentValue::GUI_ROOT,
-                    name: opacity,
-                    value: DynamicValue::F32(0.8),
+                    field: FieldWrite {
+                        offset: opacity,
+                        value: FieldValue::Dynamic(DynamicValue::F32(0.8)),
+                    },
                 }],
             })
             .unwrap();
@@ -338,18 +352,17 @@ fn streamed_edit_of_the_animated_idle_opacity_mid_transition_keeps_the_authored_
     }
     for _ in 0..30 {
         host.world_mut(world).unwrap().step(FRAME).unwrap();
-        let [base, _] = idle_background_lanes(&mut host, world, panel);
+        let [base, _] = idle_background_properties(&mut host, world, panel);
         assert_eq!(base.opacity, Some(0.8));
         assert_eq!(base.color, Some(IDLE.1));
     }
 
-    // The edited idle lane no longer matches the clip's idle sample, so the
-    // returned idle state presents the authored lanes.
-    let [base, effective] = idle_background_lanes(&mut host, world, panel);
+    // The edited idle opacity no longer matches the clip's idle sample, so
+    // the returned idle state presents the authored theme values.
+    let [base, _] = idle_background_properties(&mut host, world, panel);
     assert_eq!(base.opacity, Some(0.8));
-    assert!((effective.opacity.unwrap() - 0.8).abs() <= 1.0e-5);
-    assert_color_near(effective.color.unwrap(), IDLE.1);
     assert_color_near(panel_box_color(&mut host, world, panel), IDLE.1);
+    assert!((panel_box_opacity(&mut host, world, panel) - 0.8).abs() <= 1.0e-5);
 }
 
 #[test]
@@ -385,7 +398,7 @@ fn removing_the_node_or_root_mid_transition_withdraws_before_the_slot_is_reused(
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::RemoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -397,7 +410,7 @@ fn removing_the_node_or_root_mid_transition_withdraws_before_the_slot_is_reused(
     assert_eq!(base, effective);
 
     // Root removal mid-transition, then a fresh root incarnation on the same
-    // entity reuses node 2 and transitions from its own authored lanes.
+    // entity reuses node 2 and transitions from its own authored theme.
     let source = skin_motion_source("skin-removal");
     for round in 0..2 {
         {
@@ -580,7 +593,7 @@ fn skin_clip_completing_or_suspending_between_input_admission_and_step() {
         let key = host.asset_resources().find(&source).unwrap();
         host.asset_resources_mut().unload(key);
     });
-    let [base, _] = idle_background_lanes(&mut host, world, panel);
+    let [base, _] = idle_background_properties(&mut host, world, panel);
     assert_eq!(
         (base.color, base.opacity, base.scale),
         (Some(IDLE.1), Some(IDLE.2), Some(IDLE.3))
@@ -686,13 +699,10 @@ fn switch_knob_alignment_glides_between_unchecked_and_checked_ends() {
     // colour, opacity and scale stay constant so only alignment moves.
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
     let source = skin_motion_source("switch-knob");
-    // Sample times are exact in the f32 time lane.
+    // Sample times are exact in the f32 time property.
     let ends = [(0.0, -1.0), (0.5, 1.0)];
-    let track = |lane: &str, value: &dyn Fn(f32) -> DynamicValue| AnimationTrack {
-        target: AnimationTrackTarget::DynamicProperty {
-            component: ComponentValue::GUI_ROOT,
-            name: GuiRoot::part_property_name(GuiNodeId(2), "icon", lane).unwrap(),
-        },
+    let track = |channel: GuiPartChannel, value: &dyn Fn(f32) -> DynamicValue| AnimationTrack {
+        target: skin_channel_hint(channel),
         keys: ends
             .iter()
             .map(|&(time, align)| AnimationKeyframe {
@@ -711,10 +721,10 @@ fn switch_knob_alignment_glides_between_unchecked_and_checked_ends() {
     let clip = AnimationClip::new(
         0.5,
         vec![
-            track("color", &|_| DynamicValue::Vec4(WHITE)),
-            track("opacity", &|_| DynamicValue::F32(1.0)),
-            track("scale", &|_| DynamicValue::Vec2([1.0, 1.0])),
-            track("align_x", &|align| DynamicValue::F32(align)),
+            track(GuiPartChannel::Color, &|_| DynamicValue::Vec4(WHITE)),
+            track(GuiPartChannel::Opacity, &|_| DynamicValue::F32(1.0)),
+            track(GuiPartChannel::Scale, &|_| DynamicValue::Vec2([1.0, 1.0])),
+            track(GuiPartChannel::AlignX, &|align| DynamicValue::F32(align)),
         ],
     )
     .unwrap();

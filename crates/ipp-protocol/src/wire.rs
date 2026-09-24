@@ -532,6 +532,22 @@ layouts! {
         field!("tag", Variant => "snapshot-value"),
         field!("value", Bytes, MESSAGE_BYTES),
     ];
+    // A whole schema rows table in the component's row layout.
+    "value-rows" [Base] => [
+        field!("tag", Variant => "value"),
+        field!("value", Bytes, MESSAGE_BYTES),
+    ];
+    "snapshot-value-rows" [Base] => [
+        field!("tag", Variant => "snapshot-value"),
+        field!("value", Bytes, MESSAGE_BYTES),
+    ];
+    // Absence of an optional schema row property.
+    "value-unset" [Base] => [
+        field!("tag", Variant => "value"),
+    ];
+    "snapshot-value-unset" [Base] => [
+        field!("tag", Variant => "snapshot-value"),
+    ];
     // An effective component repeats its base descriptor table by reference.
     "snapshot-value-base-descriptors" [Base] => [
         field!("tag", Variant => "snapshot-value"),
@@ -991,6 +1007,10 @@ tags! {
     SnapshotValue [Base] SNAPSHOT_VALUE_STRING = ipp_core::components::schema::FieldKind::String as u8 => "snapshot-value-string";
     SnapshotValue [Base] SNAPSHOT_VALUE_BYTES = ipp_core::components::schema::FieldKind::Bytes as u8 => "snapshot-value-bytes";
     SnapshotValue [Base] SNAPSHOT_VALUE_BASE_DESCRIPTORS = 12 => "snapshot-value-base-descriptors";
+    Value [Base] VALUE_ROWS = ipp_core::components::schema::FieldKind::Rows as u8 => "value-rows";
+    SnapshotValue [Base] SNAPSHOT_VALUE_ROWS = ipp_core::components::schema::FieldKind::Rows as u8 => "snapshot-value-rows";
+    Value [Base] VALUE_UNSET = ipp_core::components::schema::FieldKind::Unset as u8 => "value-unset";
+    SnapshotValue [Base] SNAPSHOT_VALUE_UNSET = ipp_core::components::schema::FieldKind::Unset as u8 => "snapshot-value-unset";
     SnapshotReference [Base] SNAPSHOT_REF_HANDLE = REF_HANDLE => "empty";
 
     Request [Animation] REQUEST_CONTROLLER_CREATE = 15 => "request-controller-create";
@@ -1113,18 +1133,23 @@ pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
     ),
     #[cfg(feature = "gui")]
     (
+        "gui-edit",
+        "version-u8=4;count-u32;command=action-u8:insert1|update2|move3|remove4|set-control-value5|update-theme6|remove-theme7|update-part8;handle=session-u64,entity-u64,root-incarnation-u64,node-u32;insert=entity-u64,root-incarnation-u64,id-u32,parent?-bool-u32,index-u32,data,values=GuiRoot.node_data-row,style=GuiRoot.node_style-row;update=handle,data?-bool-data,values?-bool-GuiRoot.node_data-row,style-changed-mask,style-set-mask,set-values-in-node_style-layout-order;move=handle,parent?-bool-u32,index-u32;remove=handle;set-control-value=handle,expected-revision-u32,value-tag-u8:none0|bool1|scalar2|text3-utf8;update-theme=entity-u64,root-incarnation-u64,theme-u32,part-u8-below65-(base-part*13+qualifier:base0|state-idle-hovered-pressed-disabled*3+1+variant-none0-checked1-unchecked2),part-patch;remove-theme=entity-u64,root-incarnation-u64,theme-u32;update-part=handle,base-part-u8:background0|fill1|label2|icon3|focus-ring4,part-patch;part-patch=changed-mask,set-mask-over-first23-GuiRoot.theme_parts-properties,set-values-in-layout-order;data=tag-u8:container1-kind-u8|text2-utf8|drawing3|image4|button5-utf8|checkbox6|slider7|text-input8-utf8-utf8;row=presence-mask-then-present-values-in-row-layout-order;changed-unset-clears-optional;inspect=version-u8=2,entity-u64,incarnation-u64,count-u32,(id-u32,parent-u32-0-none,revision-u32,children-count-u32-u32*,data,values-row,control-value,style-row)*;ordered-group-stops-at-first-failure",
+    ),
+    #[cfg(feature = "gui")]
+    (
         "gui-input",
-        "version-u8=1;action-u8:pointer-down1|pointer-up2|pointer-move3|pointer-cancel4|scroll5|key6|text7|focus8|blur9|set-text-selection10|update-composition11|commit-composition12|cancel-composition13;pointer-u32;panel?-bool-entity-u64;position-f32x2;button-u8:primary0|secondary1|auxiliary2;blockers-count-u32-max1024-(entity-u64,distance-f32);panel-distance?-bool-f32;delta-f32x2;key-u8:tab0|enter1|space2|escape3|backspace4|delete5|left6|right7|up8|down9|home10|end11;pressed-bool;text-utf8-max65536;focus=session-u64,entity-u64,root-incarnation-u64,node-u32,lifetime-u32;selection-u32x2;composition=text-utf8,caret-u32x2;finite-values;ordered-correlated;session-fenced;nonzero-request;overlay-nearest-without-panel",
+        "version-u8=1;action-u8:pointer-down1|pointer-up2|pointer-move3|pointer-cancel4|scroll5|key6|text7|focus8|blur9|set-text-selection10|update-composition11|commit-composition12|cancel-composition13;pointer-u32;panel?-bool-entity-u64;position-f32x2;button-u8:primary0|secondary1|auxiliary2;blockers-count-u32-max1024-(entity-u64,distance-f32);panel-distance?-bool-f32;delta-f32x2;key-u8:tab0|enter1|space2|escape3|backspace4|delete5|left6|right7|up8|down9|home10|end11;pressed-bool;text-utf8-max65536;focus=session-u64,entity-u64,root-incarnation-u64,node-u32;selection-u32x2;composition=text-utf8,caret-u32x2;finite-values;ordered-correlated;session-fenced;nonzero-request;overlay-nearest-without-panel",
     ),
     #[cfg(feature = "gui")]
     (
         "gui-observations",
-        "version-u8=3;unsolicited-request-id-0;chunked-like-resources-max128-per-message;observations=effects-count-u32,effect*,conflicts-count-u32,conflict*,cancellations-count-u32,cancel*,text-focus-count-u32-max1,text-focus-update?;text-focus-update=tag-u8:cleared0|focused1,session-u64,context-generation-u64,focus-generation-u64,focused-(entity-u64,root-incarnation-u64,node-u32,lifetime-u32,revision-u32,text-utf8-max65536,selection-u32x2,composition?-bool-(text-utf8-max65536,caret-u32x2));unhandled=count-u32,input*;effect=kind-u8:button0|control1,session-u64,source-tick-u64,effect-tick-u64,entity-u64,root-incarnation-u64,node-u32,lifetime-u32,path-count-u32-max65536,path-u32*,revision-u32?,value-tag-u8:bool1|scalar2|text3,text-utf8-max65536;conflict-cancel=session-u64,source-tick-u64,effect-tick-u64,target?-bool-(entity-u64,root-incarnation-u64,node-u32,lifetime-u32),reason-u8;conflict-reason:revision-mismatch0-expected-u32-found-u32|admission-failed1-reason-utf8|touch-arbitration2-owner-u32;cancel-reason:target-removed0|target-hidden1|session-replaced2|gesture-cancelled3;unhandled=session-u64,tick-u64,gui-input,reason-u8:no-panel-hit0|blocked1-entity-u64|stale-target2|no-focus3|no-capture4|not-focusable5|not-owner6;gui-input=version-u8=1-action-u8-see-gui-input;text-utf8-max65536;broadcast-effects-and-conflicts,text-focus-and-unhandled-supplier-only",
+        "version-u8=3;unsolicited-request-id-0;chunked-like-resources-max128-per-message;observations=effects-count-u32,effect*,conflicts-count-u32,conflict*,cancellations-count-u32,cancel*,text-focus-count-u32-max1,text-focus-update?;text-focus-update=tag-u8:cleared0|focused1,session-u64,context-generation-u64,focus-generation-u64,focused-(entity-u64,root-incarnation-u64,node-u32,revision-u32,text-utf8-max65536,selection-u32x2,composition?-bool-(text-utf8-max65536,caret-u32x2));unhandled=count-u32,input*;effect=kind-u8:button0|control1,session-u64,source-tick-u64,effect-tick-u64,entity-u64,root-incarnation-u64,node-u32,path-count-u32-max65536,path-u32*,revision-u32?,value-tag-u8:bool1|scalar2|text3,text-utf8-max65536;conflict-cancel=session-u64,source-tick-u64,effect-tick-u64,target?-bool-(entity-u64,root-incarnation-u64,node-u32),reason-u8;conflict-reason:revision-mismatch0-expected-u32-found-u32|admission-failed1-reason-utf8|touch-arbitration2-owner-u32;cancel-reason:target-removed0|target-hidden1|session-replaced2|gesture-cancelled3;unhandled=session-u64,tick-u64,gui-input,reason-u8:no-panel-hit0|blocked1-entity-u64|stale-target2|no-focus3|no-capture4|not-focusable5|not-owner6;gui-input=version-u8=1-action-u8-see-gui-input;text-utf8-max65536;broadcast-effects-and-conflicts,text-focus-and-unhandled-supplier-only",
     ),
     #[cfg(feature = "gui")]
     (
         "gui-semantics",
-        "snapshot-version-u8=1;action-version-u8=2;correlated-nonzero-request;bounded-maxdepth-32-limit-256;snapshot-query=entity-u64,max-depth-u32,limit-u32;action=entity-u64,root-incarnation-u64,node-u32-nonzero,lifetime-u32,expected-revision-u32,kind-u8:press0|toggle1|set-scalar2-value-f32|set-text3-value-utf8-max65536|focus4;snapshot=entity-u64,incarnation-u64,tick-u64,count-u32-max256,node*,focus?-bool-(id-u32,lifetime-u32);node=id-u32-nonzero,parent-u32-0-none,lifetime-u32,role-u8:container0|text1|drawing2|image3|button4|checkbox5|slider6|textinput7,name?-bool-utf8-max65536,value-tag-u8:none0|bool1|scalar2|text3-utf8-max65536,revision-u32,bounds-f32x4,enabled-bool,visible-bool,available-bool,actions-u8-list:press0|toggle1|set-scalar2|set-text3|focus4;revision-gated-set-control-value;stale-root-lifetime-revision-unknown-unsupported-refuse-as-host-error;oversized-text-rejected-whole;transient-only-focus-visible",
+        "snapshot-version-u8=1;action-version-u8=2;correlated-nonzero-request;bounded-maxdepth-32-limit-256;snapshot-query=entity-u64,max-depth-u32,limit-u32;action=entity-u64,root-incarnation-u64,node-u32-nonzero,expected-revision-u32,kind-u8:press0|toggle1|set-scalar2-value-f32|set-text3-value-utf8-max65536|focus4;snapshot=entity-u64,incarnation-u64,tick-u64,count-u32-max256,node*,focus?-bool-id-u32;node=id-u32-nonzero,parent-u32-0-none,role-u8:container0|text1|drawing2|image3|button4|checkbox5|slider6|textinput7,name?-bool-utf8-max65536,value-tag-u8:none0|bool1|scalar2|text3-utf8-max65536,revision-u32,bounds-f32x4,enabled-bool,visible-bool,available-bool,actions-u8-list:press0|toggle1|set-scalar2|set-text3|focus4;revision-gated-set-control-value;stale-root-node-revision-unknown-unsupported-refuse-as-host-error;oversized-text-rejected-whole;transient-only-focus-visible",
     ),
     ("host-request-magic", HOST_REQUEST_MAGIC_HEX),
     (
@@ -1136,11 +1161,6 @@ pub(crate) const CONVENTIONS: &[(&str, &str)] = &[
     (
         "mesh-skin-streams",
         "IPPM-v3;semantic4-format4=u8x4;semantic5-format5=f32x4;paired;indices=0..31;weights=finite-0..1-positive-sum-normalized;rigid-omits-streams",
-    ),
-    #[cfg(feature = "skeletal-animation")]
-    (
-        "skeleton-overrides",
-        "ascending-unique-joint-u32,local-trs-f32x10;empty=source-pose-or-rest;max32;quaternion-xyzw-normalized;positive-scale",
     ),
     ("endianness", "little"),
     ("bool", "u8;false=0;true=1;other-values-reject"),

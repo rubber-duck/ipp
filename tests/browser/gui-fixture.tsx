@@ -9,6 +9,7 @@ import type {
   GuiTextFocusState,
   GuiWorldClient,
 } from "@ipp/client";
+import { GUI_BASE_PARTS, GUI_PART_QUALIFIERS } from "@ipp/client";
 import {
   Camera,
   Entity,
@@ -54,6 +55,29 @@ const controlTheme: GuiControlTheme = {
     focusRing: { base: { color: [1, 0.72, 0.08, 1], opacity: 1 } },
   },
 };
+/** Background tones the named control theme switches between while text
+ * editing continues. */
+const TONES = [
+  [0.08, 0.18, 0.42, 1],
+  [0.62, 0.14, 0.08, 1],
+] as const;
+
+/** The panel's named control theme at one background tone. Editing a named
+ * theme updates its root theme rows in place; referencing nodes are not
+ * rewritten. */
+function tonedTheme(tone: number): GuiControlTheme {
+  return {
+    ...controlTheme,
+    name: "mounted-controls",
+    parts: {
+      ...controlTheme.parts,
+      background: {
+        ...controlTheme.parts.background,
+        base: { color: TONES[tone]!, opacity: 1, scale: [1, 1] },
+      },
+    },
+  };
+}
 const iconTheme: GuiControlTheme = {
   parts: {
     icon: { base: { color: [0.15, 0.9, 0.55, 1], opacity: 1, scale: [1, 1] } },
@@ -87,6 +111,7 @@ let cameraReady = false;
 let observationTrace: string[] = [];
 let renderedRevision = 0;
 let setCommitRevision: ((value: number) => void) | undefined;
+let setThemeTone: ((tone: number) => void) | undefined;
 let releaseCommitReply: (() => void) | undefined;
 let heldCommitStarted: Promise<void> | undefined;
 let heldCommitBatches = 0;
@@ -225,7 +250,10 @@ function Application({
 }): ReactElement {
   const [renderRevision, setRenderRevision] = useState(0);
   const [commitRevision, updateCommitRevision] = useState(0);
+  const [tone, setTone] = useState(0);
   setCommitRevision = updateCommitRevision;
+  setThemeTone = setTone;
+  const namedTheme = tonedTheme(tone);
   renderedRevision = renderRevision;
   rerenderEquivalent = () => setRenderRevision((value) => value + 1);
   const ready = useCallback((next: IppCanvasHandle) => {
@@ -288,7 +316,7 @@ function Application({
                 height={1.25}
                 text="a😀b"
                 placeholder="Edit"
-                theme={controlTheme}
+                theme={namedTheme}
                 onTextCommit={(event) => {
                   callbackValues.push(event.value);
                   callbackRenders.push(renderRevision);
@@ -315,7 +343,7 @@ function Application({
                   value={0.2}
                   min={0}
                   max={1}
-                  theme={controlTheme}
+                  theme={namedTheme}
                 />
               </Row>
               <Button
@@ -323,7 +351,7 @@ function Application({
                 width={4}
                 height={1.25}
                 label="Done"
-                theme={controlTheme}
+                theme={namedTheme}
                 onPress={() => {
                   presses += 1;
                 }}
@@ -517,26 +545,72 @@ export async function captureThemeEvidence(): Promise<{
     (entity) => entity.metadata.symbolicId === "mounted-gui-panel",
   );
   const descriptor = current.client.components.GuiRoot;
-  const properties =
+  const fields =
     descriptor === undefined
       ? undefined
       : panel?.effective.find(
           (component) => component.component === descriptor.id,
-        )?.properties;
+        )?.fields;
+  // Base parts the root's themes author, from the theme part row slots.
+  const themeRows = (
+    fields?.theme_parts as { rows: ReadonlyMap<number, unknown> } | undefined
+  )?.rows;
   const parts = new Set<string>();
-  for (const name of Object.keys(properties ?? {})) {
-    const match =
-      /^node_[1-9][0-9]*_part_(background|label|icon|focusRing)(?:_|$)/.exec(
-        name,
-      );
-    if (match?.[1] !== undefined) parts.add(match[1]);
-  }
+  for (const slot of themeRows?.keys() ?? [])
+    parts.add(
+      GUI_BASE_PARTS[
+        Math.floor(
+          (slot % (GUI_BASE_PARTS.length * GUI_PART_QUALIFIERS)) /
+            GUI_PART_QUALIFIERS,
+        )
+      ]!,
+    );
   return {
     width: frame.width,
     height: frame.height,
     drawCalls: frame.drawCalls,
     coloredPixels,
     parts: [...parts].sort(),
+  };
+}
+
+/** Switch the named control theme's background tone. */
+export function retoneTheme(tone: number): void {
+  if (setThemeTone === undefined) throw new Error("GUI fixture is not mounted");
+  setThemeTone(tone);
+}
+
+/** Painted Done-button background beside its label, the panel's node style
+ * rows and its theme handles, read from one completed frame and the
+ * authoritative root. */
+export async function themeEditEvidence(): Promise<{
+  readonly button: readonly [number, number, number];
+  readonly nodeStyles: string;
+  readonly themes: readonly number[];
+}> {
+  const current = handle;
+  if (current === undefined) throw new Error("GUI fixture is not mounted");
+  const frame = await current.capture();
+  const pixels = new Uint8Array(frame.pixels);
+  const inspection = await current.client.inspect();
+  const panel = inspection.entities.find(
+    (entity) => entity.metadata.symbolicId === "mounted-gui-panel",
+  );
+  const descriptor = current.client.components.GuiRoot;
+  const fields = panel?.effective.find(
+    (component) => component.component === descriptor?.id,
+  )?.fields;
+  type Table = { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> };
+  const styles = (fields?.node_style as Table | undefined)?.rows;
+  const themes = (fields?.theme_parts as Table | undefined)?.rows;
+  if (styles === undefined || themes === undefined)
+    throw new Error("GuiRoot inspection omitted its rows");
+  return {
+    button: averageRgb(pixels, frame.width, frame.height, 200, 150),
+    nodeStyles: JSON.stringify([...styles]),
+    themes: [
+      ...new Set([...themes.values()].map((row) => row.theme as number)),
+    ].sort((a, b) => a - b),
   };
 }
 

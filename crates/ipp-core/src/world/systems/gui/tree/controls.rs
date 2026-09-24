@@ -1,10 +1,14 @@
-//! Committed control values and their monotonic revisions.
+//! Control revisions and committed text-input text.
+//!
+//! Committed checkbox and slider values are `node_data` row properties of the
+//! root; this record holds what rows cannot: the revision fence of every
+//! control and the committed string of a text input.
 
 use std::collections::BTreeMap;
 
 use super::nodes::{
-    GuiControlValue, GuiNodeContent, GuiNodeId, GuiNodes, MAX_NODES, MAX_TEXT_BYTES,
-    initial_control_value_for, put_u32, read_f32, read_u32, take, validate_control_value,
+    GuiControlValue, GuiNodeData, GuiNodeId, GuiNodes, MAX_NODES, MAX_TEXT_BYTES, put_string,
+    put_u32, read_string, read_u32, take,
 };
 use crate::components::schema::FieldError;
 
@@ -86,128 +90,135 @@ pub(crate) fn slider_rail(rect: [f32; 4]) -> Option<GuiSliderRail> {
     })
 }
 
-/// One committed control value and the revision that produced it.
+/// One committed control value and the revision that produced it, as read
+/// from the root: checkbox and slider values come from `node_data` rows and
+/// text from the control record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuiControlState {
-    /// Committed value; None while a former control node has non-control content.
+    /// Committed value; None while a former control node has non-control data.
     pub value: GuiControlValue,
     /// Monotonic revision; insertion commits revision 1.
     pub revision: u32,
 }
 
-/// Committed values of every control node in one root, keyed by node identity.
+/// Control record of one node: its revision and, for a text input, the
+/// committed text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GuiControlEntry {
+    /// Monotonic revision; insertion commits revision 1.
+    pub revision: u32,
+    /// Committed text; present exactly for text-input nodes.
+    pub text: Option<String>,
+}
+
+/// Control records of one root, keyed by node identity.
 ///
 /// Every checkbox, slider and text-input node has an entry. A node whose
-/// content stops being a control keeps its entry with a None value, so its
-/// revision stays monotonic for the whole node lifetime and a stale write
-/// cannot apply to a later control on the same node. Entries are stored with
-/// the node tree, so only the GUI System changes them for a live root
-/// incarnation; generic field writes may supply them only with a new one.
+/// data stops being a control keeps its entry, so its revision stays
+/// monotonic for the whole node lifetime and a stale write cannot apply to a
+/// later control on the same node. Entries are stored with the node tree, so
+/// only the GUI System changes them for a live root incarnation; generic
+/// field writes may supply them only with a new one.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GuiControls {
-    values: BTreeMap<GuiNodeId, GuiControlState>,
+    values: BTreeMap<GuiNodeId, GuiControlEntry>,
 }
 
 impl GuiControls {
-    /// Committed state for one control node.
-    pub fn get(&self, id: GuiNodeId) -> Option<&GuiControlState> {
+    /// Control record of one node.
+    pub fn get(&self, id: GuiNodeId) -> Option<&GuiControlEntry> {
         self.values.get(&id)
     }
 
-    /// Committed states in node identity order.
-    pub fn iter(&self) -> impl Iterator<Item = (GuiNodeId, &GuiControlState)> {
-        self.values.iter().map(|(id, state)| (*id, state))
+    /// Control records in node identity order.
+    pub fn iter(&self) -> impl Iterator<Item = (GuiNodeId, &GuiControlEntry)> {
+        self.values.iter().map(|(id, entry)| (*id, entry))
     }
 
-    /// Start a newly inserted node's value from its content at revision 1.
+    /// Start a newly inserted control node at revision 1.
     pub(in crate::world::systems::gui) fn insert_initial(
         &mut self,
         id: GuiNodeId,
-        content: &GuiNodeContent,
+        data: &GuiNodeData,
     ) {
-        let value = initial_control_value_for(content);
-        if value != GuiControlValue::None {
+        if data.is_control() {
             self.values.insert(
                 id,
-                GuiControlState {
-                    value,
+                GuiControlEntry {
                     revision: 1,
+                    text: initial_text(data),
                 },
             );
         }
     }
 
-    /// Keep a compatible committed value across content edits. A same-kind
-    /// control edit that would invalidate runtime-owned state is rejected
-    /// without mutation; changing roles establishes the new role's initial
-    /// state at the next revision.
-    pub(in crate::world::systems::gui) fn reconcile_content(
+    /// Establish `data`'s initial control state after a kind change: the next
+    /// revision for a node that already has a record, revision 1 for a node
+    /// becoming a control for the first time.
+    pub(in crate::world::systems::gui) fn restart(
         &mut self,
         id: GuiNodeId,
-        content: &GuiNodeContent,
+        data: &GuiNodeData,
     ) -> Result<(), FieldError> {
-        let Some(state) = self.values.get_mut(&id) else {
-            self.insert_initial(id, content);
-            return Ok(());
-        };
-        if validate_control_value(content, &state.value).is_ok() {
-            return Ok(());
+        match self.values.get_mut(&id) {
+            Some(entry) => {
+                entry.revision = next_revision(entry.revision)?;
+                entry.text = initial_text(data);
+            }
+            None => self.insert_initial(id, data),
         }
-        let same_control_kind = matches!(
-            (&state.value, content),
-            (GuiControlValue::Bool(_), GuiNodeContent::Checkbox { .. })
-                | (GuiControlValue::Scalar(_), GuiNodeContent::Slider { .. })
-                | (GuiControlValue::Text(_), GuiNodeContent::TextInput { .. })
-        );
-        if same_control_kind {
-            return Err(FieldError::WrongType);
-        }
-        state.value = initial_control_value_for(content);
-        state.revision = next_revision(state.revision)?;
         Ok(())
     }
 
-    /// Commit a value when the caller observed the current revision.
-    pub(in crate::world::systems::gui) fn set(
+    /// Advance a control's revision when the caller observed the current one.
+    pub(in crate::world::systems::gui) fn advance(
         &mut self,
         id: GuiNodeId,
-        content: &GuiNodeContent,
         expected_revision: u32,
-        value: GuiControlValue,
-    ) -> Result<u32, FieldError> {
-        if value == GuiControlValue::None {
+    ) -> Result<&mut GuiControlEntry, FieldError> {
+        let entry = self.values.get_mut(&id).ok_or(FieldError::WrongType)?;
+        if entry.revision != expected_revision {
             return Err(FieldError::WrongType);
         }
-        validate_control_value(content, &value)?;
-        let state = self.values.get_mut(&id).ok_or(FieldError::WrongType)?;
-        if state.revision != expected_revision {
-            return Err(FieldError::WrongType);
-        }
-        state.revision = next_revision(state.revision)?;
-        state.value = value;
-        Ok(state.revision)
+        entry.revision = next_revision(entry.revision)?;
+        Ok(entry)
     }
 
-    /// Drop the values of removed nodes.
+    /// Drop the record of a removed node.
     pub(in crate::world::systems::gui) fn remove(&mut self, id: GuiNodeId) {
         self.values.remove(&id);
     }
 
-    /// Every control node has one compatible committed value; retained
-    /// entries of former controls belong to live nodes and hold None.
+    /// Every control node has a record, text is present exactly for text
+    /// inputs, and every record belongs to a live node.
     pub(in crate::world::systems::gui) fn validate_for(
         &self,
         nodes: &GuiNodes,
     ) -> Result<(), FieldError> {
+        let mut with_records = 0;
         for node in nodes.as_slice() {
-            let control = initial_control_value_for(&node.content) != GuiControlValue::None;
+            if self.values.contains_key(&node.id) {
+                with_records += 1;
+            }
             match self.values.get(&node.id) {
-                Some(state) => validate_control_value(&node.content, &state.value)?,
-                None if control => return Err(FieldError::WrongType),
+                Some(entry) => {
+                    let text_input = matches!(node.data, GuiNodeData::TextInput { .. });
+                    if entry.text.is_some() != text_input
+                        || entry
+                            .text
+                            .as_ref()
+                            .is_some_and(|text| text.len() > MAX_TEXT_BYTES)
+                    {
+                        return Err(FieldError::WrongType);
+                    }
+                }
+                None if node.data.is_control() => return Err(FieldError::WrongType),
                 None => {}
             }
         }
-        if self.values.keys().all(|id| nodes.node(*id).is_some()) {
+        // Node identities are unique, so records beyond the matched ones
+        // belong to absent nodes.
+        if with_records == self.values.len() {
             Ok(())
         } else {
             Err(FieldError::WrongType)
@@ -216,23 +227,14 @@ impl GuiControls {
 
     pub(in crate::world::systems::gui) fn encode(&self, output: &mut Vec<u8>) {
         put_u32(output, self.values.len() as u32);
-        for (id, state) in &self.values {
+        for (id, entry) in &self.values {
             put_u32(output, id.0);
-            put_u32(output, state.revision);
-            match &state.value {
-                GuiControlValue::None => output.push(0),
-                GuiControlValue::Bool(value) => {
+            put_u32(output, entry.revision);
+            match &entry.text {
+                None => output.push(0),
+                Some(text) => {
                     output.push(1);
-                    output.push(u8::from(*value));
-                }
-                GuiControlValue::Scalar(value) => {
-                    output.push(2);
-                    output.extend(value.to_le_bytes());
-                }
-                GuiControlValue::Text(value) => {
-                    output.push(3);
-                    put_u32(output, value.len() as u32);
-                    output.extend(value.as_bytes());
+                    put_string(output, text);
                 }
             }
         }
@@ -252,36 +254,32 @@ impl GuiControls {
                 return Err(FieldError::WrongType);
             }
             previous = id;
-            let value = match take(input, 1)?[0] {
-                0 => GuiControlValue::None,
-                1 => match take(input, 1)?[0] {
-                    0 => GuiControlValue::Bool(false),
-                    1 => GuiControlValue::Bool(true),
-                    _ => return Err(FieldError::WrongType),
-                },
-                2 => GuiControlValue::Scalar(read_f32(input)?),
-                3 => {
-                    let length = read_u32(input)? as usize;
-                    if length > MAX_TEXT_BYTES {
-                        return Err(FieldError::WrongType);
-                    }
-                    let text = std::str::from_utf8(take(input, length)?)
-                        .map_err(|_| FieldError::WrongType)?;
-                    GuiControlValue::Text(text.into())
-                }
+            let text = match take(input, 1)?[0] {
+                0 => None,
+                1 => Some(read_string(input)?),
                 _ => return Err(FieldError::WrongType),
             };
             values.insert(
                 GuiNodeId(id),
-                GuiControlState {
-                    value,
+                GuiControlEntry {
                     revision,
+                    text,
                 },
             );
         }
         Ok(Self {
             values,
         })
+    }
+}
+
+fn initial_text(data: &GuiNodeData) -> Option<String> {
+    match data {
+        GuiNodeData::TextInput {
+            text,
+            ..
+        } => Some(text.clone()),
+        _ => None,
     }
 }
 

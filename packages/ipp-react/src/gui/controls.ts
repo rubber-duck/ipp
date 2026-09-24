@@ -16,17 +16,17 @@
  *
  */
 import { createElement } from "react";
-import type { GuiNodeContent, GuiNodeStyle } from "@ipp/client";
+import type { GuiNodeData, GuiNodeStyle, GuiNodeValues } from "@ipp/client";
 import {
   GUI_BUTTON_HOST_TYPE,
   GUI_CHECKBOX_HOST_TYPE,
   GUI_SLIDER_HOST_TYPE,
   GUI_TEXT_INPUT_HOST_TYPE,
-  buttonContent,
-  checkboxContent,
+  buttonNode,
+  checkboxNode,
   guiStyleFor,
-  sliderContent,
-  textInputContent,
+  sliderNode,
+  textInputNode,
   validateGuiNodeRef,
   type GuiActionListener,
   type GuiNodeRef,
@@ -41,12 +41,12 @@ export {
   GUI_CHECKBOX_HOST_TYPE,
   GUI_SLIDER_HOST_TYPE,
   GUI_TEXT_INPUT_HOST_TYPE,
-  buttonContent,
-  checkboxContent,
-  sliderContent,
-  textInputContent,
+  buttonNode,
+  checkboxNode,
+  sliderNode,
+  textInputNode,
 } from "./components.js";
-import { guiContentSignature, normalizeGuiStyle } from "./description.js";
+import { guiNodeSignature, normalizeGuiStyle } from "./description.js";
 import {
   guiStyleWithTheme,
   validateGuiTheme,
@@ -84,7 +84,8 @@ export interface GuiControlBaseProps extends GuiStyleProps {
   readonly nodeRef?: GuiNodeRef | null | undefined;
   readonly onAction?: GuiActionListener | undefined;
   readonly onActionCapture?: GuiActionListener | undefined;
-  /** Runtime named-part lanes; core chooses the active interaction state. */
+  /** Root theme this control references; core chooses the active
+   * interaction state. */
   readonly theme?: GuiControlTheme | undefined;
 }
 
@@ -140,32 +141,35 @@ function checkControlBase(kind: string, props: GuiControlBaseProps): void {
 
 export function validateButtonProps(props: ButtonProps): void {
   checkControlBase("Button", props);
-  buttonContent(props.label);
+  buttonNode(props.label);
   checkListener("Button", "onPress", props.onPress);
 }
 
 export function validateCheckboxProps(props: CheckboxProps): void {
   checkControlBase("Checkbox", props);
-  checkboxContent(props.checked);
+  checkboxNode(props.checked);
   checkListener("Checkbox", "onToggle", props.onToggle);
 }
 
 export function validateSliderProps(props: SliderProps): void {
   checkControlBase("Slider", props);
-  sliderContent(props);
+  sliderNode(props);
   checkListener("Slider", "onScalarCommit", props.onScalarCommit);
 }
 
 export function validateTextInputProps(props: TextInputProps): void {
   checkControlBase("TextInput", props);
-  textInputContent(props);
+  textInputNode(props);
   checkListener("TextInput", "onTextCommit", props.onTextCommit);
 }
 
 /** Pure declaration record consumed by the reconciler description pass. */
 export interface GuiControlDeclaration {
   readonly hostType: GuiControlHostType;
-  readonly content: GuiNodeContent;
+  /** Node kind and authored strings. */
+  readonly data: GuiNodeData;
+  /** Authored kind-specific scalars seeded on insertion. */
+  readonly values: GuiNodeValues;
   /** Complete style with lane defaults filled. */
   readonly style: GuiNodeStyle;
   readonly nodeRef: GuiNodeRef | null;
@@ -205,7 +209,7 @@ export function describeButton(props: ButtonProps): GuiControlDeclaration {
   validateButtonProps(props);
   return {
     hostType: GUI_BUTTON_HOST_TYPE,
-    content: buttonContent(props.label),
+    ...buttonNode(props.label),
     ...baseOf(props),
     ...noControlCallback,
     onPress: props.onPress,
@@ -217,7 +221,7 @@ export function describeCheckbox(props: CheckboxProps): GuiControlDeclaration {
   validateCheckboxProps(props);
   return {
     hostType: GUI_CHECKBOX_HOST_TYPE,
-    content: checkboxContent(props.checked),
+    ...checkboxNode(props.checked),
     ...baseOf(props),
     ...noControlCallback,
     onToggle: props.onToggle,
@@ -229,7 +233,7 @@ export function describeSlider(props: SliderProps): GuiControlDeclaration {
   validateSliderProps(props);
   return {
     hostType: GUI_SLIDER_HOST_TYPE,
-    content: sliderContent(props),
+    ...sliderNode(props),
     ...baseOf(props),
     ...noControlCallback,
     onScalarCommit: props.onScalarCommit,
@@ -243,7 +247,7 @@ export function describeTextInput(
   validateTextInputProps(props);
   return {
     hostType: GUI_TEXT_INPUT_HOST_TYPE,
-    content: textInputContent(props),
+    ...textInputNode(props),
     ...baseOf(props),
     ...noControlCallback,
     onTextCommit: props.onTextCommit,
@@ -260,7 +264,7 @@ export function controlDeclarationSignature(
 ): string {
   return JSON.stringify([
     decl.hostType,
-    guiContentSignature(decl.content),
+    guiNodeSignature(decl),
     normalizeGuiStyle(decl.style),
     decl.theme ?? null,
   ]);

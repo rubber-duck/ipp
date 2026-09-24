@@ -254,7 +254,6 @@ fn write_text_focus_update(
             w.u64(state.target.entity.to_bits())?;
             w.u64(state.target.root_incarnation)?;
             w.u32(state.target.node.0)?;
-            w.u32(state.target.lifetime)?;
             w.u32(state.revision)?;
             w.string(&state.text)?;
             w.u32(state.selection_start)?;
@@ -323,7 +322,6 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
             entity,
             root_incarnation,
             node,
-            lifetime,
             path,
         } => {
             w.u8(0)?;
@@ -335,7 +333,6 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
                 *entity,
                 *root_incarnation,
                 *node,
-                *lifetime,
                 path,
             )?;
         }
@@ -343,7 +340,6 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
             entity,
             root_incarnation,
             node,
-            lifetime,
             value,
             revision,
             path,
@@ -357,7 +353,6 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
                 *entity,
                 *root_incarnation,
                 *node,
-                *lifetime,
                 path,
             )?;
             w.u32(*revision)?;
@@ -393,7 +388,6 @@ fn write_effect_head(
     entity: EntityId,
     root_incarnation: u64,
     node: GuiNodeId,
-    lifetime: u32,
     path: &[GuiNodeId],
 ) -> Result<(), ProtocolError> {
     w.u64(session)?;
@@ -408,7 +402,6 @@ fn write_effect_head(
         return Err(ProtocolError::Malformed("gui effect node"));
     }
     w.u32(node.0)?;
-    w.u32(lifetime)?;
     w.count(path.len(), 65536)?;
     for id in path {
         if id.0 == 0 {
@@ -429,8 +422,7 @@ fn write_target(w: &mut Writer, target: Option<&GuiInputTarget>) -> Result<(), P
             w.u8(1)?;
             w.u64(target.entity.to_bits())?;
             w.u64(target.root_incarnation)?;
-            w.u32(target.node.0)?;
-            w.u32(target.lifetime)
+            w.u32(target.node.0)
         }
     }
 }
@@ -603,7 +595,6 @@ fn write_gui_input(w: &mut Writer, input: &GuiInputCommand) -> Result<(), Protoc
             w.u64(handle.entity.to_bits())?;
             w.u64(handle.root_incarnation)?;
             w.u32(handle.node_id.0)?;
-            w.u32(handle.node_lifetime)?;
         }
         GuiInputCommand::Blur => {
             w.u8(9)?;

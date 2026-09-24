@@ -2,11 +2,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ROWS_FIXTURE_PROPERTIES,
   encodeManifestLayout,
   generateClient,
   manifestVariant,
   nonemptyBytesDefaultContract,
   noncreatableContract,
+  rowsFieldContract,
 } from "./generated-client.mjs";
 
 const { codec } = await generateClient("manifest", []);
@@ -22,6 +24,266 @@ const noCreation = await generateClient(
   [],
   noncreatableContract,
 );
+
+const rows = await generateClient("rows", [], rowsFieldContract);
+
+/** Table bytes in the documented encoding; `rows` maps slot to present values. */
+function rowsTable(nextSlot, entries) {
+  const bytes = [];
+  const view = new DataView(new ArrayBuffer(4));
+  const u32 = (value) => {
+    view.setUint32(0, value, true);
+    bytes.push(...new Uint8Array(view.buffer));
+  };
+  const f32 = (value) => {
+    view.setFloat32(0, value, true);
+    bytes.push(...new Uint8Array(view.buffer));
+  };
+  u32(nextSlot);
+  u32(entries.length);
+  for (const [slot, values] of entries) {
+    u32(slot);
+    let mask = 0;
+    ROWS_FIXTURE_PROPERTIES.forEach((property, index) => {
+      if (property.name in values) mask |= 1 << index;
+    });
+    bytes.push(mask);
+    for (const property of ROWS_FIXTURE_PROPERTIES) {
+      const value = values[property.name];
+      if (value === undefined) continue;
+      if (property.kind === "asset") {
+        const source = new TextEncoder().encode(value.source);
+        bytes.push(value.kind & 0xff, value.kind >> 8);
+        u32(value.variant);
+        u32(source.length);
+        bytes.push(...source);
+      } else if (property.kind === "bool") u32(value ? 1 : 0);
+      else if (property.kind === "i32") {
+        view.setInt32(0, value, true);
+        bytes.push(...new Uint8Array(view.buffer));
+      } else if (property.kind === "u32") u32(value);
+      else for (const lane of [value].flat()) f32(lane);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+test("schema rows fields generate typed row helpers and decode inspected tables", () => {
+  const { codec, source } = rows;
+  const scalar = codec.components.Scalar;
+  assert.deepEqual(scalar.fields.items.rows, {
+    regionBase: 0x10000000,
+    properties: ROWS_FIXTURE_PROPERTIES.map(
+      ({ name, kind, optional, hint }) => ({
+        name,
+        kind,
+        optional,
+        hint,
+      }),
+    ),
+  });
+  assert.equal(Object.isFrozen(scalar.fields.items.rows.properties[2]), true);
+  assert.match(source, /export interface ScalarItemsRow \{/);
+  assert.match(source, /offset\?: readonly \[number, number, number\];/);
+  assert.match(source, /export interface ScalarItemsRowPatch \{/);
+  assert.match(
+    source,
+    /rotation\?: readonly \[number, number, number, number\] \| null;/,
+  );
+  assert.match(source, /weight\?: number;\n/);
+
+  // Property addresses: region base + slot * property count + property index.
+  const rotation = 0x10000000 + 3 * 7 + 2;
+  assert.equal(codec.rowFieldOffset(scalar, "items", 3, "rotation"), rotation);
+  assert.equal(codec.Scalar.itemsOffset(3, "rotation"), rotation);
+  assert.throws(
+    () => codec.Scalar.itemsOffset(3, "missing"),
+    /unknown row property/,
+  );
+  assert.throws(() => codec.Scalar.itemsOffset(-1, "weight"), /row slot/);
+  assert.throws(
+    () => codec.Scalar.itemsOffset(Math.floor(0x10000000 / 7), "weight"),
+    /row slot/,
+  );
+  assert.equal("setItems" in codec.Scalar, false);
+  assert.equal(typeof codec.Scalar.setValue, "function");
+
+  const entity = { kind: "handle", id: 41n };
+  const commands = codec.Scalar.patchItems(entity, 3, {
+    rotation: null,
+    weight: 2,
+    texture: { kind: 4, source: "a.png", variant: 1 },
+  });
+  assert.deepEqual(
+    commands.map((command) => command.field),
+    [
+      {
+        offset: 0x10000000 + 21,
+        value: { kind: "dynamic", value: { kind: "f32", value: 2 } },
+      },
+      { offset: rotation, value: { kind: "unset" } },
+      {
+        offset: 0x10000000 + 25,
+        value: {
+          kind: "dynamic",
+          value: {
+            kind: "asset",
+            value: { kind: 4, source: "a.png", variant: 1 },
+          },
+        },
+      },
+    ],
+  );
+  assert.throws(
+    () => codec.Scalar.patchItems(entity, 3, { weight: null }),
+    /cannot be cleared/,
+  );
+  assert.throws(
+    () => codec.Scalar.patchItems(entity, 3, { unknown: 1 }),
+    /unknown row property/,
+  );
+
+  const covered = new Set();
+  const tag = (name) => {
+    covered.add(name);
+    return manifestVariant(codec, name);
+  };
+  const layout = (name, values) => encodeManifestLayout(codec, name, values);
+  const field = (offset, value) => layout("field", { offset, value });
+  assert.deepEqual(
+    codec.encodeRequest({
+      session: 7n,
+      requestId: 3n,
+      body: {
+        kind: "batch",
+        batch: { id: 9n, operations: commands.slice(0, 2) },
+      },
+    }),
+    layout("request-batch", {
+      session: 7n,
+      request_id: 3n,
+      tag: tag("REQUEST_BATCH"),
+      batch_id: 9n,
+      operations: [
+        layout("command-set", {
+          tag: tag("COMMAND_SET"),
+          entity: layout("reference-handle", {
+            tag: tag("REF_HANDLE"),
+            handle: 41n,
+          }),
+          component: scalar.id,
+          field: field(
+            0x10000000 + 21,
+            layout("value-dynamic", {
+              tag: tag("VALUE_DYNAMIC"),
+              value: new Uint8Array([1, 0, 0, 0, 64]),
+            }),
+          ),
+        }),
+        layout("command-set", {
+          tag: tag("COMMAND_SET"),
+          entity: layout("reference-handle", {
+            tag: tag("REF_HANDLE"),
+            handle: 41n,
+          }),
+          component: scalar.id,
+          field: field(
+            rotation,
+            layout("value-unset", { tag: tag("VALUE_UNSET") }),
+          ),
+        }),
+      ],
+    }).bytes,
+  );
+
+  const table = rowsTable(6, [
+    [1, { weight: 0.5, enabled: true, delta: -2, offset: [1, 2, 3] }],
+    [
+      4,
+      {
+        weight: 1,
+        enabled: false,
+        delta: 7,
+        rotation: [0, 0, 0, 1],
+        texture: { kind: 4, source: "é.png", variant: 2 },
+        count: 9,
+      },
+    ],
+  ]);
+  const decoded = codec.Scalar.decodeItems(table);
+  assert.equal(decoded.nextSlot, 6);
+  assert.deepEqual([...decoded.rows.keys()], [1, 4]);
+  assert.deepEqual(decoded.rows.get(1), {
+    weight: 0.5,
+    offset: [1, 2, 3],
+    enabled: true,
+    delta: -2,
+  });
+  assert.deepEqual(decoded.rows.get(4), {
+    weight: 1,
+    rotation: [0, 0, 0, 1],
+    enabled: false,
+    texture: { kind: 4, source: "é.png", variant: 2 },
+    delta: 7,
+    count: 9,
+  });
+  for (const malformed of [
+    rowsTable(1, [[1, { weight: 1, enabled: true, delta: 0 }]]),
+    rowsTable(3, [
+      [2, { weight: 1, enabled: true, delta: 0 }],
+      [1, { weight: 1, enabled: true, delta: 0 }],
+    ]),
+    rowsTable(2, [[1, { weight: 1, delta: 0 }]]),
+    new Uint8Array([...table, 0]),
+    table.slice(0, table.length - 1),
+  ])
+    assert.throws(() => codec.Scalar.decodeItems(malformed));
+
+  const snapshotValue = (name, value) =>
+    layout(`snapshot-value-${name}`, {
+      tag: tag(`SNAPSHOT_VALUE_${name.toUpperCase()}`),
+      value,
+    });
+  const component = layout("component", {
+    type_id: scalar.id,
+    fields: [
+      layout("snapshot-field", {
+        offset: scalar.fields.value.offset,
+        value: snapshotValue("f32", 2.5),
+      }),
+      layout("snapshot-field", {
+        offset: scalar.fields.items.offset,
+        value: snapshotValue("rows", table),
+      }),
+    ],
+  });
+  const inspected = codec.decodeResponse(
+    layout("response-inspect", {
+      session: 7n,
+      request_id: 20n,
+      tick: 40n,
+      tag: tag("RESPONSE_INSPECT"),
+      next: 0n,
+      time: 0,
+      entities: [
+        layout("entity", {
+          id: 0x100000001n,
+          metadata: layout("metadata", { symbolic_id: null, classes: [] }),
+          base: [component],
+          effective: [component],
+        }),
+      ],
+      resources: [],
+      controllers: [],
+      render_diagnostics: [],
+    }).bytes,
+    7n,
+  );
+  const fields = inspected.body.entities[0].base[0].fields;
+  assert.equal(fields.value, 2.5);
+  assert.deepEqual(fields.items, decoded);
+  assert.ok(covered.has("SNAPSHOT_VALUE_ROWS"));
+});
 
 test("noncreatable descriptors preserve field helpers and native insertion stays outside the wire", () => {
   assert.equal(noCreation.codec.components.Scalar.creatable, false);
@@ -237,6 +499,8 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
       offset: 88,
       value: { kind: "dynamic", value: { kind: "f32", value: 1 } },
     },
+    { offset: 99, value: { kind: "rows", value: new Uint8Array(8) } },
+    { offset: 0x10000002, value: { kind: "unset" } },
   ];
   const encodedWrites = [
     field(11, value("f32", 1.25)),
@@ -247,6 +511,8 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     field(66, value("bytes", new Uint8Array([9, 7, 5]))),
     field(77, value("bool", true)),
     field(88, value("dynamic", new Uint8Array([1, 0, 0, 128, 63]))),
+    field(99, value("rows", new Uint8Array(8))),
+    field(0x10000002, layout("value-unset", { tag: tag("VALUE_UNSET") })),
   ];
   const operations = [
     { kind: "create", alias: 1, metadata: meta },
@@ -1589,9 +1855,15 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
   // Playback/controller branches are covered against this same manifest in animation-client.mjs.
   const animationTag = (name) =>
     codec.WIRE_TAG_LAYOUTS[name].capability === "animation";
-  const unreachableSnapshotKinds = new Set(["SNAPSHOT_VALUE_U64"]);
-  // No component in this compiled target exposes resolved u64 fields yet. Their authored
-  // encoders and Rust resolved writer remain covered; a registered field makes this set drift.
+  const unreachableSnapshotKinds = new Set([
+    "SNAPSHOT_VALUE_U64",
+    "SNAPSHOT_VALUE_ROWS",
+    "SNAPSHOT_VALUE_UNSET",
+  ]);
+  // No component in this compiled target exposes resolved u64 or rows fields yet, and
+  // absence is never a field kind. Their authored encoders and Rust resolved writer
+  // remain covered (inspected rows tables by the synthetic rows contract below); a
+  // registered field makes this set drift.
   const compiledKinds = new Set(
     Object.values(codec.components).flatMap((component) =>
       Object.values(component.fields).map((field) => field.kind),

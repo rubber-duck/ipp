@@ -230,9 +230,12 @@ test("Blender streamed imports overlap extraction and preserve complete images a
           Awaited<ReturnType<typeof Fixture.captureCommandBatchBoundary>>
         >("captureCommandBatchBoundary");
         assert.equal(boundary.firstTick, boundary.secondTick);
+        // The open batch withholds presentation: the latest presented frame
+        // stays at the acknowledged tick while the worker keeps running.
         assert.equal(boundary.firstTick, boundary.heldTick);
+        assert.ok(boundary.heldTick >= boundary.presentedBefore);
+        assert.equal(boundary.advancedDuringHold, false);
         assert.ok(boundary.completeTick > boundary.heldTick);
-        assert.equal(boundary.heldDifference.changedPixels, 0);
         assert.ok(boundary.completedDifference.changedPixels > 100);
         assert.equal(boundary.restoredDifference.changedPixels, 0);
         await environment.evidence.writeJson(
@@ -241,7 +244,6 @@ test("Blender streamed imports overlap extraction and preserve complete images a
         );
         for (const label of [
           "batch-before",
-          "batch-held",
           "batch-complete",
           "batch-restored",
         ])

@@ -1,13 +1,32 @@
 use super::controls::GuiControls;
+use super::node_rows::{GuiNodeDataRow, GuiNodeStyleRow};
+use crate::components::rows::Rows;
 use crate::components::schema::{ContractSink, FieldError, FieldKind, FieldValue, SchemaField};
 use crate::services::asset_management::AssetSource;
 
-const CODEC_VERSION: u8 = 1;
+const CODEC_VERSION: u8 = 2;
 pub(in crate::world::systems::gui) const MAX_NODES: usize = 65_536;
+/// Exclusive bound of node identities: one past the last slot both node row
+/// tables can address. Identities are never reused within a root
+/// incarnation, so a long-lived root that exhausts them fails `InsertNode`
+/// until a new incarnation (for example a restore) compacts its identities.
+pub const MAX_GUI_NODE_ID: u32 = min_u32(
+    Rows::<GuiNodeStyleRow>::MAX_SLOTS,
+    Rows::<GuiNodeDataRow>::MAX_SLOTS,
+);
+pub(in crate::world::systems::gui) const MAX_NODE_ID: u32 = MAX_GUI_NODE_ID;
 /// Maximum UTF-8 bytes in one authored, committed, provisional or restored
 /// GUI text value.
 pub const MAX_GUI_TEXT_BYTES: usize = 65_536;
 pub(in crate::world::systems::gui) const MAX_TEXT_BYTES: usize = MAX_GUI_TEXT_BYTES;
+
+const fn min_u32(a: u32, b: u32) -> u32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
 
 /// Stable root-local node identity. Zero is never valid and identities are never reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -48,48 +67,47 @@ impl GuiContainerKind {
     }
 }
 
-/// Structural node content.
+/// Node kind with its authored strings. Kind-specific scalars (image size,
+/// checkbox and slider values and slider range) live in the root's
+/// `node_data` rows; see [`GuiNodeDataRow`].
 #[derive(Clone, Debug, PartialEq)]
-pub enum GuiNodeContent {
+pub enum GuiNodeData {
     /// Layout container holding child nodes.
     Container(GuiContainerKind),
     /// Text leaf.
     Text(String),
     /// Vector drawing asset leaf.
     Drawing,
-    /// Bitmap image leaf.
-    Image {
-        /// Display size in local metres.
-        size: [f32; 2],
-    },
+    /// Bitmap image leaf; its display size is the `image_size` row property.
+    Image,
     /// Clickable button.
     Button {
         /// Button label.
         label: String,
     },
-    /// Checkbox control.
-    Checkbox {
-        /// Initial or authored check state.
-        checked: bool,
-    },
-    /// Continuous or stepped range slider.
-    Slider {
-        /// Current value.
-        value: f32,
-        /// Minimum value.
-        min: f32,
-        /// Maximum value.
-        max: f32,
-        /// Step increment, or 0.0 for continuous.
-        step: f32,
-    },
+    /// Checkbox control; its committed state is the `checked` row property.
+    Checkbox,
+    /// Range slider; `value`, `min`, `max` and `step` are row properties.
+    Slider,
     /// Single-line text input field.
     TextInput {
-        /// Current text.
+        /// Authored initial text; the committed text is a control record.
         text: String,
         /// Placeholder when empty.
         placeholder: String,
     },
+}
+
+impl GuiNodeData {
+    /// Whether this kind carries a committed control value.
+    pub fn is_control(&self) -> bool {
+        matches!(self, Self::Checkbox | Self::Slider | Self::TextInput { .. })
+    }
+
+    /// Whether both values are the same node kind, ignoring authored strings.
+    pub fn same_kind(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
 }
 
 /// Authoritative control value.
@@ -105,7 +123,8 @@ pub enum GuiControlValue {
     Text(String),
 }
 
-/// Authoritative node layout and presentation properties.
+/// Complete authored node style, including the visual transform. The
+/// authoritative copy is the node's [`GuiNodeStyleRow`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuiNodeStyle {
     /// Effective interactivity; false skips hit testing and activation.
@@ -145,6 +164,14 @@ pub struct GuiNodeStyle {
     pub font_size: f32,
     /// Bound asset reference (font, drawing, or image).
     pub asset: Option<AssetSource>,
+    /// Visual translation in local metres; moves paint and hit regions
+    /// together without reflow.
+    pub position: [f32; 2],
+    /// Visual axis-aligned scale; moves paint and hit regions together
+    /// without reflow. Layout rejects singular scales with a diagnostic.
+    pub scale: [f32; 2],
+    /// Handle of the root theme skinning this node, if any.
+    pub theme: Option<u32>,
 }
 
 impl Default for GuiNodeStyle {
@@ -167,15 +194,24 @@ impl Default for GuiNodeStyle {
             opacity: 1.0,
             font_size: 0.1,
             asset: None,
+            position: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            theme: None,
         }
     }
 }
 
-/// Partial node edit patch.
+/// Partial node edit. Style members replace one row property each; `None`
+/// preserves it and `Some(None)` clears an optional one.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GuiNodePatch {
-    /// Replacement content.
-    pub content: Option<GuiNodeContent>,
+    /// Replacement kind and authored strings.
+    pub data: Option<GuiNodeData>,
+    /// Replacement authored kind-specific scalars. Omitted with a kind change,
+    /// the new kind starts from placeholders (unchecked, a unit image, a zero
+    /// slider); omitted otherwise, the current row is kept. Committed control
+    /// values survive compatible edits.
+    pub values: Option<GuiNodeDataRow>,
     /// Replacement interactivity; None preserves the current value.
     pub enabled: Option<bool>,
     /// Replacement width.
@@ -210,6 +246,12 @@ pub struct GuiNodePatch {
     pub font_size: Option<f32>,
     /// Replacement asset.
     pub asset: Option<Option<AssetSource>>,
+    /// Replacement visual translation.
+    pub position: Option<[f32; 2]>,
+    /// Replacement visual scale.
+    pub scale: Option<[f32; 2]>,
+    /// Replacement theme reference.
+    pub theme: Option<Option<u32>>,
 }
 
 /// One authoritative node in the GUI tree.
@@ -221,13 +263,12 @@ pub struct GuiNode {
     pub parent: Option<GuiNodeId>,
     /// Ordered children.
     pub children: Vec<GuiNodeId>,
-    /// Structural node content.
-    pub content: GuiNodeContent,
-    /// Node lifetime / generation counter.
-    pub lifetime: u32,
+    /// Node kind and authored strings.
+    pub data: GuiNodeData,
 }
 
-/// Fully fenced handle to a GUI node.
+/// Fully fenced handle to a GUI node. Node identities are never reused within
+/// a root incarnation, so the identity and incarnation fence the node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GuiNodeHandle {
     /// World session fence.
@@ -238,8 +279,6 @@ pub struct GuiNodeHandle {
     pub root_incarnation: u64,
     /// Root-local node identity.
     pub node_id: GuiNodeId,
-    /// Node lifetime / generation.
-    pub node_lifetime: u32,
 }
 
 impl GuiNodeHandle {
@@ -249,19 +288,17 @@ impl GuiNodeHandle {
         entity: crate::EntityId,
         root_incarnation: u64,
         node_id: GuiNodeId,
-        node_lifetime: u32,
     ) -> Self {
         Self {
             session,
             entity,
             root_incarnation,
             node_id,
-            node_lifetime,
         }
     }
 }
 
-/// Authoritative typed storage for root-local GUI nodes and their committed control values.
+/// Authoritative root-local node tree and per-control records.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuiNodes {
     pub(in crate::world::systems::gui) values: Vec<GuiNode>,
@@ -317,19 +354,20 @@ impl GuiNodes {
         self.values.iter_mut().find(|n| n.id == id)
     }
 
-    /// Committed control values of this tree's control nodes.
+    /// Per-control revisions and committed text of this tree's control nodes.
     pub fn controls(&self) -> &GuiControls {
         &self.controls
     }
 
-    /// Validate identities, one acyclic reciprocal tree and one committed value per control node.
+    /// Validate identities, one acyclic reciprocal tree and one control
+    /// record per control node.
     pub fn validate(&self) -> Result<(), FieldError> {
         self.validate_tree()?;
         self.controls.validate_for(self)
     }
 
     fn validate_tree(&self) -> Result<(), FieldError> {
-        if self.values.len() > MAX_NODES || self.next_id == 0 {
+        if self.values.len() > MAX_NODES || self.next_id == 0 || self.next_id > MAX_NODE_ID {
             return Err(FieldError::WrongType);
         }
         if self.values.is_empty() {
@@ -340,15 +378,31 @@ impl GuiNodes {
         }
 
         let root_id = self.root_node.ok_or(FieldError::WrongType)?;
-        let mut ids = std::collections::BTreeSet::new();
+        // One sorted identity index keeps the reciprocal-link checks
+        // O(n log n) without per-node allocation.
+        let mut index: Vec<(GuiNodeId, usize)> = self
+            .values
+            .iter()
+            .enumerate()
+            .map(|(position, node)| (node.id, position))
+            .collect();
+        index.sort_unstable_by_key(|&(id, _)| id);
+        if index.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(FieldError::WrongType);
+        }
+        let position = |id: GuiNodeId| {
+            index
+                .binary_search_by_key(&id, |&(id, _)| id)
+                .map(|found| index[found].1)
+                .ok()
+        };
         for node in &self.values {
-            if node.id.0 == 0 || node.id.0 >= self.next_id || !ids.insert(node.id) {
+            if node.id.0 == 0 || node.id.0 >= self.next_id {
                 return Err(FieldError::WrongType);
             }
-            validate_node_content(&node.content)?;
+            validate_node_data(&node.data)?;
         }
-
-        if !ids.contains(&root_id) {
+        if position(root_id).is_none() {
             return Err(FieldError::WrongType);
         }
 
@@ -361,46 +415,38 @@ impl GuiNodes {
                 let Some(parent_id) = node.parent else {
                     return Err(FieldError::WrongType);
                 };
-                if parent_id == node.id || !ids.contains(&parent_id) {
+                let parent = position(parent_id).ok_or(FieldError::WrongType)?;
+                if parent_id == node.id || !self.values[parent].children.contains(&node.id) {
                     return Err(FieldError::WrongType);
                 }
             }
 
-            let mut child_set = std::collections::BTreeSet::new();
             for &child_id in &node.children {
-                if !child_set.insert(child_id) || child_id == node.id || !ids.contains(&child_id) {
-                    return Err(FieldError::WrongType);
-                }
-                let child_node = self.node(child_id).ok_or(FieldError::WrongType)?;
-                if child_node.parent != Some(node.id) {
-                    return Err(FieldError::WrongType);
-                }
-            }
-
-            if let Some(parent_id) = node.parent {
-                let parent_node = self.node(parent_id).ok_or(FieldError::WrongType)?;
-                if !parent_node.children.contains(&node.id) {
+                let child = position(child_id).ok_or(FieldError::WrongType)?;
+                if child_id == node.id || self.values[child].parent != Some(node.id) {
                     return Err(FieldError::WrongType);
                 }
             }
         }
 
-        // Cycle and reachability check: BFS from root_id must reach every node exactly once
-        let mut visited = std::collections::BTreeSet::new();
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(root_id);
-        visited.insert(root_id);
-        while let Some(curr) = queue.pop_front() {
-            let curr_node = self.node(curr).ok_or(FieldError::WrongType)?;
-            for &child in &curr_node.children {
-                if !visited.insert(child) {
+        // Cycle and reachability check: a walk from the root must reach every
+        // node exactly once, which also rejects duplicate children.
+        let mut visited = vec![false; self.values.len()];
+        let mut reached = 1;
+        let mut stack = vec![position(root_id).ok_or(FieldError::WrongType)?];
+        visited[stack[0]] = true;
+        while let Some(current) = stack.pop() {
+            for &child in &self.values[current].children {
+                let child = position(child).ok_or(FieldError::WrongType)?;
+                if std::mem::replace(&mut visited[child], true) {
                     return Err(FieldError::WrongType);
                 }
-                queue.push_back(child);
+                reached += 1;
+                stack.push(child);
             }
         }
 
-        if visited.len() != self.values.len() {
+        if reached != self.values.len() {
             return Err(FieldError::WrongType);
         }
 
@@ -408,17 +454,18 @@ impl GuiNodes {
     }
 
     /// Insert one typed node, establishing its parent and child linkage.
+    /// Fails when the node identity would leave the addressable row slots.
     pub fn insert_node(
         &mut self,
         id: GuiNodeId,
         parent: Option<GuiNodeId>,
         index: usize,
-        content: GuiNodeContent,
+        data: GuiNodeData,
     ) -> Result<GuiNodeId, FieldError> {
-        if self.values.len() >= MAX_NODES || id.0 != self.next_id {
+        if self.values.len() >= MAX_NODES || id.0 != self.next_id || id.0 >= MAX_NODE_ID {
             return Err(FieldError::WrongType);
         }
-        validate_node_content(&content)?;
+        validate_node_data(&data)?;
 
         if let Some(parent_id) = parent {
             let parent_node = self
@@ -434,31 +481,22 @@ impl GuiNodes {
             return Err(FieldError::WrongType);
         }
 
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .filter(|&v| v != 0)
-            .ok_or(FieldError::WrongType)?;
-
+        self.next_id += 1;
         self.values.push(GuiNode {
             id,
             parent,
             children: Vec::new(),
-            content,
-            lifetime: 1,
+            data,
         });
 
         Ok(id)
     }
 
-    /// Replace one node's structural content. Style lives in the root's named properties.
-    pub fn replace_content(
-        &mut self,
-        id: GuiNodeId,
-        content: GuiNodeContent,
-    ) -> Result<(), FieldError> {
-        validate_node_content(&content)?;
-        self.node_mut(id).ok_or(FieldError::WrongType)?.content = content;
+    /// Replace one node's kind and authored strings. Style and kind-specific
+    /// scalars live in the root's rows.
+    pub fn replace_data(&mut self, id: GuiNodeId, data: GuiNodeData) -> Result<(), FieldError> {
+        validate_node_data(&data)?;
+        self.node_mut(id).ok_or(FieldError::WrongType)?.data = data;
         Ok(())
     }
 
@@ -578,13 +616,12 @@ impl GuiNodes {
         for node in &self.values {
             put_u32(&mut output, node.id.0);
             put_u32(&mut output, node.parent.map(|p| p.0).unwrap_or(0));
-            put_u32(&mut output, node.lifetime);
             put_u32(&mut output, node.children.len() as u32);
             for child in &node.children {
                 put_u32(&mut output, child.0);
             }
 
-            encode_node_content(&mut output, &node.content);
+            encode_node_data(&mut output, &node.data);
         }
         self.controls.encode(&mut output);
         output
@@ -615,7 +652,6 @@ impl GuiNodes {
             } else {
                 Some(GuiNodeId(parent_val))
             };
-            let lifetime = read_u32(&mut input)?;
             let children_count = read_u32(&mut input)? as usize;
             if children_count > MAX_NODES {
                 return Err(FieldError::WrongType);
@@ -625,14 +661,13 @@ impl GuiNodes {
                 children.push(GuiNodeId(read_u32(&mut input)?));
             }
 
-            let content = decode_node_content(&mut input)?;
+            let data = decode_node_data(&mut input)?;
 
             values.push(GuiNode {
                 id,
                 parent,
                 children,
-                content,
-                lifetime,
+                data,
             });
         }
 
@@ -677,184 +712,34 @@ impl SchemaField for GuiNodes {
     }
 }
 
-pub(crate) fn initial_control_value_for(content: &GuiNodeContent) -> GuiControlValue {
-    match content {
-        GuiNodeContent::Checkbox {
-            checked,
-        } => GuiControlValue::Bool(*checked),
-        GuiNodeContent::Slider {
-            value,
-            ..
-        } => GuiControlValue::Scalar(*value),
-        GuiNodeContent::TextInput {
-            text,
-            ..
-        } => GuiControlValue::Text(text.clone()),
-        _ => GuiControlValue::None,
-    }
-}
-
-pub(in crate::world::systems::gui) fn validate_node_content(
-    content: &GuiNodeContent,
+/// Authored strings stay within the GUI text budget.
+pub(in crate::world::systems::gui) fn validate_node_data(
+    data: &GuiNodeData,
 ) -> Result<(), FieldError> {
-    match content {
-        GuiNodeContent::Container(_) => Ok(()),
-        GuiNodeContent::Text(text) if text.len() <= MAX_TEXT_BYTES => Ok(()),
-        GuiNodeContent::Drawing => Ok(()),
-        GuiNodeContent::Image {
-            size,
-        } if size.iter().all(|v| v.is_finite() && *v > 0.0) => Ok(()),
-        GuiNodeContent::Button {
+    let valid = match data {
+        GuiNodeData::Text(text) => text.len() <= MAX_TEXT_BYTES,
+        GuiNodeData::Button {
             label,
-        } if label.len() <= MAX_TEXT_BYTES => Ok(()),
-        GuiNodeContent::Checkbox {
-            ..
-        } => Ok(()),
-        GuiNodeContent::Slider {
-            value,
-            min,
-            max,
-            step,
-        } => {
-            if value.is_finite()
-                && min.is_finite()
-                && max.is_finite()
-                && step.is_finite()
-                && min <= max
-                && *step >= 0.0
-            {
-                Ok(())
-            } else {
-                Err(FieldError::NonFinite)
-            }
-        }
-        GuiNodeContent::TextInput {
+        } => label.len() <= MAX_TEXT_BYTES,
+        GuiNodeData::TextInput {
             text,
             placeholder,
-        } => {
-            if text.len() <= MAX_TEXT_BYTES && placeholder.len() <= MAX_TEXT_BYTES {
-                Ok(())
-            } else {
-                Err(FieldError::WrongType)
-            }
-        }
-        _ => Err(FieldError::WrongType),
-    }
-}
-
-pub(in crate::world::systems::gui) fn validate_node_style(
-    style: &GuiNodeStyle,
-) -> Result<(), FieldError> {
-    for dim in [
-        style.width,
-        style.height,
-        style.min_width,
-        style.min_height,
-        style.max_width,
-        style.max_height,
-        style.flex,
-        style.align_x,
-        style.align_y,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if !dim.is_finite() {
-            return Err(FieldError::NonFinite);
-        }
-    }
-    if let Some(padding) = &style.padding
-        && !padding.iter().all(|v| v.is_finite() && *v >= 0.0)
-    {
-        return Err(FieldError::NonFinite);
-    }
-    if let Some(margin) = &style.margin
-        && !margin.iter().all(|v| v.is_finite())
-    {
-        return Err(FieldError::NonFinite);
-    }
-    if !style
-        .color
-        .iter()
-        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-    {
-        return Err(FieldError::NonFinite);
-    }
-    if let Some(bg) = &style.background_color
-        && !bg.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-    {
-        return Err(FieldError::NonFinite);
-    }
-    if !style.opacity.is_finite() || !(0.0..=1.0).contains(&style.opacity) {
-        return Err(FieldError::NonFinite);
-    }
-    if !style.font_size.is_finite() || style.font_size <= 0.0 {
-        return Err(FieldError::NonFinite);
-    }
-    Ok(())
-}
-
-pub(in crate::world::systems::gui) fn validate_control_value(
-    content: &GuiNodeContent,
-    value: &GuiControlValue,
-) -> Result<(), FieldError> {
-    match (content, value) {
-        (
-            GuiNodeContent::Checkbox {
-                ..
-            },
-            GuiControlValue::Bool(_),
-        ) => Ok(()),
-        (
-            GuiNodeContent::Slider {
-                min,
-                max,
-                ..
-            },
-            GuiControlValue::Scalar(val),
-        ) => {
-            if val.is_finite() && *val >= *min && *val <= *max {
-                Ok(())
-            } else {
-                Err(FieldError::NonFinite)
-            }
-        }
-        (
-            GuiNodeContent::TextInput {
-                ..
-            },
-            GuiControlValue::Text(text),
-        ) => {
-            if text.len() <= MAX_TEXT_BYTES {
-                Ok(())
-            } else {
-                Err(FieldError::WrongType)
-            }
-        }
-        (
-            GuiNodeContent::Container(_)
-            | GuiNodeContent::Text(_)
-            | GuiNodeContent::Drawing
-            | GuiNodeContent::Image {
-                ..
-            }
-            | GuiNodeContent::Button {
-                ..
-            },
-            GuiControlValue::None,
-        ) => Ok(()),
-        _ => Err(FieldError::WrongType),
+        } => text.len() <= MAX_TEXT_BYTES && placeholder.len() <= MAX_TEXT_BYTES,
+        GuiNodeData::Container(_)
+        | GuiNodeData::Drawing
+        | GuiNodeData::Image
+        | GuiNodeData::Checkbox
+        | GuiNodeData::Slider => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(FieldError::WrongType)
     }
 }
 
 pub(in crate::world::systems::gui) fn put_u32(output: &mut Vec<u8>, value: u32) {
     output.extend(value.to_le_bytes());
-}
-
-fn put_f32s<const N: usize>(output: &mut Vec<u8>, values: &[f32; N]) {
-    for value in values {
-        output.extend(value.to_le_bytes());
-    }
 }
 
 pub(in crate::world::systems::gui) fn take<'a>(
@@ -870,146 +755,68 @@ pub(in crate::world::systems::gui) fn read_u32(input: &mut &[u8]) -> Result<u32,
     Ok(u32::from_le_bytes(take(input, 4)?.try_into().unwrap()))
 }
 
-pub(in crate::world::systems::gui) fn read_f32(input: &mut &[u8]) -> Result<f32, FieldError> {
-    let value = f32::from_le_bytes(take(input, 4)?.try_into().unwrap());
-    if !value.is_finite() {
-        return Err(FieldError::NonFinite);
-    }
-    Ok(value)
-}
-
-fn read_f32s<const N: usize>(input: &mut &[u8]) -> Result<[f32; N], FieldError> {
-    let mut output = [0.0; N];
-    for value in &mut output {
-        *value = read_f32(input)?;
-    }
-    Ok(output)
-}
-
-fn encode_node_content(output: &mut Vec<u8>, content: &GuiNodeContent) {
-    match content {
-        GuiNodeContent::Container(kind) => {
+fn encode_node_data(output: &mut Vec<u8>, data: &GuiNodeData) {
+    match data {
+        GuiNodeData::Container(kind) => {
             output.push(1);
             output.push(*kind as u8);
         }
-        GuiNodeContent::Text(text) => {
+        GuiNodeData::Text(text) => {
             output.push(2);
-            put_u32(output, text.len() as u32);
-            output.extend(text.as_bytes());
+            put_string(output, text);
         }
-        GuiNodeContent::Drawing => {
-            output.push(3);
-        }
-        GuiNodeContent::Image {
-            size,
-        } => {
-            output.push(4);
-            put_f32s(output, size);
-        }
-        GuiNodeContent::Button {
+        GuiNodeData::Drawing => output.push(3),
+        GuiNodeData::Image => output.push(4),
+        GuiNodeData::Button {
             label,
         } => {
             output.push(5);
-            put_u32(output, label.len() as u32);
-            output.extend(label.as_bytes());
+            put_string(output, label);
         }
-        GuiNodeContent::Checkbox {
-            checked,
-        } => {
-            output.push(6);
-            output.push(u8::from(*checked));
-        }
-        GuiNodeContent::Slider {
-            value,
-            min,
-            max,
-            step,
-        } => {
-            output.push(7);
-            output.extend(value.to_le_bytes());
-            output.extend(min.to_le_bytes());
-            output.extend(max.to_le_bytes());
-            output.extend(step.to_le_bytes());
-        }
-        GuiNodeContent::TextInput {
+        GuiNodeData::Checkbox => output.push(6),
+        GuiNodeData::Slider => output.push(7),
+        GuiNodeData::TextInput {
             text,
             placeholder,
         } => {
             output.push(8);
-            put_u32(output, text.len() as u32);
-            output.extend(text.as_bytes());
-            put_u32(output, placeholder.len() as u32);
-            output.extend(placeholder.as_bytes());
+            put_string(output, text);
+            put_string(output, placeholder);
         }
     }
 }
 
-fn decode_node_content(input: &mut &[u8]) -> Result<GuiNodeContent, FieldError> {
-    match take(input, 1)?[0] {
-        1 => Ok(GuiNodeContent::Container(GuiContainerKind::from_u8(
-            take(input, 1)?[0],
-        )?)),
-        2 => {
-            let len = read_u32(input)? as usize;
-            if len > MAX_TEXT_BYTES {
-                return Err(FieldError::WrongType);
-            }
-            let bytes = take(input, len)?;
-            let text = std::str::from_utf8(bytes).map_err(|_| FieldError::WrongType)?;
-            Ok(GuiNodeContent::Text(text.into()))
-        }
-        3 => Ok(GuiNodeContent::Drawing),
-        4 => Ok(GuiNodeContent::Image {
-            size: read_f32s(input)?,
-        }),
-        5 => {
-            let len = read_u32(input)? as usize;
-            if len > MAX_TEXT_BYTES {
-                return Err(FieldError::WrongType);
-            }
-            let bytes = take(input, len)?;
-            let label = std::str::from_utf8(bytes).map_err(|_| FieldError::WrongType)?;
-            Ok(GuiNodeContent::Button {
-                label: label.into(),
-            })
-        }
-        6 => Ok(GuiNodeContent::Checkbox {
-            checked: take(input, 1)?[0] != 0,
-        }),
-        7 => {
-            let value = read_f32(input)?;
-            let min = read_f32(input)?;
-            let max = read_f32(input)?;
-            let step = read_f32(input)?;
-            Ok(GuiNodeContent::Slider {
-                value,
-                min,
-                max,
-                step,
-            })
-        }
-        8 => {
-            let text_len = read_u32(input)? as usize;
-            if text_len > MAX_TEXT_BYTES {
-                return Err(FieldError::WrongType);
-            }
-            let text_bytes = take(input, text_len)?;
-            let text = std::str::from_utf8(text_bytes).map_err(|_| FieldError::WrongType)?;
+pub(in crate::world::systems::gui) fn put_string(output: &mut Vec<u8>, text: &str) {
+    put_u32(output, text.len() as u32);
+    output.extend(text.as_bytes());
+}
 
-            let ph_len = read_u32(input)? as usize;
-            if ph_len > MAX_TEXT_BYTES {
-                return Err(FieldError::WrongType);
-            }
-            let ph_bytes = take(input, ph_len)?;
-            let placeholder = std::str::from_utf8(ph_bytes).map_err(|_| FieldError::WrongType)?;
-
-            Ok(GuiNodeContent::TextInput {
-                text: text.into(),
-                placeholder: placeholder.into(),
-            })
-        }
-        _ => Err(FieldError::WrongType),
+pub(in crate::world::systems::gui) fn read_string(input: &mut &[u8]) -> Result<String, FieldError> {
+    let len = read_u32(input)? as usize;
+    if len > MAX_TEXT_BYTES {
+        return Err(FieldError::WrongType);
     }
+    let text = std::str::from_utf8(take(input, len)?).map_err(|_| FieldError::WrongType)?;
+    Ok(text.into())
+}
+
+fn decode_node_data(input: &mut &[u8]) -> Result<GuiNodeData, FieldError> {
+    Ok(match take(input, 1)?[0] {
+        1 => GuiNodeData::Container(GuiContainerKind::from_u8(take(input, 1)?[0])?),
+        2 => GuiNodeData::Text(read_string(input)?),
+        3 => GuiNodeData::Drawing,
+        4 => GuiNodeData::Image,
+        5 => GuiNodeData::Button {
+            label: read_string(input)?,
+        },
+        6 => GuiNodeData::Checkbox,
+        7 => GuiNodeData::Slider,
+        8 => GuiNodeData::TextInput {
+            text: read_string(input)?,
+            placeholder: read_string(input)?,
+        },
+        _ => return Err(FieldError::WrongType),
+    })
 }
 
 #[cfg(test)]

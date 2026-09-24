@@ -70,6 +70,12 @@ export interface GlyphAtlasLimits {
 
 /** Optional presentation controls of a host with an attached canvas. */
 export interface ClientPresentation {
+  /**
+   * Resolve with the next frame rendered at or after `afterTick`. While an
+   * open command batch withholds presentation, or the Host is paused, no frame
+   * renders; request the capture after the batch ends, or observe the
+   * presented tick through `waitForFrame` instead.
+   */
   capture(afterTick?: bigint): Promise<FrameCapture>;
   resize(width: number, height: number): void;
   loseContext(): void;

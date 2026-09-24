@@ -74,6 +74,8 @@ export class AnimationFixture {
           check(typeof value === "boolean", "boolean required");
           typed = { kind: "bool", value };
           break;
+        case 8:
+          throw new Error(`schema rows field ${name} is written per property`);
       }
       return { offset: field.offset, value: typed };
     });

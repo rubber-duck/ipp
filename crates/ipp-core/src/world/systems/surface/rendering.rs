@@ -158,8 +158,6 @@ pub struct GuiPrimitiveId {
     pub root_incarnation: u64,
     /// Stable root-local node identity, never reused within its root incarnation.
     pub node: crate::systems::gui::GuiNodeId,
-    /// Node lifetime fencing primitive reuse after removal and recreation.
-    pub lifetime: u32,
     /// Stable named paint part, independent of generated primitive order.
     pub part: GuiPrimitivePart,
 }
@@ -993,9 +991,9 @@ pub fn append_gui_surface_primitives(
 /// Translate retained GUI paint by scrolled-ancestor shifts, in Surface
 /// content metres.
 ///
-/// `shifts` maps `(node, lifetime)` to the node's ancestor scroll shift;
-/// only primitives whose identity matches a key exactly move, fencing node
-/// reuse after removal and recreation. Authored primitives and GUI
+/// `shifts` maps a node to its ancestor scroll shift; only primitives of a
+/// shifted node move. Node identities are never reused within a root
+/// incarnation, and the caller filters by incarnation. Authored primitives and GUI
 /// primitives without a shift pass through unchanged, so unscrolled
 /// subtrees stay byte-identical. Every kind moves its `position` while
 /// glyph payloads, box parameters and bitmap sizes stay put; per-primitive
@@ -1005,7 +1003,7 @@ pub fn append_gui_surface_primitives(
 #[cfg(feature = "gui")]
 pub fn translate_gui_primitives_for_scroll(
     primitives: Vec<SurfaceRenderPrimitive>,
-    shifts: &BTreeMap<(crate::systems::gui::GuiNodeId, u32), [f32; 2]>,
+    shifts: &BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]>,
 ) -> Vec<SurfaceRenderPrimitive> {
     primitives
         .into_iter()
@@ -1013,10 +1011,7 @@ pub fn translate_gui_primitives_for_scroll(
             let SurfacePrimitiveIdentity::Gui(id) = primitive.style().identity else {
                 return primitive;
             };
-            let shift = shifts
-                .get(&(id.node, id.lifetime))
-                .copied()
-                .unwrap_or([0.0, 0.0]);
+            let shift = shifts.get(&id.node).copied().unwrap_or([0.0, 0.0]);
             if shift == [0.0, 0.0] || !shift.iter().all(|lane| lane.is_finite()) {
                 return primitive;
             }

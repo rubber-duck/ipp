@@ -156,8 +156,8 @@ pub struct AnimationDriver<T: AnimationSample> {
     cache_segment: bool,
     pub(super) destination: Option<crate::world::component_binding::ComponentBinding<T>>,
     transition_destination: Option<crate::world::component_binding::ComponentBinding<T>>,
-    dynamic_destination: Option<DynamicPropertyDestination>,
-    transition_dynamic_destination: Option<DynamicPropertyDestination>,
+    dynamic_destination: Option<DynamicValueDestination>,
+    transition_dynamic_destination: Option<DynamicValueDestination>,
     discrete: bool,
     retain_discrete: bool,
     discrete_interval: std::cell::Cell<Option<usize>>,
@@ -165,8 +165,10 @@ pub struct AnimationDriver<T: AnimationSample> {
     pub(in crate::world) runtime_target: AnimationRuntimeTarget,
 }
 
+/// Compiled destination of one dynamic value: a named dynamic property kept by
+/// its validated descriptor, or a row property kept by its offset.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::world) enum DynamicPropertyDestination {
+pub(in crate::world) enum DynamicValueDestination {
     CustomMaterial(
         crate::world::component_binding::ComponentBinding<crate::components::CustomMaterial>,
         crate::components::dynamic_properties::DynamicPropertyDescriptor,
@@ -176,19 +178,70 @@ pub(in crate::world) enum DynamicPropertyDestination {
         crate::world::component_binding::ComponentBinding<crate::components::Surface>,
         crate::components::dynamic_properties::DynamicPropertyDescriptor,
     ),
-    #[cfg(feature = "gui")]
-    GuiRoot(
-        crate::world::component_binding::ComponentBinding<crate::systems::gui::GuiRoot>,
-        crate::components::dynamic_properties::DynamicPropertyDescriptor,
-    ),
+    Row(super::row_property_destination::RowPropertyDestination),
 }
 
-impl DynamicPropertyDestination {
+impl DynamicValueDestination {
+    /// Bind a single non-asset dynamic property or numeric row property.
+    ///
+    /// # Safety
+    /// Callers keep the destination only while its component incarnation and,
+    /// for dynamic properties, the property identity stay live; animation
+    /// lifecycle hooks drop it before either departs.
+    unsafe fn bind(
+        storage: &crate::components::registry::ComponentStorage,
+        entity: EntityId,
+        component: u16,
+        key: u32,
+    ) -> Option<Self> {
+        let index = entity.index() as usize;
+        if crate::components::rows::row_region(key).is_some() {
+            return super::row_property_destination::RowPropertyDestination::bind(
+                storage, entity, component, key,
+            )
+            .map(Self::Row);
+        }
+
+        let numeric =
+            |descriptor: &crate::components::dynamic_properties::DynamicPropertyDescriptor| {
+                descriptor.kind != crate::DynamicPropertyKind::Asset
+            };
+        // SAFETY: each pointer originates from the stable occupied cell whose
+        // descriptor is captured with it; the caller's contract above bounds
+        // their lifetime, and writes borrow the owning storage exclusively.
+        unsafe {
+            match component {
+                ComponentValue::CUSTOM_MATERIAL => Some(Self::CustomMaterial(
+                    crate::world::component_binding::ComponentBinding::new(
+                        storage.custom_material_ptr(index)?,
+                    ),
+                    storage
+                        .custom_material(index)?
+                        .properties
+                        .descriptor(key)
+                        .filter(numeric)?,
+                )),
+                #[cfg(feature = "surfaces")]
+                ComponentValue::SURFACE => Some(Self::Surface(
+                    crate::world::component_binding::ComponentBinding::new(
+                        storage.surface_ptr(index)?,
+                    ),
+                    storage
+                        .surface(index)?
+                        .properties
+                        .descriptor(key)
+                        .filter(numeric)?,
+                )),
+                _ => None,
+            }
+        }
+    }
+
     fn write(
         self,
         storage: &mut crate::components::registry::ComponentStorage,
         value: crate::DynamicValue,
-    ) {
+    ) -> Result<(), ErrorReason> {
         match self {
             Self::CustomMaterial(binding, descriptor) => binding
                 .get_mut(storage)
@@ -199,12 +252,9 @@ impl DynamicPropertyDestination {
                 .get_mut(storage)
                 .properties
                 .set_descriptor(descriptor, value),
-            #[cfg(feature = "gui")]
-            Self::GuiRoot(binding, descriptor) => binding
-                .get_mut(storage)
-                .properties
-                .set_descriptor(descriptor, value),
+            Self::Row(destination) => return destination.write(storage, value),
         }
+        Ok(())
     }
 }
 
@@ -304,7 +354,7 @@ pub(in crate::world) enum AnimationTransitionOutput {
         crate::world::component_binding::ComponentBinding<[f32; 4]>,
         AnimationTargetIdentity,
     ),
-    Dynamic(DynamicPropertyDestination, AnimationTargetIdentity),
+    Dynamic(DynamicValueDestination, AnimationTargetIdentity),
 }
 
 impl AnimationTransitionOutput {
@@ -336,7 +386,7 @@ impl AnimationTransitionOutput {
                 Self::Dynamic(destination, _),
                 AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)),
             ) => {
-                destination.write(storage, value);
+                destination.write(storage, value)?;
             }
             _ => return Err(ErrorReason::InvalidField),
         }
@@ -370,57 +420,11 @@ pub(super) fn bind_frozen_transition_output(
             let &[key] = property.offsets.as_slice() else {
                 return None;
             };
-            let index = identity.entity.index() as usize;
-            // SAFETY: the descriptor and stable component pointer are captured together. World
-            // lifecycle invalidation drops the transition before slot reuse, and publication
-            // holds exclusive mutable access to component storage.
-            let destination = if property.component == ComponentValue::CUSTOM_MATERIAL {
-                let component = storage.custom_material(index)?;
-                DynamicPropertyDestination::CustomMaterial(
-                    // SAFETY: see the stable-cell and invalidation argument above.
-                    unsafe {
-                        crate::world::component_binding::ComponentBinding::new(
-                            storage.custom_material_ptr(index)?,
-                        )
-                    },
-                    component.properties.descriptor(key).filter(|descriptor| {
-                        descriptor.kind != crate::DynamicPropertyKind::Asset
-                    })?,
-                )
-            } else {
-                match property.component {
-                    #[cfg(feature = "surfaces")]
-                    ComponentValue::SURFACE => {
-                        let component = storage.surface(index)?;
-                        DynamicPropertyDestination::Surface(
-                            // SAFETY: see the stable-cell and invalidation argument above.
-                            unsafe {
-                                crate::world::component_binding::ComponentBinding::new(
-                                    storage.surface_ptr(index)?,
-                                )
-                            },
-                            component.properties.descriptor(key).filter(|descriptor| {
-                                descriptor.kind != crate::DynamicPropertyKind::Asset
-                            })?,
-                        )
-                    }
-                    #[cfg(feature = "gui")]
-                    ComponentValue::GUI_ROOT => {
-                        let component = storage.gui_root(index)?;
-                        DynamicPropertyDestination::GuiRoot(
-                            // SAFETY: see the stable-cell and invalidation argument above.
-                            unsafe {
-                                crate::world::component_binding::ComponentBinding::new(
-                                    storage.gui_root_ptr(index)?,
-                                )
-                            },
-                            component.properties.descriptor(key).filter(|descriptor| {
-                                descriptor.kind != crate::DynamicPropertyKind::Asset
-                            })?,
-                        )
-                    }
-                    _ => return None,
-                }
+            // SAFETY: World lifecycle invalidation drops the transition before its
+            // property identity, row or component incarnation departs, and
+            // publication holds exclusive mutable access to component storage.
+            let destination = unsafe {
+                DynamicValueDestination::bind(storage, identity.entity, property.component, key)?
             };
             Some(AnimationTransitionOutput::Dynamic(destination, identity))
         }
@@ -454,7 +458,10 @@ pub(super) fn frozen_transition_target_supported(
                     ]
         }),
         AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value)) => {
-            matches!(target, AnimationTrackTarget::DynamicProperty { .. })
+            (matches!(target, AnimationTrackTarget::DynamicProperty { .. })
+                || target.property().is_some_and(|property| {
+                    matches!(property.offsets.as_slice(), [offset] if crate::components::rows::row_region(*offset).is_some())
+                }))
                 && !matches!(
                     value,
                     crate::DynamicValue::Bool(_) | crate::DynamicValue::Asset(_)
@@ -495,14 +502,18 @@ fn validate_transition_value(
             {
                 crate::systems::surface::validate_animation_property(name, value)?;
             }
+            // Row targets are checked before any channel publishes, so a
+            // rejected value leaves every transition output unchanged.
             #[cfg(feature = "gui")]
-            if let AnimationTrackTarget::DynamicProperty {
-                component,
-                name,
-            } = &identity.property
-                && *component == ComponentValue::GUI_ROOT
+            if let Some(property) = identity.property.property()
+                && property.component == ComponentValue::GUI_ROOT
+                && let [offset] = property.offsets.as_slice()
+                && crate::components::rows::row_region(*offset).is_some()
             {
-                crate::systems::gui::validate_gui_property_value(name, value)?;
+                if !crate::systems::gui::GuiRoot::numeric_animatable(*offset) {
+                    return Err(ErrorReason::InvalidField);
+                }
+                crate::systems::gui::GuiRoot::validate_row_value(*offset, value)?;
             }
         }
         AnimationValue::Rotation(value) if value.iter().any(|value| !value.is_finite()) => {
@@ -591,56 +602,18 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             && let Some(property) = property
             && let [key] = property.offsets.as_slice()
         {
-            let index = self.identity.entity.index() as usize;
-            // SAFETY: Animation invalidates departing property identities and component
-            // incarnations before reuse. Stable component pointers own their buffers;
-            // only validated offsets are retained across buffer reallocation.
-            unsafe {
-                if property.component == ComponentValue::CUSTOM_MATERIAL
-                    && let Some(material) = storage.custom_material(index)
-                    && let Some(descriptor) = material
-                        .properties
-                        .descriptor(*key)
-                        .filter(|d| d.kind != crate::DynamicPropertyKind::Asset)
-                {
-                    self.dynamic_destination = Some(DynamicPropertyDestination::CustomMaterial(
-                        crate::world::component_binding::ComponentBinding::new(
-                            storage.custom_material_ptr(index).unwrap(),
-                        ),
-                        descriptor,
-                    ));
-                }
-                #[cfg(feature = "surfaces")]
-                if property.component == ComponentValue::SURFACE
-                    && let Some(surface) = storage.surface(index)
-                    && let Some(descriptor) = surface
-                        .properties
-                        .descriptor(*key)
-                        .filter(|d| d.kind != crate::DynamicPropertyKind::Asset)
-                {
-                    self.dynamic_destination = Some(DynamicPropertyDestination::Surface(
-                        crate::world::component_binding::ComponentBinding::new(
-                            storage.surface_ptr(index).unwrap(),
-                        ),
-                        descriptor,
-                    ));
-                }
-                #[cfg(feature = "gui")]
-                if property.component == ComponentValue::GUI_ROOT
-                    && let Some(gui_root) = storage.gui_root(index)
-                    && let Some(descriptor) = gui_root
-                        .properties
-                        .descriptor(*key)
-                        .filter(|d| d.kind != crate::DynamicPropertyKind::Asset)
-                {
-                    self.dynamic_destination = Some(DynamicPropertyDestination::GuiRoot(
-                        crate::world::component_binding::ComponentBinding::new(
-                            storage.gui_root_ptr(index).unwrap(),
-                        ),
-                        descriptor,
-                    ));
-                }
-            }
+            // SAFETY: Animation invalidates departing property identities, rows and
+            // component incarnations before reuse. Stable component pointers own
+            // their buffers; only validated keys and offsets are retained across
+            // buffer or table reallocation.
+            self.dynamic_destination = unsafe {
+                DynamicValueDestination::bind(
+                    storage,
+                    self.identity.entity,
+                    property.component,
+                    *key,
+                )
+            };
         }
     }
 
@@ -662,59 +635,17 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             && let Some(property) = self.identity.property.property()
             && let [key] = property.offsets.as_slice()
         {
-            let index = self.identity.entity.index() as usize;
             // SAFETY: the retained binding points into stable occupied component storage. World
-            // lifecycle hooks invalidate the controller before slot reuse, and animation owns the
-            // only mutable access while publishing this output.
-            unsafe {
-                if property.component == ComponentValue::CUSTOM_MATERIAL
-                    && let Some(material) = storage.custom_material(index)
-                    && let Some(descriptor) = material
-                        .properties
-                        .descriptor(*key)
-                        .filter(|descriptor| descriptor.kind != crate::DynamicPropertyKind::Asset)
-                {
-                    self.transition_dynamic_destination =
-                        Some(DynamicPropertyDestination::CustomMaterial(
-                            crate::world::component_binding::ComponentBinding::new(
-                                storage.custom_material_ptr(index).unwrap(),
-                            ),
-                            descriptor,
-                        ));
-                }
-                #[cfg(feature = "surfaces")]
-                if property.component == ComponentValue::SURFACE
-                    && let Some(surface) = storage.surface(index)
-                    && let Some(descriptor) = surface
-                        .properties
-                        .descriptor(*key)
-                        .filter(|descriptor| descriptor.kind != crate::DynamicPropertyKind::Asset)
-                {
-                    self.transition_dynamic_destination =
-                        Some(DynamicPropertyDestination::Surface(
-                            crate::world::component_binding::ComponentBinding::new(
-                                storage.surface_ptr(index).unwrap(),
-                            ),
-                            descriptor,
-                        ));
-                }
-                #[cfg(feature = "gui")]
-                if property.component == ComponentValue::GUI_ROOT
-                    && let Some(gui_root) = storage.gui_root(index)
-                    && let Some(descriptor) = gui_root
-                        .properties
-                        .descriptor(*key)
-                        .filter(|descriptor| descriptor.kind != crate::DynamicPropertyKind::Asset)
-                {
-                    self.transition_dynamic_destination =
-                        Some(DynamicPropertyDestination::GuiRoot(
-                            crate::world::component_binding::ComponentBinding::new(
-                                storage.gui_root_ptr(index).unwrap(),
-                            ),
-                            descriptor,
-                        ));
-                }
-            }
+            // lifecycle hooks invalidate the controller before slot or row reuse, and animation
+            // owns the only mutable access while publishing this output.
+            self.transition_dynamic_destination = unsafe {
+                DynamicValueDestination::bind(
+                    storage,
+                    self.identity.entity,
+                    property.component,
+                    *key,
+                )
+            };
         }
     }
 
@@ -754,8 +685,8 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             else {
                 unreachable!()
             };
-            destination.write(storage, value);
-            return true;
+            // A rejected write changes nothing; the general path reports it.
+            return destination.write(storage, value).is_ok();
         }
         let Some(destination) = self.destination else {
             return false;
@@ -791,7 +722,9 @@ impl<T: AnimationSample> AnimationDriverBinding for AnimationDriver<T> {
             else {
                 unreachable!()
             };
-            destination.write(storage, value);
+            // A rejected row value changes nothing; the general path samples
+            // again and reports the failure through ordinary validation.
+            return destination.write(storage, value).is_ok();
         }
         true
     }

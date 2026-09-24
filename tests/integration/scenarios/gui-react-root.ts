@@ -48,8 +48,8 @@ async function rejects(operation: Promise<unknown>, message: string) {
   throw new Error(message);
 }
 
-function contents(response: GuiInspectResponse) {
-  return response.nodes.map((node) => node.content);
+function nodeData(response: GuiInspectResponse) {
+  return response.nodes.map((node) => node.data);
 }
 
 type SliderRef = { current: GuiNodeHandle | null };
@@ -208,8 +208,8 @@ export async function exerciseGuiReactRoot(
   const panelId = await panelEntity(client, "panel");
   const mounted = await client.inspectGui({ entity: panelId });
   expect(
-    contents(mounted).length === 3,
-    `React mount produced ${contents(mounted).length} nodes`,
+    nodeData(mounted).length === 3,
+    `React mount produced ${nodeData(mounted).length} nodes`,
   );
   const incarnation = mounted.rootIncarnation;
 
@@ -268,7 +268,7 @@ export async function exerciseGuiReactRoot(
     rootIncarnation: sabotaged.rootIncarnation,
     id: 1,
     index: 0,
-    content: { kind: "text", text: "foreign" },
+    data: { kind: "text", text: "foreign" },
   });
   // The combined render refuses the occupied root. The attempt's binding and
   // overlay release while the acknowledged panel and the foreign tree stay.
@@ -282,9 +282,9 @@ export async function exerciseGuiReactRoot(
   );
   const kept = await client.inspectGui({ entity: panelId });
   expect(
-    contents(kept).length === 3 &&
-      contents(kept).some(
-        (content) => content.kind === "text" && content.text === "hello",
+    nodeData(kept).length === 3 &&
+      nodeData(kept).some(
+        (data) => data.kind === "text" && data.text === "hello",
       ),
     "The refused mount disturbed the acknowledged panel",
   );
@@ -295,7 +295,7 @@ export async function exerciseGuiReactRoot(
   );
   await client.editGui({
     action: "remove",
-    handle: client.createGuiNodeHandle(occupied, intact.rootIncarnation, 1, 1),
+    handle: client.createGuiNodeHandle(occupied, intact.rootIncarnation, 1),
   });
   successfulBatch(
     await client.batch([
@@ -313,8 +313,8 @@ export async function exerciseGuiReactRoot(
   await root.render(combined("hello", "recovered", sliderRef));
   const adopted = await client.inspectGui({ entity: occupied });
   expect(
-    contents(adopted).some(
-      (content) => content.kind === "text" && content.text === "recovered",
+    nodeData(adopted).some(
+      (data) => data.kind === "text" && data.text === "recovered",
     ),
     "React did not populate the cleared root",
   );
@@ -370,8 +370,8 @@ export async function exerciseGuiReactRoot(
     })
   ).nodes[0];
   expect(
-    slider?.content.kind === "slider" &&
-      slider.content.min === 0 &&
+    slider?.data.kind === "slider" &&
+      slider.values.min === 0 &&
       slider.controlValue.kind === "scalar" &&
       Math.abs(slider.controlValue.value - 0.8) < 1e-6 &&
       slider.controlRevision === initialSliderRevision + 1,
@@ -397,8 +397,8 @@ export async function exerciseGuiReactRoot(
     "An update replaced node identities",
   );
   expect(
-    contents(updated).some(
-      (content) => content.kind === "text" && content.text === "hello world",
+    nodeData(updated).some(
+      (data) => data.kind === "text" && data.text === "hello world",
     ),
     "An update did not patch the text",
   );
@@ -406,8 +406,8 @@ export async function exerciseGuiReactRoot(
     (node) => node.id === sliderHandle.nodeId,
   );
   expect(
-    correctedSlider?.content.kind === "slider" &&
-      Math.abs(correctedSlider.content.min - 0.9) < 1e-6 &&
+    correctedSlider?.data.kind === "slider" &&
+      Math.abs(correctedSlider.values.min! - 0.9) < 1e-6 &&
       correctedSlider.controlValue.kind === "scalar" &&
       Math.abs(correctedSlider.controlValue.value - 0.95) < 1e-6 &&
       correctedSlider.controlRevision === initialSliderRevision + 2,

@@ -6,10 +6,11 @@
 
 use super::super::super::test_support::{font_fixture_bytes, font_source};
 use super::*;
+use crate::GuiNodeDataRow;
 use crate::services::asset_management::AssetSource;
 use crate::systems::gui::{
-    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiLayoutDiagnostic, GuiNodeContent,
-    GuiNodeId, GuiNodeStyle, GuiRoot,
+    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiLayoutDiagnostic, GuiNodeData, GuiNodeId,
+    GuiNodeStyle, GuiRoot,
 };
 use crate::systems::surface::Surface;
 use crate::{Batch, Command, ComponentValue, EntityMetadata, EntityRef, HostRuntime, WorldLimits};
@@ -150,7 +151,8 @@ fn pending_font_recovers_without_authored_edits() {
                 id: GuiNodeId(1),
                 parent: None,
                 index: 0,
-                content: GuiNodeContent::Container(GuiContainerKind::Column),
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle {
                     width: Some(4.0),
                     height: Some(3.0),
@@ -163,7 +165,8 @@ fn pending_font_recovers_without_authored_edits() {
                 id: GuiNodeId(2),
                 parent: Some(GuiNodeId(1)),
                 index: 0,
-                content: GuiNodeContent::Text("A".into()),
+                data: GuiNodeData::Text("A".into()),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle {
                     asset: Some(font_source()),
                     ..Default::default()
@@ -279,7 +282,8 @@ fn scheduled_pass_recovers_identical_valid_input_after_invalid_cache_entry() {
                 id: GuiNodeId(1),
                 parent: None,
                 index: 0,
-                content: GuiNodeContent::Container(GuiContainerKind::Column),
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle {
                     width: Some(4.0),
                     height: Some(3.0),
@@ -292,9 +296,8 @@ fn scheduled_pass_recovers_identical_valid_input_after_invalid_cache_entry() {
                 id: GuiNodeId(2),
                 parent: Some(GuiNodeId(1)),
                 index: 0,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle {
                     width: Some(1.0),
                     height: Some(1.0),
@@ -478,7 +481,7 @@ fn unchanged_roots_keep_output_without_fingerprinting() {
         vec![Command::SetDynamicProperty {
             entity: EntityRef::Handle(panel),
             component: ComponentValue::GUI_ROOT,
-            name: "node_1_opacity".into(),
+            name: "node_1_part_background_opacity".into(),
             value: crate::DynamicValue::F32(0.5),
         }],
     );

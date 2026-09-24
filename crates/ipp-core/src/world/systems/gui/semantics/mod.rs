@@ -42,8 +42,7 @@ pub use snapshot::{build_tree, build_tree_with_focus, changed_nodes, effect_refr
 pub use types::{
     GuiSemanticAction, GuiSemanticActionCommand, GuiSemanticActionError, GuiSemanticActionKind,
     GuiSemanticActionRequest, GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole,
-    GuiSemanticSnapshotQuery, GuiSemanticTree, actions_for_role, name_for_content,
-    role_for_content,
+    GuiSemanticSnapshotQuery, GuiSemanticTree, actions_for_role, name_for_data, role_for_data,
 };
 
 #[cfg(test)]

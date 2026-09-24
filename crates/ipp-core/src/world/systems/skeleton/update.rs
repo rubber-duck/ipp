@@ -42,11 +42,7 @@ fn local_pose_into(
         }
         local.extend_from_slice(pose.joints());
     }
-    for (joint, transform) in
-        crate::services::asset_management::skeleton::override_iter(&value.joints)?
-    {
-        *local.get_mut(joint).ok_or(ErrorReason::InvalidValue)? = transform;
-    }
+    value.apply_joint_overrides(&mut local)?;
     Ok(Some((key, local)))
 }
 
@@ -76,14 +72,14 @@ fn assign_local_pose(
         pose.valid = true;
         local
     } else {
-        runtime.pose = Some(SkeletonPoseState {
+        runtime.pose = Some(Box::new(SkeletonPoseState {
             valid: true,
             source,
             global: vec![[0.0; 16]; local.len()].into_boxed_slice(),
             evaluation: vec![Transform::default(); local.len()].into_boxed_slice(),
             sampled: vec![false; local.len()].into_boxed_slice(),
             local: local.into_boxed_slice(),
-        });
+        }));
         Vec::new()
     }
 }
@@ -268,7 +264,7 @@ pub(in crate::world) fn pose<'a>(
         .skeleton(entity.index() as usize)?
         .runtime
         .pose
-        .as_ref()
+        .as_deref()
         .filter(|pose| pose.valid)
 }
 

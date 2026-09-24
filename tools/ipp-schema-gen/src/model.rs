@@ -90,6 +90,22 @@ pub(super) struct Field {
     pub(super) field_align: u32,
     pub(super) kind: u8,
     pub(super) default: String,
+    /// Present exactly for schema rows fields (kind 8).
+    pub(super) rows: Option<RowsLayout>,
+}
+
+/// Region base and ordered property layout of one schema rows field.
+pub(super) struct RowsLayout {
+    pub(super) region_base: u32,
+    pub(super) properties: Vec<RowProperty>,
+}
+
+pub(super) struct RowProperty {
+    pub(super) name: String,
+    /// `DynamicPropertyKind` tag.
+    pub(super) kind: u8,
+    pub(super) optional: bool,
+    pub(super) rotation: bool,
 }
 
 pub(super) struct Export {

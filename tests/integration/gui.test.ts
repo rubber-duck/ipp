@@ -24,7 +24,7 @@ test("GUI roots, node identity and committed values cross a real native connecti
     contract.encodeGuiTree({
       nextId: 2,
       nodes: [],
-      controls: [{ id: 1, revision: 0, value: { kind: "bool", value: true } }],
+      controls: [{ id: 1, revision: 0 }],
     }),
   );
   await runNativeEnvironment(

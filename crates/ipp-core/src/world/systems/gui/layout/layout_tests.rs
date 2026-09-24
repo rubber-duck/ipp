@@ -4,8 +4,10 @@ use super::super::super::test_support::{font_source, test_font};
 use super::test_support::*;
 use super::*;
 use crate::EntityId;
+use crate::GuiControlValue;
 use crate::services::asset_management::AssetKey;
 use crate::systems::gui::GuiNodePatch;
+use crate::world::systems::gui::test_support::{checkbox_node, slider_node};
 use std::collections::BTreeMap;
 
 #[test]
@@ -15,17 +17,17 @@ fn column_stacks_children_vertically() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let first = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let second = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(2.0, 0.5),
     );
     let root_tree = tree.build();
@@ -47,17 +49,17 @@ fn row_flex_shares_leftover_space() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Row),
+        GuiNodeData::Container(GuiContainerKind::Row),
         text_style(),
     );
     let fixed = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 0.5),
     );
     let flex_one = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             flex: Some(1.0),
             ..sized(0.0, 0.5)
@@ -65,7 +67,7 @@ fn row_flex_shares_leftover_space() {
     );
     let flex_three = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             flex: Some(3.0),
             ..sized(0.0, 0.5)
@@ -90,17 +92,17 @@ fn row_places_interleaved_flex_and_fixed_children_in_tree_order() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Row),
+        GuiNodeData::Container(GuiContainerKind::Row),
         text_style(),
     );
     let first = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let spacer = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             flex: Some(1.0),
             ..sized(0.0, 0.5)
@@ -110,7 +112,7 @@ fn row_places_interleaved_flex_and_fixed_children_in_tree_order() {
     // order show which sibling comes later.
     let second = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         GuiNodeStyle {
             margin: Some([0.0, 0.1, 0.0, -0.2]),
             ..sized(0.5, 0.5)
@@ -118,12 +120,12 @@ fn row_places_interleaved_flex_and_fixed_children_in_tree_order() {
     );
     let nested = tree.add(
         Some(second),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(0.25, 0.25),
     );
     let tail = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             flex: Some(3.0),
             align_y: Some(1.0),
@@ -162,17 +164,17 @@ fn column_flex_scroll_view_keeps_its_slot_clip_and_hits_between_fixed_children()
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let header = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(4.0, 0.5),
     );
     let scroll = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         GuiNodeStyle {
             flex: Some(1.0),
             width: Some(4.0),
@@ -181,21 +183,21 @@ fn column_flex_scroll_view_keeps_its_slot_clip_and_hits_between_fixed_children()
     );
     let content = tree.add(
         Some(scroll),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     let rows: Vec<_> = (0..2)
         .map(|_| {
             tree.add(
                 Some(content),
-                GuiNodeContent::Container(GuiContainerKind::SizedBox),
+                GuiNodeData::Container(GuiContainerKind::SizedBox),
                 sized(4.0, 1.0),
             )
         })
         .collect();
     let footer = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(4.0, 0.25),
     );
     let root_tree = tree.build();
@@ -226,7 +228,7 @@ fn unbounded_flex_diagnoses_instead_of_solving() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         GuiNodeStyle {
             width: Some(2.0),
             height: Some(1.0),
@@ -235,12 +237,12 @@ fn unbounded_flex_diagnoses_instead_of_solving() {
     );
     let column = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     let flexed = tree.add(
         Some(column),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             flex: Some(1.0),
             ..Default::default()
@@ -275,7 +277,7 @@ fn min_max_clamps_explicit_size() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             width: Some(5.0),
             height: Some(5.0),
@@ -299,7 +301,7 @@ fn padding_insets_the_child() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Padding),
+        GuiNodeData::Container(GuiContainerKind::Padding),
         GuiNodeStyle {
             padding: Some([0.5, 0.0, 0.0, 0.25]),
             ..Default::default()
@@ -307,7 +309,7 @@ fn padding_insets_the_child() {
     );
     let child = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let root_tree = tree.build();
@@ -327,12 +329,12 @@ fn align_defaults_to_center() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Align),
+        GuiNodeData::Container(GuiContainerKind::Align),
         sized(4.0, 2.0),
     );
     let child = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let root_tree = tree.build();
@@ -350,17 +352,17 @@ fn stack_overlays_with_reverse_painter_hits() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         sized(4.0, 2.0),
     );
     let _first = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let second = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(2.0, 0.5),
     );
     let root_tree = tree.build();
@@ -382,12 +384,12 @@ fn stack_margins_place_descendants_and_preserve_clipped_hit_bounds() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         sized(4.0, 2.0),
     );
     let offset = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         GuiNodeStyle {
             margin: Some([0.3, -1.2, -0.3, 1.2]),
             ..sized(1.0, 0.4)
@@ -395,12 +397,12 @@ fn stack_margins_place_descendants_and_preserve_clipped_hit_bounds() {
     );
     let child = tree.add(
         Some(offset),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 0.4),
     );
     let clipped = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             margin: Some([0.0, 0.25, 0.0, -0.25]),
             ..sized(0.5, 0.5)
@@ -408,7 +410,7 @@ fn stack_margins_place_descendants_and_preserve_clipped_hit_bounds() {
     );
     let inset = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             margin: Some([1.0, 0.5, 0.5, 0.5]),
             enabled: false,
@@ -435,12 +437,12 @@ fn stack_aligns_centre_and_end_children_within_their_margin_boxes() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         sized(4.0, 2.0),
     );
     let centred = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             margin: Some([0.2, 0.3, 0.1, 0.5]),
             align_x: Some(0.0),
@@ -450,7 +452,7 @@ fn stack_aligns_centre_and_end_children_within_their_margin_boxes() {
     );
     let overhanging = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         GuiNodeStyle {
             margin: Some([0.0, -0.2, 0.0, 0.0]),
             align_x: Some(1.0),
@@ -478,14 +480,10 @@ fn text_leaf_measures_and_paints_glyphs() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let leaf = tree.add(
-        Some(root),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -520,12 +518,12 @@ fn text_wraps_under_finite_width() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let leaf = tree.add(
         Some(root),
-        GuiNodeContent::Text("A A A".to_owned()),
+        GuiNodeData::Text("A A A".to_owned()),
         GuiNodeStyle {
             width: Some(2.0 * ADV_A),
             font_size: FONT_SIZE,
@@ -564,14 +562,10 @@ fn pending_font_marks_leaf_unavailable() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let leaf = tree.add(
-        Some(root),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    let leaf = tree.add(Some(root), GuiNodeData::Text("A".to_owned()), text_style());
     let root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -599,12 +593,12 @@ fn visual_transform_moves_paint_and_hit_together() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         sized(4.0, 2.0),
     );
     let moved = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     tree.set_visual(moved, [2.0, 1.0], [2.0, 2.0]);
@@ -629,12 +623,12 @@ fn singular_scale_suppresses_its_subtree() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         sized(4.0, 2.0),
     );
     let flat = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     tree.set_visual(flat, [0.0, 0.0], [0.0, 1.0]);
@@ -662,18 +656,18 @@ fn scroll_view_clips_content_and_reports_extents() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         sized(2.0, 1.0),
     );
     let column = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     for _ in 0..3 {
         tree.add(
             Some(column),
-            GuiNodeContent::Container(GuiContainerKind::SizedBox),
+            GuiNodeData::Container(GuiContainerKind::SizedBox),
             sized(2.0, 1.0),
         );
     }
@@ -704,12 +698,12 @@ fn units_per_metre_scales_root_and_metre_lanes() {
     // spans 2 logical units on a 400x200 logical root.
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let child = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(0.02, 0.01),
     );
     let root_tree = tree.build();
@@ -732,7 +726,7 @@ fn invalid_root_input_is_unavailable() {
     let mut tree = TreeBuilder::new();
     tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let root_tree = tree.build();
@@ -760,7 +754,6 @@ fn invalid_root_input_is_unavailable() {
 fn panel_resolution_compares_blocker_distances() {
     let hit = GuiHit {
         node: GuiNodeId(2),
-        lifetime: 1,
         position: [1.0, 1.0],
     };
     let blocker = |distance: f32, bits: u64| GuiBlockerHit {
@@ -821,12 +814,12 @@ fn content_point_converts_through_units() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Stack),
+        GuiNodeData::Container(GuiContainerKind::Stack),
         sized(0.02, 0.02),
     );
     let child = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(0.01, 0.01),
     );
     let root_tree = tree.build();
@@ -859,12 +852,12 @@ fn drawing_leaf_needs_its_resource() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let leaf = tree.add(
         Some(root),
-        GuiNodeContent::Drawing,
+        GuiNodeData::Drawing,
         GuiNodeStyle {
             width: Some(1.0),
             height: Some(0.5),
@@ -912,26 +905,11 @@ fn checkbox_and_slider_carry_intrinsic_sizes() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let check = tree.add(
-        Some(root),
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
-        text_style(),
-    );
-    let slider = tree.add(
-        Some(root),
-        GuiNodeContent::Slider {
-            value: 0.5,
-            min: 0.0,
-            max: 1.0,
-            step: 0.0,
-        },
-        text_style(),
-    );
+    let check = tree.add(Some(root), checkbox_node(false), text_style());
+    let slider = tree.add(Some(root), slider_node(0.5, 0.0, 1.0, 0.0), text_style());
     let root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -952,12 +930,12 @@ fn text_input_measures_placeholder_when_empty() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let input = tree.add(
         Some(root),
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: String::new(),
             placeholder: "Ae".to_owned(),
         },
@@ -989,14 +967,8 @@ fn text_input_measures_placeholder_when_empty() {
 /// Commit one control value through the authoritative revision gate, mirroring
 /// a routed input commit at the mutation boundary. Returns the new revision.
 fn commit_value(root: &mut GuiRoot, id: GuiNodeId, expected: u32, value: GuiControlValue) -> u32 {
-    let content = root
-        .nodes()
-        .node(id)
-        .map(|node| node.content.clone())
-        .unwrap();
-    root.controls_mut()
-        .set(id, &content, expected, value)
-        .unwrap()
+    root.set_control_value(id, expected, &value).unwrap();
+    root.control_state(id).unwrap().revision
 }
 
 #[test]
@@ -1006,12 +978,12 @@ fn committed_text_wins_over_authored_content() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let input = tree.add(
         Some(root),
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "a".to_owned(),
             placeholder: "e".to_owned(),
         },
@@ -1081,26 +1053,11 @@ fn checkbox_and_slider_report_effective_values() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let check = tree.add(
-        Some(root),
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
-        text_style(),
-    );
-    let slider = tree.add(
-        Some(root),
-        GuiNodeContent::Slider {
-            value: 0.5,
-            min: 0.0,
-            max: 1.0,
-            step: 0.0,
-        },
-        text_style(),
-    );
+    let check = tree.add(Some(root), checkbox_node(false), text_style());
+    let slider = tree.add(Some(root), slider_node(0.5, 0.0, 1.0, 0.0), text_style());
     let mut root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -1206,41 +1163,38 @@ fn missing_committed_state_falls_back_to_authored() {
     let font = test_font();
     let resolver = TestResolver::with_font(&font);
     let mut root_tree = GuiRoot::default();
-    root_tree
-        .nodes_mut()
-        .insert_node(
-            GuiNodeId(1),
+    for (id, parent, index, node) in [
+        (
+            1,
             None,
             0,
-            GuiNodeContent::Container(GuiContainerKind::Column),
-        )
-        .unwrap();
-    root_tree
-        .nodes_mut()
-        .insert_node(
-            GuiNodeId(2),
-            Some(GuiNodeId(1)),
-            0,
-            GuiNodeContent::Checkbox {
-                checked: true,
-            },
-        )
-        .unwrap();
-    root_tree
-        .nodes_mut()
-        .insert_node(
-            GuiNodeId(3),
+            GuiNodeData::Container(GuiContainerKind::Column).into(),
+        ),
+        (2, Some(GuiNodeId(1)), 0, checkbox_node(true)),
+        (
+            3,
             Some(GuiNodeId(1)),
             1,
-            GuiNodeContent::TextInput {
+            GuiNodeData::TextInput {
                 text: "a".to_owned(),
                 placeholder: "e".to_owned(),
-            },
-        )
-        .unwrap();
-    for id in [GuiNodeId(1), GuiNodeId(2), GuiNodeId(3)] {
-        root_tree.install_node_style(id, &text_style()).unwrap();
+            }
+            .into(),
+        ),
+    ] {
+        let node: crate::world::systems::gui::test_support::AuthoredNode = node;
+        root_tree
+            .insert_node(
+                GuiNodeId(id),
+                parent,
+                index,
+                node.data,
+                node.values,
+                &text_style(),
+            )
+            .unwrap();
     }
+    root_tree.nodes_mut().controls = Default::default();
 
     let mut cache = GuiLayoutCache::default();
     let view = cache.evaluate(entity(), &request(&root_tree, 1), &resolver);
@@ -1277,18 +1231,18 @@ fn nested_nonuniform_scale_applies_to_child_extents() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let scaled = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(2.0, 2.0),
     );
     tree.set_visual(scaled, [0.0, 0.0], [2.0, 0.5]);
     let leaf = tree.add(
         Some(scaled),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     let root_tree = tree.build();
@@ -1316,18 +1270,18 @@ fn asymmetric_text_child_paints_and_hits_scaled() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let middle = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 1.0),
     );
     tree.set_visual(middle, [0.0, 0.0], [2.0, 1.0]);
     let leaf = tree.add(
         Some(middle),
-        GuiNodeContent::Text("A".to_owned()),
+        GuiNodeData::Text("A".to_owned()),
         text_style(),
     );
     tree.set_visual(leaf, [0.0, 0.0], [1.0, 0.5]);
@@ -1374,18 +1328,18 @@ fn scaled_drawing_leaf_carries_accumulated_scale() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
     let scaled = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(1.0, 0.5),
     );
     tree.set_visual(scaled, [0.0, 0.0], [3.0, 2.0]);
     let leaf = tree.add(
         Some(scaled),
-        GuiNodeContent::Drawing,
+        GuiNodeData::Drawing,
         GuiNodeStyle {
             width: Some(1.0),
             height: Some(0.5),
@@ -1420,18 +1374,18 @@ fn scaled_scroll_viewport_clips_in_final_coordinates() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::ScrollView),
+        GuiNodeData::Container(GuiContainerKind::ScrollView),
         sized(2.0, 1.0),
     );
     tree.set_visual(root, [0.0, 0.0], [2.0, 0.5]);
     let column = tree.add(
         Some(root),
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         GuiNodeStyle::default(),
     );
     let child = tree.add(
         Some(column),
-        GuiNodeContent::Container(GuiContainerKind::SizedBox),
+        GuiNodeData::Container(GuiContainerKind::SizedBox),
         sized(2.0, 1.0),
     );
     let root_tree = tree.build();
@@ -1452,14 +1406,12 @@ fn disabled_nodes_skip_hit_testing() {
     let mut tree = TreeBuilder::new();
     let root = tree.add(
         None,
-        GuiNodeContent::Container(GuiContainerKind::Column),
+        GuiNodeData::Container(GuiContainerKind::Column),
         sized(4.0, 2.0),
     );
     let control = tree.add(
         Some(root),
-        GuiNodeContent::Checkbox {
-            checked: false,
-        },
+        checkbox_node(false),
         GuiNodeStyle {
             enabled: false,
             ..sized(1.0, 1.0)
@@ -1482,7 +1434,7 @@ fn disabled_nodes_skip_hit_testing() {
 
     // Re-enabling through the authoring lane refreshes hit eligibility without reflow.
     root_tree
-        .apply_patch(
+        .update_node(
             control,
             &GuiNodePatch {
                 enabled: Some(true),

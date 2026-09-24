@@ -31,6 +31,10 @@ pub enum FieldValue {
     Bool(bool),
     /// Entity reference; aliases are resolved before retention.
     Entity(EntityRef),
+    /// Whole schema rows table in the [`Rows`](crate::components::rows::Rows) encoding.
+    Rows(Vec<u8>),
+    /// Clear an optional schema row property.
+    Unset,
 }
 
 /// Exact target-layout field address and owned value.

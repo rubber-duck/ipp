@@ -4,7 +4,7 @@
 use super::*;
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, GuiCommand,
-    GuiContainerKind, GuiNodeContent, GuiNodeId, GuiNodeStyle, Surface,
+    GuiContainerKind, GuiNodeData, GuiNodeId, GuiNodeStyle, Surface,
 };
 use std::time::Duration;
 
@@ -101,7 +101,8 @@ fn insert(entity: EntityId, incarnation: u64, id: u32, parent: Option<u32>) -> G
         id: GuiNodeId(id),
         parent: parent.map(GuiNodeId),
         index: 0,
-        content: GuiNodeContent::Container(GuiContainerKind::Column),
+        data: GuiNodeData::Container(GuiContainerKind::Column),
+        values: ipp_core::GuiNodeDataRow::default(),
         style: GuiNodeStyle::default(),
     }
 }

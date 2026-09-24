@@ -1,5 +1,7 @@
 use super::*;
 #[cfg(feature = "gui")]
+use crate::GuiNodeDataRow;
+#[cfg(feature = "gui")]
 use crate::services::asset_management::drawing::DRAWING_TYPE;
 use crate::services::asset_management::{AssetSource, AssetUpload, AssetUploadIdentity};
 #[cfg(feature = "gui")]
@@ -10,7 +12,7 @@ use crate::systems::animation::{
 #[cfg(feature = "gui")]
 use crate::systems::gui::{
     GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCancelReason, GuiInputCommand,
-    GuiInputEffectKind, GuiNodeContent, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
+    GuiInputEffectKind, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
     GuiPointerButton, GuiRoot, GuiUnhandledReason,
 };
 #[cfg(feature = "gui")]
@@ -267,43 +269,76 @@ fn model_recovery_rebuilds_primitives_for_the_reappearing_surface() {
 #[cfg(feature = "gui")]
 const SESSION: u64 = 7;
 
+/// Author one property of a part in the theme whose handle is `node`; the
+/// fixture tree points each node at the theme of its own identity.
+#[cfg(feature = "gui")]
+fn part_property(root: &mut GuiRoot, node: u32, part: &str, property: &str, value: DynamicValue) {
+    crate::world::systems::gui::test_support::set_theme_part(
+        root,
+        node,
+        part,
+        property,
+        Some(value),
+    );
+}
+
 #[cfg(feature = "gui")]
 fn part_color(root: &mut GuiRoot, node: u32, part: &str, value: [f32; 4]) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "color").unwrap();
-    root.properties
-        .set(&name, DynamicValue::Vec4(value))
-        .unwrap();
+    part_property(root, node, part, "color", DynamicValue::Vec4(value));
 }
 
 #[cfg(feature = "gui")]
 fn part_asset(root: &mut GuiRoot, node: u32, part: &str, source: AssetSource) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "asset").unwrap();
-    root.properties
-        .set(&name, DynamicValue::Asset(source))
-        .unwrap();
+    part_property(root, node, part, "asset", DynamicValue::Asset(source));
 }
 
 #[cfg(feature = "gui")]
-fn part_f32(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: f32) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, lane).unwrap();
-    root.properties
-        .set(&name, DynamicValue::F32(value))
-        .unwrap();
+fn part_f32(root: &mut GuiRoot, node: u32, part: &str, property: &str, value: f32) {
+    part_property(root, node, part, property, DynamicValue::F32(value));
 }
 
 #[cfg(feature = "gui")]
-fn part_vec2(root: &mut GuiRoot, node: u32, part: &str, lane: &str, value: [f32; 2]) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, lane).unwrap();
-    root.properties
-        .set(&name, DynamicValue::Vec2(value))
-        .unwrap();
+fn part_vec2(root: &mut GuiRoot, node: u32, part: &str, property: &str, value: [f32; 2]) {
+    part_property(root, node, part, property, DynamicValue::Vec2(value));
 }
 
 #[cfg(feature = "gui")]
 fn part_motion(root: &mut GuiRoot, node: u32, part: &str, source: AssetSource) {
-    let name = GuiRoot::part_property_name(GuiNodeId(node), part, "motion").unwrap();
-    root.properties
-        .set(&name, DynamicValue::Asset(source))
+    part_property(root, node, part, "motion", DynamicValue::Asset(source));
+}
+
+#[cfg(feature = "gui")]
+/// Queue an edit of one part property of the theme node 2 references.
+fn theme_edit(
+    context: &mut WorldContext<'_>,
+    panel: crate::EntityId,
+    part: &str,
+    property: &str,
+    value: Option<DynamicValue>,
+) {
+    use crate::world::systems::gui::test_support::{part_id, part_property};
+
+    let root_incarnation = context
+        .inspect_gui(panel, None, 1, 1)
+        .unwrap()
+        .root_incarnation;
+    let patch = match value {
+        Some(value) => {
+            crate::systems::gui::GuiPartPatch::default().set(part_property(property), value)
+        }
+        None => crate::systems::gui::GuiPartPatch::default().clear(part_property(property)),
+    };
+    context
+        .enqueue_gui_command(
+            SESSION,
+            GuiCommand::UpdateTheme {
+                entity: panel,
+                root_incarnation,
+                theme: 2,
+                part: part_id(part),
+                patch,
+            },
+        )
         .unwrap();
 }
 
@@ -326,6 +361,19 @@ fn skinned_root() -> GuiRoot {
 }
 
 #[cfg(feature = "gui")]
+use crate::systems::gui::GuiPartChannel;
+
+/// Clip track hint for one skin channel: a single GuiRoot row offset. The
+/// runtime binds each track to the transitioning node's own channel.
+#[cfg(feature = "gui")]
+fn skin_channel_hint(channel: GuiPartChannel) -> AnimationTrackTarget {
+    AnimationTrackTarget::AnimationProperty(crate::systems::animation::AnimationProperty {
+        component: ComponentValue::GUI_ROOT,
+        offsets: vec![GuiRoot::part_row_offset(0, channel.index()).unwrap()],
+    })
+}
+
+#[cfg(feature = "gui")]
 fn skin_motion_source(name: &str) -> AssetSource {
     AssetSource {
         kind: ANIMATION_TYPE,
@@ -343,11 +391,8 @@ fn skin_motion_clip(color: [f32; 4]) -> AnimationClip {
 fn skin_motion_tracks(color: [f32; 4]) -> Vec<AnimationTrack<AnimationValue>> {
     let dynamic =
         |value| AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(value));
-    let track = |lane: &str, value: DynamicValue| AnimationTrack {
-        target: AnimationTrackTarget::DynamicProperty {
-            component: ComponentValue::GUI_ROOT,
-            name: GuiRoot::part_property_name(GuiNodeId(2), "background", lane).unwrap(),
-        },
+    let track = |channel: GuiPartChannel, value: DynamicValue| AnimationTrack {
+        target: skin_channel_hint(channel),
         keys: vec![AnimationKeyframe {
             time: 1.0,
             value: dynamic(value),
@@ -355,9 +400,9 @@ fn skin_motion_tracks(color: [f32; 4]) -> Vec<AnimationTrack<AnimationValue>> {
         }],
     };
     vec![
-        track("color", DynamicValue::Vec4(color)),
-        track("opacity", DynamicValue::F32(1.0)),
-        track("scale", DynamicValue::Vec2([1.0, 1.0])),
+        track(GuiPartChannel::Color, DynamicValue::Vec4(color)),
+        track(GuiPartChannel::Opacity, DynamicValue::F32(1.0)),
+        track(GuiPartChannel::Scale, DynamicValue::Vec2([1.0, 1.0])),
     ]
 }
 
@@ -453,7 +498,8 @@ fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId
                 id: GuiNodeId(1),
                 parent: None,
                 index: 0,
-                content: GuiNodeContent::Container(GuiContainerKind::Column),
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle {
                     width: Some(10.0),
                     height: Some(10.0),
@@ -466,10 +512,10 @@ fn skin_panel_with_root(root: GuiRoot) -> (HostRuntime, WorldId, crate::EntityId
                 id: GuiNodeId(2),
                 parent: Some(GuiNodeId(1)),
                 index: 0,
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle {
+                    theme: Some(2),
                     width: Some(2.0),
                     height: Some(1.0),
                     background_color: Some([0.2, 0.2, 0.2, 1.0]),
@@ -510,9 +556,38 @@ fn node_centre(
 }
 
 #[cfg(feature = "gui")]
+/// Painted opacity of node 2's background in the prepared Surface primitives.
+fn panel_box_opacity(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) -> f32 {
+    host.world_mut(world)
+        .unwrap()
+        .with_system::<RenderSystem, _>(RenderSystem::ID, |system, _| {
+            system
+                .state
+                .surface_items
+                .iter()
+                .find(|item| item.entity == panel)
+                .unwrap()
+                .primitives
+                .iter()
+                .find_map(|primitive| {
+                    let style = primitive.style();
+                    matches!(
+                        style.identity,
+                        SurfacePrimitiveIdentity::Gui(id)
+                            if id.node == GuiNodeId(2)
+                                && id.part == GuiPrimitivePart::Background
+                    )
+                    .then_some(style.opacity)
+                })
+                .unwrap()
+        })
+        .unwrap()
+}
+
+#[cfg(feature = "gui")]
 /// Painted background fill of node 2 in the prepared Surface primitives.
 ///
-/// The renderer paints a box from its `fill`; the style colour lane only
+/// The renderer paints a box from its `fill`; the style colour only
 /// joins its revision. Both must carry the same (possibly sampled) colour.
 fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityId) -> [f32; 4] {
     host.world_mut(world)
@@ -535,7 +610,6 @@ fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityI
                         style.identity,
                         SurfacePrimitiveIdentity::Gui(id)
                             if id.node == GuiNodeId(2)
-                                && id.lifetime == 1
                                 && id.part == GuiPrimitivePart::Background
                     ) =>
                     {
@@ -545,7 +619,7 @@ fn panel_box_color(host: &mut HostRuntime, world: WorldId, panel: crate::EntityI
 
                         assert_eq!(
                             style.color, *painted,
-                            "painted fill diverged from the style colour lane"
+                            "painted fill diverged from the style colour"
                         );
                         Some(*painted)
                     }
@@ -811,7 +885,6 @@ fn background_skin_owner(
         primitive: crate::systems::surface::GuiPrimitiveId {
             root_incarnation,
             node: GuiNodeId(2),
-            lifetime: 1,
             part: GuiPrimitivePart::Background,
         },
     }
@@ -839,13 +912,10 @@ fn skin_controller_snapshot(
 #[cfg(feature = "gui")]
 #[test]
 fn skin_controller_description_has_exactly_three_consecutive_drivers() {
+    use crate::systems::animation::AnimationProperty;
+    use crate::systems::gui::GuiPartChannel;
+
     let entity = crate::EntityId::from_bits(7);
-    let primitive = crate::systems::surface::GuiPrimitiveId {
-        root_incarnation: 3,
-        node: GuiNodeId(2),
-        lifetime: 5,
-        part: GuiPrimitivePart::Background,
-    };
     let motion = crate::systems::gui::GuiPartMotion {
         source: skin_motion_source("track-limit"),
         duration_secs: 1.0,
@@ -853,9 +923,10 @@ fn skin_controller_description_has_exactly_three_consecutive_drivers() {
         base_track: 4_294_967_040,
         animates_align: false,
         sample_time: 0.0,
+        channels: 5,
     };
 
-    let description = skin_controller_description(entity, primitive, &motion);
+    let description = skin_controller_description(entity, &motion);
     assert_eq!(description.drivers.len(), 3);
     assert_eq!(
         description
@@ -865,22 +936,22 @@ fn skin_controller_description_has_exactly_three_consecutive_drivers() {
             .collect::<Vec<_>>(),
         vec![4_294_967_040, 4_294_967_041, 4_294_967_042]
     );
+    let channel = |channel: GuiPartChannel| {
+        AnimationTrackTarget::AnimationProperty(AnimationProperty {
+            component: ComponentValue::GUI_ROOT,
+            offsets: vec![GuiRoot::part_row_offset(5, channel.index()).unwrap()],
+        })
+    };
     assert_eq!(
         description
             .drivers
             .iter()
-            .map(|driver| match &driver.property {
-                AnimationTrackTarget::DynamicProperty {
-                    name,
-                    ..
-                } => name.as_str(),
-                _ => panic!("expected GUI dynamic-property driver"),
-            })
+            .map(|driver| driver.property.clone())
             .collect::<Vec<_>>(),
         vec![
-            "node_2_part_background_color",
-            "node_2_part_background_opacity",
-            "node_2_part_background_scale",
+            channel(GuiPartChannel::Color),
+            channel(GuiPartChannel::Opacity),
+            channel(GuiPartChannel::Scale),
         ]
     );
 }
@@ -965,7 +1036,7 @@ fn automatic_skin_motion_uses_animation_samples_and_interrupts_continuously() {
 
     // Cancellation returns to the authored idle destination. The lookup is
     // reconstructed from AnimationSystem's underlying producer, never from
-    // the effective in-flight base lanes.
+    // the effective in-flight live channels.
     host.world_mut(world)
         .unwrap()
         .enqueue_gui_input_command(
@@ -1035,13 +1106,20 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
     let primitive = crate::systems::surface::GuiPrimitiveId {
         root_incarnation,
         node: GuiNodeId(2),
-        lifetime: 1,
         part: GuiPrimitivePart::Background,
     };
     let owner = GuiSkinAnimationOwner {
         entity: panel,
         primitive,
     };
+    let channels = host
+        .world_mut(world)
+        .unwrap()
+        .gui_root(panel)
+        .unwrap()
+        .part_row(GuiNodeId(2), GuiPrimitivePart::Background)
+        .unwrap()
+        .0;
     let from = crate::systems::gui::GuiPartMotion {
         source: sources[0].clone(),
         duration_secs: 1.0,
@@ -1049,6 +1127,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
         base_track: 0,
         animates_align: false,
         sample_time: 1.0,
+        channels,
     };
     let to = crate::systems::gui::GuiPartMotion {
         source: sources[1].clone(),
@@ -1057,7 +1136,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
     let ensure = |owner, request| AnimationInternalCommand::EnsureSkinTransition {
         owner,
         request,
-        source: skin_controller_description(panel, primitive, &from),
+        source: skin_controller_description(panel, &from),
         source_time: from.sample_time,
         source_sample: crate::systems::animation::GuiSkinAnimationSample {
             color: [0.25, 0.25, 0.25, 1.0],
@@ -1066,7 +1145,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
             align_x: None,
         },
         transition: AnimationControllerTransition {
-            description: skin_controller_description(panel, primitive, &to),
+            description: skin_controller_description(panel, &to),
             duration: to.duration_secs,
             easing: to.easing,
             start_time: AnimationTransitionStartTime::Seek(to.sample_time),
@@ -1084,7 +1163,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
     let ordinary = host
         .world_mut(world)
         .unwrap()
-        .create_animation_controller(skin_controller_description(panel, primitive, &from))
+        .create_animation_controller(skin_controller_description(panel, &from))
         .unwrap();
     host.world_mut(world)
         .unwrap()
@@ -1123,7 +1202,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
             context.transition_animation_controller(
                 private_id,
                 AnimationControllerTransition {
-                    description: skin_controller_description(panel, primitive, &to),
+                    description: skin_controller_description(panel, &to),
                     duration: to.duration_secs,
                     easing: to.easing,
                     start_time: AnimationTransitionStartTime::Seek(to.sample_time),
@@ -1153,7 +1232,7 @@ fn skin_controller_commands_fence_ordinary_access_lifecycle_and_item_failures() 
                 AnimationControllerCommand::Transition {
                     id: private_id,
                     transition: AnimationControllerTransition {
-                        description: skin_controller_description(panel, primitive, &to),
+                        description: skin_controller_description(panel, &to),
                         duration: to.duration_secs,
                         easing: to.easing,
                         start_time: AnimationTransitionStartTime::Seek(to.sample_time),
@@ -1402,19 +1481,13 @@ fn mismatched_skin_endpoint_settles_static_and_corrected_motion_recovers() {
 
     // A corrected motion reference is a fresh intent. It establishes a new
     // private controller without replaying the permanently refused request.
-    host.world_mut(world)
-        .unwrap()
-        .enqueue(Batch {
-            id: 120,
-            operations: vec![Command::SetDynamicProperty {
-                entity: EntityRef::Handle(panel),
-                component: ComponentValue::GUI_ROOT,
-                name: GuiRoot::part_property_name(GuiNodeId(2), "background_hovered", "motion")
-                    .unwrap(),
-                value: DynamicValue::Asset(corrected),
-            }],
-        })
-        .unwrap();
+    theme_edit(
+        &mut host.world_mut(world).unwrap(),
+        panel,
+        "background_hovered",
+        "motion",
+        Some(DynamicValue::Asset(corrected)),
+    );
     host.world_mut(world).unwrap().step(0.0).unwrap();
     host.world_mut(world).unwrap().step(0.0).unwrap();
     assert!(skin_controller_snapshot(&mut host, world, owner).is_some());
@@ -1709,7 +1782,7 @@ fn disabled_nodes_never_activate_and_paint_disabled() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         enabled: Some(false),
                         ..Default::default()
@@ -1813,7 +1886,7 @@ fn register_drawing(host: &mut HostRuntime, world: WorldId, uri: &str, pump: boo
 /// Drawing panel with a ready base asset and a skin part asset behind the
 /// base part: the part swaps the prepared resource through the runtime
 /// resource mechanism. Pending parts retain the prior resource while
-/// resolved color lanes still apply.
+/// resolved colours still apply.
 fn drawing_panel(
     part_uri: &str,
     part_ready: bool,
@@ -1988,20 +2061,15 @@ fn replace_skin_with_pending_drawing(
     uri: &str,
 ) -> (AssetSource, u64) {
     let pending = drawing_source(uri);
-    let property = GuiRoot::part_property_name(GuiNodeId(2), "icon", "asset").unwrap();
     {
         let mut context = host.world_mut(world).unwrap();
-        context
-            .enqueue(Batch {
-                id: context.tick() + 1,
-                operations: vec![Command::SetDynamicProperty {
-                    entity: EntityRef::Handle(panel),
-                    component: ComponentValue::GUI_ROOT,
-                    name: property,
-                    value: DynamicValue::Asset(pending.clone()),
-                }],
-            })
-            .unwrap();
+        theme_edit(
+            &mut context,
+            panel,
+            "icon",
+            "asset",
+            Some(DynamicValue::Asset(pending.clone())),
+        );
         context.step(0.0).unwrap();
     }
     host.progress_assets();
@@ -2027,7 +2095,8 @@ fn insert_drawing_tree(
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(10.0),
                 height: Some(10.0),
@@ -2040,8 +2109,10 @@ fn insert_drawing_tree(
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Drawing,
+            data: GuiNodeData::Drawing,
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
+                theme: Some(2),
                 width: Some(2.0),
                 height: Some(1.0),
                 asset: Some(base),
@@ -2087,7 +2158,6 @@ fn panel_drawing(
                         style.identity,
                         SurfacePrimitiveIdentity::Gui(id)
                             if id.node == GuiNodeId(2)
-                                && id.lifetime == 1
                                 && id.part == GuiPrimitivePart::Icon
                     ) =>
                     {
@@ -2135,7 +2205,7 @@ fn asset_backed_skin_paints_through_runtime_resources() {
     assert_ne!(base.uri, part.uri);
 
     // Settled paint swaps the base resource for the skin part asset while
-    // the resolved color lane applies. Drawing leaves never carry press
+    // the resolved colour applies. Drawing leaves never carry press
     // cursors (only controls do), so the base part proves the mechanism.
     host.world_mut(world).unwrap().step(0.0).unwrap();
     host.world_mut(world).unwrap().step(0.0).unwrap();
@@ -2155,7 +2225,7 @@ fn pending_skin_asset_retains_prior_resource_in_prepared_paint() {
     );
 
     // The pending part retains the prior resource while the resolved color
-    // lane still applies: the subset rule holds in prepared paint.
+    // colour still applies: the subset rule holds in prepared paint.
     host.world_mut(world).unwrap().step(0.0).unwrap();
     host.world_mut(world).unwrap().step(0.0).unwrap();
     assert_eq!(
@@ -2175,20 +2245,15 @@ fn pending_skin_replacement_retains_last_ready_skin_resource() {
     host.world_mut(world).unwrap().step(0.0).unwrap();
     assert_eq!(panel_drawing(&mut host, world, panel).0, ready.uri);
 
-    let property = GuiRoot::part_property_name(GuiNodeId(2), "icon", "asset").unwrap();
     {
         let mut context = host.world_mut(world).unwrap();
-        context
-            .enqueue(Batch {
-                id: 2,
-                operations: vec![Command::SetDynamicProperty {
-                    entity: EntityRef::Handle(panel),
-                    component: ComponentValue::GUI_ROOT,
-                    name: property,
-                    value: DynamicValue::Asset(pending),
-                }],
-            })
-            .unwrap();
+        theme_edit(
+            &mut context,
+            panel,
+            "icon",
+            "asset",
+            Some(DynamicValue::Asset(pending)),
+        );
         context.step(0.0).unwrap();
     }
 
@@ -2198,7 +2263,8 @@ fn pending_skin_replacement_retains_last_ready_skin_resource() {
 
 #[cfg(feature = "gui")]
 #[test]
-fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_removal() {
+fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_and_theme_removal()
+{
     let (mut host, world, panel, _, ready) = demand_only_drawing_panel("replace-node");
     let ready_key = host.asset_resources().find(&ready).unwrap();
     let (replacement, request) = replace_skin_with_pending_drawing(
@@ -2208,7 +2274,7 @@ fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_
         "skin-retention:///replace-node-next.ippd",
     );
 
-    // The authored lane now demands only the pending replacement. Advancing
+    // The authored theme now demands only the pending replacement. Advancing
     // the zero-budget release barrier must not evict the RenderSystem's
     // last-ready consumer or its prepared appearance.
     host.flush_resource_lifecycle();
@@ -2253,7 +2319,7 @@ fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::RemoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -2262,6 +2328,24 @@ fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_
     host.flush_resource_lifecycle();
     assert!(render_skin_resources(&mut host, world).is_empty());
     assert!(host.asset_resources().find(&replacement).is_none());
+    // The root-owned theme outlives the node and keeps demanding its
+    // pending reference until the theme itself goes.
+    assert!(host.asset_resources().find(&pending).is_some());
+    {
+        let mut context = host.world_mut(world).unwrap();
+        context
+            .enqueue_gui_command(
+                SESSION,
+                GuiCommand::RemoveTheme {
+                    entity: panel,
+                    root_incarnation: incarnation,
+                    theme: 2,
+                },
+            )
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    host.flush_resource_lifecycle();
     assert!(host.asset_resources().find(&pending).is_none());
 }
 
@@ -2269,27 +2353,10 @@ fn demand_only_skin_retention_survives_pending_replacement_and_releases_on_node_
 #[test]
 fn clearing_demand_only_skin_appearance_releases_before_pending_replacement() {
     let (mut host, world, panel, base, ready) = demand_only_drawing_panel("clear-appearance");
-    let color = GuiRoot::part_property_name(GuiNodeId(2), "icon", "color").unwrap();
-    let asset = GuiRoot::part_property_name(GuiNodeId(2), "icon", "asset").unwrap();
     {
         let mut context = host.world_mut(world).unwrap();
-        context
-            .enqueue(Batch {
-                id: context.tick() + 1,
-                operations: vec![
-                    Command::RemoveDynamicProperty {
-                        entity: EntityRef::Handle(panel),
-                        component: ComponentValue::GUI_ROOT,
-                        name: color,
-                    },
-                    Command::RemoveDynamicProperty {
-                        entity: EntityRef::Handle(panel),
-                        component: ComponentValue::GUI_ROOT,
-                        name: asset,
-                    },
-                ],
-            })
-            .unwrap();
+        theme_edit(&mut context, panel, "icon", "color", None);
+        theme_edit(&mut context, panel, "icon", "asset", None);
         context.step(0.0).unwrap();
     }
 
@@ -2396,11 +2463,7 @@ fn root_replacement_cannot_reuse_a_retained_skin_resource() {
     assert_eq!(panel_drawing(&mut host, world, panel).0, ready.uri);
 
     let mut replacement = panel_root(&mut host, world, panel);
-    let property = GuiRoot::part_property_name(GuiNodeId(2), "icon", "asset").unwrap();
-    replacement
-        .properties
-        .set(&property, DynamicValue::Asset(pending))
-        .unwrap();
+    part_asset(&mut replacement, 2, "icon", pending);
     {
         let mut context = host.world_mut(world).unwrap();
         context
@@ -2526,21 +2589,15 @@ fn skin_property_edit_repaints_without_hover_or_layout_work() {
         })
         .unwrap();
 
-    let property =
-        GuiRoot::part_property_name(GuiNodeId(2), "background_idle_unchecked", "color").unwrap();
     {
         let mut context = host.world_mut(world).unwrap();
-        context
-            .enqueue(Batch {
-                id: 2,
-                operations: vec![Command::SetDynamicProperty {
-                    entity: EntityRef::Handle(panel),
-                    component: ComponentValue::GUI_ROOT,
-                    name: property,
-                    value: DynamicValue::Vec4([0.1, 0.2, 0.9, 1.0]),
-                }],
-            })
-            .unwrap();
+        theme_edit(
+            &mut context,
+            panel,
+            "background_idle_unchecked",
+            "color",
+            Some(DynamicValue::Vec4([0.1, 0.2, 0.9, 1.0])),
+        );
         context.step(0.0).unwrap();
     }
 
@@ -2571,36 +2628,41 @@ type SkinMotionSample = (f64, [f32; 4], f32, [f32; 2]);
 #[cfg(feature = "gui")]
 /// One motion clip holding every destination at its own sample time, like
 /// the gallery skins: idle, hovered, pressed and disabled share the tracks
-/// that animate the idle `background` lanes.
+/// that animate the `background` channels.
 fn shared_skin_motion_clip(samples: &[SkinMotionSample]) -> AnimationClip {
     let duration = samples.last().unwrap().0;
-    let track = |lane: &str, value: &dyn Fn(&SkinMotionSample) -> DynamicValue| AnimationTrack {
-        target: AnimationTrackTarget::DynamicProperty {
-            component: ComponentValue::GUI_ROOT,
-            name: GuiRoot::part_property_name(GuiNodeId(2), "background", lane).unwrap(),
-        },
-        keys: samples
-            .iter()
-            .map(|sample| AnimationKeyframe {
-                time: sample.0,
-                value: AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
-                    value(sample),
-                )),
-                interpolation: if sample.0 < duration {
-                    AnimationInterpolation::Linear
-                } else {
-                    AnimationInterpolation::Step
-                },
-            })
-            .collect(),
+    let track = |channel: GuiPartChannel, value: &dyn Fn(&SkinMotionSample) -> DynamicValue| {
+        AnimationTrack {
+            target: skin_channel_hint(channel),
+            keys: samples
+                .iter()
+                .map(|sample| AnimationKeyframe {
+                    time: sample.0,
+                    value: AnimationValue::Field(crate::components::schema::FieldValue::Dynamic(
+                        value(sample),
+                    )),
+                    interpolation: if sample.0 < duration {
+                        AnimationInterpolation::Linear
+                    } else {
+                        AnimationInterpolation::Step
+                    },
+                })
+                .collect(),
+        }
     };
 
     AnimationClip::new(
         duration,
         vec![
-            track("color", &|sample| DynamicValue::Vec4(sample.1)),
-            track("opacity", &|sample| DynamicValue::F32(sample.2)),
-            track("scale", &|sample| DynamicValue::Vec2(sample.3)),
+            track(GuiPartChannel::Color, &|sample| {
+                DynamicValue::Vec4(sample.1)
+            }),
+            track(GuiPartChannel::Opacity, &|sample| {
+                DynamicValue::F32(sample.2)
+            }),
+            track(GuiPartChannel::Scale, &|sample| {
+                DynamicValue::Vec2(sample.3)
+            }),
         ],
     )
     .unwrap()
@@ -2617,7 +2679,7 @@ fn set_node_enabled(host: &mut HostRuntime, world: WorldId, panel: crate::Entity
         .enqueue_gui_command(
             SESSION,
             GuiCommand::UpdateNode {
-                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2), 1),
+                handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(2)),
                 patch: GuiNodePatch {
                     enabled: Some(enabled),
                     ..Default::default()
@@ -2649,24 +2711,40 @@ fn skin_controller_refused(
 }
 
 #[cfg(feature = "gui")]
-/// Base (authored) and effective idle `background` lanes of node 2.
-fn idle_background_lanes(
+/// Node 2's idle `background` as the base value authors it (its theme's base
+/// part) and as the effective value animates it (its live part-row channels).
+fn idle_background_properties(
     host: &mut HostRuntime,
     world: WorldId,
     panel: crate::EntityId,
 ) -> [crate::systems::gui::GuiPartStyle; 2] {
     let inspected = host.world_mut(world).unwrap().inspect(panel).unwrap();
-    let lanes = |values: Vec<ComponentValue>| {
-        let root = values
+    let root = |values: Vec<ComponentValue>| {
+        values
             .into_iter()
             .find_map(|value| match value {
                 ComponentValue::GuiRoot(root) => Some(root),
                 _ => None,
             })
-            .unwrap();
-        crate::systems::gui::part_style(&root, GuiNodeId(2), "background")
+            .unwrap()
     };
-    [lanes(inspected.base), lanes(inspected.effective)]
+    let authored = crate::systems::gui::theme_part_style(
+        &root(inspected.base),
+        GuiNodeId(2),
+        crate::systems::gui::GuiPartId::base(GuiPrimitivePart::Background),
+    );
+    let effective = root(inspected.effective);
+    let (_, channels) = effective
+        .part_row(GuiNodeId(2), GuiPrimitivePart::Background)
+        .expect("an animated part keeps its live channels");
+    let effective = crate::systems::gui::GuiPartStyle {
+        color: channels.live_color,
+        opacity: channels.live_opacity,
+        scale: channels.live_scale,
+        align_x: channels.live_align_x,
+        ..Default::default()
+    };
+    [authored, effective]
 }
 
 #[cfg(feature = "gui")]
@@ -2712,7 +2790,7 @@ fn step_with_unrelated_edit(
         .unwrap()
         .root_incarnation;
     let edit = GuiCommand::UpdateNode {
-        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1), 1),
+        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(1)),
         patch: GuiNodePatch {
             opacity: Some(if frame.is_multiple_of(2) {
                 1.0
@@ -2768,7 +2846,7 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
         part_f32(&mut root, 2, part, "duration", 0.2);
         part_f32(&mut root, 2, part, "easing", 0.0);
         part_f32(&mut root, 2, part, "track", 0.0);
-        // Lane times are f32 like React's authored lanes.
+        // Sample times are f32 like React's authored theme values.
         part_f32(&mut root, 2, part, "time", sample.0 as f32);
     }
     let (mut host, world, panel) = skin_panel_with_root(root);
@@ -2799,9 +2877,8 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
                     id: GuiNodeId(3),
                     parent: Some(GuiNodeId(1)),
                     index: 1,
-                    content: GuiNodeContent::Checkbox {
-                        checked: false,
-                    },
+                    data: GuiNodeData::Checkbox,
+                    values: GuiNodeDataRow::checkbox(false),
                     style: GuiNodeStyle {
                         width: Some(2.0),
                         height: Some(1.0),
@@ -2832,7 +2909,7 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
             assert_eq!(skin_controller_refused(&mut host, world, owner), None);
         }
         assert_color_near(panel_box_color(&mut host, world, panel), disabled.0);
-        let [base, effective] = idle_background_lanes(&mut host, world, panel);
+        let [base, effective] = idle_background_properties(&mut host, world, panel);
         assert!(
             (effective.opacity.unwrap() - disabled.1).abs() <= 1.0e-5,
             "cycle {cycle}"
@@ -2841,14 +2918,14 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
         assert_eq!(base.opacity, Some(idle.1), "cycle {cycle}");
 
         // Disabled -> idle blends from the held disabled sample through
-        // intermediate values and restores the authored idle lanes.
+        // intermediate values and restores the authored idle values.
         set_node_enabled(&mut host, world, panel, true);
         let mut blended = false;
         for _ in 0..24 {
             step_with_unrelated_edit(&mut host, world, panel, frame, edits);
             frame += 1;
             assert_eq!(skin_controller_refused(&mut host, world, owner), None);
-            let [base, _] = idle_background_lanes(&mut host, world, panel);
+            let [base, _] = idle_background_properties(&mut host, world, panel);
             assert_eq!(base.color, Some(idle.0), "cycle {cycle}");
             assert_eq!(base.opacity, Some(idle.1), "cycle {cycle}");
             let paint = panel_box_color(&mut host, world, panel);
@@ -2862,14 +2939,14 @@ fn re_enabled_control_transitions_back_to_idle_through_a_shared_motion_clip() {
         }
         assert!(blended, "cycle {cycle}: no intermediate transition paint");
         assert_color_near(panel_box_color(&mut host, world, panel), idle.0);
-        let [base, effective] = idle_background_lanes(&mut host, world, panel);
-        for lanes in [base, effective] {
-            assert_color_near(lanes.color.unwrap(), idle.0);
+        let [base, effective] = idle_background_properties(&mut host, world, panel);
+        for values in [base, effective] {
+            assert_color_near(values.color.unwrap(), idle.0);
             assert!(
-                (lanes.opacity.unwrap() - idle.1).abs() <= 1.0e-5,
+                (values.opacity.unwrap() - idle.1).abs() <= 1.0e-5,
                 "cycle {cycle}"
             );
-            assert_eq!(lanes.scale, Some(idle.2), "cycle {cycle}");
+            assert_eq!(values.scale, Some(idle.2), "cycle {cycle}");
         }
     }
 

@@ -15,6 +15,7 @@ import type {
   GuiNodeHandle,
   GuiNodeStyle,
 } from "@ipp/client";
+import { guiPartIndex } from "@ipp/client";
 import type { ReactWorldClient } from "../src/contract.js";
 import type {
   GuiDescribedNode,
@@ -34,9 +35,9 @@ type FailureMode = "loss" | "reject";
 interface FakeStoredNode {
   id: number;
   parent: number | undefined;
-  content: GuiDescribedNode["content"];
+  data: GuiDescribedNode["data"];
+  values: GuiDescribedNode["values"];
   style: GuiNodeStyle;
-  lifetime: number;
 }
 
 function rejected(): Error {
@@ -66,6 +67,9 @@ class FakeGuiRuntime {
   readonly failureSnapshots: number[][] = [];
   readonly nodes = new Map<number, FakeStoredNode>();
   readonly dynamicCommands: Command[] = [];
+  /** Root themes by handle: compiled part rows keyed by part index. */
+  readonly themes = new Map<number, Map<number, Record<string, unknown>>>();
+  readonly themeEdits: GuiEdit[] = [];
   private readonly failures: Array<{
     action: GuiEdit["action"];
     mode: FailureMode;
@@ -111,15 +115,33 @@ class FakeGuiRuntime {
 
   async editGui(edit: GuiEdit): Promise<void> {
     const mode = this.takeFailure(edit.action);
+    if (edit.action === "updateTheme") {
+      this.themeEdits.push(edit);
+      const theme = this.themes.get(edit.theme) ?? new Map();
+      const index = guiPartIndex(edit.part);
+      const row = { ...(theme.get(index) ?? {}) };
+      for (const [key, value] of Object.entries(edit.patch))
+        if (value === null) delete row[key];
+        else row[key] = value;
+      theme.set(index, row);
+      this.themes.set(edit.theme, theme);
+      return;
+    }
+    if (edit.action === "removeTheme") {
+      this.themeEdits.push(edit);
+      if (!this.themes.delete(edit.theme)) throw rejected();
+      return;
+    }
+    if (edit.action === "updatePart") throw rejected();
     if (edit.action === "insert") {
       if (mode !== "reject") {
         if (this.nodes.has(edit.id)) throw rejected();
         this.nodes.set(edit.id, {
           id: edit.id,
           parent: edit.parent,
-          content: edit.content,
+          data: edit.data,
+          values: edit.values ?? {},
           style: { ...edit.style },
-          lifetime: 1,
         });
       }
       if (mode === "reject") throw rejected();
@@ -136,9 +158,17 @@ class FakeGuiRuntime {
       if (mode !== "reject") {
         const node = this.nodes.get(edit.handle.nodeId);
         if (!node) throw rejected();
-        if (edit.patch.content !== undefined) node.content = edit.patch.content;
+        if (edit.patch.data !== undefined) node.data = edit.patch.data;
+        if (edit.patch.values !== undefined) node.values = edit.patch.values;
         if (edit.patch.style?.opacity !== undefined)
           node.style = { ...node.style, opacity: edit.patch.style.opacity };
+        if (edit.patch.style?.theme !== undefined) {
+          const { theme: _previous, ...style } = node.style;
+          node.style =
+            edit.patch.style.theme === null
+              ? style
+              : { ...style, theme: edit.patch.style.theme };
+        }
       }
       if (mode === "reject") throw rejected();
       if (mode === "loss") throw new Error("response lost");
@@ -202,11 +232,11 @@ class FakeGuiRuntime {
             children: [...this.nodes.values()]
               .filter((child) => child.parent === node.id)
               .map((child) => child.id),
-            content: node.content,
+            data: node.data,
+            values: node.values,
             style: { ...node.style },
             controlValue: { kind: "none" },
             controlRevision: 0,
-            lifetime: node.lifetime,
           }) as unknown as GuiInspectedNode,
       );
     return {
@@ -308,7 +338,8 @@ function containerNode(
     identity,
     parent: undefined,
     type: GUI_COLUMN_HOST_TYPE,
-    content: { kind: "container", containerKind: "column" },
+    data: { kind: "container", containerKind: "column" },
+    values: {},
     style,
     nodeRef,
     onAction: undefined,
@@ -328,7 +359,8 @@ function checkboxNode(
     identity,
     parent,
     type: GUI_CHECKBOX_HOST_TYPE,
-    content: { kind: "checkbox", checked },
+    data: { kind: "checkbox" },
+    values: { checked },
     style,
     nodeRef,
     onAction: undefined,
@@ -344,7 +376,12 @@ function describe(nodes: GuiDescribedNode[]): GuiDescribedRoot[] {
       nodeRef: null,
       nodes,
       signature: JSON.stringify(
-        nodes.map((node) => [node.identity, node.parent ?? null, node.content]),
+        nodes.map((node) => [
+          node.identity,
+          node.parent ?? null,
+          node.data,
+          node.values,
+        ]),
       ),
     },
   ];
@@ -499,9 +536,9 @@ test("refusing foreign work retains produced ids for later recovery", async () =
   runtime.injectForeign({
     id: 99,
     parent: undefined,
-    content: { kind: "container", containerKind: "column" },
+    data: { kind: "container", containerKind: "column" },
+    values: {},
     style: {},
-    lifetime: 1,
   });
   runtime.failNext("update", "loss");
   await assert.rejects(
@@ -583,57 +620,71 @@ test("losing the bound entity uses the same retained cleanup path", async () => 
   assert.equal(runtime.producerLive, false);
 });
 
-test("themes author GuiRoot named parts and equivalent rerenders are stable", async () => {
+test("themes flush once per root and nodes reference them", async () => {
   const runtime = new FakeGuiRuntime();
   const commits = runtime.commits();
-  const theme: GuiControlTheme = {
-    parts: {
-      background: {
-        base: { color: [1, 0, 0, 1], opacity: 0.75, scale: [1, 1] },
-        pressed: { color: [0, 1, 0, 1] },
-      },
-    },
-  };
-  await commits.apply(
-    describe([containerNode(10, ref(), {}, theme)]),
-    () => runtime.entity,
-  );
-  assert.ok(
-    runtime.dynamicCommands.some(
-      (command) =>
-        command.kind === "setDynamicProperty" &&
-        command.name === "node_1_part_background_pressed_color",
-    ),
-  );
-  const count = runtime.dynamicCommands.length;
-  await commits.apply(
-    describe([
-      containerNode(
-        10,
-        ref(),
-        {},
-        {
-          parts: {
-            background: {
-              base: { color: [1, 0, 0, 1], opacity: 0.75, scale: [1, 1] },
-              pressed: { color: [0, 1, 0, 1] },
-            },
-          },
+  const theme = (pressed: readonly [number, number, number, number]) =>
+    ({
+      parts: {
+        background: {
+          base: { color: [1, 0, 0, 1], opacity: 0.75, scale: [1, 1] },
+          pressed: { color: pressed },
         },
-      ),
-    ]),
-    () => runtime.entity,
+      },
+    }) satisfies GuiControlTheme;
+  const pressed = guiPartIndex({ part: "background", state: "pressed" });
+  const tree = (first: GuiControlTheme | undefined, second = first) =>
+    describe([
+      containerNode(10, ref(), {}, first),
+      { ...containerNode(11, ref(), {}, second), parent: 10 },
+    ]);
+
+  // Two controls sharing a theme compile it once; both reference it.
+  await commits.apply(tree(theme([0, 1, 0, 1])), () => runtime.entity);
+  assert.equal(runtime.themes.size, 1);
+  const [id, rows] = [...runtime.themes][0]!;
+  assert.deepEqual(rows.get(pressed), { color: [0, 1, 0, 1] });
+  assert.deepEqual(
+    [...runtime.nodes.values()].map((node) => node.style.theme),
+    [id, id],
   );
-  assert.equal(runtime.dynamicCommands.length, count);
+
+  // An equivalent rerender with fresh objects sends nothing.
+  const edits = runtime.themeEdits.length;
+  const requests = runtime.guiBatchRequests;
+  await commits.apply(tree(theme([0, 1, 0, 1])), () => runtime.entity);
+  assert.equal(runtime.themeEdits.length, edits);
+  assert.equal(runtime.guiBatchRequests, requests);
+
+  // A named theme edited in place changes only its rows, never the nodes.
   await commits.apply(
-    describe([containerNode(10, ref())]),
+    tree({ name: "panel", ...theme([0, 0, 1, 1]) }),
     () => runtime.entity,
   );
-  assert.ok(
-    runtime.dynamicCommands.some(
-      (command) =>
-        command.kind === "removeDynamicProperty" &&
-        command.name === "node_1_part_background_pressed_color",
-    ),
+  const named = [...runtime.themes.keys()].find((handle) => handle !== id)!;
+  assert.equal(runtime.themes.has(id), false);
+  const nodeEdits = () =>
+    [...runtime.nodes.values()].map((node) => node.style.theme);
+  assert.deepEqual(nodeEdits(), [named, named]);
+  const before = runtime.themeEdits.length;
+  await commits.apply(
+    tree({ name: "panel", ...theme([1, 1, 1, 1]) }),
+    () => runtime.entity,
   );
+  assert.deepEqual(runtime.themeEdits.slice(before), [
+    {
+      action: "updateTheme",
+      entity: runtime.entity,
+      rootIncarnation: runtime.rootIncarnation,
+      theme: named,
+      part: { part: "background", state: "pressed" },
+      patch: { color: [1, 1, 1, 1] },
+    },
+  ]);
+  assert.deepEqual(nodeEdits(), [named, named]);
+
+  // Dropping the theme clears references and removes the unused theme.
+  await commits.apply(tree(undefined), () => runtime.entity);
+  assert.equal(runtime.themes.size, 0);
+  assert.deepEqual(nodeEdits(), [undefined, undefined]);
 });

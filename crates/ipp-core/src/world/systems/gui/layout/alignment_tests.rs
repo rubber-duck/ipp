@@ -9,10 +9,11 @@
 use super::super::super::test_support::test_font;
 use super::test_support::*;
 use super::*;
+use crate::GuiNodePatch;
 use crate::systems::surface::SurfaceRenderPrimitive;
 
-fn container(kind: GuiContainerKind) -> GuiNodeContent {
-    GuiNodeContent::Container(kind)
+fn container(kind: GuiContainerKind) -> GuiNodeData {
+    GuiNodeData::Container(kind)
 }
 
 fn aligned(w: f32, h: f32, align_x: f32, align_y: f32) -> GuiNodeStyle {
@@ -41,7 +42,7 @@ fn align_moves_nested_containers_text_and_hit_targets() {
     );
     let text = tree.add(
         Some(column),
-        GuiNodeContent::Text("A".to_owned()),
+        GuiNodeData::Text("A".to_owned()),
         text_style(),
     );
     let root_tree = tree.build();
@@ -360,11 +361,7 @@ fn visual_moves_of_aligned_text_rebuild_geometry_without_remeasuring() {
         container(GuiContainerKind::Row),
         aligned(2.0, 1.0, 1.0, 0.0),
     );
-    let text = tree.add(
-        Some(panel),
-        GuiNodeContent::Text("A".to_owned()),
-        text_style(),
-    );
+    let text = tree.add(Some(panel), GuiNodeData::Text("A".to_owned()), text_style());
     let mut root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
@@ -375,10 +372,14 @@ fn visual_moves_of_aligned_text_rebuild_geometry_without_remeasuring() {
     assert_eq!(view.remeasure_count, 1);
     assert_eq!(view.reflow_count, 1);
 
-    let position = GuiRoot::property_name(panel, "position").unwrap();
     root_tree
-        .properties
-        .set(&position, crate::DynamicValue::Vec2([0.5, 0.0]))
+        .update_node(
+            panel,
+            &GuiNodePatch {
+                position: Some([0.5, 0.0]),
+                ..GuiNodePatch::default()
+            },
+        )
         .unwrap();
     let view = cache.evaluate(entity(), &request(&root_tree, 2), &resolver);
 

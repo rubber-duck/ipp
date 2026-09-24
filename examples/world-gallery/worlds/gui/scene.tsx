@@ -1,12 +1,13 @@
 import {
-  guiPartProperty,
-  guiProperty,
+  guiNodeStyleOffset,
+  guiPartStateOffset,
   type AnimationClipSource,
   type AnimationControllerState,
   type AnimationTrack,
   type AnimationWorldClient,
   type AssetResourceSnapshot,
   type ClientAssetSource,
+  type ComponentDescriptor,
   type GuiNodeHandle,
 } from "@ipp/client";
 import {
@@ -154,27 +155,35 @@ function errorMessage(failure: unknown): string {
   return failure instanceof Error ? failure.message : String(failure);
 }
 
-function dynamicTrack(
-  component: number,
-  lane: "color" | "opacity" | "scale" | "align_x",
+/** One skin channel track. Its target hint is the channel of part-row
+ * slot 0; the runtime binds the track to each transitioning node's own
+ * channel. */
+function channelTrack(
+  guiRoot: ComponentDescriptor,
+  channel: "color" | "opacity" | "scale" | "alignX",
   values: readonly (readonly [number, unknown])[],
 ): AnimationTrack {
+  const live = `live${channel[0]!.toUpperCase()}${channel.slice(1)}` as
+    | "liveColor"
+    | "liveOpacity"
+    | "liveScale"
+    | "liveAlignX";
   return {
     property: {
-      component,
-      name: guiPartProperty(1, "background", lane),
+      component: guiRoot.id,
+      offsets: [guiPartStateOffset(guiRoot, 0, live)],
     },
     keys: values.map(([time, value], index) => ({
       time,
       value: {
         kind: "dynamic" as const,
         value:
-          lane === "color"
+          channel === "color"
             ? {
                 kind: "vec4" as const,
                 value: value as readonly [number, number, number, number],
               }
-            : lane === "scale"
+            : channel === "scale"
               ? {
                   kind: "vec2" as const,
                   value: value as readonly [number, number],
@@ -191,7 +200,10 @@ function dynamicTrack(
 /** Complete color/opacity/scale samples for every interaction destination,
  * then the SCAN switch knob's two ends, which also animate alignment. Other
  * controls hold alignment at 0 and never sample the knob times. */
-function skinMotion(component: number, palette: Palette): AnimationClipSource {
+function skinMotion(
+  guiRoot: ComponentDescriptor,
+  palette: Palette,
+): AnimationClipSource {
   const knob = [SWITCH_KNOB.scale, SWITCH_KNOB.scale] as const;
   const samples = [
     { time: 0, color: palette.button, opacity: 1, scale: [1, 1] as const },
@@ -243,24 +255,24 @@ function skinMotion(component: number, palette: Palette): AnimationClipSource {
   return {
     duration: SWITCH_KNOB.checked.time,
     tracks: [
-      dynamicTrack(
-        component,
+      channelTrack(
+        guiRoot,
         "color",
         samples.map(({ time, color }) => [time, color] as const),
       ),
-      dynamicTrack(
-        component,
+      channelTrack(
+        guiRoot,
         "opacity",
         samples.map(({ time, opacity }) => [time, opacity] as const),
       ),
-      dynamicTrack(
-        component,
+      channelTrack(
+        guiRoot,
         "scale",
         samples.map(({ time, scale }) => [time, scale] as const),
       ),
-      dynamicTrack(
-        component,
-        "align_x",
+      channelTrack(
+        guiRoot,
+        "alignX",
         samples.map(
           (sample) =>
             [sample.time, "alignX" in sample ? sample.alignX : 0] as const,
@@ -273,9 +285,10 @@ function skinMotion(component: number, palette: Palette): AnimationClipSource {
 async function createMotionAssets(
   client: AnimationWorldClient,
 ): Promise<MotionAssets> {
-  const component = client.components.GuiRoot?.id;
+  const guiRoot = client.components.GuiRoot;
+  const component = guiRoot?.id;
   const material = client.components.CustomMaterial?.id;
-  if (component === undefined)
+  if (guiRoot === undefined || component === undefined)
     throw new Error("The gallery GUI profile does not expose GuiRoot");
   if (material === undefined)
     throw new Error("The gallery GUI profile does not expose CustomMaterial");
@@ -283,11 +296,11 @@ async function createMotionAssets(
   try {
     for (const name of ["aurora", "ember", "neon"] as const) {
       const bytes = client.encodeAnimationClip(
-        skinMotion(component, PALETTES[name]),
+        skinMotion(guiRoot, PALETTES[name]),
       );
       created.push(await client.createAsset(10, bytes.slice().buffer));
     }
-    for (const clip of waveformClips(component)) {
+    for (const clip of waveformClips(guiRoot)) {
       const bytes = client.encodeAnimationClip(clip);
       created.push(await client.createAsset(10, bytes.slice().buffer));
     }
@@ -321,7 +334,7 @@ async function createMotionAssets(
       scan: created[3]!,
       wavePulse: created[4]!,
       dust: created[5]!,
-      guiComponent: component,
+      guiRoot,
       materialComponent: material,
     };
   } catch (failure) {
@@ -604,13 +617,19 @@ export function useGuiScene(
       const client = canvas.client;
       if (signal.session !== client.session || pulse.session !== client.session)
         throw new Error("The waveform nodes belong to a different session");
+      const guiRoot = client.components.GuiRoot!;
       const result = await client.batch(
         [signal, pulse].map((node) => ({
-          kind: "setDynamicProperty" as const,
+          kind: "setField" as const,
           entity: { kind: "handle" as const, id: node.entity },
-          component: client.components.GuiRoot!.id,
-          name: guiProperty(node.nodeId, "position"),
-          value: { kind: "vec2" as const, value: [0, 0] as const },
+          component: guiRoot.id,
+          field: {
+            offset: guiNodeStyleOffset(guiRoot, node.nodeId, "position"),
+            value: {
+              kind: "dynamic" as const,
+              value: { kind: "vec2" as const, value: [0, 0] as const },
+            },
+          },
         })),
       );
       if (!result.ok)
@@ -652,7 +671,8 @@ export function useGuiScene(
                   [motions?.scan.source, motions?.wavePulse.source].includes(
                     driver.source,
                   ) &&
-                  driver.property.name?.endsWith("_position"),
+                  "offsets" in driver.property &&
+                  driver.property.offsets !== undefined,
               ),
             );
             if (waves?.length === 2) setRevealed(true);

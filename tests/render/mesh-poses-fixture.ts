@@ -179,13 +179,13 @@ export async function run(configuration: {
       );
       skeleton = await fixture.create("pose-rig", {
         Transform: { x: -1.25 },
-        Skeleton: {
-          source,
-          joints: contract.encodeJointOverrides([
-            { joint: 0, rotation: [0, 0, Math.sin(0.2), Math.cos(0.2)] },
-          ]),
-        },
+        Skeleton: { source },
       });
+      await batch(
+        contract.Skeleton.patchJoints(contract.Entity.handle(skeleton), 0, {
+          rotation: [0, 0, Math.sin(0.2), Math.cos(0.2)],
+        }),
+      );
     }
     const a = await fixture.create("pose-left", {
       Transform: { x: -1.25 },

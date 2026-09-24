@@ -91,21 +91,34 @@ function component(r) {
       size = r.u32(),
       alignment = r.u32(),
       kind = r.u8();
+    const rows = kind === 8 ? rowsLayout(r) : undefined;
     let value;
     if (!creatable) value = undefined;
     else if (kind === 1) value = r.f32();
     else if (kind === 2 || kind === 4) value = r.u64();
     else if (kind === 3) value = r.u32();
     else if (kind === 5) value = r.string();
-    else if (kind === 6) value = [...r.raw(r.u32())];
+    else if (kind === 6 || kind === 8) value = [...r.raw(r.u32())];
     else if (kind === 7) {
       const v = r.u8();
       assert.ok(v <= 1);
       value = v === 1;
     } else throw new Error("unknown fixture kind");
-    fields[name] = { offset, size, alignment, kind, default: value };
+    fields[name] = { offset, size, alignment, kind, default: value, rows };
   }
   return { name, size, alignment, creatable, fields };
+}
+function rowsLayout(r) {
+  const regionBase = r.u32();
+  const properties = [];
+  for (let i = 0, n = r.u16(); i < n; i++)
+    properties.push({
+      name: r.string(),
+      kind: r.u8(),
+      optional: r.u8() === 1,
+      hint: r.u8(),
+    });
+  return { regionBase, properties };
 }
 function contract(bytes) {
   assert.equal(new TextDecoder().decode(bytes.slice(0, 4)), "IPPB");
@@ -192,9 +205,10 @@ function fixtureContract(bytes) {
   assert.equal(new TextDecoder().decode(r.raw(4)), "IPPF");
   const pointerBits = r.u8(),
     layout = component(r),
-    bound = component(r);
+    bound = component(r),
+    rows = component(r);
   r.done();
-  return { pointerBits, ...layout, bound };
+  return { pointerBits, ...layout, bound, rows };
 }
 const native = contract(await readFile(nativePath)),
   target = contract(wasm);
@@ -267,7 +281,34 @@ for (const f of [nf, wf]) {
   assert.equal(f.fields.source.default, 0x1_0000_0007n);
   assert.equal(f.fields.value.default, 1.25);
 }
+// Row layouts, region bases and table encodings are target-independent;
+// only the table's real struct offset follows each target's layout.
+for (const f of [nf, wf]) {
+  assert.equal(f.rows.name, "RowsFixture");
+  assert.deepEqual(Object.keys(f.rows.fields), ["marker", "rows"]);
+  assert.equal(f.rows.fields.rows.kind, 8);
+  assert.ok(f.rows.fields.rows.offset < f.rows.size);
+  assert.deepEqual(f.rows.fields.rows.rows, {
+    regionBase: 0x10000000,
+    properties: [
+      { name: "weight", kind: 1, optional: false, hint: 0 },
+      { name: "rotation", kind: 7, optional: true, hint: 1 },
+      { name: "source", kind: 12, optional: true, hint: 0 },
+    ],
+  });
+}
+assert.deepEqual(wf.rows.fields.rows.default, nf.rows.fields.rows.default);
+assert.deepEqual(
+  wf.rows.fields.rows.default,
+  // next slot 2, one live row at slot 1 with only its weight (0.5) present.
+  [2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0x3f],
+);
 if (nf.pointerBits === 64) {
+  assert.notEqual(
+    nf.rows.fields.rows.offset,
+    wf.rows.fields.rows.offset,
+    "rows tables keep each target's real struct offset",
+  );
   assert.notEqual(
     nf.fields.value.offset,
     wf.fields.value.offset,

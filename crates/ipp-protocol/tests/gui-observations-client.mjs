@@ -55,15 +55,9 @@ function path(ids) {
   return concatenate([u32(ids.length), ...ids.map(u32)]);
 }
 
-function target(entity, rootIncarnation, node, lifetime) {
+function target(entity, rootIncarnation, node) {
   if (entity === undefined) return u8(0);
-  return concatenate([
-    u8(1),
-    u64(entity),
-    u64(rootIncarnation),
-    u32(node),
-    u32(lifetime),
-  ]);
+  return concatenate([u8(1), u64(entity), u64(rootIncarnation), u32(node)]);
 }
 
 const buttonEffect = () =>
@@ -75,7 +69,6 @@ const buttonEffect = () =>
     u64(100n),
     u64(3n),
     u32(20),
-    u32(1),
     path([10, 20]),
   ]);
 
@@ -88,7 +81,6 @@ const controlEffect = () =>
     u64(100n),
     u64(3n),
     u32(30),
-    u32(1),
     path([10, 30]),
     u32(2),
     u8(1),
@@ -100,7 +92,7 @@ const conflictRecord = () =>
     u64(7n),
     u64(11n),
     u64(12n),
-    target(100n, 3n, 30, 1),
+    target(100n, 3n, 30),
     u8(0),
     u32(1),
     u32(2),
@@ -136,7 +128,6 @@ const textFocusPayload = () =>
     u64(100n),
     u64(9n),
     u32(5),
-    u32(1),
     u32(2),
     text("hé"),
     u32(0),
@@ -221,7 +212,6 @@ test("broadcast observations decode to effects, conflicts and cancellations", ()
               entity: 100n,
               rootIncarnation: 3n,
               node: 20,
-              lifetime: 1,
               path: [10, 20],
               sourceTick: 11n,
               effectTick: 12n,
@@ -231,7 +221,6 @@ test("broadcast observations decode to effects, conflicts and cancellations", ()
               entity: 100n,
               rootIncarnation: 3n,
               node: 30,
-              lifetime: 1,
               value: { kind: "bool", value: true },
               revision: 2,
               path: [10, 30],
@@ -248,7 +237,6 @@ test("broadcast observations decode to effects, conflicts and cancellations", ()
                 entity: 100n,
                 rootIncarnation: 3n,
                 node: 30,
-                lifetime: 1,
               },
               reason: { kind: "revisionMismatch", expected: 1, found: 2 },
             },

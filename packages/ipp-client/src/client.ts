@@ -83,7 +83,6 @@ export interface GuiWorldClient extends Client {
     entity: bigint,
     rootIncarnation: bigint,
     nodeId: import("./gui-types.js").GuiNodeId,
-    nodeLifetime: number,
   ): import("./gui-types.js").GuiNodeHandle;
 }
 
@@ -1001,14 +1000,12 @@ export abstract class ClientBase implements Client {
     entity: bigint,
     rootIncarnation: bigint,
     nodeId: import("./gui-types.js").GuiNodeId,
-    nodeLifetime: number,
   ): import("./gui-types.js").GuiNodeHandle {
     return {
       session: this.session,
       entity,
       rootIncarnation,
       nodeId,
-      nodeLifetime,
     };
   }
 

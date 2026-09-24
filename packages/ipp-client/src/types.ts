@@ -78,7 +78,11 @@ export type FieldValue =
   | { kind: "u64"; value: bigint }
   | { kind: "entity"; value: EntityRef }
   | { kind: "string"; value: string }
-  | { kind: "bytes"; value: Uint8Array<ArrayBuffer> };
+  | { kind: "bytes"; value: Uint8Array<ArrayBuffer> }
+  /** A whole schema rows table in its row layout's table encoding. */
+  | { kind: "rows"; value: Uint8Array<ArrayBuffer> }
+  /** Clears an optional schema row property. */
+  | { kind: "unset" };
 export interface FieldWrite {
   offset: number;
   value: FieldValue;
@@ -114,11 +118,54 @@ export const FieldKind = {
   String: 5,
   Bytes: 6,
   Bool: 7,
+  Rows: 8,
 } as const;
 export type FieldKind = (typeof FieldKind)[keyof typeof FieldKind];
+/** Schema row property types: the dynamic property kinds without matrices. */
+export type RowPropertyKind =
+  | "f32"
+  | "i32"
+  | "u32"
+  | "bool"
+  | "vec2"
+  | "vec3"
+  | "vec4"
+  | "asset";
+export interface RowPropertyDescriptor {
+  readonly name: string;
+  readonly kind: RowPropertyKind;
+  readonly optional: boolean;
+  /** `rotation` marks a Vec4 quaternion interpolated as a rotation. */
+  readonly hint: "none" | "rotation";
+}
+/** Target-exported layout of one schema rows field; order defines property indices. */
+export interface RowsLayoutDescriptor {
+  /** Offset of slot 0, property 0; a property is `regionBase + slot * count + index`. */
+  readonly regionBase: number;
+  readonly properties: readonly RowPropertyDescriptor[];
+}
+/** Asset selection held by a schema row property. */
+export interface RowAssetValue {
+  kind: number;
+  source: string;
+  variant?: number;
+}
+export type RowPropertyValue =
+  | number
+  | boolean
+  | readonly number[]
+  | RowAssetValue;
+/** A decoded schema rows table: live rows by never-reused slot, absent properties omitted. */
+export interface RowsTable<Row = Record<string, RowPropertyValue>> {
+  /** Lowest unallocated slot; lower slots without a row are dead. */
+  nextSlot: number;
+  rows: Map<number, Row>;
+}
 export interface FieldDescriptor {
   readonly offset: number;
   readonly kind: FieldKind;
+  /** Present exactly for schema rows fields. */
+  readonly rows?: RowsLayoutDescriptor;
 }
 export interface ComponentDescriptor {
   readonly id: number;
@@ -353,7 +400,8 @@ export type ComponentFieldValue =
   | number
   | bigint
   | string
-  | Uint8Array<ArrayBuffer>;
+  | Uint8Array<ArrayBuffer>
+  | RowsTable;
 export interface ComponentSnapshot {
   component: number;
   properties?: Record<string, DynamicValue>;

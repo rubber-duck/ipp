@@ -5,7 +5,9 @@
 static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
 
 // Share the maintained test-host context loader, never a production device shim.
+// The benchmark does not call every loader method, such as the error-check helpers.
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 #[path = "../../ipp-render-gl/examples/smoke/egl.rs"]
 mod egl;
 

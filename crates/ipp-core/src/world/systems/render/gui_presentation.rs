@@ -21,8 +21,8 @@ pub(super) struct GuiSkinPresentation {
 
 /// Every input skin reconciliation reads, compared before each pass so an
 /// unchanged frame skips it. Roots carry their layout content revision
-/// (evaluated records, paint lanes and control values, not translated
-/// geometry) and committed-change count (authored lanes that animation may
+/// (evaluated records, paint properties and control values, not translated
+/// geometry) and committed-change count (authored properties that animation may
 /// hide); cursors select interaction states; controller states carry
 /// acknowledgements, rejections, failures and crossfade completion.
 #[cfg(feature = "gui")]
@@ -70,11 +70,11 @@ impl RenderSystem {
 // Skin paint and transition-plan ownership.
 // ---------------------------------------------------------------------------
 
-/// Runtime resource catalog behind skin asset lanes in prepared paint.
+/// Runtime resource catalog behind skin asset properties in prepared paint.
 ///
 /// Mirrors the layout pass resolver without measuring text: glyph fonts
 /// always stay on their measured resources and only drawing and bitmap
-/// lanes resolve here.
+/// properties resolve here.
 #[cfg(all(feature = "surfaces", feature = "gui"))]
 struct GuiSkinRenderResolver<'a> {
     /// Identity scoping immutable source lookups.
@@ -252,7 +252,6 @@ impl RenderSystem {
                         entity,
                         root_incarnation: id.root_incarnation,
                         node: id.node,
-                        lifetime: id.lifetime,
                     },
                     node.enabled,
                 );
@@ -267,7 +266,7 @@ impl RenderSystem {
                 let motion = crate::systems::gui::resolve_state_part_motion(
                     authored_root,
                     id.node,
-                    id.part.as_str(),
+                    id.part,
                     desired.state,
                     desired.variant,
                 );
@@ -311,6 +310,10 @@ impl RenderSystem {
                             effective_root,
                             id.node,
                             id.part,
+                            presentation
+                                .motion
+                                .as_ref()
+                                .is_some_and(|motion| motion.animates_align),
                         );
                         if controller.transition.is_some() {
                             sampled.asset = presentation.last_painted.asset.clone();
@@ -358,7 +361,11 @@ impl RenderSystem {
                     presentation.acknowledged = None;
                     presentation.last_painted = desired.clone();
                     if let Some(to) = motion.as_ref()
-                        && skin_numeric_base_complete(authored_root, id.node, id.part)
+                        && crate::systems::gui::skin_channels_complete(
+                            authored_root,
+                            id.node,
+                            id.part,
+                        )
                         && let Some(sample) = skin_animation_sample(&desired, to)
                         && next_request != 0
                     {
@@ -375,7 +382,11 @@ impl RenderSystem {
                     presentation.refused = None;
                 } else if appearance_changed {
                     if let Some((from, to)) = presentation.motion.as_ref().zip(motion.as_ref())
-                        && skin_numeric_base_complete(authored_root, id.node, id.part)
+                        && crate::systems::gui::skin_channels_complete(
+                            authored_root,
+                            id.node,
+                            id.part,
+                        )
                         && let Some(source_sample) =
                             skin_animation_sample(&presentation.desired, from)
                         && skin_animation_sample(&desired, to).is_some()
@@ -435,11 +446,11 @@ impl RenderSystem {
                             AnimationInternalCommand::EnsureSkinTransition {
                                 owner,
                                 request: pending.request,
-                                source: skin_controller_description(entity, id, &pending.source),
+                                source: skin_controller_description(entity, &pending.source),
                                 source_time: pending.source.sample_time,
                                 source_sample: pending.source_sample,
                                 transition: AnimationControllerTransition {
-                                    description: skin_controller_description(entity, id, to),
+                                    description: skin_controller_description(entity, to),
                                     duration: to.duration_secs,
                                     easing: to.easing,
                                     start_time: AnimationTransitionStartTime::Seek(to.sample_time),
@@ -493,16 +504,6 @@ impl RenderSystem {
 }
 
 #[cfg(all(feature = "surfaces", feature = "gui"))]
-pub(super) fn skin_numeric_base_complete(
-    root: &crate::systems::gui::GuiRoot,
-    node: crate::systems::gui::GuiNodeId,
-    part: crate::systems::surface::GuiPrimitivePart,
-) -> bool {
-    let style = crate::systems::gui::part_style(root, node, part.as_str());
-    style.color.is_some() && style.opacity.is_some() && style.scale.is_some()
-}
-
-#[cfg(all(feature = "surfaces", feature = "gui"))]
 pub(super) fn skin_animation_sample(
     appearance: &crate::systems::gui::GuiSkinnedAppearance,
     motion: &crate::systems::gui::GuiPartMotion,
@@ -519,41 +520,43 @@ pub(super) fn skin_animation_sample(
     })
 }
 
+/// Controller writing the colour, opacity, scale and, when animated,
+/// alignment channels of the part's `part_state` row from consecutive clip
+/// tracks.
 #[cfg(all(feature = "surfaces", feature = "gui"))]
 pub(super) fn skin_controller_description(
     entity: crate::EntityId,
-    primitive: crate::systems::surface::GuiPrimitiveId,
     motion: &crate::systems::gui::GuiPartMotion,
 ) -> crate::systems::animation::AnimationControllerDescription {
     use crate::systems::animation::{
-        AnimationControllerDescription, AnimationDriverDescription, AnimationTrackTarget,
+        AnimationControllerDescription, AnimationDriverDescription, AnimationProperty,
+        AnimationTrackTarget,
     };
+    use crate::systems::gui::{GuiPartChannel, GuiRoot};
 
-    let lanes: &[&str] = if motion.animates_align {
-        &["color", "opacity", "scale", "align_x"]
+    let channels: &[GuiPartChannel] = if motion.animates_align {
+        &GuiPartChannel::ALL
     } else {
-        &["color", "opacity", "scale"]
+        &GuiPartChannel::ALL[..3]
     };
-    let drivers = lanes
+    let drivers = channels
         .iter()
         .zip(0u32..)
-        .map(|(lane, offset)| AnimationDriverDescription {
+        .map(|(channel, track)| AnimationDriverDescription {
             source: motion.source.uri.clone(),
             variant: motion.source.variant,
             track: motion
                 .base_track
-                .checked_add(offset)
+                .checked_add(track)
                 .expect("resolved GUI skin motion fits every animated track"),
             target: entity,
-            property: AnimationTrackTarget::DynamicProperty {
+            property: AnimationTrackTarget::AnimationProperty(AnimationProperty {
                 component: crate::ComponentValue::GUI_ROOT,
-                name: crate::systems::gui::GuiRoot::part_property_name(
-                    primitive.node,
-                    primitive.part.as_str(),
-                    lane,
-                )
-                .expect("built-in GUI skin lane"),
-            },
+                offsets: vec![
+                    GuiRoot::part_row_offset(motion.channels, channel.index())
+                        .expect("live part rows lie within their region"),
+                ],
+            }),
             weight: 1.0,
             additive: false,
             reference_time: 0.0,

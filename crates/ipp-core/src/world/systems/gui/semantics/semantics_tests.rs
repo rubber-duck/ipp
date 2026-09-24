@@ -3,8 +3,8 @@
 use super::*;
 use crate::{
     EntityId, GuiContainerKind, GuiControlValue, GuiEvaluatedContent, GuiEvaluatedView,
-    GuiInputEffectKind, GuiInspectResponse, GuiInspectedNode, GuiNodeContent, GuiNodeId,
-    GuiNodeStyle,
+    GuiInputEffectKind, GuiInspectResponse, GuiInspectedNode, GuiNodeData, GuiNodeDataRow,
+    GuiNodeId, GuiNodeStyle,
 };
 
 fn entity(bits: u64) -> EntityId {
@@ -20,63 +20,56 @@ fn inspect_fixture() -> GuiInspectResponse {
                 id: GuiNodeId(1),
                 parent: None,
                 children: vec![GuiNodeId(2), GuiNodeId(3), GuiNodeId(4), GuiNodeId(5)],
-                content: GuiNodeContent::Container(GuiContainerKind::Column),
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle::default(),
                 control_value: GuiControlValue::None,
                 control_revision: 0,
-                lifetime: 1,
             },
             GuiInspectedNode {
                 id: GuiNodeId(2),
                 parent: Some(GuiNodeId(1)),
                 children: vec![],
-                content: GuiNodeContent::Button {
+                data: GuiNodeData::Button {
                     label: "Go".into(),
                 },
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle::default(),
                 control_value: GuiControlValue::None,
                 control_revision: 0,
-                lifetime: 1,
             },
             GuiInspectedNode {
                 id: GuiNodeId(3),
                 parent: Some(GuiNodeId(1)),
                 children: vec![],
-                content: GuiNodeContent::Checkbox {
-                    checked: false,
-                },
+                data: GuiNodeData::Checkbox,
+                values: GuiNodeDataRow::checkbox(false),
                 style: GuiNodeStyle::default(),
                 control_value: GuiControlValue::Bool(true),
                 control_revision: 2,
-                lifetime: 1,
             },
             GuiInspectedNode {
                 id: GuiNodeId(4),
                 parent: Some(GuiNodeId(1)),
                 children: vec![],
-                content: GuiNodeContent::Slider {
-                    value: 0.0,
-                    min: 0.0,
-                    max: 2.0,
-                    step: 0.5,
-                },
+                data: GuiNodeData::Slider,
+                values: GuiNodeDataRow::slider(0.0, 0.0, 2.0, 0.5),
                 style: GuiNodeStyle::default(),
                 control_value: GuiControlValue::Scalar(1.5),
                 control_revision: 6,
-                lifetime: 3,
             },
             GuiInspectedNode {
                 id: GuiNodeId(5),
                 parent: Some(GuiNodeId(1)),
                 children: vec![],
-                content: GuiNodeContent::TextInput {
+                data: GuiNodeData::TextInput {
                     text: "seed".into(),
                     placeholder: "name".into(),
                 },
+                values: crate::GuiNodeDataRow::default(),
                 style: GuiNodeStyle::default(),
                 control_value: GuiControlValue::Text("ada".into()),
                 control_revision: 3,
-                lifetime: 1,
             },
         ],
     }
@@ -94,13 +87,11 @@ fn empty_layout() -> crate::systems::surface::TextLayout {
 
 fn evaluated_node(
     id: u32,
-    lifetime: u32,
     rect: [f32; 4],
     content: GuiEvaluatedContent,
 ) -> crate::GuiEvaluatedNode {
     crate::GuiEvaluatedNode {
         node: GuiNodeId(id),
-        lifetime,
         depth: 1,
         rect,
         clip: None,
@@ -144,10 +135,9 @@ fn view_fixture(rect_shift: f32) -> GuiEvaluatedView {
         root_bounds: [0.0, 0.0, 10.0, 10.0],
         units_per_metre: 1.0,
         nodes: vec![
-            evaluated_node(1, 1, [0.0, 0.0, 10.0, 10.0], GuiEvaluatedContent::Container),
+            evaluated_node(1, [0.0, 0.0, 10.0, 10.0], GuiEvaluatedContent::Container),
             evaluated_node(
                 2,
-                1,
                 [1.0 + rect_shift, 1.0, 2.0, 1.0],
                 GuiEvaluatedContent::Button {
                     layout: empty_layout(),
@@ -158,7 +148,6 @@ fn view_fixture(rect_shift: f32) -> GuiEvaluatedView {
             ),
             evaluated_node(
                 3,
-                1,
                 [1.0, 2.0, 2.0, 1.0],
                 GuiEvaluatedContent::Checkbox {
                     checked: true,
@@ -167,7 +156,6 @@ fn view_fixture(rect_shift: f32) -> GuiEvaluatedView {
             ),
             evaluated_node(
                 4,
-                3,
                 [1.0, 3.0, 4.0, 1.0],
                 GuiEvaluatedContent::Slider {
                     value: 1.5,
@@ -179,7 +167,6 @@ fn view_fixture(rect_shift: f32) -> GuiEvaluatedView {
             ),
             evaluated_node(
                 5,
-                1,
                 [1.0, 4.0, 4.0, 1.0],
                 GuiEvaluatedContent::TextInput {
                     layout: empty_layout(),
@@ -217,7 +204,6 @@ fn roles_values_revisions_bounds_exposed() {
     let slider = tree.node(GuiNodeId(4)).expect("slider");
     assert_eq!(slider.value, GuiControlValue::Scalar(1.5));
     assert_eq!(slider.revision, 6);
-    assert_eq!(slider.lifetime, 3);
 
     let text = tree.node(GuiNodeId(5)).expect("text input");
     assert_eq!(text.value, GuiControlValue::Text("ada".into()));
@@ -291,7 +277,6 @@ fn semantic_snapshot_exposes_only_observed_focus() {
             entity: entity(21),
             root_incarnation: 4,
             node: GuiNodeId(3),
-            lifetime: 1,
             value: GuiControlValue::Bool(false),
             revision: 3,
             path: vec![GuiNodeId(3)],
@@ -376,18 +361,16 @@ fn removed_nodes_invalidate_before_reuse() {
 }
 
 #[test]
-fn focus_observed_with_lifetime_fence() {
+fn focus_observed_only_for_present_nodes() {
     let focus = GuiSemanticFocus {
         id: GuiNodeId(5),
-        lifetime: 1,
     };
     let tree =
         build_tree_with_focus(&inspect_fixture(), &view_fixture(0.0), Some(focus)).expect("tree");
     assert_eq!(tree.focused, Some(focus));
-    // Stale lifetimes never fabricate a target.
+    // Focus on an absent node never fabricates a target.
     let stale = GuiSemanticFocus {
-        id: GuiNodeId(5),
-        lifetime: 9,
+        id: GuiNodeId(9),
     };
     let tree =
         build_tree_with_focus(&inspect_fixture(), &view_fixture(0.0), Some(stale)).expect("tree");
@@ -404,7 +387,6 @@ fn actions_dispatch_through_validated_policy() {
     assert_eq!(toggle.target.entity, tree.entity);
     assert_eq!(toggle.target.root_incarnation, tree.root_incarnation);
     assert_eq!(toggle.target.node, GuiNodeId(3));
-    assert_eq!(toggle.target.lifetime, 1);
     assert_eq!(toggle.expected_revision, 2);
     assert_eq!(toggle.action, GuiSemanticAction::Toggle);
 

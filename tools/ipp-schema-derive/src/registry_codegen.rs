@@ -235,6 +235,19 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let storage_cell_visits = entries.iter().map(|e| {
+        let Entry {
+            attrs,
+            name: component,
+            id,
+        } = e;
+        let field = snake_case(component);
+        quote! {
+            #(#attrs)*
+            #id => self.#field.bound_ptr(index).map(|cell| visitor.visit(cell)),
+        }
+    });
+
     let storage_get = entries.iter().map(|e| {
         let Entry {
             attrs,
@@ -373,7 +386,11 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
 
         quote! {
             #(#attrs)*
-            Self::#name(v) => ::ipp_core::components::schema::SchemaComponent::set_field(v, offset, value),
+            Self::#name(v) => {
+                ::ipp_core::components::schema::SchemaComponent::set_field(v, offset, value)?;
+                ::ipp_core::components::schema::ComponentLifecycle::after_field_write(v, offset);
+                Ok(())
+            }
         }
     });
 
@@ -468,12 +485,29 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
+    let animatable_fields = entries.iter().map(|e| {
+        let Entry { attrs, name, id } = e;
+        quote! {
+            #(#attrs)*
+            #id => <crate::components::#name as ::ipp_core::components::schema::ComponentLifecycle>::animatable_field(offset),
+        }
+    });
+
     let lifecycle_field_validation = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
         quote! {
             #(#attrs)*
             Self::#component(value) => ::ipp_core::components::schema::ComponentLifecycle::validate_field(value, offset),
+        }
+    });
+
+    let row_assets = entries.iter().map(|e| {
+        let attrs = &e.attrs;
+        let component = &e.name;
+        quote! {
+            #(#attrs)*
+            Self::#component(value) => ::ipp_core::components::schema::SchemaComponent::visit_row_assets(value, visit),
         }
     });
 
@@ -627,6 +661,19 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
                 match component { #(#storage_numeric_writes)* _ => Err(crate::ErrorReason::InvalidField) }
             }
 
+            /// Hand one occupied stable cell to a visitor generic over its
+            /// component type, so compiled bindings can use the derived field
+            /// accessors without a hand-written arm per component.
+            #[allow(dead_code)] // Only compiled property consumers bind cells.
+            pub(crate) fn visit_cell<V: crate::components::registry::ComponentCellVisitor>(
+                &self,
+                component: u16,
+                index: usize,
+                visitor: V,
+            ) -> Option<V::Output> {
+                match component { #(#storage_cell_visits)* _ => None }
+            }
+
             pub(crate) fn get(&self, component: u16, index: usize) -> Option<#name> {
                 match component {
                     #(#storage_get)*
@@ -724,6 +771,11 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
                 match id { #(#null_entity)* _ => false }
             }
 
+            /// Whether animation of any kind may target this exposed field.
+            pub(crate) fn animatable_field(id: u16, offset: u32) -> bool {
+                match id { #(#animatable_fields)* _ => false }
+            }
+
             /// Run typed field-local lifecycle validation after replacement.
             pub(crate) fn validate_field_lifecycle(
                 &self,
@@ -738,6 +790,14 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
             pub(crate) fn retained_bytes(&self) -> Option<usize> {
                 let bytes: Option<usize> = match self { #(#retained_bytes)* };
                 bytes?.checked_add(self.dynamic_properties().map_or(0, |p| p.retained_bytes()))
+            }
+
+            /// Visit present asset properties held in schema rows fields.
+            pub(crate) fn visit_row_assets(
+                &self,
+                visit: &mut dyn FnMut(&crate::services::asset_management::AssetSource),
+            ) {
+                match self { #(#row_assets)* }
             }
 
             /// Default dependencies declared by the compiled component implementation.

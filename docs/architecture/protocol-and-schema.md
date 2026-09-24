@@ -45,9 +45,11 @@ An explicit compiled registry defines deterministic identities. Access validates
 
 Compiled components may opt into named typed dynamic properties without runtime type registration. Properties belong to components independently of shaders or other consumers, use validated identities, and participate in generated writes, overlays, animation and persistence. Asset-valued properties carry general typed source/variant references; a shader's texture requirements do not restrict that model. [Runtime binding rules](runtime.md#stable-storage-and-direct-bindings) own invalidation and relocation.
 
+Compiled components may also declare rows: out-of-line tables of compiled row structs whose properties are scalars, vectors or asset references, each required or optional with explicit presence. Row properties are addressed through the same field offsets by slot and property index, so generated writes, overlays, animation and staging reach them without name resolution. Slots are never reused within a component incarnation. The contract carries each row layout, so generated clients, persistence and inspection handle a table as one typed value rather than as named entries. Dynamic properties remain the open named set for components whose clients send arbitrary names; fixed per-entry shapes use rows.
+
 Native writes, protocol and overlays share validation/lifecycle rules. Real-time numeric evaluation uses prevalidated bindings and derived-result notification under the [runtime binding contract](runtime.md#stable-storage-and-direct-bindings). Retained values own storage; transient decoding views cannot escape. Schema processing stays outside evaluation hot paths.
 
-[GUI](gui.md#identity-and-authoritative-state) extends these contracts with root/node lifetime checks and revision-aware value operations. Ordered input admission, routed observations and committed control effects remain distinct. Its snapshot exclusions are scoped to GUI transient interaction state under the [GUI persistence boundary](gui.md#client-and-persistence-boundaries).
+[GUI](gui.md#identity-and-authoritative-state) extends these contracts with root incarnation and node identity checks and revision-aware value operations. Ordered input admission, routed observations and committed control effects remain distinct. Its snapshot exclusions are scoped to GUI transient interaction state under the [GUI persistence boundary](gui.md#client-and-persistence-boundaries).
 
 ## Build compatibility
 

@@ -3,12 +3,14 @@
 use super::super::super::test_support::font_source;
 use super::test_support::*;
 use super::*;
+use crate::GuiNodeDataRow;
+use crate::world::systems::gui::test_support::checkbox_node;
 use crate::{
     Batch, Command, ComponentOverlayMode, ComponentValue, DynamicValue, EntityMetadata,
     EntityOverlayMode, EntityRef, StateOverlayRef,
 };
 use crate::{
-    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiNodeContent, GuiNodeId, GuiNodePatch,
+    GuiCommand, GuiContainerKind, GuiEvaluatedContent, GuiNodeData, GuiNodeId, GuiNodePatch,
     GuiNodeStyle,
 };
 
@@ -69,7 +71,7 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::RemoveNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -122,7 +124,7 @@ fn disabling_focused_text_without_new_input_clears_caret_and_composition() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: String::new(),
         },
@@ -135,7 +137,7 @@ fn disabling_focused_text_without_new_input_clears_caret_and_composition() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -177,7 +179,7 @@ fn disabling_focused_text_without_new_input_clears_caret_and_composition() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::UpdateNode {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     patch: GuiNodePatch {
                         enabled: Some(false),
                         ..Default::default()
@@ -213,7 +215,7 @@ fn ready_text_becoming_unavailable_without_new_input_clears_focus() {
     register_font(&mut fixture);
     insert_font_control(
         &mut fixture,
-        GuiNodeContent::TextInput {
+        GuiNodeData::TextInput {
             text: "ae".into(),
             placeholder: String::new(),
         },
@@ -226,7 +228,7 @@ fn ready_text_becoming_unavailable_without_new_input_clears_focus() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -279,7 +281,7 @@ fn root_replacement_without_new_input_does_not_transfer_focus() {
             .enqueue_gui_input_command(
                 SESSION,
                 GuiInputCommand::Focus {
-                    handle: GuiNodeHandle::new(SESSION, panel, old_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, old_incarnation, GuiNodeId(2)),
                 },
             )
             .unwrap();
@@ -348,7 +350,7 @@ fn authored_commit_before_routing_chains_prediction() {
             .enqueue_gui_command(
                 SESSION,
                 GuiCommand::SetControlValue {
-                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2), 1),
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
                     expected_revision: 1,
                     value: GuiControlValue::Bool(true),
                 },
@@ -380,16 +382,18 @@ fn authored_commit_before_routing_chains_prediction() {
 
 #[test]
 fn control_commit_gate_fences_sessions_and_revisions() {
-    let content = GuiNodeContent::Checkbox {
-        checked: false,
-    };
+    let content = checkbox_node(false);
     let mut root = GuiRoot::default();
-    root.nodes_mut()
-        .insert_node(GuiNodeId(1), None, 0, content.clone())
-        .unwrap();
-    root.controls_mut().insert_initial(GuiNodeId(1), &content);
-    let handle =
-        |session| GuiNodeHandle::new(session, EntityId::from_bits(0x42), 3, GuiNodeId(1), 1);
+    root.insert_node(
+        GuiNodeId(1),
+        None,
+        0,
+        content.data,
+        content.values,
+        &crate::GuiNodeStyle::default(),
+    )
+    .unwrap();
+    let handle = |session| GuiNodeHandle::new(session, EntityId::from_bits(0x42), 3, GuiNodeId(1));
     // A foreign session is refused without touching the value.
     assert!(
         commit_control_value(
@@ -441,7 +445,8 @@ fn insert_opacity_checkbox(fixture: &mut Fixture) {
             id: GuiNodeId(1),
             parent: None,
             index: 0,
-            content: GuiNodeContent::Container(GuiContainerKind::Column),
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
             style: GuiNodeStyle {
                 width: Some(10.0),
                 height: Some(10.0),
@@ -454,9 +459,8 @@ fn insert_opacity_checkbox(fixture: &mut Fixture) {
             id: GuiNodeId(2),
             parent: Some(GuiNodeId(1)),
             index: 0,
-            content: GuiNodeContent::Checkbox {
-                checked: false,
-            },
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
             style: GuiNodeStyle {
                 width: Some(4.0),
                 height: Some(3.0),
@@ -514,7 +518,6 @@ fn committed_primitive_opacity(fixture: &mut Fixture, node: GuiNodeId) -> f32 {
                 style.identity,
                 crate::systems::surface::SurfacePrimitiveIdentity::Gui(id)
                     if id.node == node
-                        && id.lifetime == 1
                         && id.part == crate::systems::surface::GuiPrimitivePart::Background
             ) =>
             {
@@ -570,13 +573,14 @@ fn committed_toggle_retains_bound_style_overlay_and_restyles_on_release() {
                         alias: 12,
                         component: ComponentValue::GUI_ROOT,
                         mode: ComponentOverlayMode::Bound,
-                        fields: vec![],
-                    },
-                    Command::UpdateDynamicComponentStateOverlay {
-                        owner: StateOverlayRef::Alias(10),
-                        overlay: StateOverlayRef::Alias(12),
-                        properties: vec![("node_2_opacity".to_owned(), DynamicValue::F32(0.25))],
-                        clear: vec![],
+                        fields: vec![crate::FieldWrite {
+                            offset: GuiRoot::node_style_offset(
+                                GuiNodeId(2),
+                                crate::GuiNodeStyleProperty::Opacity,
+                            )
+                            .unwrap(),
+                            value: crate::FieldValue::Dynamic(DynamicValue::F32(0.25)),
+                        }],
                     },
                 ],
             })
@@ -681,7 +685,6 @@ fn committed_toggle_pins_runtime_ancestor_path_and_drains_once() {
                 entity,
                 root_incarnation: effect_root,
                 node,
-                lifetime,
                 value,
                 revision,
                 path,
@@ -689,7 +692,6 @@ fn committed_toggle_pins_runtime_ancestor_path_and_drains_once() {
                 *entity,
                 *effect_root,
                 *node,
-                *lifetime,
                 path.clone(),
                 value.clone(),
                 *revision,
@@ -708,7 +710,6 @@ fn committed_toggle_pins_runtime_ancestor_path_and_drains_once() {
             panel,
             root_incarnation,
             GuiNodeId(2),
-            1,
             vec![GuiNodeId(1), GuiNodeId(2)],
             GuiControlValue::Bool(true),
             2,

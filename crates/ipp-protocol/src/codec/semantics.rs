@@ -63,7 +63,6 @@ impl Reader<'_> {
             entity,
             root_incarnation,
             node,
-            lifetime: r.u32()?,
             expected_revision: r.u32()?,
             action: match r.u8()? {
                 0 => GuiSemanticAction::Press,
@@ -118,7 +117,6 @@ fn encode_gui_semantic_snapshot_inner(tree: &GuiSemanticTree) -> Result<Vec<u8>,
             }
             w.u8(1)?;
             w.u32(focus.id.0)?;
-            w.u32(focus.lifetime)?;
         }
     }
     Ok(w.0)
@@ -130,7 +128,6 @@ fn write_semantic_node(w: &mut Writer, node: &GuiSemanticNode) -> Result<(), Pro
     }
     w.u32(node.id.0)?;
     w.u32(node.parent.map(|parent| parent.0).unwrap_or(0))?;
-    w.u32(node.lifetime)?;
     w.u8(match node.role {
         GuiSemanticRole::Container => 0,
         GuiSemanticRole::Text => 1,

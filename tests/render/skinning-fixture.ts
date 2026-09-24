@@ -82,25 +82,53 @@ function current(): CameraWorldClient {
   return client;
 }
 
+/** Joint override patches keyed by joint ordinal. */
+type JointOverrides = Record<
+  number,
+  {
+    translation?: readonly number[];
+    rotation?: readonly number[];
+    scale?: readonly number[];
+  }
+>;
+
+/** Every ordinal this fixture overrides: the two rig joints and the invalid 31. */
+const OVERRIDDEN_JOINTS = [0, 1, 31];
+
+/**
+ * Replace the fixture's joint overrides through their schema row properties:
+ * listed properties are written and every other property is cleared.
+ */
+function jointOverrides(entity: unknown, overrides: JointOverrides) {
+  return OVERRIDDEN_JOINTS.flatMap((joint) =>
+    contract.Skeleton.patchJoints(entity, joint, {
+      translation: null,
+      rotation: null,
+      scale: null,
+      ...overrides[joint],
+    }),
+  );
+}
+
 export async function pose(index: number, mode: "rest" | "bent" | "override") {
-  const { Skeleton, Entity, encodeJointOverrides } = contract;
+  const { Skeleton, Entity } = contract;
   const entity = Entity.handle(rigs[index]);
-  const joints =
-    mode === "override"
-      ? encodeJointOverrides([
-          {
-            joint: 1,
-            translation: [0, 1, 0],
-            rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
-          },
-        ])
-      : new Uint8Array();
   const result = await current().batch([
     Skeleton.setPose_source(
       entity,
       mode === "bent" ? "ipp://pose/rig-strip-bent" : "",
     ),
-    Skeleton.setJoints(entity, joints),
+    ...jointOverrides(
+      entity,
+      mode === "override"
+        ? {
+            1: {
+              translation: [0, 1, 0],
+              rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+            },
+          }
+        : {},
+    ),
   ]);
   if (!result.ok) throw new Error("pose change rejected");
   return result;
@@ -178,11 +206,12 @@ export function pixel(label: string, x: number, y: number) {
   return Array.from(new Uint8Array(f.pixels).slice(i, i + 3));
 }
 export async function applyInvalidPose() {
-  const { Skeleton, Scalar, Entity, encodeJointOverrides } = contract;
+  const { Skeleton, Scalar, Entity } = contract;
   const entity = Entity.handle(rigs[0]);
+  // Ordinal 31 is addressable but names no joint of the two-joint rig.
   const result = await current().batch([
     Scalar.insert(entity, { value: 123 }),
-    Skeleton.setJoints(entity, encodeJointOverrides([{ joint: 31 }])),
+    ...Skeleton.patchJoints(entity, 31, { translation: [0, 0, 0] }),
   ]);
   const inspect = await current().inspect();
   const scalar = inspect.entities
@@ -717,23 +746,19 @@ export async function explicitTransitionPoses(
   check(animation, "animation fixture missing");
   for (const id of controllers)
     await animation.client.controlAnimationController(id, { action: "stop" });
-  const { Skeleton, Entity, encodeJointOverrides } = contract;
+  const { Entity } = contract;
   const poses: [bigint, number, number][] = [
     [rigs[0]!, firstRootX, firstAngle],
     [rigs[1]!, secondRootX, secondAngle],
   ];
-  const commands = poses.map(([id, rootX, angle]) =>
-    Skeleton.setJoints(
-      Entity.handle(id),
-      encodeJointOverrides([
-        { joint: 0, translation: [rootX, 0, 0] },
-        {
-          joint: 1,
-          translation: [0, 1, 0],
-          rotation: [0, 0, Math.sin(angle / 2), Math.cos(angle / 2)],
-        },
-      ]),
-    ),
+  const commands = poses.flatMap(([id, rootX, angle]) =>
+    jointOverrides(Entity.handle(id), {
+      0: { translation: [rootX, 0, 0] },
+      1: {
+        translation: [0, 1, 0],
+        rotation: [0, 0, Math.sin(angle / 2), Math.cos(angle / 2)],
+      },
+    }),
   );
   check(
     (await current().batch(commands)).ok,
@@ -764,19 +789,15 @@ export async function animationStop(index: number) {
 }
 
 export async function explicitAngle(index: number, angle: number) {
-  const { Skeleton, Entity, encodeJointOverrides } = contract;
-  const result = await current().batch([
-    Skeleton.setJoints(
-      Entity.handle(rigs[index]),
-      encodeJointOverrides([
-        {
-          joint: 1,
-          translation: [0, 1, 0],
-          rotation: [0, 0, Math.sin(angle / 2), Math.cos(angle / 2)],
-        },
-      ]),
-    ),
-  ]);
+  const { Entity } = contract;
+  const result = await current().batch(
+    jointOverrides(Entity.handle(rigs[index]), {
+      1: {
+        translation: [0, 1, 0],
+        rotation: [0, 0, Math.sin(angle / 2), Math.cos(angle / 2)],
+      },
+    }),
+  );
   check(result.ok, "explicit angle rejected");
 }
 
@@ -834,18 +855,15 @@ export async function geometryScene() {
 }
 
 export async function geometryPose() {
-  const { Entity, Transform, Skeleton, encodeJointOverrides } = contract;
+  const { Entity, Transform } = contract;
   const entity = Entity.handle(rigs[0]);
   check(
     (
       await current().batch([
         Transform.insert(entity, { x: -0.6, z: 0.2, sx: 1.5, sy: 0.5, sz: 1 }),
-        Skeleton.setJoints(
-          entity,
-          encodeJointOverrides([
-            { joint: 0, rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] },
-          ]),
-        ),
+        ...jointOverrides(entity, {
+          0: { rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] },
+        }),
       ])
     ).ok,
     "geometry pose rejected",

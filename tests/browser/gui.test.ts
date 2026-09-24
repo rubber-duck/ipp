@@ -228,6 +228,7 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       );
       assert.deepEqual(themeFrame.parts, [
         "background",
+        "fill",
         "focusRing",
         "icon",
         "label",
@@ -319,6 +320,41 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         [10, 10],
         `equivalent rerender changed DOM selection: ${JSON.stringify(afterRerender)}`,
       );
+      // Editing the named control theme while the text input is being edited
+      // updates only the root theme: the completed frame repaints the button,
+      // node rows and theme handles stay as they were, and editing continues.
+      const themeEvidence = () =>
+        env.page.evaluate(
+          async (url) => (await import(url)).themeEditEvidence(),
+          fixture,
+        );
+      const beforeTheme = await themeEvidence();
+      assert.ok(
+        beforeTheme.button[2]! > beforeTheme.button[0]!,
+        `initial tone is not blue: ${beforeTheme.button}`,
+      );
+      await env.page.evaluate(
+        async (url) => (await import(url)).retoneTheme(1),
+        fixture,
+      );
+      let afterTheme = await themeEvidence();
+      for (
+        const deadline = performance.now() + 5_000;
+        afterTheme.button[0]! <= afterTheme.button[2]!;
+        afterTheme = await themeEvidence()
+      )
+        if (performance.now() > deadline)
+          throw new Error(`theme edit never repainted: ${afterTheme.button}`);
+      env.evidence.record("theme edit during editing", {
+        before: beforeTheme.button,
+        after: afterTheme.button,
+      });
+      assert.equal(afterTheme.nodeStyles, beforeTheme.nodeStyles);
+      assert.deepEqual(afterTheme.themes, beforeTheme.themes);
+      const afterThemeEdit = await readObservation();
+      assert.deepEqual(afterThemeEdit.focusSelection, [12, 12]);
+      assert.equal(afterThemeEdit.text, "aX世-clip-b");
+
       await env.page.keyboard.insertText("!");
       await waitForObservation(
         (value) => value.text === "aX世-clip-b!",

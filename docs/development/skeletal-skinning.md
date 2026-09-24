@@ -15,7 +15,7 @@ flowchart LR
     skin --> draw["GPU deformation"]
 ```
 
-- `Skeleton`: `source`/`variant`, optional `pose_source`/`pose_variant`, sparse `joints`. Each override replaces local TRS; absent overrides use selected pose/rest pose. `encodeJointOverrides` requires ascending unique indices.
+- `Skeleton`: `source`/`variant`, optional `pose_source`/`pose_variant`, and `joints` override rows. The row slot is the joint ordinal; every ordinal below the 32-joint limit is a live row with optional `translation`, `rotation` and `scale` properties. Each present property replaces that part of the joint's local TRS; absent properties use the selected pose or rest pose. Write properties with the generated `Skeleton.patchJoints(entity, joint, patch)` (or `Skeleton.jointsOffset` with `setField`) and clear them with `null`; keep rows rather than removing them, because a removed ordinal cannot be written again within the component incarnation. Override properties are authored input, not numeric animation targets; joint animation samples the pose through joint tracks. A present property on an ordinal the skeleton asset lacks suppresses the pose until cleared.
 - `Skin`: binding `source`/`variant` and skeleton entity. Mesh/skeleton entities supply effective Transforms and may coincide. Palette: `inverse(mesh world) × skeleton world × joint global × inverse bind`. Palette and skeleton orders may differ.
 - Internal component buffers are excluded from authored copies, generic fields, overlays and snapshots. Same-incarnation/source updates preserve allocations; replacement invalidates bindings before release.
 - Zero skeleton/empty source is inactive. Deletion never retargets a reused slot. CPU loading precedes pose evaluation; pending sources retain declarations and suppress affected draws.
@@ -48,7 +48,7 @@ await client.batch([
 ]);
 ```
 
-Activate a camera separately; await assets/completed frame after acknowledgement. Bend with `pose_source` or `encodeJointOverrides([{ joint: 1, translation: [0,1,0], rotation: [0,0,Math.SQRT1_2,Math.SQRT1_2] }])`. Clear both for rest pose. Instances can share sources with independent overrides.
+Activate a camera separately; await assets/completed frame after acknowledgement. Bend with `pose_source` or `...Skeleton.patchJoints(entity, 1, { rotation: [0,0,Math.SQRT1_2,Math.SQRT1_2] })`. Clear both (`pose_source: ""`, `{ rotation: null }`) for rest pose. Instances can share sources with independent overrides.
 
 ## Payloads and ownership
 

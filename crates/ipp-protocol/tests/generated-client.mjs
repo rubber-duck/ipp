@@ -139,6 +139,70 @@ export function nonemptyBytesDefaultContract(input) {
   return hashContract(contract);
 }
 
+/** Scalar row layout of the synthetic rows contract, in property index order. */
+export const ROWS_FIXTURE_PROPERTIES = [
+  { name: "weight", kind: "f32", tag: 1, optional: false, hint: "none" },
+  { name: "offset", kind: "vec3", tag: 6, optional: true, hint: "none" },
+  { name: "rotation", kind: "vec4", tag: 7, optional: true, hint: "rotation" },
+  { name: "enabled", kind: "bool", tag: 4, optional: false, hint: "none" },
+  { name: "texture", kind: "asset", tag: 12, optional: true, hint: "none" },
+  { name: "delta", kind: "i32", tag: 2, optional: false, hint: "none" },
+  { name: "count", kind: "u32", tag: 3, optional: true, hint: "none" },
+];
+
+/**
+ * Give the exported Scalar a second, rows-kind field `items` at offset 8, with
+ * region base 0x1000_0000 and ROWS_FIXTURE_PROPERTIES, as a target would export a
+ * `#[schema(rows)]` field. No production component declares rows yet.
+ */
+export function rowsFieldContract(input) {
+  const { creation, kind } = scalarFieldContract(input);
+  const text = new TextEncoder();
+  const bytes = [];
+  const u8 = (value) => bytes.push(value);
+  const u16 = (value) => bytes.push(value & 0xff, value >> 8);
+  const u32 = (value) => {
+    for (let shift = 0; shift < 32; shift += 8)
+      bytes.push((value >>> shift) & 0xff);
+  };
+  const string = (value) => {
+    const encoded = text.encode(value);
+    u32(encoded.length);
+    bytes.push(...encoded);
+  };
+  string("items");
+  u32(8);
+  u32(24);
+  u32(8);
+  u8(8);
+  u32(0x10000000);
+  u16(ROWS_FIXTURE_PROPERTIES.length);
+  for (const property of ROWS_FIXTURE_PROPERTIES) {
+    string(property.name);
+    u8(property.tag);
+    u8(property.optional ? 1 : 0);
+    u8(property.hint === "rotation" ? 1 : 0);
+  }
+  u32(8);
+  bytes.push(0, 0, 0, 0, 0, 0, 0, 0);
+
+  const prefix = input.slice(0, kind + 5);
+  const view = new DataView(
+    prefix.buffer,
+    prefix.byteOffset,
+    prefix.byteLength,
+  );
+  view.setUint32(creation - 10, 32, true);
+  view.setUint32(creation - 6, 8, true);
+  view.setUint16(creation - 2, 2, true);
+  const suffix = input.slice(kind + 5);
+  const contract = new Uint8Array(prefix.length + bytes.length + suffix.length);
+  contract.set(prefix);
+  contract.set(bytes, prefix.length);
+  contract.set(suffix, prefix.length + bytes.length);
+  return hashContract(contract);
+}
+
 function hashContract(contract) {
   let hash = 0xcbf29ce484222325n;
   for (const byte of contract.slice(16))

@@ -1277,3 +1277,299 @@ fn overlay_attachment_and_update_resolve_prior_entity_aliases_before_retention()
     assert_eq!(value(&world), 15.0);
     assert!(world.lookup_id("discarded-source").is_none());
 }
+
+/// Overlays over GuiRoot node style rows, addressed by row offset.
+#[cfg(feature = "gui")]
+mod gui_rows {
+    use super::*;
+    use ipp_core::components::schema::FieldValue as SchemaValue;
+    use ipp_core::systems::gui::{
+        GuiCommand, GuiContainerKind, GuiNodeData, GuiNodeDataRow, GuiNodeHandle, GuiNodeId,
+        GuiNodeStyle, GuiNodeStyleProperty, GuiRoot,
+    };
+    use ipp_core::{DynamicValue, Surface};
+
+    const SESSION: u64 = 1;
+
+    fn offset(node: u32, property: GuiNodeStyleProperty) -> u32 {
+        GuiRoot::node_style_offset(GuiNodeId(node), property).unwrap()
+    }
+
+    fn row_write(offset: u32, value: Option<f32>) -> FieldWrite {
+        FieldWrite {
+            offset,
+            value: value.map_or(FieldValue::Unset, |value| {
+                FieldValue::Dynamic(DynamicValue::F32(value))
+            }),
+        }
+    }
+
+    /// Node 3 has an explicit width; node 2 leaves it absent.
+    fn style(node: u32) -> GuiNodeStyle {
+        GuiNodeStyle {
+            width: (node == 3).then_some(1.0),
+            ..GuiNodeStyle::default()
+        }
+    }
+
+    fn contents() -> [(u32, Option<u32>, GuiNodeData); 3] {
+        [
+            (1, None, GuiNodeData::Container(GuiContainerKind::Column)),
+            (2, Some(1), GuiNodeData::Text("two".into())),
+            (3, Some(1), GuiNodeData::Text("three".into())),
+        ]
+    }
+
+    fn gui_root(world: &ipp_core::WorldContext<'_>, entity: EntityId, base: bool) -> GuiRoot {
+        let snapshot = world.inspect(entity).unwrap();
+        let values = if base {
+            snapshot.base
+        } else {
+            snapshot.effective
+        };
+        values
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::GuiRoot(root) => Some(root),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    /// (base, effective) value of one node style row property.
+    fn property(
+        world: &ipp_core::WorldContext<'_>,
+        entity: EntityId,
+        offset: u32,
+    ) -> [SchemaValue; 2] {
+        [true, false].map(|base| {
+            ComponentValue::GuiRoot(gui_root(world, entity, base))
+                .field(offset)
+                .unwrap()
+        })
+    }
+
+    fn gui(world: &mut ipp_core::WorldContext<'_>, command: GuiCommand) {
+        world
+            .enqueue_gui_command_with_reply(SESSION, 1, command)
+            .unwrap();
+        let report = world.update_for_test(0.0).unwrap();
+        assert_eq!(report.system_command_outcomes[0].result, Ok(()));
+    }
+
+    /// A GUI root named `gui` with a column (1) and two text nodes (2, 3).
+    fn gui_entity(world: &mut ipp_core::WorldContext<'_>) -> EntityId {
+        let report = ok(
+            world,
+            vec![
+                Command::Create {
+                    alias: 1,
+                    metadata: EntityMetadata {
+                        symbolic_id: Some("gui".into()),
+                        classes: Vec::new(),
+                    },
+                },
+                Command::InsertComponentValue {
+                    entity: EntityRef::Alias(1),
+                    value: ComponentValue::Surface(Surface::default()),
+                },
+                Command::InsertComponentValue {
+                    entity: EntityRef::Alias(1),
+                    value: ComponentValue::GuiRoot(GuiRoot::default()),
+                },
+            ],
+        );
+        let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;
+        let root_incarnation = world
+            .inspect_gui(entity, None, 1, 1)
+            .unwrap()
+            .root_incarnation;
+        for (id, parent, data) in contents() {
+            gui(
+                world,
+                GuiCommand::InsertNode {
+                    entity,
+                    root_incarnation,
+                    id: GuiNodeId(id),
+                    parent: parent.map(GuiNodeId),
+                    index: u32::MAX,
+                    data,
+                    values: GuiNodeDataRow::default(),
+                    style: style(id),
+                },
+            );
+        }
+        entity
+    }
+
+    fn declare_rows(
+        world: &mut ipp_core::WorldContext<'_>,
+        fields: Vec<FieldWrite>,
+    ) -> Declaration {
+        let report = ok(
+            world,
+            vec![
+                Command::CreateStateOverlayOwner {
+                    alias: 0,
+                },
+                bind(StateOverlayRef::Alias(0), 1, "gui"),
+                Command::AttachComponentStateOverlay {
+                    owner: StateOverlayRef::Alias(0),
+                    binding: StateOverlayRef::Alias(1),
+                    alias: 2,
+                    component: ComponentValue::GUI_ROOT,
+                    mode: ComponentOverlayMode::Bound,
+                    fields,
+                },
+            ],
+        );
+        let resources = &report.outcomes[0].state_overlays;
+        Declaration {
+            owner: resources[0].id,
+            binding: resources[1].id,
+            overlay: resources[2].id,
+        }
+    }
+
+    #[test]
+    fn row_overrides_layer_clear_and_reveal_the_latest_producer_value() {
+        let mut host = ipp_core::HostRuntime::new();
+        let id = host.create_world(WorldLimits::default()).unwrap();
+        let mut world = host.world_mut(id).unwrap();
+        let entity = gui_entity(&mut world);
+        let absent = offset(2, GuiNodeStyleProperty::Width);
+        let present = offset(3, GuiNodeStyleProperty::Width);
+        let f32_value = |value| SchemaValue::Dynamic(DynamicValue::F32(value));
+
+        let first = declare_rows(
+            &mut world,
+            vec![row_write(absent, Some(3.0)), row_write(present, Some(4.0))],
+        );
+        let second = declare_rows(&mut world, vec![row_write(present, None)]);
+        assert_eq!(
+            property(&world, entity, absent),
+            [SchemaValue::Unset, f32_value(3.0)]
+        );
+        assert_eq!(
+            property(&world, entity, present),
+            [f32_value(1.0), SchemaValue::Unset],
+            "the later attachment's clear wins"
+        );
+
+        ok(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::GUI_ROOT,
+                field: row_write(present, Some(2.0)),
+            }],
+        );
+        assert_eq!(
+            property(&world, entity, present),
+            [f32_value(2.0), SchemaValue::Unset]
+        );
+
+        ok(&mut world, vec![second.release_owner()]);
+        assert_eq!(
+            property(&world, entity, present),
+            [f32_value(2.0), f32_value(4.0)]
+        );
+        ok(&mut world, vec![first.release_owner()]);
+        assert_eq!(
+            property(&world, entity, present),
+            [f32_value(2.0), f32_value(2.0)]
+        );
+        assert_eq!(
+            property(&world, entity, absent),
+            [SchemaValue::Unset, SchemaValue::Unset],
+            "withdrawal restores the property's absence"
+        );
+    }
+
+    #[test]
+    fn one_declaration_addresses_more_row_properties_than_exposed_fields() {
+        let mut host = ipp_core::HostRuntime::new();
+        let id = host.create_world(WorldLimits::default()).unwrap();
+        let mut world = host.world_mut(id).unwrap();
+        let entity = gui_entity(&mut world);
+        let fields: Vec<_> = [1, 2, 3]
+            .into_iter()
+            .flat_map(|node| {
+                [
+                    GuiNodeStyleProperty::Opacity,
+                    GuiNodeStyleProperty::FontSize,
+                    GuiNodeStyleProperty::MinWidth,
+                    GuiNodeStyleProperty::Flex,
+                ]
+                .map(|property| row_write(offset(node, property), Some(0.5)))
+            })
+            .collect();
+        assert!(fields.len() > ComponentValue::field_count(ComponentValue::GUI_ROOT).unwrap());
+        declare_rows(&mut world, fields);
+        let effective = gui_root(&world, entity, false);
+        assert!(
+            effective
+                .node_style()
+                .iter()
+                .all(|(_, row)| row.opacity == 0.5 && row.flex == Some(0.5))
+        );
+    }
+
+    #[test]
+    fn removed_rows_drop_their_overrides_without_failing_resolution() {
+        let mut host = ipp_core::HostRuntime::new();
+        let id = host.create_world(WorldLimits::default()).unwrap();
+        let mut world = host.world_mut(id).unwrap();
+        let entity = gui_entity(&mut world);
+        let removed = offset(2, GuiNodeStyleProperty::Opacity);
+        let kept = offset(3, GuiNodeStyleProperty::Opacity);
+        let declaration = declare_rows(
+            &mut world,
+            vec![row_write(removed, Some(0.25)), row_write(kept, Some(0.5))],
+        );
+
+        let root_incarnation = world
+            .inspect_gui(entity, None, 1, 1)
+            .unwrap()
+            .root_incarnation;
+        gui(
+            &mut world,
+            GuiCommand::RemoveNode {
+                handle: GuiNodeHandle::new(SESSION, entity, root_incarnation, GuiNodeId(2)),
+            },
+        );
+        let effective = gui_root(&world, entity, false);
+        assert!(!effective.node_style().is_live(2));
+        assert_eq!(effective.node_style().get(3).unwrap().opacity, 0.5);
+
+        // Later edits of the same declaration keep working without the dead slot.
+        ok(
+            &mut world,
+            vec![declaration.update_rows(vec![row_write(kept, Some(0.75))])],
+        );
+        assert_eq!(
+            gui_root(&world, entity, false)
+                .node_style()
+                .get(3)
+                .unwrap()
+                .opacity,
+            0.75
+        );
+        reject(
+            &mut world,
+            vec![declaration.update_rows(vec![row_write(removed, Some(0.25))])],
+            ErrorReason::InvalidField,
+        );
+    }
+
+    impl Declaration {
+        fn update_rows(self, fields: Vec<FieldWrite>) -> Command {
+            Command::UpdateComponentStateOverlay {
+                owner: StateOverlayRef::Handle(self.owner),
+                overlay: StateOverlayRef::Handle(self.overlay),
+                fields,
+                clear: Vec::new(),
+            }
+        }
+    }
+}

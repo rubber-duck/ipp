@@ -3,8 +3,10 @@
 //! `GuiRoot.nodes` stores structure plus one committed value and revision per
 //! control node. While a root incarnation is live it changes only through
 //! [`GuiCommand`]; a new incarnation (insertion or restore) may supply it whole.
-//! Node style and named skin parts are ordinary dynamic properties named
-//! `node_<id>_<lane>` and `node_<id>_part_<part>_<lane>`, removed with their node.
+//! Node style, node data, root-owned theme parts and per-node part state are
+//! compiled rows addressed by field offset; node rows and part rows are
+//! removed with their node. Dynamic properties hold only application
+//! extension values.
 //! Operation guards reject raw Surface items on GUI-owned Surfaces, GUI roots on
 //! populated Surfaces and overlays that would supply either structure.
 //!
@@ -30,7 +32,7 @@
 //! Boundaries: hidden, unavailable or disabled targets are ineligible for
 //! routing and application; retained interactions are synchronously cancelled
 //! when those states or their full identities change. The authored `enabled`
-//! style lane defaults true and gates hit testing, activation and skin state.
+//! style property defaults true and gates hit testing, activation and skin state.
 //! Sessions fence every handle, focus, capture
 //! and queued envelope; replacement cancels in-flight work. Clipboard,
 //! IME composition and soft keyboards belong to platform adapters: this
@@ -67,7 +69,7 @@ pub mod semantics;
 mod system;
 mod system_state;
 #[cfg(test)]
-mod test_support;
+pub(in crate::world::systems) mod test_support;
 pub mod tree;
 
 pub use input::{
@@ -83,21 +85,24 @@ pub use layout::{
     GuiLayoutRequest, GuiLayoutSystem, GuiLayoutSystemFactory, GuiPanelResolution, GuiPartMotion,
     GuiPartStyle, GuiResourceResolver, GuiSkinCursors, GuiSkinState, GuiSkinnedAppearance,
     MAX_LAYOUT_DEPTH, MAX_SKIN_DEPTH, MAX_SKIN_NODES, apply_appearance_to_primitive,
-    apply_asset_to_primitive, focus_part_name, is_valid_skin_part, part_style, resolve_appearance,
-    resolve_panel_hit, resolve_state_part_motion, resolve_state_part_style, skin_part_key,
-    skinned_primitives_for_view, state_part_candidates, variant_for_content,
+    apply_asset_to_primitive, part_overrides, resolve_appearance, resolve_panel_hit,
+    resolve_state_part_motion, resolve_state_part_style, skinned_primitives_for_view,
+    theme_part_style, variant_for_content,
 };
 pub(crate) use layout::{
-    appearance_with_effective_numeric, resolve_paint_appearance, skinned_parts_for_view,
-    skinned_primitives_for_view_with_overrides,
+    appearance_with_effective_numeric, resolve_paint_appearance, skin_channels_complete,
+    skinned_parts_for_view, skinned_primitives_for_view_with_overrides,
 };
 pub(in crate::world) use system::validate_overlay_declaration;
 pub use system::{
     GuiCommand, GuiInspectQuery, GuiInspectResponse, GuiInspectedNode, GuiSystem, GuiSystemFactory,
 };
-pub(crate) use tree::component::validate_property_value as validate_gui_property_value;
 pub(crate) use tree::controls::slider_rail;
 pub use tree::{
-    GuiContainerKind, GuiControlState, GuiControlValue, GuiControls, GuiNode, GuiNodeContent,
-    GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes, GuiRoot, MAX_GUI_TEXT_BYTES,
+    GUI_BASE_PARTS, GuiContainerKind, GuiControlEntry, GuiControlState, GuiControlValue,
+    GuiControls, GuiNode, GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle,
+    GuiNodeId, GuiNodePatch, GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle,
+    GuiNodeStyleChange, GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPartChannel, GuiPartId,
+    GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty, GuiPartVariant, GuiRoot,
+    GuiRootRowProperty, GuiThemePartRow, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES,
 };

@@ -100,9 +100,9 @@ function near(actual: number, expected: number, what: string): void {
 /** The resizable SPAN frame, matched by its authored sizes. */
 function spanFrame(state: GalleryGuiState): GuiSemanticNode {
   const node = state.detailed.nodes.find(
-    ({ content, style }) =>
-      content.kind === "container" &&
-      content.containerKind === "stack" &&
+    ({ data, style }) =>
+      data.kind === "container" &&
+      data.containerKind === "stack" &&
       style.enabled === false &&
       Math.abs((style.height ?? 0) - 0.38) < 1e-5 &&
       [1.2, 2.0].some((width) => Math.abs((style.width ?? 0) - width) < 1e-5),
@@ -116,7 +116,7 @@ function spanFrame(state: GalleryGuiState): GuiSemanticNode {
 /** Evaluated bounds of the one text leaf, such as an icon glyph, with this text. */
 function textBounds(state: GalleryGuiState, text: string) {
   const matches = state.detailed.nodes.filter(
-    ({ content }) => content.kind === "text" && content.text === text,
+    ({ data }) => data.kind === "text" && data.text === text,
   );
   assert.equal(matches.length, 1, `expected one text leaf ${text}`);
   const semantic = state.semantic.nodes.find(({ id }) => id === matches[0]!.id);
@@ -163,6 +163,37 @@ function dynamicProperty(
   return value;
 }
 
+/**
+ * Node animated by a GuiRoot `node_style.position` offset. The row layout is
+ * region 0 (base 0x1000_0000) with 20 properties, position at index 15;
+ * offsets of other properties name no position driver.
+ */
+function drivenNode(offset: number): number | undefined {
+  const relative = offset - 0x1000_0000;
+  if (relative < 0 || relative % 20 !== 15) return undefined;
+  return Math.floor(relative / 20);
+}
+
+/** Effective node style row of the node a waveform controller animates. */
+function drivenNodeStyle(
+  inspection: Inspection,
+  controller: { description: { drivers: readonly { property: unknown }[] } },
+): Record<string, unknown> {
+  const property = controller.description.drivers[0]!.property as {
+    offsets?: readonly number[];
+  };
+  const node = drivenNode(property.offsets?.[0] ?? -1);
+  assert.ok(node !== undefined, "waveform driver targets no node position");
+  // The browser helper hands rows tables over as records keyed by slot.
+  const table = fieldsWith(inspection, "gui-demo", "node_style")
+    .node_style as unknown as {
+    rows: Readonly<Record<number, Record<string, unknown>>>;
+  };
+  const row = table.rows[node];
+  assert.ok(row, `waveform node ${node} has no style row`);
+  return row;
+}
+
 function animationFor(inspection: Inspection, symbolicId: string) {
   const target = sceneEntity(inspection, symbolicId).id;
   const controller = inspection.controllers?.find((candidate) =>
@@ -179,8 +210,11 @@ function waveformAnimation(inspection: Inspection, pulse = false) {
       description.drivers.length === 1 &&
       description.looping === !pulse &&
       description.drivers.every((driver) => driver.target === target) &&
-      description.drivers.some((driver) =>
-        driver.property.name?.endsWith("_position"),
+      description.drivers.some(
+        (driver) =>
+          "offsets" in driver.property &&
+          driver.property.offsets?.length === 1 &&
+          drivenNode(driver.property.offsets[0]!) !== undefined,
       ),
   );
   assert.ok(
@@ -192,9 +226,9 @@ function waveformAnimation(inspection: Inspection, pulse = false) {
 
 function waveformViewport(state: GalleryGuiState) {
   const node = state.detailed.nodes.find(
-    ({ content, style }) =>
-      content.kind === "container" &&
-      content.containerKind === "scrollView" &&
+    ({ data, style }) =>
+      data.kind === "container" &&
+      data.containerKind === "scrollView" &&
       style.enabled === false &&
       Math.abs((style.width ?? 0) - 3.54) < 1e-5 &&
       Math.abs((style.height ?? 0) - 0.46) < 1e-5,
@@ -204,13 +238,19 @@ function waveformViewport(state: GalleryGuiState) {
 }
 
 function waveformX(inspection: Inspection, pulse = false): number {
-  const position = dynamicProperty(
+  const position = drivenNodeStyle(
     inspection,
-    "gui-demo",
-    waveformAnimation(inspection, pulse).description.drivers[0]!.property.name!,
+    waveformAnimation(inspection, pulse),
+  ).position;
+  assert.ok(Array.isArray(position) && position.length === 2);
+  return (position as readonly number[])[0]!;
+}
+
+/** Effective opacity of the scan (or pulse) waveform node. */
+function waveformOpacity(inspection: Inspection, pulse = false): number {
+  return Number(
+    drivenNodeStyle(inspection, waveformAnimation(inspection, pulse)).opacity,
   );
-  assert.equal(position.kind, "vec2");
-  return (position.value as readonly number[])[0]!;
 }
 
 function assertNoScanner(inspection: Inspection): void {
@@ -272,7 +312,6 @@ function assertRetainedGuiNodes(
   )) {
     const retained = after.nodes.find(({ id }) => id === node.id);
     assert.ok(retained, `removed GUI node ${node.id}`);
-    assert.equal(retained.lifetime, node.lifetime);
     assert.equal(retained.role, node.role);
     assert.deepEqual(retained.value, node.value);
     assert.equal(retained.revision, node.revision);
@@ -532,8 +571,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
           await g.call("releaseGalleryGuiTransform");
         }
       };
-      // Named background lanes: `background` carries the animated appearance,
-      // `background_disabled` the authored disabled state lane.
+      // `background` reads the node's live channels, which carry the animated
+      // appearance; `background_disabled` reads its theme's authored disabled
+      // state.
       const partValue = (
         tree: GuiSemanticTree,
         node: GuiSemanticNode,
@@ -942,9 +982,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       assert.equal(
         initial.detailed.nodes.filter(
-          ({ content, style }) =>
-            content.kind === "container" &&
-            content.containerKind === "scrollView" &&
+          ({ data, style }) =>
+            data.kind === "container" &&
+            data.containerKind === "scrollView" &&
             style.enabled !== false,
         ).length,
         1,
@@ -1060,16 +1100,15 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "complex waveform curves share Surface drawing resources",
       );
       assert.equal(
-        initial.detailed.nodes.filter(
-          ({ content }) => content.kind === "drawing",
-        ).length,
+        initial.detailed.nodes.filter(({ data }) => data.kind === "drawing")
+          .length,
         3,
         "waveform geometry must not expand into hundreds of GUI nodes",
       );
       assert.ok(Number(overview.frame.backend.guiBatches) > 0);
       assert.ok(Number(overview.frame.backend.glyphPages) > 0);
-      const glyphTexts = initial.detailed.nodes.flatMap(({ content }) =>
-        content.kind === "text" ? [content.text] : [],
+      const glyphTexts = initial.detailed.nodes.flatMap(({ data }) =>
+        data.kind === "text" ? [data.text] : [],
       );
       for (const icon of Object.values(ICON_CODE_POINTS))
         assert.ok(glyphTexts.includes(icon), `missing Nerd Font icon ${icon}`);
@@ -1087,8 +1126,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(overview.summary.coverage > 0.08);
       assert.deepEqual(overview.inspection.renderDiagnostics, []);
 
-      // UPLINK is mounted disabled while SCAN runs. Its disabled lane is an
-      // ordinary named part property and paints a solid dim fill.
+      // UPLINK is mounted disabled while SCAN runs. Its disabled state is an
+      // ordinary theme part row and paints a solid dim fill.
       const disabledUplink = semanticNode(initial.semantic, "button", "UPLINK");
       assert.equal(disabledUplink.enabled, false);
       assert.deepEqual(disabledUplink.actions, []);
@@ -1249,15 +1288,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
         time: 2.399999,
       });
       const loopEnd = await g.capture("gui-waveform-loop-end");
-      const loopPosition = dynamicProperty(
-        loopEnd.inspection,
-        "gui-demo",
-        waveformAnimation(loopEnd.inspection).description.drivers[0]!.property
-          .name!,
-      );
-      assert.equal(loopPosition.kind, "vec2");
       assert.ok(
-        (loopPosition.value as readonly number[])[0]! < -3.5,
+        waveformX(loopEnd.inspection) < -3.5,
         "SCAN must travel left through the second authored tile",
       );
       const seamDifference = await waveformDifference(
@@ -1266,7 +1298,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       await recordWaveform("seam", {
         difference: seamDifference,
-        position: loopPosition,
+        position: waveformX(loopEnd.inspection),
         controller: waveformAnimation(loopEnd.inspection),
       });
       // Clipped curve endpoints and subpixel coverage can differ between tiles.
@@ -1445,20 +1477,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
         capturedWavePulse.time > 0.32 && capturedWavePulse.time < 1.05,
         `pulse left its visible interval before capture: ${capturedWavePulse.time}`,
       );
-      const pulseOpacityName =
-        capturedWavePulse.description.drivers[0]!.property.name!.replace(
-          /_position$/,
-          "_opacity",
-        );
       await recordWaveform("pulse", {
         started: activeWavePulse,
         controller: capturedWavePulse,
         scan: waveformAnimation(pulseFrame.inspection),
-        opacity: dynamicProperty(
-          pulseFrame.inspection,
-          "gui-demo",
-          pulseOpacityName,
-        ),
+        opacity: waveformOpacity(pulseFrame.inspection, true),
       });
       assert.ok(
         (
@@ -1476,19 +1499,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
         baselineSignal.every((green) => green > 150),
         `manual pulse must join a visible baseline on both sides: ${JSON.stringify(baselineSignal)}`,
       );
-      const scanOpacityName = waveformAnimation(
-        pulseFrame.inspection,
-      ).description.drivers[0]!.property.name!.replace(
-        /_position$/,
-        "_opacity",
-      );
       assert.ok(
-        Math.abs(
-          Number(
-            dynamicProperty(pulseFrame.inspection, "gui-demo", scanOpacityName)
-              .value,
-          ) - 0.35,
-        ) < 1e-6,
+        Math.abs(waveformOpacity(pulseFrame.inspection) - 0.35) < 1e-6,
         "PULSE must preserve the visible paused sine trace",
       );
       const pulseToggle = await point("checkbox");
@@ -1506,10 +1518,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await waitForPartOpacity(current.semantic, enabledUplink, 0.45);
       const toggledPulse = await g.capture("gui-waveform-pulse-scan-toggled");
       assert.ok(
-        Number(
-          dynamicProperty(toggledPulse.inspection, "gui-demo", scanOpacityName)
-            .value,
-        ) > 0.85,
+        waveformOpacity(toggledPulse.inspection) > 0.85,
         "the moving sine must remain visible alongside PULSE",
       );
       assert.equal(waveformAnimation(toggledPulse.inspection).state, "playing");
@@ -1518,10 +1527,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         capturedWavePulse.time,
       );
       assert.equal(
-        Number(
-          dynamicProperty(toggledPulse.inspection, "gui-demo", pulseOpacityName)
-            .value,
-        ),
+        waveformOpacity(toggledPulse.inspection, true),
         1,
         "SCAN must preserve the independent pulse trace",
       );
@@ -1580,23 +1586,14 @@ test("Gallery runs a real GUI demo and cleans it up", {
         (inspection) =>
           waveformAnimation(inspection, true).state === "completed",
       );
-      await g.waitFor(
-        (inspection) =>
-          Number(
-            dynamicProperty(inspection, "gui-demo", pulseOpacityName).value,
-          ) === 0,
-      );
+      await g.waitFor((inspection) => waveformOpacity(inspection, true) === 0);
       const finishedPulse = await g.capture("gui-waveform-pulse-finished");
       assert.equal(
         waveformAnimation(finishedPulse.inspection).state,
         "playing",
         "pulse completion interrupted SCAN",
       );
-      assert.equal(
-        dynamicProperty(finishedPulse.inspection, "gui-demo", pulseOpacityName)
-          .value,
-        0,
-      );
+      assert.equal(waveformOpacity(finishedPulse.inspection, true), 0);
       assert.ok(
         (
           await waveformDifference(
@@ -1772,7 +1769,6 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       assert.deepEqual(identityBeforeSkin.focused, {
         id: callsignBeforeSkin.id,
-        lifetime: callsignBeforeSkin.lifetime,
       });
       // Exercise the production machine-client action while the editor remains
       // focused, which isolates reskinning from normal pointer focus transfer.
@@ -2023,7 +2019,6 @@ test("Gallery runs a real GUI demo and cleans it up", {
         const callsign = semanticNode(detail.semantic, "textInput", "CALLSIGN");
         assert.deepEqual(detail.semantic.focused, {
           id: callsign.id,
-          lifetime: callsign.lifetime,
         });
         assert.ok(
           [neon.ringTop!, neon.ringBottom!, neon.ringRight!].every(

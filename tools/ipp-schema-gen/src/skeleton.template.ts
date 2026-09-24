@@ -8,9 +8,6 @@ export interface JointTransform {
 export interface SkeletonJoint extends JointTransform {
   parent: number | null;
 }
-export interface JointOverride extends JointTransform {
-  joint: number;
-}
 function writeJointTransform(w: Writer, value: JointTransform): void {
   const t = value.translation ?? [0, 0, 0];
   const r = value.rotation ?? [0, 0, 0, 1];
@@ -50,20 +47,5 @@ export function encodePoseAsset(
 ): Uint8Array<ArrayBuffer> {
   const w = rigHeader("IPPP", joints.length);
   for (const joint of joints) writeJointTransform(w, joint);
-  return w.finish();
-}
-/** Sparse absolute local overrides; omission reveals the pose asset or rest pose. */
-export function encodeJointOverrides(
-  joints: readonly JointOverride[],
-): Uint8Array<ArrayBuffer> {
-  const w = new Writer();
-  let previous = -1;
-  for (const joint of joints) {
-    if (joint.joint <= previous)
-      fail("joint overrides must be unique and ascending");
-    previous = uint(joint.joint, MAX_JOINTS - 1);
-    w.u32(previous);
-    writeJointTransform(w, joint);
-  }
   return w.finish();
 }

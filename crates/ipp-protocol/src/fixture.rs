@@ -1,6 +1,7 @@
 //! Target-executed layout and owned dispatch fixture; excluded without schema-export.
 
 use ipp_core::EntityId;
+use ipp_core::components::rows::Rows;
 use ipp_core::components::schema::{ContractSink, FieldValue, SchemaComponent};
 
 #[repr(C)]
@@ -40,6 +41,91 @@ struct BoundFixture {
     internal: usize,
 }
 
+/// Row properties cover a required scalar, a hinted optional Vec4 and an asset.
+#[derive(Default, ipp_core::components::rows::SchemaRow)]
+struct FixtureRow {
+    weight: f32,
+    #[schema(rotation)]
+    rotation: Option<[f32; 4]>,
+    source: Option<ipp_core::services::asset_management::AssetSource>,
+}
+
+// The ignored pointer moves the table's real offset between targets; the region
+// addresses and table encoding stay target-independent.
+#[repr(C)]
+#[derive(ipp_core::components::schema::SchemaComponent)]
+struct RowsFixture {
+    #[schema(ignore)]
+    internal: usize,
+    marker: u32,
+    #[schema(rows)]
+    rows: Rows<FixtureRow>,
+}
+
+impl Default for RowsFixture {
+    fn default() -> Self {
+        let mut rows = Rows::new();
+        rows.insert(
+            1,
+            FixtureRow {
+                weight: 0.5,
+                ..FixtureRow::default()
+            },
+        )
+        .expect("fixture slot");
+        Self {
+            internal: 0,
+            marker: 23,
+            rows,
+        }
+    }
+}
+
+/// Row property addressing, slot liveness and whole-table round trips.
+fn check_rows() -> bool {
+    use ipp_core::DynamicValue;
+    use ipp_core::components::schema::FieldError;
+
+    let property = |slot, index| Rows::<FixtureRow>::offset(0, slot, index).expect("offset");
+    let table = std::mem::offset_of!(RowsFixture, rows) as u32;
+    let mut fixture = RowsFixture::default();
+    if !RowsFixture::has_field(property(1, 1))
+        || fixture.field(property(1, 1)) != Ok(FieldValue::Unset)
+        || fixture.field(property(0, 0)) != Err(FieldError::UnknownField)
+        || fixture
+            .set_field(
+                property(1, 1),
+                FieldValue::Dynamic(DynamicValue::Vec4([0.0, 0.0, 0.0, 1.0])),
+            )
+            .is_err()
+        || fixture.set_field(property(1, 0), FieldValue::Dynamic(DynamicValue::U32(1)))
+            != Err(FieldError::WrongType)
+        || fixture.set_field(property(1, 0), FieldValue::Unset) != Err(FieldError::WrongType)
+        || fixture.set_field(property(0, 0), FieldValue::Dynamic(DynamicValue::F32(1.0)))
+            != Err(FieldError::UnknownField)
+    {
+        return false;
+    }
+
+    let Ok(value @ FieldValue::Rows(_)) = fixture.field(table) else {
+        return false;
+    };
+    let mut restored = RowsFixture {
+        rows: Rows::new(),
+        ..RowsFixture::default()
+    };
+    restored.set_field(table, value).is_ok()
+        && restored.rows.next_slot() == 2
+        && restored.rows.get(1).and_then(|row| row.rotation) == Some([0.0, 0.0, 0.0, 1.0])
+        && restored.rows.get(1).map(|row| row.weight) == Some(0.5)
+        && restored
+            .set_field(property(1, 1), FieldValue::Unset)
+            .is_ok()
+        && restored.rows.get(1).and_then(|row| row.rotation).is_none()
+        && restored.internal == 0
+        && restored.marker == 23
+}
+
 /// Runs real generated owned typed dispatch inside the selected host target.
 pub fn check() -> bool {
     use ipp_core::components::schema::FieldError;
@@ -56,6 +142,9 @@ pub fn check() -> bool {
         || bound.label != "bound"
         || bound.internal != 7
     {
+        return false;
+    }
+    if !check_rows() {
         return false;
     }
     let mut fixture = LayoutFixture::default();
@@ -99,6 +188,7 @@ pub fn export() -> Vec<u8> {
     bytes.write(&[usize::BITS as u8]);
     LayoutFixture::write_contract(&mut bytes);
     BoundFixture::write_contract(&mut bytes);
+    RowsFixture::write_contract(&mut bytes);
     bytes
 }
 

@@ -12,8 +12,8 @@
  * observation summary only. There is no retroactive cancel channel back to
  * the runtime; JavaScript `stopPropagation` controls callbacks alone, and
  * committed values, revisions and bounds are already final when callbacks
- * run. Unknown effect kinds are rejected fail-closed, stale lifetimes are
- * reported as conflicts and skipped (invalidation before reuse), and a
+ * run. Unknown effect kinds are rejected fail-closed, effects for nodes
+ * without an acknowledged record are skipped, and a
  * throwing listener is isolated through `onError` without breaking later
  * deliveries.
  *
@@ -23,7 +23,7 @@
 import type {
   GuiControlValue,
   GuiInputCommand,
-  GuiNodeContent,
+  GuiNodeData,
 } from "@ipp/client";
 import { dispatchGuiAction, resolveGuiActionPath } from "./description.js";
 import type { GuiActionListener } from "./components.js";
@@ -44,7 +44,6 @@ export interface GuiPressEvent {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   readonly name?: string | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
   readonly sourceTick?: bigint | undefined;
@@ -57,7 +56,6 @@ export interface GuiControlEvent<T> {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   readonly revision: number;
   readonly value: T;
   readonly name?: string | undefined;
@@ -72,13 +70,12 @@ export type GuiToggleListener = (event: GuiControlEvent<boolean>) => void;
 export type GuiScalarCommitListener = (event: GuiControlEvent<number>) => void;
 export type GuiTextCommitListener = (event: GuiControlEvent<string>) => void;
 
-/** Committed button outcome, mirroring `ButtonPressed{entity, node, lifetime}`. */
+/** Committed button outcome, mirroring `ButtonPressed{entity, node}`. */
 export interface GuiButtonPressedEffect {
   readonly kind: "buttonPressed";
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
   readonly path?: readonly number[] | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
@@ -93,7 +90,6 @@ export interface GuiControlCommittedEffect {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
   readonly value: GuiControlValue;
   readonly revision: number;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
@@ -165,7 +161,6 @@ export function isCommittedEffect(value: unknown): value is GuiCommittedEffect {
   if (typeof effect.entity !== "bigint") return false;
   if (typeof effect.rootIncarnation !== "bigint") return false;
   if (!isU32(effect.node) || (effect.node as number) === 0) return false;
-  if (!isU32(effect.lifetime)) return false;
   switch (effect.kind) {
     case "buttonPressed":
       return isEffectMetadata(effect);
@@ -180,11 +175,9 @@ export function isCommittedEffect(value: unknown): value is GuiCommittedEffect {
   }
 }
 
-/** Control kind for one structural content, or null for non-controls. */
-export function controlKindForContent(
-  content: GuiNodeContent,
-): GuiControlKind | null {
-  switch (content.kind) {
+/** Control kind for one node kind, or null for non-controls. */
+export function controlKindForData(data: GuiNodeData): GuiControlKind | null {
+  switch (data.kind) {
     case "button":
       return "button";
     case "checkbox":
@@ -214,17 +207,17 @@ export function actionsForControlKind(
   }
 }
 
-/** Human-readable name for one structural content, if any.
+/** Human-readable name for one node's authored strings, if any.
  *
  * Mirrors the .13 rule: button labels, text-input placeholders while
  * nonempty, otherwise none.
  */
-export function nameForContent(content: GuiNodeContent): string | undefined {
-  switch (content.kind) {
+export function nameForData(data: GuiNodeData): string | undefined {
+  switch (data.kind) {
     case "button":
-      return content.label;
+      return data.label;
     case "textInput":
-      return content.placeholder.length > 0 ? content.placeholder : undefined;
+      return data.placeholder.length > 0 ? data.placeholder : undefined;
     default:
       return undefined;
   }
@@ -234,8 +227,6 @@ export function nameForContent(content: GuiNodeContent): string | undefined {
  * control listeners; structural ancestors subscribe as `"container"` for
  * the `onAction` path only and never consume control effects. */
 export interface GuiControlListenerRecord {
-  /** Acknowledged node lifetime; effects naming another lifetime are stale. */
-  readonly lifetime: number;
   readonly kind: GuiControlKind | "container";
   readonly name?: string | undefined;
   readonly onPress?: GuiPressListener | undefined;
@@ -299,8 +290,8 @@ function resolveEffectPath(
 
 /** Dispatch committed effects to control callbacks and the `onAction` path.
  *
- * For each effect, in order: skip unknown nodes, report-and-skip stale
- * lifetimes and value-kind mismatches, invoke the matching control callback
+ * For each effect, in order: skip unknown nodes, report-and-skip
+ * value-kind mismatches, invoke the matching control callback
  * (observe-only; throws are isolated), then dispatch capture/bubble
  * `onAction` along the logical ancestor path via the frozen helper.
  */
@@ -320,14 +311,6 @@ export function dispatchControlEffects(
       effect.node,
     );
     if (!record) {
-      skipped += 1;
-      continue;
-    }
-    if (record.lifetime !== effect.lifetime) {
-      report(
-        `Stale GUI control effect for node ${effect.node}: ` +
-          `effect lifetime ${effect.lifetime} != acknowledged ${record.lifetime}`,
-      );
       skipped += 1;
       continue;
     }
@@ -373,7 +356,6 @@ function matchControlCallback(
     entity: bigint;
     rootIncarnation: bigint;
     node: number;
-    lifetime: number;
     name?: string | undefined;
     sourceTick?: bigint | undefined;
     effectTick?: bigint | undefined;
@@ -381,7 +363,6 @@ function matchControlCallback(
     entity: effect.entity,
     rootIncarnation: effect.rootIncarnation,
     node: effect.node,
-    lifetime: effect.lifetime,
   };
   if (record.name !== undefined) base.name = record.name;
   if (effect.sourceTick !== undefined) base.sourceTick = effect.sourceTick;
@@ -457,7 +438,6 @@ export interface GuiObservationTarget {
   readonly entity: bigint;
   readonly rootIncarnation: bigint;
   readonly node: number;
-  readonly lifetime: number;
 }
 
 /** Why a routed intent could not apply cleanly. Mirrors the core reason. */
@@ -592,12 +572,13 @@ export function dispatchGuiObservations(
   return { delivered, skipped, conflicts, cancelled, unhandled };
 }
 
-/** Lifetime-fenced listener registry feeding committed observations.
+/** Root- and node-fenced listener registry feeding committed observations.
  *
  * The reconciler subscribes each acknowledged control node once and drops
- * the record when the node is removed or the root unmounts; re-acknowledged
- * nodes resubscribe under their new lifetime, so delayed effects naming a
- * retired lifetime report as stale and skip. Dispatch itself stays
+ * the record when the node is removed or the root unmounts. Node identities
+ * are never reused within a root incarnation and a replaced root
+ * resubscribes under its new incarnation, so delayed effects naming a
+ * retired node or incarnation find no record and skip. Dispatch itself stays
  * observe-only: exactly-once delivery rests on the host draining each
  * observation once, and momentary presses carry no idempotency key, so the
  * registry never dedupes — every fed record dispatches once.

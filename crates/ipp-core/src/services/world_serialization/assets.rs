@@ -35,6 +35,11 @@ pub(crate) fn component_sources(
             });
         }
     }
+    component.visit_row_assets(&mut |asset| {
+        if !asset.uri.is_empty() {
+            sources.insert(asset.clone());
+        }
+    });
     {
         let mut demand = BTreeSet::new();
         component.resource_demand(&mut demand);

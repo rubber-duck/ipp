@@ -83,11 +83,12 @@ pub use systems::gui::{
     GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus,
     GuiInputSystem, GuiInputSystemFactory, GuiInputTarget, GuiInspectQuery, GuiInspectResponse,
     GuiInspectedNode, GuiKey, GuiLayoutCache, GuiLayoutDiagnostic, GuiLayoutRequest,
-    GuiLayoutSystem, GuiLayoutSystemFactory, GuiNode, GuiNodeContent, GuiNodeHandle, GuiNodeId,
-    GuiNodePatch, GuiNodeStyle, GuiNodes, GuiPanelResolution, GuiPointerButton,
-    GuiResourceResolver, GuiRoot, GuiSystem, GuiSystemFactory, GuiTextCompositionState,
-    GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
-    MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, resolve_panel_hit,
+    GuiLayoutSystem, GuiLayoutSystemFactory, GuiNode, GuiNodeData, GuiNodeDataProperty,
+    GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodePropertyRef, GuiNodeRowProperty,
+    GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPanelResolution,
+    GuiPointerButton, GuiResourceResolver, GuiRoot, GuiSystem, GuiSystemFactory,
+    GuiTextCompositionState, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput,
+    GuiUnhandledReason, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, resolve_panel_hit,
 };
 
 #[cfg(feature = "gui")]

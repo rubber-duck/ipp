@@ -23,6 +23,13 @@ pub(crate) trait ComponentLifecycle: Clone {
         &[]
     }
 
+    /// Whether animation of any kind, numeric or discrete, may target an exposed
+    /// field or property. Components return false for fields with another sole
+    /// writer, such as committed control values or rows an evaluator owns.
+    fn animatable_field(_offset: u32) -> bool {
+        true
+    }
+
     /// Numeric fields eligible for in-place writes without changing resources or runtime identity.
     fn supports_numeric_property(_offset: u32) -> bool {
         false
@@ -87,6 +94,10 @@ pub(crate) trait ComponentLifecycle: Clone {
     fn activation_bytes(&self) -> usize {
         0
     }
+
+    /// Keep derived storage consistent after a field was replaced, before
+    /// field-local validation. Every field write through the registry runs it.
+    fn after_field_write(&mut self, _offset: u32) {}
 
     /// Validate field-local semantics after typed replacement.
     fn validate_field(&self, _offset: u32) -> Result<(), crate::ErrorReason> {

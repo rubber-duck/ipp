@@ -365,6 +365,14 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             offset: 66,
             value: FieldValue::Bytes(vec![9, 7, 5]),
         },
+        FieldWrite {
+            offset: 99,
+            value: FieldValue::Rows(vec![0, 0, 0, 0, 0, 0, 0, 0]),
+        },
+        FieldWrite {
+            offset: 0x1000_0002,
+            value: FieldValue::Unset,
+        },
     ];
     let encoded_writes = vec![
         manifest_field(
@@ -418,6 +426,18 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 "VALUE_BYTES",
                 ManifestValue::Bytes(vec![9, 7, 5]),
             ),
+        ),
+        manifest_field(
+            99,
+            manifest_typed_value(
+                "value-rows",
+                "VALUE_ROWS",
+                ManifestValue::Bytes(vec![0, 0, 0, 0, 0, 0, 0, 0]),
+            ),
+        ),
+        manifest_field(
+            0x1000_0002,
+            manifest_layout("value-unset", [("tag", ManifestValue::Tag("VALUE_UNSET"))]),
         ),
     ];
 
@@ -1172,14 +1192,13 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
 
     #[cfg(feature = "gui")]
     {
-        let mut edit = vec![2];
+        let mut edit = vec![4];
         edit.extend(1u32.to_le_bytes());
         edit.push(4);
         edit.extend(7u64.to_le_bytes());
         edit.extend(42u64.to_le_bytes());
         edit.extend(3u64.to_le_bytes());
         edit.extend(9u32.to_le_bytes());
-        edit.extend(1u32.to_le_bytes());
         let request = ManifestFixture::new(
             "request-gui",
             [
@@ -1205,7 +1224,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                         EntityId::from_bits(42),
                         3,
                         ipp_core::systems::gui::GuiNodeId(9),
-                        1,
                     ),
                 }],
             },
@@ -1303,7 +1321,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
         semantic_action.extend(42u64.to_le_bytes());
         semantic_action.extend(3u64.to_le_bytes());
         semantic_action.extend(9u32.to_le_bytes());
-        semantic_action.extend(1u32.to_le_bytes());
         semantic_action.extend(2u32.to_le_bytes());
         semantic_action.push(1);
         let request = ManifestFixture::new(
@@ -1323,7 +1340,6 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 entity: EntityId::from_bits(42),
                 root_incarnation: 3,
                 node: ipp_core::GuiNodeId(9),
-                lifetime: 1,
                 expected_revision: 2,
                 action: ipp_core::GuiSemanticAction::Toggle,
             })),
@@ -1490,6 +1506,23 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                 "snapshot-value-bytes",
                 "SNAPSHOT_VALUE_BYTES",
                 ManifestValue::Bytes(vec![9, 7, 5]),
+            ),
+        ),
+        (
+            99,
+            ResolvedValue::Rows(vec![1, 0, 0, 0, 0, 0, 0, 0]),
+            manifest_typed_value(
+                "snapshot-value-rows",
+                "SNAPSHOT_VALUE_ROWS",
+                ManifestValue::Bytes(vec![1, 0, 0, 0, 0, 0, 0, 0]),
+            ),
+        ),
+        (
+            0x1000_0002,
+            ResolvedValue::Unset,
+            manifest_layout(
+                "snapshot-value-unset",
+                [("tag", ManifestValue::Tag("SNAPSHOT_VALUE_UNSET"))],
             ),
         ),
     ];
@@ -2566,7 +2599,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             &mut covered,
         );
 
-        let mut payload = vec![1u8];
+        let mut payload = vec![2u8];
         payload.extend(42u64.to_le_bytes());
         payload.extend(3u64.to_le_bytes());
         payload.extend(0u32.to_le_bytes());
@@ -2595,7 +2628,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         );
 
         // One committed button press: version, effect count, kind, head
-        // (session, ticks, entity, node, lifetime, empty path), then empty
+        // (session, ticks, entity, node, empty path), then empty
         // conflict and cancellation counts.
         let mut observations = vec![3u8];
         observations.extend(1u32.to_le_bytes());
@@ -2606,7 +2639,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         observations.extend(EntityId::from_bits(100).to_bits().to_le_bytes());
         observations.extend(3u64.to_le_bytes());
         observations.extend(30u32.to_le_bytes());
-        observations.extend(1u32.to_le_bytes());
         observations.extend(0u32.to_le_bytes());
         observations.extend(0u32.to_le_bytes());
         observations.extend(0u32.to_le_bytes());
@@ -2625,7 +2657,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             entity: EntityId::from_bits(100),
                             root_incarnation: 3,
                             node: ipp_core::GuiNodeId(30),
-                            lifetime: 1,
                             path: Vec::new(),
                         },
                     }],
@@ -2657,7 +2688,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         snapshot.extend(2u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.extend(0u32.to_le_bytes());
-        snapshot.extend(1u32.to_le_bytes());
         snapshot.push(0);
         snapshot.push(0);
         snapshot.push(0);
@@ -2667,7 +2697,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         }
         snapshot.extend([1, 1, 1, 0]);
         snapshot.extend(2u32.to_le_bytes());
-        snapshot.extend(1u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.push(4);
         snapshot.push(1);
@@ -2683,7 +2712,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         snapshot.push(0);
         snapshot.push(1);
         snapshot.extend(2u32.to_le_bytes());
-        snapshot.extend(1u32.to_le_bytes());
         assert_manifest_response(
             Response {
                 session: 7,
@@ -2696,7 +2724,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                     nodes: vec![
                         ipp_core::GuiSemanticNode {
                             id: ipp_core::GuiNodeId(1),
-                            lifetime: 1,
                             parent: None,
                             role: ipp_core::GuiSemanticRole::Container,
                             name: None,
@@ -2710,7 +2737,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                         },
                         ipp_core::GuiSemanticNode {
                             id: ipp_core::GuiNodeId(2),
-                            lifetime: 1,
                             parent: Some(ipp_core::GuiNodeId(1)),
                             role: ipp_core::GuiSemanticRole::Button,
                             name: Some("Go".into()),
@@ -2725,7 +2751,6 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                     ],
                     focused: Some(ipp_core::GuiSemanticFocus {
                         id: ipp_core::GuiNodeId(2),
-                        lifetime: 1,
                     }),
                 }),
             },

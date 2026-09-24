@@ -8,10 +8,11 @@ import {
   replyToHostCreate,
 } from "./generated-client.mjs";
 
-const { codec } = await generateClient("lifecycle-minimal");
+const client = await generateClient("lifecycle-minimal");
+const { codec } = client;
 const spatial = await generateClient("lifecycle-assets", []);
-const layout = (name, values) => encodeManifestLayout(codec, name, values);
-const tag = (name) => manifestVariant(codec, name);
+const layout = (name, values) => encodeManifestLayout(client, name, values);
+const tag = (name) => manifestVariant(client, name);
 
 function response(name, requestId, fields = {}) {
   return layout(`response-lifecycle-${name}`, {

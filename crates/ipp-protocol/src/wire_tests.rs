@@ -246,3 +246,12 @@ fn nested_field_order_and_encoding_change_contract_hash() {
     write_layout(&mut bytes, &original);
     assert!(!bytes.is_empty());
 }
+
+#[test]
+fn cached_schema_hash_matches_the_hashed_contract() {
+    let mut hash = ContractHash::default();
+    crate::write_contract(&mut hash);
+
+    assert_eq!(crate::schema_hash(), hash.0);
+    assert_eq!(crate::schema_hash(), hash.0, "repeated reads use the cache");
+}

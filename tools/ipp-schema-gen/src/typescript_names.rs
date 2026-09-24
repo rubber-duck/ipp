@@ -64,7 +64,7 @@ fn template_identifiers() -> &'static std::collections::BTreeSet<String> {
 }
 
 pub(super) fn identifier(s: &str) -> Result<(), String> {
-    if template_identifiers().contains(s) {
+    if template_identifiers().contains(s) || crate::codec_limits::CODEC_LIMIT_NAMES.contains(&s) {
         return Err("invalid exported identifier".into());
     }
     member_identifier(s)
@@ -122,11 +122,6 @@ const RESERVED: &[&str] = &[
     "freezeContract",
     "TARGET",
     "PROTOCOL_VERSION",
-    "ENCODING",
-    "WIRE_TAG_LAYOUTS",
-    "WIRE_LAYOUTS",
-    "WIRE_CONVENTIONS",
-    "ASSET_FORMATS",
     "components",
     "WIRE",
     "CAPABILITIES",

@@ -11,7 +11,8 @@ import {
   rowsFieldContract,
 } from "./generated-client.mjs";
 
-const { codec } = await generateClient("manifest", []);
+const client = await generateClient("manifest", []);
+const { codec, manifest, source } = client;
 const bytesDefault = await generateClient(
   "bytes-default",
   [],
@@ -146,9 +147,9 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
   const covered = new Set();
   const tag = (name) => {
     covered.add(name);
-    return manifestVariant(codec, name);
+    return manifestVariant(client, name);
   };
-  const layout = (name, values) => encodeManifestLayout(codec, name, values);
+  const layout = (name, values) => encodeManifestLayout(client, name, values);
   const field = (offset, value) => layout("field", { offset, value });
   assert.deepEqual(
     codec.encodeRequest({
@@ -339,22 +340,22 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     id: 16,
     enabled: false,
   });
-  assert.equal("request-upload-asset" in codec.WIRE_LAYOUTS, false);
+  assert.equal("request-upload-asset" in manifest.WIRE_LAYOUTS, false);
   assert.equal("uploadAsset" in codec.IppClient.prototype, false);
-  assert.deepEqual(codec.ASSET_FORMATS.ASSET_MESH, {
+  assert.deepEqual(manifest.ASSET_FORMATS.ASSET_MESH, {
     capability: "textures",
     typeId: codec.WIRE.ASSET_MESH,
-    format: codec.ASSET_FORMATS.ASSET_MESH.format,
+    format: manifest.ASSET_FORMATS.ASSET_MESH.format,
   });
   for (const descriptor of [
     codec.TARGET,
     codec.TARGET.features,
     codec.WIRE,
-    codec.WIRE_TAG_LAYOUTS,
-    codec.WIRE_LAYOUTS,
-    codec.WIRE_LAYOUTS["request-batch"].fields,
-    codec.WIRE_LAYOUTS["request-batch"].fields[0],
-    codec.ASSET_FORMATS,
+    manifest.WIRE_TAG_LAYOUTS,
+    manifest.WIRE_LAYOUTS,
+    manifest.WIRE_LAYOUTS["request-batch"].fields,
+    manifest.WIRE_LAYOUTS["request-batch"].fields[0],
+    manifest.ASSET_FORMATS,
     codec.components,
     codec.components.Scalar,
     codec.components.Scalar.fields,
@@ -365,26 +366,40 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     codec.components.Scalar.fields.value.offset = 101;
   }, TypeError);
   assert.equal(
-    codec.WIRE_LAYOUTS.component.fields.find((field) => field.name === "fields")
-      .limit,
+    manifest.WIRE_LAYOUTS.component.fields.find(
+      (field) => field.name === "fields",
+    ).limit,
     65536,
   );
   assert.equal(
-    codec.WIRE_LAYOUTS["command-insert"].fields.find(
+    manifest.WIRE_LAYOUTS["command-insert"].fields.find(
       (field) => field.name === "fields",
     ).limit,
     256,
   );
   // The generated codec derives the message and inspected-byte bounds from the
   // exported contract; they cannot drift from the Rust declarations.
-  const inspectedBytes = codec.WIRE_LAYOUTS["snapshot-value-bytes"].fields.find(
-    (field) => field.name === "value",
-  ).limit;
+  const inspectedBytes = manifest.WIRE_LAYOUTS[
+    "snapshot-value-bytes"
+  ].fields.find((field) => field.name === "value").limit;
   assert.equal(
     codec.MAX_MESSAGE_BYTES,
-    Number(codec.WIRE_CONVENTIONS["max-message-bytes"]),
+    Number(manifest.WIRE_CONVENTIONS["max-message-bytes"]),
   );
   assert.equal(codec.INSPECTED_BYTES_LIMIT, inspectedBytes);
+  // The shipped client carries resolved bounds only; the descriptive manifest
+  // is a separate module for tests and tools.
+  for (const name of [
+    "WIRE_TAG_LAYOUTS",
+    "WIRE_LAYOUTS",
+    "WIRE_CONVENTIONS",
+    "ASSET_FORMATS",
+    "ENCODING",
+  ]) {
+    assert.equal(name in codec, false, name);
+    assert.equal(source.includes(name), false, name);
+  }
+  assert.equal(manifest.SCHEMA_HASH, codec.SCHEMA_HASH);
   assert.equal(codec.INSPECTED_BYTES_LIMIT, codec.MAX_MESSAGE_BYTES);
   assert.doesNotMatch(
     codec.decodeResponse.toString() + codec.encodeRequest.toString(),
@@ -393,9 +408,9 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
   const covered = new Set();
   const tag = (name) => {
     covered.add(name);
-    return manifestVariant(codec, name);
+    return manifestVariant(client, name);
   };
-  const layout = (name, values) => encodeManifestLayout(codec, name, values);
+  const layout = (name, values) => encodeManifestLayout(client, name, values);
   const alias = (value) =>
     layout("reference-alias", { tag: tag("REF_ALIAS"), alias: value });
   const handle = (value) =>
@@ -1854,7 +1869,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
 
   // Playback/controller branches are covered against this same manifest in animation-client.mjs.
   const animationTag = (name) =>
-    codec.WIRE_TAG_LAYOUTS[name].capability === "animation";
+    manifest.WIRE_TAG_LAYOUTS[name].capability === "animation";
   const unreachableSnapshotKinds = new Set([
     "SNAPSHOT_VALUE_U64",
     "SNAPSHOT_VALUE_ROWS",
@@ -1873,7 +1888,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
     assert.equal(compiledKinds.has(codec.WIRE[name]), false, name);
   assert.deepEqual(
     [...covered].sort(),
-    Object.keys(codec.WIRE_TAG_LAYOUTS)
+    Object.keys(manifest.WIRE_TAG_LAYOUTS)
       .filter(
         (name) =>
           !unreachableSnapshotKinds.has(name) &&
@@ -1881,7 +1896,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", () 
           // Physical Host controls/selectors are exercised by the maintained
           // native and worker Host lifecycle/persistence suites, separately
           // from this World-envelope fixture.
-          ![23, 24, 25].includes(codec.WIRE_TAG_LAYOUTS[name].space),
+          ![23, 24, 25].includes(manifest.WIRE_TAG_LAYOUTS[name].space),
       )
       .sort(),
   );

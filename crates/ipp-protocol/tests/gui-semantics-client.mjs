@@ -8,9 +8,10 @@ import {
   manifestVariant,
 } from "./generated-client.mjs";
 
-const { codec } = await generateClient("gui-semantics", ["surfaces", "gui"]);
-const layout = (name, values) => encodeManifestLayout(codec, name, values);
-const tag = (name) => manifestVariant(codec, name);
+const client = await generateClient("gui-semantics", ["surfaces", "gui"]);
+const { codec, manifest } = client;
+const layout = (name, values) => encodeManifestLayout(client, name, values);
+const tag = (name) => manifestVariant(client, name);
 
 function concatenate(chunks) {
   const total = chunks.reduce((sum, part) => sum + part.length, 0);
@@ -158,7 +159,7 @@ test("semantic wire branches use their manifest tags and layouts", () => {
     "request-gui-semantic-action",
     "response-gui-semantic-snapshot",
   ]) {
-    assert.ok(codec.WIRE_LAYOUTS[name], `missing layout ${name}`);
+    assert.ok(manifest.WIRE_LAYOUTS[name], `missing layout ${name}`);
   }
 });
 

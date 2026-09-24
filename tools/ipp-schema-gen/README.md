@@ -4,6 +4,8 @@ The generator turns an executed target's verified binary export into matching Ty
 
 Exports describe the compiled registry, field access and creation defaults, wire/asset formats and selected capabilities. The generator checks the compatibility hash before interpreting those declarations. Hashes identify matching builds, not authenticity. Target layouts, wire encoding and GPU packing remain distinct.
 
+The shipped client carries only the codec bounds it enforces (message budget, host magics and field limits) as constants resolved from the executed contract at generation time. The descriptive wire manifest (layouts, conventions, tag layouts and asset formats) is a separate generated module, `OUTPUT-manifest.ts` beside the client, which only tests and tools import.
+
 Generate each client from its actual target export with the same capabilities as the final Host. Disabled capabilities omit their declarations/codecs; internal component fields remain unavailable for generic authoring. Dynamic properties are an opt-in capability of a compiled component, not runtime component registration. Derives currently support named, non-generic `repr(C)` structs; supported field kinds and restrictions live in the [derive implementation](../ipp-schema-derive/src/component_derive.rs).
 
 ## Build integration
@@ -13,6 +15,8 @@ Emit generated files into target-specific artifact directories. Update maintaine
 ```sh
 cargo run -p ipp-schema-gen --locked -- target/runtime.contract target/generated.ts
 ```
+
+This writes `target/generated.ts` and its manifest `target/generated-manifest.ts`.
 
 The maintained [assembler](../../packages/ipp-client/tools/assemble.mjs) copies target-independent client support beside generated output and assembles browser hosts with matching capabilities. Its module list and option names are authoritative. The [client guide](../../packages/ipp-client/README.md) owns connection and authoring usage.
 

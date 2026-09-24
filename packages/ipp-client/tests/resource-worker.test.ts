@@ -6,6 +6,7 @@ import {
   AssetWorkerService,
   type AssetHostExports,
 } from "../src/resource-worker.js";
+import type { IngressStatistics } from "../src/presentation.js";
 
 class AssetInput implements AssetHostExports {
   memory = new WebAssembly.Memory({ initial: 3 });
@@ -96,15 +97,10 @@ test("idle post-frame pumps expose provider work without polling loaders", () =>
   const input = new AssetInput();
   input.pending = false;
   let prepared = 0;
-  const worker = new AssetWorkerService(
-    input,
-    1n,
-    "off",
-    {},
-    [],
-    undefined,
-    () => prepared++,
-  );
+  const worker = new AssetWorkerService(input, 1n, {
+    logLevel: "off",
+    prepareProgress: () => prepared++,
+  });
   try {
     worker.pumpAfterFrame();
     assert.equal(input.serviceCalls, 1);
@@ -130,7 +126,7 @@ test("Host cancellation aborts the exact active HTTP reader without completion",
       });
     },
   );
-  const worker = new AssetWorkerService(input, 1n, "off");
+  const worker = new AssetWorkerService(input, 1n, { logLevel: "off" });
   try {
     worker.pump();
     await setImmediate();
@@ -169,8 +165,19 @@ test("multi-chunk HTTP input advances Host resources without frame calls and sta
         }),
       ),
   );
-  const counters: Record<string, number> = {};
-  const worker = new AssetWorkerService(input, 1n, "off", counters);
+  const counters: IngressStatistics = {
+    messages: 0,
+    wasmCopyBytes: 0,
+    partsMessages: 0,
+    transferredAssetBytes: 0,
+    sourceBytes: 0,
+    sourceBufferedBytes: 0,
+    sourcePeakBufferedBytes: 0,
+  };
+  const worker = new AssetWorkerService(input, 1n, {
+    logLevel: "off",
+    statistics: counters,
+  });
   try {
     worker.pump();
     for (let turn = 0; turn < 20 && input.ended.length === 0; turn++) {
@@ -183,8 +190,7 @@ test("multi-chunk HTTP input advances Host resources without frame calls and sta
     assert.ok(input.progressCalls >= 4, "each full pipe made Host progress");
     assert.equal(counters.sourceBytes, payloadLength);
     assert.ok(
-      (counters.sourcePeakBufferedBytes ?? Number.POSITIVE_INFINITY) <=
-        2 * chunkBytes,
+      counters.sourcePeakBufferedBytes <= 2 * chunkBytes,
       `retained ${counters.sourcePeakBufferedBytes} source bytes`,
     );
   } finally {
@@ -218,7 +224,7 @@ test("ready HTTP chunks ignore simulation cadence and suspend inactivity during 
       );
     },
   );
-  const worker = new AssetWorkerService(input, 1n, "off");
+  const worker = new AssetWorkerService(input, 1n, { logLevel: "off" });
   try {
     worker.pump();
     await setImmediate();
@@ -255,7 +261,7 @@ test("network inactivity fails its resource and UTF-8 errors share the Host byte
         );
       }),
   );
-  const worker = new AssetWorkerService(input, 1n, "off");
+  const worker = new AssetWorkerService(input, 1n, { logLevel: "off" });
   try {
     worker.pump();
     context.mock.timers.tick(29_999);
@@ -271,7 +277,7 @@ test("network inactivity fails its resource and UTF-8 errors share the Host byte
     throw new Error("é".repeat(1023) + "🌍");
   });
   const unicode = new AssetInput();
-  const other = new AssetWorkerService(unicode, 1n, "off");
+  const other = new AssetWorkerService(unicode, 1n, { logLevel: "off" });
   try {
     other.pump();
     await setImmediate();
@@ -357,7 +363,7 @@ test("pending HTTP sources free acquisition progress and resume after fenced rea
       { headers: { etag: '"immutable"' } },
     );
   });
-  const worker = new AssetWorkerService(input, 1n, "off");
+  const worker = new AssetWorkerService(input, 1n, { logLevel: "off" });
   try {
     input.blocked = false;
     worker.pump();
@@ -413,7 +419,7 @@ test("provider disconnect fails unresolved pending sources", async (context) => 
         { status: 202, headers: { "content-type": "application/json" } },
       ),
   );
-  const worker = new AssetWorkerService(input, 1n, "off");
+  const worker = new AssetWorkerService(input, 1n, { logLevel: "off" });
   try {
     worker.pump();
     await flushTasks();

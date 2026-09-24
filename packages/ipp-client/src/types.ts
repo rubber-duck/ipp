@@ -513,9 +513,17 @@ export interface Response {
 }
 
 export type {
+  FrameSummary,
   FrameCapture,
   ClientPresentation,
-  GlyphAtlasLimits,
+  ViewportLimits,
+  RenderStatisticsSnapshot,
+  FrameRenderStatistics,
+  ShadowRenderStatistics,
+  GuiRenderStatistics,
+  SurfaceRenderStatistics,
+  IngressStatistics,
+  RenderDeviceInfo,
   SurfaceCacheMode,
   SurfaceCacheRecord,
 } from "./presentation.js";

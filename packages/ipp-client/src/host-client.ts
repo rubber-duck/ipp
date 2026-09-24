@@ -1,7 +1,12 @@
 import { isAssetSourceResponse } from "./asset-sources.js";
 import { validateOptions, type Client, type ConnectOptions } from "./client.js";
 import type { MessageTransport, TransportEvents } from "./transport.js";
-import type { GlyphAtlasLimits, Presentation } from "./presentation.js";
+import {
+  bindTestingChannel,
+  testingChannel,
+  type Presentation,
+  type ViewportLimits,
+} from "./presentation.js";
 import {
   HostWireReader,
   HostWireWriter,
@@ -304,45 +309,46 @@ export abstract class HostClientBase<T extends Client> {
       },
     };
     const presentation = this.transport.presentation;
-    if (presentation)
+    if (presentation) {
+      const frame = async (
+        afterTick: bigint,
+        timeoutMs: number,
+        readback: boolean,
+      ) => {
+        this.requireAttachment(attachment);
+        const observed = await (readback
+          ? presentation.frame(this.connection, afterTick, timeoutMs, true)
+          : presentation.frame(this.connection, afterTick, timeoutMs, false));
+        this.requireAttachment(attachment);
+        return { ...observed, session };
+      };
       Object.assign(transport, {
-        presentation: {
-          capture: async (
-            _session: bigint,
-            afterTick: bigint,
-            timeoutMs: number,
-          ) => {
+        presentation: bindTestingChannel(
+          {
+            frame: ((
+              _session: bigint,
+              afterTick: bigint,
+              timeoutMs: number,
+              readback: boolean,
+            ) =>
+              frame(afterTick, timeoutMs, readback)) as Presentation["frame"],
+            resize: (width: number, height: number) => {
+              this.requireAttachment(attachment);
+              presentation.resize(width, height);
+            },
+            get viewportLimits() {
+              return presentation.viewportLimits;
+            },
+            onViewportLimits: (listener: (limits: ViewportLimits) => void) =>
+              presentation.onViewportLimits(listener),
+          } satisfies Presentation,
+          (message) => {
             this.requireAttachment(attachment);
-            const frame = await presentation.capture(
-              this.connection,
-              afterTick,
-              timeoutMs,
-            );
-            this.requireAttachment(attachment);
-            return { ...frame, session };
+            testingChannel(presentation)(message);
           },
-          resize: (width: number, height: number) => {
-            this.requireAttachment(attachment);
-            presentation.resize(width, height);
-          },
-          loseContext: () => {
-            this.requireAttachment(attachment);
-            presentation.loseContext();
-          },
-          restoreContext: () => {
-            this.requireAttachment(attachment);
-            presentation.restoreContext();
-          },
-          setGlyphAtlasLimits: (limits: GlyphAtlasLimits) => {
-            this.requireAttachment(attachment);
-            presentation.setGlyphAtlasLimits(limits);
-          },
-          setSurfaceCacheBudget: (bytes: number) => {
-            this.requireAttachment(attachment);
-            presentation.setSurfaceCacheBudget(bytes);
-          },
-        } satisfies Presentation,
+        ),
       });
+    }
     attachment.client = this.createWorldClient(
       transport,
       session,

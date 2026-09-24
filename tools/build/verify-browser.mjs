@@ -109,6 +109,29 @@ const reports = [];
   assert.equal("onRenderStateUpdated" in client.IppClient.prototype, true);
   assert.equal(source.includes("ASSET_TEXTURE"), true);
   assert.equal(source.includes("REQUEST_LOAD_BUILTIN_TEXTURE"), false);
+  // The shipped client carries resolved codec bounds; the descriptive wire
+  // manifest is a separate generated module that only tests and tools import.
+  const manifestSource = await readFile(
+    resolve(directory, "generated-manifest.ts"),
+    "utf8",
+  );
+  assert.equal(manifestSource.includes(`SCHEMA_HASH = ${hash}n;`), true);
+  for (const name of [
+    "WIRE_TAG_LAYOUTS",
+    "WIRE_LAYOUTS",
+    "WIRE_CONVENTIONS",
+    "ASSET_FORMATS",
+  ]) {
+    assert.equal(name in client, false, `${name} leaked into the client`);
+    assert.equal(
+      source.includes(name),
+      false,
+      `${name} leaked into the client`,
+    );
+    assert.equal(manifestSource.includes(`export const ${name} =`), true);
+  }
+  assert.equal(source.includes("generated-manifest"), false);
+  assert.equal(Number.isSafeInteger(client.MAX_MESSAGE_BYTES), true);
   for (const method of [
     "uploadMesh",
     "uploadTexture",

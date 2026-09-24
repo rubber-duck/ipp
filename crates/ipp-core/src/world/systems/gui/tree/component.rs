@@ -405,11 +405,6 @@ impl GuiRoot {
         &self.nodes.controls
     }
 
-    /// Number of live nodes in this tree.
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
-
     /// Identity a caller must use for the next node insertion.
     pub fn next_node_id(&self) -> u32 {
         self.nodes.next_node_id()

@@ -77,18 +77,18 @@ pub use systems::surface::{
 
 #[cfg(feature = "gui")]
 pub use systems::gui::{
-    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiCommand, GuiConstraintError, GuiContainerKind,
-    GuiControlState, GuiControlValue, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView,
-    GuiFontResolution, GuiHit, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand,
-    GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus,
-    GuiInputSystem, GuiInputSystemFactory, GuiInputTarget, GuiInspectQuery, GuiInspectResponse,
-    GuiInspectedNode, GuiKey, GuiLayoutCache, GuiLayoutDiagnostic, GuiLayoutRequest,
-    GuiLayoutSystem, GuiLayoutSystemFactory, GuiNode, GuiNodeData, GuiNodeDataProperty,
-    GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodePropertyRef, GuiNodeRowProperty,
-    GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPanelResolution,
-    GuiPointerButton, GuiResourceResolver, GuiRoot, GuiSystem, GuiSystemFactory,
-    GuiTextCompositionState, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput,
-    GuiUnhandledReason, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, resolve_panel_hit,
+    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiCommand, GuiContainerKind, GuiControlState,
+    GuiControlValue, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiFontResolution,
+    GuiHit, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
+    GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
+    GuiInputSystemFactory, GuiInputTarget, GuiInspectQuery, GuiInspectResponse, GuiInspectedNode,
+    GuiKey, GuiLayoutCache, GuiLayoutRequest, GuiLayoutSystem, GuiLayoutSystemFactory, GuiNode,
+    GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
+    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow,
+    GuiNodes, GuiPanelResolution, GuiPointerButton, GuiResourceResolver, GuiRoot, GuiSystem,
+    GuiSystemFactory, GuiTextCompositionState, GuiTextFocusState, GuiTextFocusUpdate,
+    GuiUnhandledInput, GuiUnhandledReason, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH,
+    resolve_panel_hit,
 };
 
 #[cfg(feature = "gui")]

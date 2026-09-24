@@ -387,7 +387,8 @@ impl TextLayout {
     }
 
     /// Number of placed glyphs that fell back to `.notdef`.
-    pub fn missing_glyph_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn missing_glyph_count(&self) -> usize {
         self.glyphs.iter().filter(|glyph| glyph.missing).count()
     }
 

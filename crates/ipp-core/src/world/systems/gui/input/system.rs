@@ -6068,10 +6068,10 @@ impl crate::WorldContext<'_> {
 
     /// Hovered node for one pointer, if set.
     ///
-    /// Read-only snapshot of the routing hover cursor, mirroring
-    /// [`Self::gui_input_focus`]: production skin and browser callers observe
-    /// hover here instead of reconstructing it from `HoverChanged` effects.
-    /// No behavior change; never mutates cursors, predictions or envelopes.
+    /// Read-only embedder snapshot of the routing hover cursor, mirroring
+    /// [`Self::gui_input_focus`], so a host can observe hover without
+    /// reconstructing it from `HoverChanged` effects. Never mutates cursors,
+    /// predictions or envelopes.
     pub fn gui_input_hover(&self, pointer: u32) -> Option<GuiInputTarget> {
         self.system::<GuiInputSystem>(GuiInputSystem::ID)
             .and_then(|input| input.hovers.get(&pointer).map(|cursor| cursor.target))
@@ -6079,17 +6079,18 @@ impl crate::WorldContext<'_> {
 
     /// Pressed (captured) node for one pointer, if set.
     ///
-    /// Read-only snapshot of the routing capture cursor, mirroring
-    /// [`Self::gui_input_focus`]: production skin and browser callers observe
-    /// the press here instead of reconstructing it from routed effects.
-    /// No behavior change; never mutates cursors, predictions or envelopes.
+    /// Read-only embedder snapshot of the routing capture cursor, mirroring
+    /// [`Self::gui_input_focus`], so a host can observe the press without
+    /// reconstructing it from routed effects. Never mutates cursors,
+    /// predictions or envelopes.
     pub fn gui_input_pressed(&self, pointer: u32) -> Option<GuiInputTarget> {
         self.system::<GuiInputSystem>(GuiInputSystem::ID)
             .and_then(|input| input.captures.get(&pointer).map(|capture| capture.target))
     }
 
     /// Whether routed input still awaits its mutation boundary.
-    pub fn gui_input_has_deferred(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn gui_input_has_deferred(&self) -> bool {
         self.system::<GuiInputSystem>(GuiInputSystem::ID)
             .is_some_and(|input| input.has_deferred_input())
     }

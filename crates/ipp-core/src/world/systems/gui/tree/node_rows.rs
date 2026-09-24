@@ -176,7 +176,8 @@ pub type GuiNodeStyleChange = Option<Option<DynamicValue>>;
 
 impl GuiNodePatch {
     /// Style change for one row property, in the row's value representation.
-    pub fn style_change(&self, property: GuiNodeStyleProperty) -> GuiNodeStyleChange {
+    #[cfg(test)]
+    pub(crate) fn style_change(&self, property: GuiNodeStyleProperty) -> GuiNodeStyleChange {
         use crate::components::rows::RowPropertyValue;
         use GuiNodeStyleProperty as P;
 

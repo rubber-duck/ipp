@@ -340,7 +340,7 @@ fn scoped_command_writes_reach_the_complete_root_result() {
             if let Ok(next) = full {
                 root = next;
                 applied += 1;
-                peak = peak.max(root.node_count());
+                peak = peak.max(root.nodes().len());
             }
         }
 

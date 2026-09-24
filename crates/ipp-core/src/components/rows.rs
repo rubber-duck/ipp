@@ -330,9 +330,10 @@ impl<T: RowPropertyValue> RowPropertyField for Option<T> {
     }
 }
 
-/// Per-slot state inside one rows field.
+/// Per-slot state inside one rows field, observed by tests.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowSlotState {
+pub(crate) enum RowSlotState {
     /// Never held a row in this incarnation; may receive [`Rows::insert`].
     Unallocated,
     /// Holds a row.
@@ -410,7 +411,8 @@ impl<R: SchemaRow> Rows<R> {
     }
 
     /// Classify a slot.
-    pub fn slot_state(&self, slot: u32) -> RowSlotState {
+    #[cfg(test)]
+    pub(crate) fn slot_state(&self, slot: u32) -> RowSlotState {
         if self.position(slot).is_some() {
             RowSlotState::Live
         } else if self.dead.binary_search(&slot).is_ok() {
@@ -573,7 +575,7 @@ impl<R: SchemaRow> Rows<R> {
 
     /// Add every nonempty asset property to a component's resource demand; the
     /// owning component calls this from its lifecycle resource hook.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(any(test, feature = "gui"))]
     pub(crate) fn resource_demand(
         &self,
         demand: &mut std::collections::BTreeSet<

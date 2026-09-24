@@ -339,7 +339,7 @@ fn reordering_preserves_identity_and_handles_are_fenced() {
         )
         .is_err()
     );
-    assert_eq!(root(&world, entity).node_count(), 2);
+    assert_eq!(root(&world, entity).nodes().len(), 2);
 }
 
 #[test]
@@ -587,7 +587,6 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
             )
             .unwrap();
         world.update_for_test(0.0).unwrap();
-        assert!(world.gui_input_has_deferred());
         assert_eq!(control(&world, entity, 3), (GuiControlValue::Bool(true), 2));
         assert_eq!(root(&world, entity).next_node_id(), 4);
     }
@@ -637,7 +636,13 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
         (GuiControlValue::Bool(true), 2)
     );
     assert!(restored.gui_input_focus().is_none());
-    assert!(!restored.gui_input_has_deferred());
+
+    // The routed toggle was not persisted: a further update applies nothing.
+    restored.update_for_test(0.0).unwrap();
+    assert_eq!(
+        control(&restored, restored_entity, 3),
+        (GuiControlValue::Bool(true), 2)
+    );
 
     let restored_incarnation = incarnation(&restored, restored_entity);
     insert(
@@ -986,7 +991,7 @@ fn removing_a_subtree_removes_node_and_part_rows() {
     )
     .unwrap();
     let root = root(&world, entity);
-    assert_eq!(root.node_count(), 1);
+    assert_eq!(root.nodes().len(), 1);
     assert!(root.part_state().is_empty());
     assert!(world.validate_gui_node_handle(&button, SESSION).is_err());
     // Identities are never reused after removal.

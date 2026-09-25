@@ -54,12 +54,9 @@ test("GUI roots, node identity and committed values cross a real native connecti
       );
       env.evidence.record("gui lifecycle", result);
       assert.equal(result.batchApplied, 50);
-      assert.equal(result.batchRequests, 1);
       assert.equal(result.failedBatchApplied, 1);
       assert.equal(result.largeBatchApplied, 18);
-      assert.equal(result.largeBatchRequests, 4);
       assert.equal(result.failedLargeBatchApplied, 18);
-      assert.equal(result.failedLargeBatchRequests, 3);
     },
   );
 });

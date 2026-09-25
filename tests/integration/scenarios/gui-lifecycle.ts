@@ -118,10 +118,6 @@ export async function exerciseGuiLifecycle(
     batchOutcome.applied === 50,
     "The GUI batch acknowledged a short prefix",
   );
-  expect(
-    batchOutcome.requests === 1,
-    "The 50-node GUI batch used multiple requests",
-  );
   await client.waitForFrame();
   let batchedTree = await client.inspectGui({ entity: batchEntity });
   expect(
@@ -180,8 +176,9 @@ export async function exerciseGuiLifecycle(
     "A correction after a failed GUI batch did not recover",
   );
 
-  // Repeated large patches keep the final tree small while forcing the
-  // generated client across the exact request-byte boundary.
+  // Repeated large patches keep the final tree small while exceeding one
+  // message, so the client pages them as one logical batch. Page counts
+  // belong to the protocol client tests; this asserts visibility and order.
   const largeUpdates = (character: string) =>
     Array.from({ length: 18 }, (_, index) => ({
       action: "update" as const,
@@ -204,14 +201,12 @@ export async function exerciseGuiLifecycle(
   const queuedInspectionPromise = client.inspectGui({ entity: batchEntity });
   const largeOutcome = await largePromise;
   expect(
-    largeOutcome.ok &&
-      largeOutcome.applied === 18 &&
-      largeOutcome.requests === 4,
-    "A two-page GUI edit did not use begin, two buffers and finish",
+    largeOutcome.ok && largeOutcome.applied === 18,
+    "A multi-page GUI edit did not apply every edit",
   );
   const queuedDirect = await queuedDirectPromise;
   expect(
-    queuedDirect.ok && queuedDirect.requests === 1,
+    queuedDirect.ok && queuedDirect.applied === 1,
     "A direct GUI edit queued behind a multi-page edit did not complete",
   );
   batchedTree = await queuedInspectionPromise;
@@ -261,14 +256,12 @@ export async function exerciseGuiLifecycle(
   const failedInspectionPromise = client.inspectGui({ entity: batchEntity });
   const failedLargeOutcome = await failedLargePromise;
   expect(
-    !failedLargeOutcome.ok &&
-      failedLargeOutcome.applied === 18 &&
-      failedLargeOutcome.requests === 3,
+    !failedLargeOutcome.ok && failedLargeOutcome.applied === 18,
     "A failed second GUI page lost its global acknowledged prefix",
   );
   const recoveredLargeOutcome = await recoveredLargePromise;
   expect(
-    recoveredLargeOutcome.ok && recoveredLargeOutcome.requests === 1,
+    recoveredLargeOutcome.ok && recoveredLargeOutcome.applied === 1,
     "Queued recovery after a failed multi-page GUI edit did not complete",
   );
   batchedTree = await failedInspectionPromise;
@@ -300,7 +293,7 @@ export async function exerciseGuiLifecycle(
     },
   ]);
   expect(
-    reusedGateOutcome.ok && reusedGateOutcome.requests === 1,
+    reusedGateOutcome.ok && reusedGateOutcome.applied === 1,
     "The automatic GUI gate could not be reused after queued recovery",
   );
 
@@ -996,12 +989,9 @@ export async function exerciseGuiLifecycle(
   });
   return {
     batchApplied: batchOutcome.applied,
-    batchRequests: batchOutcome.requests,
     failedBatchApplied: failedBatch.applied,
     largeBatchApplied: largeOutcome.applied,
-    largeBatchRequests: largeOutcome.requests,
     failedLargeBatchApplied: failedLargeOutcome.applied,
-    failedLargeBatchRequests: failedLargeOutcome.requests,
     rootIncarnation: String(rootIncarnation),
     restoredIncarnation: String(after.rootIncarnation),
     nodes: ids(after),

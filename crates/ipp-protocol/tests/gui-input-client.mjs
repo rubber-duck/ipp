@@ -1,4 +1,4 @@
-// GUI input codec boundaries through a real generated client; real hosts run the shared GUI scenarios.
+// GUI input and edit codec boundaries through a real generated client; real hosts run the shared GUI scenarios.
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -656,6 +656,141 @@ test("submitGuiInput resolves authoritative routing and rejects host errors", as
     const rejected = client.submitGuiInput({ kind: "blur" });
     emit(errorReply(sent.at(-1)));
     await assert.rejects(rejected, /Host 1: rejected/);
+  } finally {
+    await client.close();
+  }
+});
+
+/** Connect a client whose transport answers GUI edit paging like a Host:
+ * `respond(kind, edits)` returns the applied prefix and optional error of
+ * each GUI request; batch control requests always succeed. */
+async function connectPagingHost(respond) {
+  let handler;
+  let attached = false;
+  const requests = [];
+  const client = await codec.IppClient.connectTransport(
+    {
+      start(events) {
+        handler = events;
+        events.ready();
+      },
+      send(bytes) {
+        if (replyToHostCreate(bytes, handler)) return;
+        if (!attached) {
+          attached = true;
+          const reply = new Uint8Array(24);
+          reply.set(bytes);
+          new DataView(reply.buffer).setBigUint64(16, 7n, true);
+          handler.message(reply);
+          return;
+        }
+        const request_id = requestIdOf(bytes);
+        const header = { session: 7n, request_id, tick: 1n };
+        let reply;
+        if (bytes[16] === codec.WIRE.REQUEST_BEGIN_BATCH) {
+          requests.push({ kind: "begin" });
+          reply = layout("response-batch-identity", {
+            ...header,
+            tag: tag("RESPONSE_BATCH_STARTED"),
+            batch_id: 27n,
+          });
+        } else if (bytes[16] === codec.WIRE.REQUEST_END_BATCH) {
+          requests.push({ kind: "end" });
+          reply = layout("response-batch-identity", {
+            ...header,
+            tag: tag("RESPONSE_BATCH_FINISHED"),
+            batch_id: 27n,
+          });
+        } else if (bytes[16] === codec.WIRE.REQUEST_GUI) {
+          const view = new DataView(bytes.buffer, bytes.byteOffset);
+          const streamed = bytes[17] === codec.WIRE.OPTION_SOME;
+          // Edits payload: u32 length, then version and edit count.
+          const edits = view.getUint32(18 + (streamed ? 8 : 0) + 4 + 1, true);
+          const kind = streamed ? "page" : "direct";
+          requests.push({ kind, edits });
+          const { applied, error } = respond(kind, edits);
+          reply = layout("response-gui", {
+            ...header,
+            tag: tag("RESPONSE_GUI"),
+            applied,
+            error: error ?? null,
+          });
+        } else throw new Error(`unexpected request tag ${bytes[16]}`);
+        queueMicrotask(() => handler.message(reply.bytes));
+      },
+      async close() {},
+    },
+    { logLevel: "off" },
+  );
+  return { client, requests };
+}
+
+test("GUI edit batches page at the exact request-byte budget", async () => {
+  const handle = (nodeId) => ({
+    session: 7n,
+    entity: 42n,
+    rootIncarnation: 3n,
+    nodeId,
+  });
+  const text = (nodeId, value) => ({
+    action: "update",
+    handle: handle(nodeId),
+    patch: { data: { kind: "text", text: value } },
+  });
+  // Eighteen 60 kB patches exceed one message; seventeen fit in a page.
+  const large = (character) =>
+    Array.from({ length: 18 }, (_, index) =>
+      text(2, `${character.repeat(60_000)}${index}`),
+    );
+  // The Host rejects the first of the last page's two trailing edits.
+  let failLastPage = false;
+  const { client, requests } = await connectPagingHost((kind, edits) =>
+    failLastPage && kind === "page" && edits === 3
+      ? { applied: 1, error: "duplicate GUI node" }
+      : { applied: edits },
+  );
+  try {
+    const small = Array.from({ length: 50 }, (_, index) =>
+      text(index + 1, `node ${index}`),
+    );
+    assert.deepEqual(await client.editGuiBatch(small), {
+      ok: true,
+      applied: 50,
+      requests: 1,
+    });
+    assert.deepEqual(requests, [{ kind: "direct", edits: 50 }]);
+
+    requests.length = 0;
+    assert.deepEqual(await client.editGuiBatch(large("x")), {
+      ok: true,
+      applied: 18,
+      requests: 4,
+    });
+    assert.deepEqual(requests, [
+      { kind: "begin" },
+      { kind: "page", edits: 17 },
+      { kind: "page", edits: 1 },
+      { kind: "end" },
+    ]);
+
+    // A failure on the second page reports the global applied prefix and
+    // stops before finishing the logical batch.
+    requests.length = 0;
+    failLastPage = true;
+    const failed = await client.editGuiBatch([
+      ...large("y"),
+      text(3, "must fail"),
+      text(4, "suffix"),
+    ]);
+    assert.deepEqual(
+      { ...failed, error: undefined },
+      { ok: false, applied: 18, requests: 3, error: undefined },
+    );
+    assert.deepEqual(requests, [
+      { kind: "begin" },
+      { kind: "page", edits: 17 },
+      { kind: "page", edits: 3 },
+    ]);
   } finally {
     await client.close();
   }

@@ -408,8 +408,8 @@ export async function exerciseGuiInput(
 
   // Transient caret, selection and provisional work never touches the
   // committed value or revision through the real pipeline: moves and
-  // updates paint only (browser/GLES captures are env-blocked, so this
-  // scenario asserts the committed seams headless instead).
+  // updates paint only. The mounted browser test asserts that paint in
+  // completed frames; this scenario asserts the committed seams.
   const transientRevision = field.controlRevision;
   await client.submitGuiInput({ kind: "key", key: "left", pressed: true });
   await client.submitGuiInput({ kind: "setTextSelection", start: 1, end: 2 });
@@ -778,7 +778,16 @@ export async function exerciseGuiInput(
 
   log.stop();
   await host.detachWorld();
-  await exerciseGuiScrolling(host);
+  const scrolling = await exerciseGuiScrolling(host);
+  return {
+    traversal,
+    submissions: submitted.length,
+    commitSources: [
+      ...new Set(commitsSince(log, 0).map((effect) => effect.source)),
+    ].sort(),
+    unhandledScroll: unscrolled.unhandled?.kind,
+    scrolling,
+  };
 }
 
 type GuiEditNode = Parameters<GuiTestClient["editGui"]>[0] & {
@@ -1070,4 +1079,11 @@ async function exerciseGuiScrolling(
     !(await checked(7)) && (await checked(9)),
     "A scroll bar press reached content under the bar",
   );
+  await host.detachWorld();
+  return {
+    outerMaxOffset: outer.maxOffset[1],
+    innerMaxOffset: inner.maxOffset[1],
+    edgeUnhandled: atEdge.unhandled?.kind,
+    finalOuterOffset: outer.offset[1],
+  };
 }

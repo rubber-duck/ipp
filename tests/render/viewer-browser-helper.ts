@@ -737,26 +737,6 @@ export async function controlGalleryAnimation(
   await handle.flush();
 }
 
-/** Project the maintained ScrollView without application-specific geometry. */
-export async function galleryGuiScrollPoint() {
-  const { semantic, detailed } = await galleryGuiContext();
-  const scrollViews = detailed.nodes.filter(
-    ({ data, style }) =>
-      data.kind === "container" &&
-      data.containerKind === "scrollView" &&
-      style.enabled !== false,
-  );
-  if (scrollViews.length !== 1)
-    throw new Error(
-      `Expected one enabled ScrollView, found ${scrollViews.length}`,
-    );
-  const semanticNode = semantic.nodes.find(
-    ({ id }) => id === scrollViews[0]!.id,
-  );
-  if (!semanticNode) throw new Error("ScrollView is absent from semantics");
-  return pointForNode(semanticNode, 0.5, 0.72);
-}
-
 /** Dispatch one revision-fenced semantic action for machine-access testing. */
 export async function galleryGuiAction(
   selector: GalleryGuiSelector,

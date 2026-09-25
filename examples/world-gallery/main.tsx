@@ -205,6 +205,7 @@ export function Gallery() {
                     preventDefaultPointer: true,
                     unhandledInputGate: guiInputGate,
                     wheelStep: GUI_WHEEL_STEP,
+                    blockers: gui.blockers,
                     onError: (failure: Error) => setError(failure.message),
                   },
                 }

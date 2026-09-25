@@ -9,6 +9,8 @@ import {
   type ClientAssetSource,
   type ComponentDescriptor,
   type GuiNodeHandle,
+  type GuiObservationBatch,
+  type GuiWorldClient,
 } from "@ipp/client";
 import {
   Entity,
@@ -19,9 +21,9 @@ import {
   Transform,
   VertexShader,
 } from "@ipp/react";
-import { GuiRoot } from "@ipp/react/gui";
+import { GuiRoot, type GuiBlockerHit } from "@ipp/react/gui";
 import { World, type IppCanvasHandle } from "@ipp/react/web";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   HolographicProjector,
   PROJECTED_PANEL_TRANSFORM,
@@ -36,6 +38,9 @@ import BACKGROUND_VERTEX_SHADER from "./projector-background-vertex.glsl";
 import BEAM_VERTEX_SHADER from "./projector-beam-vertex.glsl";
 import GLOW_SHADER from "./projector-glow.glsl";
 import METAL_SHADER from "./projector-metal.glsl";
+import SHIELD_SHADER from "./input-shield.glsl";
+import SHIELD_VERTEX_SHADER from "./input-shield-vertex.glsl";
+import { InputShield, SHIELD_ENTITY } from "./shield.js";
 
 import {
   PALETTES,
@@ -123,12 +128,20 @@ export interface GuiSceneState {
   readonly pulseSequence: number;
   readonly lastCommand: string;
   readonly events: readonly string[];
+  /** Whether the input shield in front of PURGE is marked as a blocker. */
+  readonly shieldArmed: boolean;
+  /** Pointer presses and wheel notches the armed shield has blocked. */
+  readonly shieldBlocks: number;
+  /** Scene blockers for `IppCanvas.guiInput`: the armed, mounted shield. */
+  readonly blockers: readonly GuiBlockerHit[];
   readonly motions?: MotionAssets;
   readonly beamSection?: ProjectorBeamSection;
   readonly font: ClientAssetSource;
   readonly onCommit: () => void;
   readonly pulse: () => void;
   readonly uplink: () => void;
+  readonly purge: () => void;
+  readonly toggleShield: () => void;
   readonly toggleSpan: () => void;
   readonly selectSkin: (skin: GuiDemoSkin) => void;
   readonly selectSurfaceCache: (mode: GuiSurfaceCacheMode) => void;
@@ -389,6 +402,7 @@ async function awaitCompleteProjectorFrame(
       "gui-projector-core",
       "gui-projector-emitter",
       "gui-projector-beam",
+      SHIELD_ENTITY,
     ].map(
       (symbolicId) =>
         inspection.entities
@@ -421,6 +435,23 @@ async function awaitCompleteProjectorFrame(
     await client.waitForFrame(inspection.tick);
   }
   throw new Error("Projector resources did not produce a complete frame");
+}
+
+/** Page through the entity collection for one symbolic ID. */
+async function findEntity(
+  client: IppCanvasHandle["client"],
+  symbolicId: string,
+): Promise<bigint | undefined> {
+  let after = 0n;
+  do {
+    const page = await client.inspectPage({ collection: "entities", after });
+    const entity = page.entities.find(
+      ({ metadata }) => metadata.symbolicId === symbolicId,
+    );
+    if (entity) return entity.id;
+    after = page.next;
+  } while (after !== 0n);
+  return undefined;
 }
 
 function assetKey(asset: ClientAssetSource): string {
@@ -498,6 +529,10 @@ export function useGuiScene(
   const [lastCommand, setLastCommand] = useState("Awaiting command");
   const [pulseSequence, setPulseSequence] = useState(0);
   const [events, setEvents] = useState<readonly string[]>(INITIAL_EVENTS);
+  const [shieldArmed, setShieldArmed] = useState(true);
+  const [shieldEntity, setShieldEntity] = useState<bigint>();
+  const [shieldBlocks, setShieldBlocks] = useState(0);
+  const shieldRequest = useRef(0);
   const sequence = useRef(INITIAL_EVENTS.length);
   const generation = useRef(0);
   const finishingFrame = useRef(false);
@@ -531,6 +566,8 @@ export function useGuiScene(
     setError(undefined);
     setMotions(undefined);
     setBeamSection(undefined);
+    setShieldEntity(undefined);
+    shieldRequest.current += 1;
     finishingFrame.current = false;
     if (!canvas || !active) return;
     setSkin("aurora");
@@ -542,6 +579,8 @@ export function useGuiScene(
     setLastCommand("Awaiting command");
     setPulseSequence(0);
     setEvents(INITIAL_EVENTS);
+    setShieldArmed(true);
+    setShieldBlocks(0);
     sequence.current = INITIAL_EVENTS.length;
     const client = canvas.client as AnimationWorldClient;
     if (
@@ -659,7 +698,25 @@ export function useGuiScene(
   }, [canvas, active, motions]);
 
   const onCommit = useCallback(() => {
-    if (!canvas || !active || error || ready) return;
+    if (!canvas || !active || error) return;
+    if (revealed && !vectorOnly && shieldEntity === undefined) {
+      // This commit mounted the shield with the revealed panel; name its
+      // entity so the canvas can mark it as a GUI input blocker.
+      const request = ++shieldRequest.current;
+      void findEntity(canvas.client, SHIELD_ENTITY).then(
+        (entity) => {
+          if (shieldRequest.current !== request) return;
+          if (entity === undefined)
+            setError("The GUI input shield is not mounted");
+          else setShieldEntity(entity);
+        },
+        (failure: unknown) => {
+          if (shieldRequest.current === request)
+            setError(errorMessage(failure));
+        },
+      );
+    }
+    if (ready) return;
     if (!revealed) {
       if (!treeCommitted) setTreeCommitted(true);
       else if (prepared) {
@@ -713,7 +770,39 @@ export function useGuiScene(
     revealed,
     treeCommitted,
     motions,
+    vectorOnly,
+    shieldEntity,
   ]);
+
+  // Blocked presses and wheel notches are observable for scene controls;
+  // the demo logs each one the shield intercepts.
+  useEffect(() => {
+    if (!canvas || !active || shieldEntity === undefined) return;
+    const client = canvas.client as GuiWorldClient;
+    return client.subscribeGuiObservations((batch: GuiObservationBatch) => {
+      for (const { input, reason } of batch.unhandled ?? []) {
+        if (
+          reason.kind !== "blocked" ||
+          reason.entity !== shieldEntity ||
+          (input.kind !== "pointerDown" && input.kind !== "scroll")
+        )
+          continue;
+        setShieldBlocks((current) => current + 1);
+        record(`SHIELD BLOCKED ${input.kind === "scroll" ? "WHEEL" : "PRESS"}`);
+      }
+    });
+  }, [canvas, active, shieldEntity, record]);
+
+  const blockers = useMemo<readonly GuiBlockerHit[]>(
+    () =>
+      shieldArmed && shieldEntity !== undefined && !vectorOnly
+        ? // The projected input path resolves the distance from the
+          // shield's current picking geometry; this value is only the
+          // logical-routing hint and is never used with a camera.
+          [{ entity: shieldEntity, distance: 0 }]
+        : [],
+    [shieldArmed, shieldEntity, vectorOnly],
+  );
 
   const pulse = useCallback(() => {
     setPulseSequence((current) => current + 1);
@@ -724,11 +813,24 @@ export function useGuiScene(
     setLastCommand("Uplink sent");
     record("UPLINK PACKET QUEUED");
   }, [record]);
+  const purge = useCallback(() => {
+    sequence.current += 1;
+    setEvents([`${String(sequence.current).padStart(2, "0")} // LOG PURGED`]);
+    setLastCommand("Log purged");
+  }, []);
+  const toggleShield = useCallback(() => {
+    setShieldArmed(!shieldArmed);
+    record(shieldArmed ? "SHIELD LIFTED" : "SHIELD ARMED");
+  }, [shieldArmed, record]);
   const toggleSpan = useCallback(() => {
     setWide(!wide);
     record(`SPAN ${wide ? "NARROW" : "WIDE"}`);
   }, [wide, record]);
   const toggleVectorOnly = useCallback(() => {
+    // Isolation unmounts the shield with the projector; its next mount is a
+    // new entity, resolved again after that commit.
+    shieldRequest.current += 1;
+    setShieldEntity(undefined);
     setVectorOnly((current) => !current);
   }, []);
   const selectSkin = useCallback(
@@ -778,12 +880,17 @@ export function useGuiScene(
     pulseSequence,
     lastCommand,
     events,
+    shieldArmed,
+    shieldBlocks,
+    blockers,
     ...(motions ? { motions } : {}),
     ...(beamSection ? { beamSection } : {}),
     font: absoluteAsset(17, FONT_URL),
     onCommit,
     pulse,
     uplink,
+    purge,
+    toggleShield,
     toggleSpan,
     toggleVectorOnly,
     selectSkin,
@@ -838,8 +945,19 @@ export function GuiWorld({ scene }: { scene: GuiSceneState }) {
         <VertexShader requiredAttributes={2}>{BEAM_VERTEX_SHADER}</VertexShader>
         <FragmentShader requiredAttributes={2}>{BEAM_SHADER}</FragmentShader>
       </ShaderAsset>
+      <ShaderAsset
+        id="gui-input-shield-shader"
+        recipe={{}}
+        parameters={{ size: "vec2", color: "vec4", hatch: "f32" }}
+      >
+        <VertexShader>{SHIELD_VERTEX_SHADER}</VertexShader>
+        <FragmentShader>{SHIELD_SHADER}</FragmentShader>
+      </ShaderAsset>
       {!scene.vectorOnly && (
-        <HolographicProjector scene={scene} stagingX={stagingX} />
+        <>
+          <HolographicProjector scene={scene} stagingX={stagingX} />
+          <InputShield armed={scene.shieldArmed} stagingX={stagingX} />
+        </>
       )}
       <ProjectorPanel scene={scene} stagingX={stagingX} />
     </World>

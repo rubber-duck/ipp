@@ -27,6 +27,22 @@ export function GuiControls({ scene }: GuiControlsProps) {
         Compare the FPS readout at the same camera angle. Isolates the whole GUI
         Surface and camera without projector geometry.
       </p>
+      <button
+        id="gui-shield-toggle"
+        className="secondary-button"
+        type="button"
+        disabled={!scene.ready || scene.vectorOnly}
+        aria-pressed={!scene.shieldArmed}
+        onClick={scene.toggleShield}
+      >
+        {scene.shieldArmed ? "Lift input shield" : "Arm input shield"}
+      </button>
+      <p>
+        The hatched amber shield in front of PURGE is scene geometry marked as a
+        GUI input blocker: clicks and wheel notches on it never reach the panel.
+        Lifting it leaves the shield in place but stops marking it, so PURGE
+        takes clicks through it.
+      </p>
       <label className="mesh-select" htmlFor="gui-surface-cache">
         <span>Panel presentation</span>
         <select
@@ -69,6 +85,13 @@ export function GuiControls({ scene }: GuiControlsProps) {
         <div>
           <dt>Signal gain</dt>
           <dd id="gui-gain">{Math.round(scene.gain * 100)}%</dd>
+        </div>
+        <div>
+          <dt>Input shield</dt>
+          <dd id="gui-shield">
+            {scene.shieldArmed ? "armed" : "lifted"}, {scene.shieldBlocks}{" "}
+            blocked
+          </dd>
         </div>
         <div>
           <dt>Last command</dt>

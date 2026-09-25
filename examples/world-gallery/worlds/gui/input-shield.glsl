@@ -1,0 +1,20 @@
+in vec2 shieldUv;
+
+vec4 materialFragment() {
+  // Metres across the glass face and the distance to its nearest edge.
+  vec2 metres = shieldUv * p_size;
+  vec2 edges = min(metres, p_size - metres);
+  float edge = min(edges.x, edges.y);
+
+  // A hazard-striped frame around the edge.
+  if (edge < 0.024) {
+    float stripe = step(0.5, fract((metres.x + metres.y) / 0.08));
+    return vec4(p_color.rgb * mix(0.3, 1.0, stripe), 1.0);
+  }
+
+  // Sparse diagonal hatching across the glass while armed. Everything else
+  // is cut out, so the panel shows through between the marks.
+  float hatch = fract((metres.x - metres.y) / 0.09);
+  if (p_hatch > 0.5 && hatch < 0.15) return vec4(p_color.rgb * 0.8, 1.0);
+  return vec4(0.0);
+}

@@ -12,7 +12,8 @@ use super::{
     GlyphPopulationBudget, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME, POPULATE_RETRY_TICKS,
     RESOLUTION_BANDS, TextRun, select_resolution_band,
 };
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::services::render::frame_statistics::RenderFrameWork;
+use crate::{RenderDevice, RenderError};
 use ipp_core::services::asset_management::AssetKey;
 use ipp_core::systems::surface::{SurfaceGlyph, SurfacePrimitiveIdentity, SurfacePrimitiveStyle};
 
@@ -37,6 +38,10 @@ struct MockBatch {
 }
 
 impl RenderDevice for MockAtlasDevice {
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        None
+    }
+
     type Program = u32;
     type Mesh = u32;
     type Texture = u32;
@@ -307,7 +312,7 @@ struct TestWorld {
 impl TestWorld {
     fn new(device: &Rc<RefCell<MockAtlasDevice>>) -> Self {
         Self {
-            cache: GlyphBatchRenderCache::new(),
+            cache: GlyphBatchRenderCache::default(),
             gui: GuiBatchRenderCache::new(device.clone()),
             work: GlyphFrameWork::default(),
         }
@@ -356,8 +361,8 @@ impl TestWorld {
 
     /// Draw one run as the only GUI work of a Surface of its own, so each run keeps
     /// separate storage.
-    fn draw(&mut self, atlas: &Atlas, run: &TextRun<'_>) -> (bool, RenderStats) {
-        let mut stats = RenderStats::default();
+    fn draw(&mut self, atlas: &Atlas, run: &TextRun<'_>) -> (bool, RenderFrameWork) {
+        let mut stats = RenderFrameWork::default();
         if !self.cache.prepare_text_run(atlas, run, &mut stats) {
             return (false, stats);
         }
@@ -567,9 +572,12 @@ fn warm_runs_reuse_demand_and_batches_without_rebuilding_keys() {
     assert_eq!(world.populate(&mut atlas, 20), 2);
     let (drawn, cold) = world.draw(&atlas, &run);
     assert!(drawn);
-    assert_eq!((cold.gui_rebuilds, cold.gui_batches), (1, 1));
     assert_eq!(
-        cold.uploaded_bytes,
+        (cold.statistics.gui_rebuilds, cold.statistics.gui_batches),
+        (1, 1)
+    );
+    assert_eq!(
+        cold.statistics.uploaded_bytes,
         (3 * 6 * std::mem::size_of::<GuiVertex>()) as u32
     );
 
@@ -585,9 +593,15 @@ fn warm_runs_reuse_demand_and_batches_without_rebuilding_keys() {
     assert_eq!(record.resident, Some(generation));
     let (drawn, warm) = world.draw(&atlas, &run);
     assert!(drawn);
-    assert_eq!((warm.gui_rebuilds, warm.gui_allocations), (0, 0));
-    assert_eq!(warm.uploaded_bytes, 0);
-    assert_eq!(warm.gui_batches, 1);
+    assert_eq!(
+        (
+            warm.statistics.gui_rebuilds,
+            warm.statistics.gui_allocations
+        ),
+        (0, 0)
+    );
+    assert_eq!(warm.statistics.uploaded_bytes, 0);
+    assert_eq!(warm.statistics.gui_batches, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().writes.len(), 1);
 }
@@ -618,7 +632,7 @@ fn text_edits_rebuild_the_run_and_update_its_demand() {
     world.populate(&mut atlas, 20);
     let (drawn, stats) = world.draw(&atlas, &edited);
     assert!(drawn);
-    assert_eq!(stats.gui_rebuilds, 1);
+    assert_eq!(stats.statistics.gui_rebuilds, 1);
     assert_eq!(device.borrow().created_batches.len(), 1);
     assert_eq!(device.borrow().writes.len(), 2);
     assert_eq!(device.borrow().writes[1].2, 12);
@@ -713,9 +727,9 @@ fn culled_surfaces_keep_runs_bands_and_atlas_demand() {
     assert_eq!(world.work.misses, 0);
     let (drawn, visible_again) = world.draw(&atlas, &run);
     assert!(drawn);
-    assert_eq!(visible_again.uploaded_bytes, 0);
-    assert_eq!(visible_again.gui_rebuilds, 0);
-    assert_eq!(visible_again.gui_allocations, 0);
+    assert_eq!(visible_again.statistics.uploaded_bytes, 0);
+    assert_eq!(visible_again.statistics.gui_rebuilds, 0);
+    assert_eq!(visible_again.statistics.gui_allocations, 0);
     assert_eq!(device.borrow().created_batches.len(), 1);
 }
 
@@ -737,7 +751,10 @@ fn band_oscillation_neither_repopulates_nor_retires_pages() {
         let (drawn, stats) = world.draw(&atlas, &run);
         assert!(drawn);
         assert_eq!(
-            (stats.uploaded_bytes, stats.gui_rebuilds),
+            (
+                stats.statistics.uploaded_bytes,
+                stats.statistics.gui_rebuilds
+            ),
             (0, 0),
             "{height}"
         );
@@ -830,7 +847,13 @@ fn retiring_one_page_rebuilds_only_the_runs_that_sample_it() {
     world.populate(&mut atlas, 500);
     assert_eq!(atlas.take_retired_pages(), 1);
     let (_, b_stats) = world.draw(&atlas, &run_b);
-    assert_eq!((b_stats.gui_rebuilds, b_stats.uploaded_bytes), (0, 0));
+    assert_eq!(
+        (
+            b_stats.statistics.gui_rebuilds,
+            b_stats.statistics.uploaded_bytes
+        ),
+        (0, 0)
+    );
 
     // Run A returns: its entry misses, repopulates and only A rebuilds.
     world.publish(
@@ -845,7 +868,13 @@ fn retiring_one_page_rebuilds_only_the_runs_that_sample_it() {
     assert_eq!(world.work.misses, 1);
     assert!(!world.draw(&atlas, &run_a).0);
     let (_, b_stats) = world.draw(&atlas, &run_b);
-    assert_eq!((b_stats.gui_rebuilds, b_stats.uploaded_bytes), (0, 0));
+    assert_eq!(
+        (
+            b_stats.statistics.gui_rebuilds,
+            b_stats.statistics.uploaded_bytes
+        ),
+        (0, 0)
+    );
     assert_eq!(device.borrow().deleted_pages.len(), 1);
 }
 
@@ -873,14 +902,26 @@ fn a_retired_page_rebuilds_its_runs_after_repopulation_and_only_then() {
     world.populate(&mut atlas, 500);
     let (drawn, a_stats) = world.draw(&atlas, &run_a);
     assert!(drawn);
-    assert_eq!(a_stats.gui_rebuilds, 1, "A samples the retired page");
+    assert_eq!(
+        a_stats.statistics.gui_rebuilds, 1,
+        "A samples the retired page"
+    );
     let (_, b_stats) = world.draw(&atlas, &run_b);
-    assert_eq!(b_stats.gui_rebuilds, 0, "B samples only a live page");
+    assert_eq!(
+        b_stats.statistics.gui_rebuilds, 0,
+        "B samples only a live page"
+    );
 
     // The rebuilt run is warm again.
     world.publish(&mut atlas, &shown, &[]);
     let (_, a_stats) = world.draw(&atlas, &run_a);
-    assert_eq!((a_stats.gui_rebuilds, a_stats.uploaded_bytes), (0, 0));
+    assert_eq!(
+        (
+            a_stats.statistics.gui_rebuilds,
+            a_stats.statistics.uploaded_bytes
+        ),
+        (0, 0)
+    );
     // Cold writes of A and B, then A's single rebuild.
     assert_eq!(device.borrow().writes.len(), 3);
 }
@@ -1002,11 +1043,14 @@ fn page_interleaved_runs_draw_once_per_page() {
     let pages = device.borrow().created_pages.clone();
     let (drawn, cold) = world.draw(&atlas, &run);
     assert!(drawn);
-    assert_eq!(cold.gui_batches, 2, "{cold:?}");
+    assert_eq!(cold.statistics.gui_batches, 2, "{cold:?}");
     assert_eq!(device.borrow().sampled_pages, [pages[0], pages[1]]);
 
     let (_, warm) = world.draw(&atlas, &run);
-    assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 2));
+    assert_eq!(
+        (warm.statistics.uploaded_bytes, warm.statistics.gui_batches),
+        (0, 2)
+    );
     drop(world);
     assert_eq!(
         device.borrow().deleted_batches.len(),
@@ -1069,8 +1113,8 @@ fn clipped_glyphs_never_generate_vertices_and_long_runs_split_bounded_batches() 
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
     world.populate(&mut atlas, 20);
     let (_, stats) = world.draw(&atlas, &run);
-    assert_eq!(stats.gui_batches, 3);
-    assert_eq!(stats.triangles, 1200);
+    assert_eq!(stats.statistics.gui_batches, 3);
+    assert_eq!(stats.summary.triangles, 1200);
     assert!(
         device
             .borrow()
@@ -1338,7 +1382,7 @@ fn context_loss_keeps_slots_and_bands_for_identical_recovered_coverage() {
     assert_eq!(device.borrow().created_pages.len(), 2);
     let (drawn, recovered) = world.draw(&atlas, &run);
     assert!(drawn);
-    assert_eq!(recovered.gui_rebuilds, 1);
+    assert_eq!(recovered.statistics.gui_rebuilds, 1);
 }
 
 #[test]

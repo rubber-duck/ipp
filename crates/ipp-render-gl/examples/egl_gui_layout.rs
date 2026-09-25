@@ -89,7 +89,7 @@ fn render(
     renderer: &mut ipp_render_gl::RenderService<ipp_render_gl::GlesRenderDevice>,
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
-) -> Result<ipp_render_gl::RenderStats> {
+) -> Result<crate::smoke::frame_stats::FrameStats> {
     smoke::world::render_host_frame(
         renderer,
         host,
@@ -155,7 +155,7 @@ fn settle_assets(
     panel: ipp_core::EntityId,
     sources: &[ipp_core::services::asset_management::AssetSource],
     payloads: &std::collections::BTreeMap<String, Vec<u8>>,
-) -> Result<ipp_render_gl::RenderStats> {
+) -> Result<crate::smoke::frame_stats::FrameStats> {
     let progress_limit = payloads
         .values()
         .map(|bytes| {
@@ -165,7 +165,7 @@ fn settle_assets(
         })
         .sum::<usize>()
         + payloads.len() * 8;
-    let mut last = ipp_render_gl::RenderStats::default();
+    let mut last = crate::smoke::frame_stats::FrameStats::default();
     for _ in 0..progress_limit {
         host.progress_assets();
         for request in host.take_resource_requests() {
@@ -226,49 +226,46 @@ fn main() -> Result<()> {
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Transform(Transform {
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Transform(Transform {
                         z: 5.0,
                         ..Default::default()
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Camera(Camera {
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Camera(Camera {
                         projection: 1,
                         ortho_height: 3.0,
                         ..Default::default()
                     }),
-                },
+                ),
                 Command::Create {
                     alias: 2,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(2),
-                    value: ComponentValue::Transform(Transform::default()),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(2),
-                    value: ComponentValue::Surface(surface),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(2),
-                    value: ComponentValue::GuiRoot(GuiRoot::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(2),
+                    ComponentValue::Transform(Transform::default()),
+                ),
+                Command::insert_value(EntityRef::Alias(2), ComponentValue::Surface(surface)),
+                Command::insert_value(
+                    EntityRef::Alias(2),
+                    ComponentValue::GuiRoot(GuiRoot::default()),
+                ),
                 Command::Create {
                     alias: 3,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(3),
-                    value: ComponentValue::Transform(Transform {
+                Command::insert_value(
+                    EntityRef::Alias(3),
+                    ComponentValue::Transform(Transform {
                         qy: 1.0,
                         qw: 0.0,
                         ..Default::default()
                     }),
-                },
+                ),
             ],
         })?;
         let report = world_context.step(0.0)?;
@@ -734,13 +731,13 @@ fn main() -> Result<()> {
         let mut world_context = host.world_mut(world).unwrap();
         world_context.enqueue(Batch {
             id: world_context.tick() + 1,
-            operations: vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(panel),
-                value: ComponentValue::Hierarchy(Hierarchy {
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(panel),
+                ComponentValue::Hierarchy(Hierarchy {
                     parent: rear_parent,
                     ..Default::default()
                 }),
-            }],
+            )],
         })?;
         world_context.step(0.0)?;
         Ok(())

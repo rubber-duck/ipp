@@ -69,9 +69,14 @@ impl ConstraintSystem {
         components: &ComponentStorage,
         staged: &WorldMutationState,
     ) -> Result<(), ErrorReason> {
-        self.state
-            .bindings
-            .retain(|&target, &mut binding| valid(staged, target, binding));
+        let mut touched = Vec::new();
+        self.state.bindings.retain(|&target, &mut binding| {
+            let keep = valid(staged, target, binding);
+            if !keep {
+                touched.push(target);
+            }
+            keep
+        });
         let source_offset = std::mem::offset_of!(LinearDriver, source) as u32;
         let targets: BTreeSet<_> = staged
             .dirty
@@ -104,6 +109,7 @@ impl ConstraintSystem {
                 continue;
             }
             self.state.bindings.remove(&target);
+            touched.push(target);
             if let Some(current) = current {
                 self.state.declarations.insert(target, current);
                 match binding(staged, target, current.source) {
@@ -121,12 +127,23 @@ impl ConstraintSystem {
         self.state
             .declarations
             .retain(|target, _| staged.entities.contains_key(target));
+        if !touched.is_empty() {
+            // A new cycle passes through a changed binding; a broken one was
+            // already invalid. Reclassify both, proportionally to their chains.
+            let previous: Vec<_> = self.state.invalid.iter().copied().collect();
+            classify_cycles(
+                &self.state.bindings,
+                &mut self.state.invalid,
+                touched.into_iter().chain(previous),
+            );
+        }
         result
     }
 
     pub(super) fn prepare_numeric(&mut self, components: &ComponentStorage) {
         self.state.numeric.clear();
-        for (&entity, binding) in &self.state.bindings {
+        for entity in evaluation_order(&self.state.bindings, &self.state.invalid) {
+            let binding = self.state.bindings[&entity];
             let Some(source) = components.scalar_ptr(binding.source.index() as usize) else {
                 continue;
             };
@@ -149,9 +166,6 @@ impl ConstraintSystem {
                 }
             });
         }
-        self.state
-            .numeric
-            .sort_unstable_by_key(|binding| binding.entity.index());
         self.state.numeric_dirty = false;
     }
 
@@ -184,95 +198,80 @@ impl ConstraintSystem {
         }
         self.state.restores_active = true;
     }
+}
 
-    #[cfg(debug_assertions)]
-    fn validation_binding(
-        &self,
-        components: &ComponentStorage,
-        staged: &WorldMutationState,
-        target: EntityId,
-    ) -> Option<ScalarConstraintBinding> {
-        let current = declaration(components, staged, target)?;
-        let source_offset = std::mem::offset_of!(LinearDriver, source) as u32;
-        let candidate = if self.state.declarations.get(&target) != Some(&current)
-            || staged.explicit_fields.contains(&(
-                target,
-                ComponentValue::LINEAR_DRIVER,
-                source_offset,
-            )) {
-            binding(staged, target, current.source).ok()?
-        } else {
-            *self.state.bindings.get(&target)?
+/// Classify the drivers reachable from `affected` along their source chains.
+/// Every driver has one source, so a walk either ends, reaches a chain that is
+/// already classified, or closes a cycle; only the cycle's members are invalid.
+/// Drivers that read an invalid driver still evaluate from its underlying value.
+fn classify_cycles(
+    bindings: &BTreeMap<EntityId, ScalarConstraintBinding>,
+    invalid: &mut BTreeSet<EntityId>,
+    affected: impl IntoIterator<Item = EntityId>,
+) {
+    let mut done = BTreeSet::new();
+    let mut positions = BTreeMap::new();
+    for start in affected {
+        positions.clear();
+        let mut path = Vec::new();
+        let mut current = start;
+        let cycle = loop {
+            if done.contains(&current) {
+                break None;
+            }
+            if let Some(&position) = positions.get(&current) {
+                break Some(position);
+            }
+            let Some(binding) = bindings.get(&current) else {
+                break None;
+            };
+            positions.insert(current, path.len());
+            path.push(current);
+            current = binding.source;
         };
-        valid(staged, target, candidate).then_some(candidate)
-    }
-
-    #[cfg(debug_assertions)]
-    pub(super) fn validate(
-        &self,
-        components: &ComponentStorage,
-        staged: &WorldMutationState,
-    ) -> Result<(), ErrorReason> {
-        let mut values: BTreeMap<_, _> = staged
-            .entities
-            .keys()
-            .filter_map(|&entity| {
-                let ComponentValue::Scalar(value) =
-                    staged.input_value(components, entity, ComponentValue::SCALAR)?
-                else {
-                    return None;
-                };
-                Some((entity.index(), value.value))
-            })
-            .collect();
-        // Validation runs before lifecycle reconciliation. Inspect the binding
-        // that the prepared declaration will establish, including sampled sources.
-        let mut targets: Vec<_> = staged.entities.keys().copied().collect();
-        targets.sort_unstable_by_key(|target| target.index());
-        for target in targets {
-            let Some(binding) = self.validation_binding(components, staged, target) else {
-                continue;
-            };
-            if binding.source == target
-                || (self
-                    .validation_binding(components, staged, binding.source)
-                    .is_some()
-                    && binding.source.index() >= target.index())
-            {
-                return Err(ErrorReason::UnsupportedDependency);
-            }
-            let ComponentValue::LinearDriver(driver) = staged
-                .input_value(components, target, ComponentValue::LINEAR_DRIVER)
-                .unwrap()
-            else {
-                unreachable!()
-            };
-            let value = values[&binding.source.index()] * driver.scale + driver.bias;
-            if !value.is_finite() {
-                return Err(ErrorReason::InvalidValue);
-            }
-            values.insert(target.index(), value);
+        if !bindings.contains_key(&start) {
+            invalid.remove(&start);
         }
-        Ok(())
+        for (position, entity) in path.into_iter().enumerate() {
+            done.insert(entity);
+            if cycle.is_some_and(|first| position >= first) {
+                if invalid.insert(entity) {
+                    crate::diagnostic!(
+                        Warn,
+                        "[IPP core] constraint.invalid target={} reason=dependency-cycle",
+                        entity.to_bits()
+                    );
+                }
+            } else if invalid.remove(&entity) {
+                crate::diagnostic!(
+                    Debug,
+                    "[IPP core] constraint.valid target={}",
+                    entity.to_bits()
+                );
+            }
+        }
     }
 }
 
-impl crate::WorldContext<'_> {
-    /// Whether the retained driver currently has a valid incarnation binding.
-    /// Returns `None` when the entity or driver does not exist.
-    pub fn driver_bound(&self, entity: EntityId) -> Option<bool> {
-        self.world
-            .state
-            .entities
-            .get(&entity)?
-            .input(ComponentValue::LINEAR_DRIVER)?;
-        let system = self.system::<ConstraintSystem>(ConstraintSystem::ID)?;
-        Some(
-            system
-                .state
-                .bindings
-                .get(&entity)
-                .is_some_and(|&binding| valid(&self.world.state, entity, binding)),
-        )
+/// Valid drivers with every source evaluated before its target. Invalid cycle
+/// members are omitted, so the remaining chains are acyclic.
+fn evaluation_order(
+    bindings: &BTreeMap<EntityId, ScalarConstraintBinding>,
+    invalid: &BTreeSet<EntityId>,
+) -> Vec<EntityId> {
+    let mut order = Vec::with_capacity(bindings.len());
+    let mut done = BTreeSet::new();
+    for &target in bindings.keys() {
+        let mut path = Vec::new();
+        let mut current = target;
+        while !invalid.contains(&current) && done.insert(current) {
+            let Some(binding) = bindings.get(&current) else {
+                break;
+            };
+            path.push(current);
+            current = binding.source;
+        }
+        order.extend(path.into_iter().rev());
     }
+    order
 }

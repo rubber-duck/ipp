@@ -1,15 +1,32 @@
 //! Verified binary target export processing. This tool never links a host core.
 
 mod binary_reader;
+mod codec_limits;
 mod export_reader;
 mod model;
 mod typescript;
 mod typescript_names;
 mod wire_contract;
+mod wire_manifest;
+
+/// TypeScript modules generated from one executed target contract.
+#[derive(Debug)]
+pub struct GeneratedContract {
+    /// Shipped client: typed contract, codecs and resolved codec bounds.
+    pub client: String,
+    /// Descriptive wire manifest imported only by tests and tools.
+    pub manifest: String,
+}
 
 /// Generate a browser-compatible typed contract from executed target output.
-pub fn generate(bytes: &[u8]) -> Result<String, String> {
-    typescript::render(export_reader::read_export(bytes)?)
+pub fn generate(bytes: &[u8]) -> Result<GeneratedContract, String> {
+    let export = export_reader::read_export(bytes)?;
+    let manifest = wire_manifest::render(&export);
+
+    Ok(GeneratedContract {
+        client: typescript::render(export)?,
+        manifest,
+    })
 }
 
 #[cfg(test)]

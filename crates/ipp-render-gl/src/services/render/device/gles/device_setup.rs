@@ -72,6 +72,18 @@ impl GlesRenderDevice {
             limit as u32
         };
 
+        let max_renderbuffer_size = {
+            let mut limit = 0;
+            // SAFETY: Current context writes one integer into exclusive storage.
+            unsafe { (gl.get_integer)(0x84E8, &mut limit) };
+            if limit <= 0 {
+                return Err(RenderError::RenderDevice(
+                    "GLES renderbuffer size baseline unavailable".into(),
+                ));
+            }
+            limit as u32
+        };
+
         let mut max_parameter_bytes = 0;
         let mut vertex_units = 0;
         let mut fragment_units = 0;
@@ -104,6 +116,7 @@ impl GlesRenderDevice {
             presentation_target: None,
             max_viewport,
             max_texture_size,
+            max_renderbuffer_size,
             error_checks: super::super::error_checks::RenderDeviceErrorChecks::sampled(
                 frame_check_interval,
             ),

@@ -1,7 +1,7 @@
 //! Cost and observable contracts of ordered writes to one staged component.
 
+use crate::components::CustomMaterial;
 use crate::components::dynamic_properties::clone_count;
-use crate::components::{BufferCounters, CustomMaterial, PreparedBuffer};
 use crate::systems::lifecycle_publisher::{
     ComponentLifecycleKind, LifecycleFilter, LifecycleObservation, LifecyclePublisherCommand,
     LifecyclePublisherOutput, LifecyclePublisherSystem,
@@ -11,7 +11,7 @@ use crate::{
     ComponentOverlayMode, DynamicProperties, DynamicValue, EntityOverlayMode, HostRuntime,
     StateOverlayRef, WorldId,
 };
-use std::{mem::offset_of, rc::Rc};
+use std::mem::offset_of;
 
 const SESSION: u64 = 7;
 
@@ -161,63 +161,6 @@ fn batched_property_writes_copy_the_component_independently_of_their_count() {
         copies[0], copies[1],
         "a batch copies its staged component a fixed number of times, not once per write"
     );
-}
-
-#[test]
-fn resource_owning_components_still_prepare_after_each_write_without_copies() {
-    let counters = Rc::new(BufferCounters::default());
-    let mut host = HostRuntime::new();
-    let world = host.create_world(WorldLimits::default()).unwrap();
-    let entity = run(
-        &mut host,
-        world,
-        vec![
-            Command::Create {
-                alias: 0,
-                metadata: Default::default(),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::PreparedBuffer(PreparedBuffer {
-                    length: 4,
-                    counters: counters.clone(),
-                    allocation: None,
-                }),
-            },
-        ],
-    )
-    .result
-    .unwrap()[0]
-        .1;
-    let length = |value: u32| Command::SetField {
-        entity: EntityRef::Handle(entity),
-        component: ComponentValue::PREPARED_BUFFER,
-        field: FieldWrite {
-            offset: offset_of!(PreparedBuffer, length) as u32,
-            value: FieldValue::U32(value),
-        },
-    };
-
-    let mut clones = Vec::new();
-    for count in [4u32, 64] {
-        counters.clones.set(0);
-        let prepared = counters.prepared.get();
-        let writes = (0..count).map(|index| length(100 + index)).collect();
-        assert!(run(&mut host, world, writes).result.is_ok());
-        clones.push(counters.clones.get());
-        assert_eq!(
-            counters.prepared.get() - prepared,
-            count as usize,
-            "fallible activation stays attributed to each operation"
-        );
-    }
-    assert_eq!(clones[0], clones[1]);
-
-    // An activation failure stops the batch at the operation that caused it.
-    let outcome = run(&mut host, world, vec![length(20), length(13), length(21)]);
-    let error = outcome.result.unwrap_err();
-    assert_eq!(error.operation, Some(1));
-    assert_eq!(error.reason, ErrorReason::InvalidValue);
 }
 
 #[test]
@@ -534,10 +477,7 @@ mod rows {
                         classes: vec![],
                     },
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::RowsFixture(fixture),
-                },
+                Command::insert_value(EntityRef::Alias(1), ComponentValue::RowsFixture(fixture)),
             ],
         );
         let entity = outcome.result.unwrap()[0].1;

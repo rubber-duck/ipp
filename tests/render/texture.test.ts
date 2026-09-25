@@ -1,3 +1,4 @@
+import type { IngressStatistics, RenderStatisticsSnapshot } from "@ipp/client";
 import { invoke, writeDataUrl, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
@@ -91,7 +92,7 @@ for (const variant of ["development", "production"] as const) {
               },
             ],
           );
-          assertProgramCounts(setup.startupBackend, 0, 0);
+          assertProgramCounts(setup.startupStatistics, 0, 0);
           assert.deepEqual(setup.inspection.texture, {
             source: `${assetBaseUrl}/checker.texture`,
             variant: 0,
@@ -132,15 +133,15 @@ for (const variant of ["development", "production"] as const) {
               requireVisible(checker.summary, "built-in checker cube");
               assert.equal(checker.drawCalls, 1);
               assert.ok(
-                ingressNumber(checker.backend, "sourceBytes") >= 25_165_840,
+                ingressNumber(checker.statistics, "sourceBytes") >= 25_165_840,
               );
               assert.ok(
-                ingressNumber(checker.backend, "sourcePeakBufferedBytes") <=
+                ingressNumber(checker.statistics, "sourcePeakBufferedBytes") <=
                   2 * 65_536,
                 "one HTTP texture retains at most one JS chunk and one Rust pipe",
               );
               assert.equal(checker.triangles, 12);
-              assertProgramCounts(checker.backend, 1, 1);
+              assertProgramCounts(checker.statistics, 1, 1);
               for (const [index, count] of checkerEvidence.counts.entries()) {
                 assert.ok(
                   count > 250,
@@ -193,7 +194,7 @@ for (const variant of ["development", "production"] as const) {
               requireVisible(untextured.summary, "untextured retained cube");
               assert.equal(untextured.drawCalls, 1);
               assert.equal(untextured.triangles, 12);
-              assertProgramCounts(untextured.backend, 2, 1);
+              assertProgramCounts(untextured.statistics, 2, 1);
               assert.ok(declarationDifference.changedFraction > 0.03);
               assert.ok(
                 (untexturedEvidence.counts[0] ?? 0) >
@@ -233,7 +234,7 @@ for (const variant of ["development", "production"] as const) {
             "builtin-checker-cube",
             () => {
               assert.equal(restoredDifference.changedPixels, 0);
-              assertProgramCounts(restored.backend, 3, 1);
+              assertProgramCounts(restored.statistics, 3, 1);
             },
           );
 
@@ -263,12 +264,12 @@ for (const variant of ["development", "production"] as const) {
           assert.equal(optional.drawCalls, 4);
           assert.equal(optional.triangles, 14);
           assert.equal(
-            backendNumber(optional.backend, "totalUploadedBytes") -
-              backendNumber(restored.backend, "totalUploadedBytes"),
+            totalUploadedBytes(optional.statistics) -
+              totalUploadedBytes(restored.statistics),
             836 + 3 * 2 * 4,
             "optional layouts must upload only present streams, indices, and the demanded texture",
           );
-          assertLivePrograms(optional.backend, 3);
+          assertLivePrograms(optional.statistics, 3);
 
           const layoutOrder = await invoke<OptionalLayoutOrderReport>(
             scenario.page,
@@ -308,12 +309,12 @@ for (const variant of ["development", "production"] as const) {
             () => {
               assert.equal(reversedDifference.changedPixels, 0);
               assert.equal(
-                backendNumber(optionalReversed.backend, "totalUploadedBytes"),
-                backendNumber(optional.backend, "totalUploadedBytes"),
+                totalUploadedBytes(optionalReversed.statistics),
+                totalUploadedBytes(optional.statistics),
               );
               assertProgramCounts(
-                optionalReversed.backend,
-                backendNumber(optional.backend, "shaderProgramsCreated"),
+                optionalReversed.statistics,
+                deviceNumber(optional.statistics, "shaderProgramsCreated"),
                 3,
               );
             },
@@ -355,7 +356,7 @@ for (const variant of ["development", "production"] as const) {
               requireVisible(sampler.summary, "asymmetric sampler quad");
               assert.equal(sampler.drawCalls, 1);
               assert.equal(sampler.triangles, 2);
-              assertLivePrograms(sampler.backend, 1);
+              assertLivePrograms(sampler.statistics, 1);
               assert.equal(observations.length, 24);
               for (const observation of observations) {
                 const source = ASYMMETRIC_RGB[observation.sourceIndex];
@@ -503,7 +504,7 @@ for (const variant of ["development", "production"] as const) {
             texturedPlaneEvidence.unmatchedForegroundPixels <
               texturedPlaneEvidence.foregroundPixels * 0.05,
           );
-          assertLivePrograms(texturedPlane.backend, 1);
+          assertLivePrograms(texturedPlane.statistics, 1);
 
           const solidPlaneInspection = await invoke<WorldInspection>(
             scenario.page,
@@ -534,7 +535,7 @@ for (const variant of ["development", "production"] as const) {
             ["weighted-plane-asymmetric", "weighted-plane-without-texture"],
           );
           assert.ok(planeRemovalDifference.changedFraction > 0.01);
-          assertLivePrograms(solidPlane.backend, 1);
+          assertLivePrograms(solidPlane.statistics, 1);
 
           await invoke(scenario.page, moduleUrl, "setPlaneTextureEnabled", [
             true,
@@ -553,7 +554,7 @@ for (const variant of ["development", "production"] as const) {
             ["weighted-plane-asymmetric", "weighted-plane-restored"],
           );
           assert.equal(restoredPlaneDifference.changedPixels, 0);
-          assertLivePrograms(restoredPlane.backend, 1);
+          assertLivePrograms(restoredPlane.statistics, 1);
 
           const recovery = await invoke<RecoveryReport>(
             scenario.page,
@@ -591,20 +592,22 @@ for (const variant of ["development", "production"] as const) {
                 "context restore preserves resource objects",
               );
               assert.equal(
-                backendNumber(recovery.after.backend, "totalUploadedBytes") -
-                  backendNumber(restoredPlane.backend, "totalUploadedBytes"),
+                totalUploadedBytes(recovery.after.statistics) -
+                  totalUploadedBytes(restoredPlane.statistics),
                 3_405 + 2 * 3 * 2 * 4,
                 "weighted plane streams and retained producer texture must be reuploaded",
               );
               assert.ok(
-                ingressNumber(recovery.after.backend, "sourceBytes") >
-                  ingressNumber(restoredPlane.backend, "sourceBytes"),
+                ingressNumber(recovery.after.statistics, "sourceBytes") >
+                  ingressNumber(restoredPlane.statistics, "sourceBytes"),
                 "source reload transfers the immutable content again",
               );
               assertProgramCounts(
-                recovery.after.backend,
-                backendNumber(restoredPlane.backend, "shaderProgramsCreated") +
-                  1,
+                recovery.after.statistics,
+                deviceNumber(
+                  restoredPlane.statistics,
+                  "shaderProgramsCreated",
+                ) + 1,
                 1,
               );
             },
@@ -818,19 +821,19 @@ function assertRgbaClose(
 // Private recipes follow current World demand. Replacing the scene releases
 // unused programs; only unchanged demanded recipes promise compilation reuse.
 function assertLivePrograms(
-  backend: Readonly<Record<string, unknown>>,
+  statistics: RenderStatisticsSnapshot | undefined,
   live: number,
 ): void {
-  assert.equal(backendNumber(backend, "shaderProgramsLive"), live);
+  assert.equal(deviceNumber(statistics, "shaderProgramsLive"), live);
 }
 
 function assertProgramCounts(
-  backend: Readonly<Record<string, unknown>>,
+  statistics: RenderStatisticsSnapshot | undefined,
   created: number,
   live: number,
 ): void {
-  assert.equal(backendNumber(backend, "shaderProgramsCreated"), created);
-  assert.equal(backendNumber(backend, "shaderProgramsLive"), live);
+  assert.equal(deviceNumber(statistics, "shaderProgramsCreated"), created);
+  assert.equal(deviceNumber(statistics, "shaderProgramsLive"), live);
 }
 
 function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
@@ -953,26 +956,38 @@ function linearToSrgb8(value: number): number {
   return Math.round(Math.min(1, Math.max(0, encoded)) * 255);
 }
 
-function backendNumber(
-  backend: Readonly<Record<string, unknown>>,
+function requireStatistics(
+  statistics: RenderStatisticsSnapshot | undefined,
+): RenderStatisticsSnapshot {
+  if (!statistics)
+    throw new Error("capture omitted statistics; select a diagnostics build");
+  return statistics;
+}
+
+function deviceNumber(
+  statistics: RenderStatisticsSnapshot | undefined,
   field: string,
 ): number {
-  const value = backend[field];
+  const value = requireStatistics(statistics).device[field];
   if (typeof value !== "number") {
-    throw new Error(`capture backend.${field} is not numeric`);
+    throw new Error(`capture statistics.device.${field} is not numeric`);
   }
   return value;
 }
 
-function ingressNumber(
-  backend: Readonly<Record<string, unknown>>,
-  field: string,
+function totalUploadedBytes(
+  statistics: RenderStatisticsSnapshot | undefined,
 ): number {
-  const ingress = backend.ingress;
-  if (!ingress || typeof ingress !== "object") {
-    throw new Error("capture backend omitted ingress counters");
-  }
-  return backendNumber(ingress as Readonly<Record<string, unknown>>, field);
+  return requireStatistics(statistics).frame.totalUploadedBytes;
+}
+
+function ingressNumber(
+  statistics: RenderStatisticsSnapshot | undefined,
+  field: keyof IngressStatistics,
+): number {
+  const ingress = requireStatistics(statistics).ingress;
+  if (!ingress) throw new Error("capture statistics omitted ingress counters");
+  return ingress[field];
 }
 
 function receiptError(receipt: {

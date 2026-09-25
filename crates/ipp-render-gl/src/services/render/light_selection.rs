@@ -4,9 +4,7 @@ use super::{
     lighting::{MAX_LIGHTS, PreparedLight, RenderLightingFrame},
 };
 use crate::RenderError;
-use ipp_core::{
-    EntityId, RenderItem, WorldContext, components::Light, systems::geometry::GeometryBounds,
-};
+use ipp_core::{EntityId, RenderItem, WorldContext, components::Light};
 use std::collections::BTreeMap;
 
 type Candidate = (EntityId, [f32; 16], Light);
@@ -14,7 +12,6 @@ type Candidate = (EntityId, [f32; 16], Light);
 #[derive(Default)]
 pub(super) struct LightSelectionState {
     candidates: Vec<Candidate>,
-    draws: BTreeMap<EntityId, Vec<EntityId>>,
     shadows: Vec<EntityId>,
     groups: Vec<(EntityId, LightGroup)>,
     selected: Vec<RankedLight>,
@@ -220,102 +217,6 @@ impl LightInfluence {
     }
 }
 
-fn influence(candidate: &Candidate, origin: [f64; 3], bounds: Option<[[f64; 3]; 2]>) -> f64 {
-    let (_, model, light) = candidate;
-    let luminance =
-        0.2126 * f64::from(light.r) + 0.7152 * f64::from(light.g) + 0.0722 * f64::from(light.b);
-    let energy = luminance * f64::from(light.intensity);
-    if energy <= 0.0 || !energy.is_finite() {
-        return 0.0;
-    }
-    if light.kind == 0 {
-        return energy;
-    }
-    let center = bounds.map_or(origin, |b| {
-        std::array::from_fn(|i| (b[0][i] + b[1][i]) * 0.5)
-    });
-    let radius = bounds.map_or(0.0, |b| {
-        (0..3)
-            .map(|i| ((b[1][i] - b[0][i]) * 0.5).powi(2))
-            .sum::<f64>()
-            .sqrt()
-    });
-    let delta: [f64; 3] = std::array::from_fn(|i| center[i] - f64::from(model[12 + i]));
-    let distance = delta.iter().map(|v| v * v).sum::<f64>().sqrt();
-    let nearest = (distance - radius).max(0.01);
-    let range = f64::from(light.range);
-    let mut attenuation = (1.0 - (nearest / range).powi(4)).clamp(0.0, 1.0) / nearest.powi(2);
-    if light.kind == 2 && distance > radius {
-        let forward = [
-            -f64::from(model[8]),
-            -f64::from(model[9]),
-            -f64::from(model[10]),
-        ];
-        let length = forward.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let cosine = (delta.iter().zip(forward).map(|(a, b)| a * b).sum::<f64>()
-            / (distance * length))
-            .clamp(-1.0, 1.0);
-        let angle = (cosine.acos() - (radius / distance).min(1.0).asin()).max(0.0);
-        let inner = f64::from(light.inner_cone).cos();
-        let outer = f64::from(light.outer_cone).cos();
-        attenuation *= ((angle.cos() - outer) / (inner - outer).max(1e-6))
-            .clamp(0.0, 1.0)
-            .powi(2);
-    }
-    // Missing bounds never prove exclusion. Keep an approximate weak candidate
-    // even when its origin lies outside the light's range or cone.
-    if bounds.is_none() {
-        attenuation = attenuation.max(f64::EPSILON / nearest.powi(2));
-    }
-    let score = energy * attenuation;
-    if score.is_finite() {
-        score
-    } else {
-        0.0
-    }
-}
-
-fn select(
-    candidates: &[Candidate],
-    origin: [f64; 3],
-    enclosure: Option<[[f64; 3]; 2]>,
-    previous: &[EntityId],
-) -> Vec<RankedLight> {
-    let mut selected = Vec::with_capacity(MAX_LIGHTS + 1);
-    select_into(candidates, origin, enclosure, previous, &mut selected);
-    selected
-}
-
-fn select_into(
-    candidates: &[Candidate],
-    origin: [f64; 3],
-    enclosure: Option<[[f64; 3]; 2]>,
-    previous: &[EntityId],
-    selected: &mut Vec<RankedLight>,
-) {
-    selected.clear();
-    for (index, candidate) in candidates.iter().enumerate() {
-        let score = influence(candidate, origin, enclosure);
-        if score > 0.0 {
-            retain_best(
-                selected,
-                RankedLight {
-                    index,
-                    score,
-                    rank: score
-                        * if previous.contains(&candidate.0) {
-                            1.1
-                        } else {
-                            1.0
-                        },
-                    entity: candidate.0,
-                },
-                MAX_LIGHTS,
-            );
-        }
-    }
-}
-
 #[derive(Clone, Copy, Default)]
 struct LightContact {
     distance_squared: f64,
@@ -390,55 +291,6 @@ fn select_prepared_object(
     }
 }
 
-fn bounds(world: &WorldContext<'_>, item: &RenderItem, unbounded: bool) -> Option<[[f64; 3]; 2]> {
-    if unbounded {
-        return None;
-    }
-    #[cfg(feature = "particles")]
-    if let Some(particle) = item.particle {
-        #[cfg(feature = "mesh-poses")]
-        if item.pose.is_some() {
-            return None;
-        }
-        #[cfg(feature = "skeletal-animation")]
-        if item.skinned {
-            return None;
-        }
-        let (min, max) = if particle.sprite {
-            ([-0.5; 3], [0.5; 3])
-        } else {
-            world.mesh_metadata(item.mesh)?.bounds()
-        };
-        // A sphere also encloses billboard rotations, including velocity alignment.
-        let local_radius = (0..3)
-            .map(|i| f64::from(min[i].abs().max(max[i].abs())).powi(2))
-            .sum::<f64>()
-            .sqrt();
-        let scale = (0..3)
-            .flat_map(|column| {
-                (0..3).map(move |row| f64::from(item.model[column * 4 + row]).powi(2))
-            })
-            .sum::<f64>()
-            .sqrt();
-        let radius = local_radius * scale;
-        return Some(std::array::from_fn(|side| {
-            std::array::from_fn(|i| {
-                f64::from(item.model[12 + i])
-                    + if side == 0 {
-                        -radius
-                    } else {
-                        radius
-                    }
-            })
-        }));
-    }
-    if ipp_core::lighting_reuse_enabled() {
-        world.render_geometry(item.entity).mesh_bounds
-    } else {
-        world.mesh_bounding_geometry(item.entity).ok()?.bounds()
-    }
-}
-
 impl LightSelectionState {
     pub(super) fn prepare(
         &mut self,
@@ -451,126 +303,16 @@ impl LightSelectionState {
         #[cfg(feature = "profiling")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(225, "gl.light-prepare");
 
-        if ipp_core::lighting_reuse_enabled() {
-            let mut candidates = if ipp_core::render_buffer_reuse_enabled() {
-                std::mem::take(&mut self.candidates)
-            } else {
-                Vec::new()
-            };
-            candidates.clear();
-            candidates.extend(world.light_items());
-            let result =
-                self.prepare_reused(world, items, customs, frustum, shadow_capacity, &candidates);
-            self.candidates = candidates;
-            return result;
-        }
-        let candidates: Vec<_> = world.light_items().collect();
-        let mut groups: BTreeMap<EntityId, Vec<&RenderItem>> = BTreeMap::new();
-        for item in items {
-            if item.pbr.is_some() || customs.contains_key(&item.entity) {
-                groups.entry(item.entity).or_default().push(item);
-            }
-        }
-        self.draws.retain(|entity, _| groups.contains_key(entity));
-        let mut frames = super::draw_lighting::DrawLightingTable::default();
-        let mut shadow_scores: BTreeMap<usize, f64> = BTreeMap::new();
-        for (entity, group) in groups {
-            let unbounded = customs
-                .get(&entity)
-                .is_some_and(|custom| custom.custom_vertex && !custom.material.conservative_bounds);
-            let first = group[0];
-            let mut enclosure = bounds(world, first, unbounded);
-            for item in &group[1..] {
-                enclosure = enclosure.zip(bounds(world, item, unbounded)).map(|(a, b)| {
-                    std::array::from_fn(|side| {
-                        std::array::from_fn(|i| {
-                            if side == 0 {
-                                a[side][i].min(b[side][i])
-                            } else {
-                                a[side][i].max(b[side][i])
-                            }
-                        })
-                    })
-                });
-            }
-            let visible = unbounded || {
-                #[cfg(feature = "particles")]
-                let particles = first.particle.is_some();
-                #[cfg(not(feature = "particles"))]
-                let particles = false;
-                particles || world.geometry_visible(entity, frustum)
-            };
-            let origin = [first.model[12], first.model[13], first.model[14]].map(f64::from);
-            let previous = self.draws.entry(entity).or_default();
-            let selected = select(&candidates, origin, enclosure, previous);
-            *previous = selected.iter().map(|light| light.entity).collect();
-            if visible {
-                for light in &selected {
-                    if candidates[light.index].2.cast_shadows {
-                        shadow_scores
-                            .entry(light.index)
-                            .and_modify(|score| *score = score.max(light.score))
-                            .or_insert(light.score);
-                    }
-                }
-            }
-            let lights: Vec<_> = selected
-                .iter()
-                .map(|light| candidates[light.index])
-                .collect();
-            frames.insert(
-                entity,
-                PreparedDrawLighting {
-                    frame: RenderLightingFrame::prepare(world, &lights)?,
-                    visible,
-                    selected: std::array::from_fn(|i| {
-                        selected
-                            .get(i)
-                            .map_or(EntityId::from_bits(0), |light| light.entity)
-                    }),
-                    selected_count: selected.len(),
-                },
-            );
-        }
-        let requested_shadows = shadow_scores.len();
-        let mut selected = Vec::new();
-        for (index, score) in shadow_scores {
-            let entity = candidates[index].0;
-            retain_best(
-                &mut selected,
-                RankedLight {
-                    index,
-                    score,
-                    rank: score
-                        * if self.shadows.contains(&entity) {
-                            1.1
-                        } else {
-                            1.0
-                        },
-                    entity,
-                },
-                shadow_capacity,
-            );
-        }
-        let shadows = selected
-            .iter()
-            .map(|light| {
-                Ok((
-                    light.entity,
-                    RenderLightingFrame::prepare(world, &[candidates[light.index]])?,
-                ))
-            })
-            .collect::<Result<_, RenderError>>()?;
-        Ok(PreparedLighting {
-            draws: frames,
-            shadows,
-            requested_shadows,
-            unlit: RenderLightingFrame::prepare(world, &[])?,
-            ..Default::default()
-        })
+        let mut candidates = std::mem::take(&mut self.candidates);
+        candidates.clear();
+        candidates.extend(world.light_items());
+        let result =
+            self.prepare_candidates(world, items, customs, frustum, shadow_capacity, &candidates);
+        self.candidates = candidates;
+        result
     }
 
-    fn prepare_reused(
+    fn prepare_candidates(
         &mut self,
         world: &WorldContext<'_>,
         items: &[RenderItem],
@@ -760,19 +502,13 @@ impl LightSelectionState {
     }
 
     pub(super) fn recycle(&mut self, prepared: PreparedLighting) {
-        if ipp_core::lighting_reuse_enabled() {
-            self.prepared = prepared;
-        }
+        self.prepared = prepared;
     }
 
     pub(super) fn assign_shadows(&mut self, prepared: &mut PreparedLighting) {
-        if ipp_core::lighting_reuse_enabled() {
-            self.shadows.clear();
-            self.shadows
-                .extend(prepared.shadows.iter().map(|(entity, _)| *entity));
-        } else {
-            self.shadows = prepared.shadows.iter().map(|(entity, _)| *entity).collect();
-        }
+        self.shadows.clear();
+        self.shadows
+            .extend(prepared.shadows.iter().map(|(entity, _)| *entity));
         let count = self.shadows.len() as u32;
         let grid = (f64::from(count).sqrt().ceil()) as f32;
         for (slot, (_, frame)) in prepared.shadows.iter_mut().enumerate() {

@@ -139,21 +139,33 @@ test("canvas follows CSS size and display density without replacing its runtime"
           "left",
           false,
         ]);
+        // The drawing buffer follows full density unless the device limits
+        // are smaller, which then bound it proportionally.
+        const limits = (await layout(scenario.page, moduleUrl)).viewportLimits;
+        assert.ok(limits, "the worker reports device viewport limits");
+        const bounded = boundedSize(2_400, 1_200, limits);
         const capped = await capture(
           scenario.page,
           moduleUrl,
           scenario.evidence.directory,
-          "dpi-capped",
-          2_048,
-          1_024,
+          "dpi-device-bounded",
+          bounded.width,
+          bounded.height,
         );
         assertRenderedCube(
           capped,
-          "proportionally capped canvas after context recovery",
+          "device-bounded canvas after context recovery",
         );
         assert.ok(capped.contextGeneration > dprChanged.contextGeneration);
         const cappedLayout = await layout(scenario.page, moduleUrl);
-        assertLayout(cappedLayout, 1_200, 600, 2, 2_048, 1_024);
+        assertLayout(
+          cappedLayout,
+          1_200,
+          600,
+          2,
+          bounded.width,
+          bounded.height,
+        );
         assertIdentity(cappedLayout, initialScene);
         assert.deepEqual(cappedLayout.transfers, initialTransfers);
         transfers = cappedLayout.transfers;
@@ -198,6 +210,19 @@ function browserBuild(name: "render" | "headless"): BrowserBuildConfiguration {
     runtimeWasm: resolve(directory, "runtime.wasm"),
     exportWasm: resolve(directory, "export.wasm"),
     contractArtifact: resolve(directory, "contract.bin"),
+  };
+}
+
+/** Independent expectation of the canvas density bound. */
+function boundedSize(
+  width: number,
+  height: number,
+  limits: { readonly maxWidth: number; readonly maxHeight: number },
+): { width: number; height: number } {
+  const scale = Math.min(1, limits.maxWidth / width, limits.maxHeight / height);
+  return {
+    width: Math.min(limits.maxWidth, Math.round(width * scale)),
+    height: Math.min(limits.maxHeight, Math.round(height * scale)),
   };
 }
 

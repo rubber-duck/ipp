@@ -171,7 +171,7 @@ Snapshots retain descriptions/status/time and controller identity high-water mar
 | Clips | No byte/track/key quotas; format counts and system memory still apply |
 | Controllers | At most 16384 per World; any represented track selectable |
 | Queued descriptions | `max_batch_bytes` |
-| Transient activation | `max_staging_bytes` |
+| Staged component values | No byte limit; each touched component is copied once at commit |
 | Retained drivers/descriptions/restoration | No estimated-byte ceiling; typed residency accounted without quotas |
 
 [clip.rs](../../crates/ipp-core/src/world/systems/animation/clip.rs) owns encoding/validation; the [wire registry](../../crates/ipp-protocol/src/wire.rs) exports the selected format contract. Dynamic-property animation also has real frame coverage in `python tools/ipp.py test custom-materials`.

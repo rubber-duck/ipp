@@ -33,7 +33,6 @@ struct HostConnectionState {
 
 enum HostConnectionIngress {
     Control(HostRequest),
-    World(Vec<u8>),
     DecodedWorld(ipp_protocol::Request),
 }
 

@@ -10,9 +10,10 @@ import {
 
 const minimal = await generateClient("camera-minimal");
 const scene = await generateClient("camera-scene", []);
-const { codec } = await generateClient("camera-picking", []);
-const layout = (name, fields) => encodeManifestLayout(codec, name, fields);
-const tag = (name) => manifestVariant(codec, name);
+const client = await generateClient("camera-picking", []);
+const { codec, manifest } = client;
+const layout = (name, fields) => encodeManifestLayout(client, name, fields);
+const tag = (name) => manifestVariant(client, name);
 const center = {
   type: "GeometryPickQuery",
   x: 0.5,
@@ -200,8 +201,11 @@ test("baseline contracts expose camera commands, geometry queries and registrati
   assert.equal("REQUEST_GEOMETRY_PICK" in scene.codec.WIRE, true);
   assert.equal(codec.Camera.id, codec.components.Camera.id);
   assert.equal(codec.GEOMETRY_TYPE, codec.WIRE.ASSET_GEOMETRY);
-  assert.equal(codec.ASSET_FORMATS.ASSET_GEOMETRY.typeId, codec.GEOMETRY_TYPE);
-  assert.ok(codec.ASSET_FORMATS.ASSET_GEOMETRY.format.startsWith("IPPG;"));
+  assert.equal(
+    manifest.ASSET_FORMATS.ASSET_GEOMETRY.typeId,
+    codec.GEOMETRY_TYPE,
+  );
+  assert.ok(manifest.ASSET_FORMATS.ASSET_GEOMETRY.format.startsWith("IPPG;"));
   assert.equal("encodeBoundingShape" in minimal.codec, true);
   assert.equal(codec.Camera.fields.focus_distance.default, 6);
   assert.equal(codec.SCHEMA_HASH, scene.codec.SCHEMA_HASH);

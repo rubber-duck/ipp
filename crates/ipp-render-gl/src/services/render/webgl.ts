@@ -113,6 +113,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     throw new Error("WebGL texture size baseline unavailable");
   }
 
+  let maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
+  if (!(maxRenderbufferSize > 0)) {
+    throw new Error("WebGL renderbuffer size baseline unavailable");
+  }
+
   let maxParameterBytes = gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE) as number;
   let maxParameterTextures = Math.min(
     gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) as number,
@@ -1008,6 +1013,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.drawingBufferColorSpace = "srgb";
     maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
     maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
     maxParameterBytes = gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE) as number;
     maxParameterTextures = Math.min(
       gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) as number,
@@ -1329,6 +1335,14 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   const imports: WebAssembly.Imports[string] = {
     set_draw_checks(enabled: number): void {
       exhaustiveDrawChecks = enabled !== 0;
+    },
+    viewport_limit(axis: number): number {
+      if (disposed || gl.isContextLost()) return 0;
+      return Math.min(
+        maxViewport[axis === 0 ? 0 : 1]!,
+        maxRenderbufferSize,
+        maxTextureSize,
+      );
     },
     prepare_custom_parameters(
       handle: number,

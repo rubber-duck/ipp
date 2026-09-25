@@ -21,13 +21,13 @@ pub fn run<D: RenderDevice>(
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::ParticleEmitter(ParticleEmitter {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::ParticleEmitter(ParticleEmitter {
                     burst: 2000,
                     rate: 0.0,
                     shape: 1,
@@ -39,17 +39,17 @@ pub fn run<D: RenderDevice>(
                     lifetime: 2.0,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::ParticleSprite(ParticleSprite {
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::ParticleSprite(ParticleSprite {
                     r: 0.0,
                     g: 1.0,
                     b: 0.0,
                     end_opacity: 1.0,
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )?;
     let entity = world
@@ -86,20 +86,20 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::BoundingGeometry(BoundingGeometry {
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::BoundingGeometry(BoundingGeometry {
                     geometry,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Transform(Transform {
+            ),
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Transform(Transform {
                     x: 100.0,
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )?;
     assert_eq!(
@@ -121,10 +121,10 @@ pub fn run<D: RenderDevice>(
     );
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::Transform(Transform::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::Transform(Transform::default()),
+        )],
     )?;
     world.step(2.0)?;
     assert_eq!(
@@ -192,9 +192,9 @@ pub fn run<D: RenderDevice>(
                 entity: target,
                 component: ComponentValue::PARTICLE_SPRITE,
             },
-            Command::InsertComponentValue {
-                entity: target,
-                value: ComponentValue::ParticleEmitter(ParticleEmitter {
+            Command::insert_value(
+                target,
+                ComponentValue::ParticleEmitter(ParticleEmitter {
                     restart: 1,
                     burst: 1000,
                     rate: 0.0,
@@ -204,21 +204,21 @@ pub fn run<D: RenderDevice>(
                     lifetime: 10.0,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: target,
-                value: ComponentValue::ParticleMesh(ParticleMesh {
+            ),
+            Command::insert_value(
+                target,
+                ComponentValue::ParticleMesh(ParticleMesh {
                     source: "client://particles/mesh".into(),
                     variant: 0,
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: target,
-                value: ComponentValue::CustomMaterial(CustomMaterial {
+            ),
+            Command::insert_value(
+                target,
+                ComponentValue::CustomMaterial(CustomMaterial {
                     source: "client://particles/shader".into(),
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )?;
     let stats = render_frame(renderer, &mut world, WIDTH, HEIGHT)?;

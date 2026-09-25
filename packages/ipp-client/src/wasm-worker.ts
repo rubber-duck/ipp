@@ -1,5 +1,6 @@
 import { resourceUrlMappings } from "./resource-urls.js";
 import type { RenderWorkerService } from "./render-worker.js";
+import type { IngressStatistics } from "./presentation.js";
 import type {
   AssetHostExports,
   AssetWorkerService,
@@ -89,12 +90,8 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
   let runtime: WasmHostExports | undefined;
   let presentation: RenderWorkerService | undefined;
   let resources: AssetWorkerService | undefined;
-  const ingress = {
-    messages: 0,
-    wasmCopyBytes: 0,
-    partsMessages: 0,
-    transferredAssetBytes: 0,
-  };
+  // Counted only by diagnostics render builds, which report them in captures.
+  let ingress: IngressStatistics | undefined;
   // The paired target contract's message budget arrives with init and is
   // validated before the runtime loads; nothing is accepted until then.
   let maxMessageBytes = 0;
@@ -170,11 +167,13 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         destination.set(new Uint8Array(part), offset);
         offset += part.byteLength;
       }
-      ingress.messages++;
-      ingress.wasmCopyBytes += length;
-      if (multipart) {
-        ingress.partsMessages++;
-        ingress.transferredAssetBytes += parts[1]?.byteLength ?? 0;
+      if (ingress) {
+        ingress.messages++;
+        ingress.wasmCopyBytes += length;
+        if (multipart) {
+          ingress.partsMessages++;
+          ingress.transferredAssetBytes += parts[1]?.byteLength ?? 0;
+        }
       }
       checkResult(runtime.ipp_receive(length));
     }
@@ -192,11 +191,18 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
     }
   };
 
-  // Host-only profiler: the hook exists only in profiling WASM builds.
-  let profileFrames = new Float64Array(0);
-  let profileFrameCount = 0;
-  let profileCapture = false;
-  let profileApi: WebAssembly.Exports | undefined;
+  const evaluateFrame = (dt: number) => checkResult(runtime!.ipp_tick(dt));
+  const runFrame = (dt: number) => {
+    presentation?.beforeTick();
+    evaluate(dt);
+    pumpInputs();
+    resources?.pumpAfterFrame();
+    presentation?.afterFrame();
+    publish();
+  };
+  // Profiling builds replace both with timed steps; see profile-worker.ts.
+  let evaluate = evaluateFrame;
+  let step = runFrame;
   const frame = () => {
     if (frameTimer !== undefined) nextMaintenanceFrame += FRAME_INTERVAL_MS;
     frameRequest = undefined;
@@ -217,20 +223,7 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
             Math.max(0, (now - lastFrame) / 1_000),
           );
       lastFrame = now;
-      const started = profileCapture ? performance.now() : 0;
-      presentation?.beforeFrame();
-      const beforeTick = profileCapture ? performance.now() : 0;
-      checkResult(runtime.ipp_tick(dt));
-      const afterTick = profileCapture ? performance.now() : 0;
-      pumpInputs();
-      resources?.pumpAfterFrame();
-      presentation?.afterFrame();
-      publish();
-      if (profileCapture && profileFrameCount * 2 < profileFrames.length) {
-        profileFrames[profileFrameCount * 2] = afterTick - beforeTick;
-        profileFrames[profileFrameCount * 2 + 1] = performance.now() - started;
-        profileFrameCount++;
-      }
+      step(dt);
       scheduleFrame();
     } catch (error) {
       finish(error instanceof Error ? error : new Error(String(error)));
@@ -366,7 +359,6 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
           init.wasmUrl,
           (message, transfer) => port.postMessage(message, transfer),
           finish,
-          ingress,
           level as LogLevel,
         );
         if (closed) {
@@ -400,78 +392,25 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
       if (closed) return;
       runtime = runtimeExports(instance);
       if (typeof instance.exports.ipp_profile_reset === "function") {
-        profileApi = instance.exports;
-        profileFrames = new Float64Array(65536);
-        Object.assign(globalThis, {
-          ippProfile: {
-            start(profile = false) {
-              (profileApi!.ipp_profile_reset as Function)(Number(profile));
-              profileFrameCount = 0;
-              profileCapture = true;
-            },
-            count: () => profileFrameCount,
-            growMemory: () => runtime!.memory.grow(1),
-            stop() {
-              profileCapture = false;
-              (profileApi!.ipp_profile_pause as Function)();
-              return {
-                memoryBytes: runtime!.memory.buffer.byteLength,
-                shadowDrawCalls:
-                  typeof profileApi!.ipp_profile_shadow_draw_calls ===
-                  "function"
-                    ? Number(
-                        (
-                          profileApi!.ipp_profile_shadow_draw_calls as Function
-                        )(),
-                      )
-                    : null,
-                frames: Array.from({ length: profileFrameCount }, (_, i) => [
-                  profileFrames[i * 2]!,
-                  profileFrames[i * 2 + 1]!,
-                ]),
-                names: Array.from({ length: 32 }, (_, i) =>
-                  new TextDecoder().decode(
-                    new Uint8Array(
-                      runtime!.memory.buffer,
-                      (profileApi!.ipp_profile_name_ptr as Function)(i) >>> 0,
-                      (profileApi!.ipp_profile_name_len as Function)(i),
-                    ),
-                  ),
-                ),
-                stages: Array.from({ length: 768 }, (_, i) =>
-                  Number((profileApi!.ipp_profile_counter as Function)(i)),
-                ),
-                categories: Array.from({ length: 256 }, (_, i) => ({
-                  name: new TextDecoder().decode(
-                    new Uint8Array(
-                      runtime!.memory.buffer,
-                      (profileApi!.ipp_profile_category_name_ptr as Function)(
-                        i,
-                      ) >>> 0,
-                      (profileApi!.ipp_profile_category_name_len as Function)(
-                        i,
-                      ),
-                    ),
-                  ),
-                  calls: Number(
-                    (profileApi!.ipp_profile_category_counter as Function)(
-                      i * 2,
-                    ),
-                  ),
-                  bytes: Number(
-                    (profileApi!.ipp_profile_category_counter as Function)(
-                      i * 2 + 1,
-                    ),
-                  ),
-                })),
-                allocations: [0, 1].map((i) =>
-                  Number((profileApi!.ipp_profile_allocations as Function)(i)),
-                ),
-              };
-            },
-          },
+        const { installProfiler } = await import("./profile-worker.js");
+        if (closed) return;
+        const timed = installProfiler(instance.exports, runtime.memory, {
+          evaluate: evaluateFrame,
+          run: runFrame,
         });
+        evaluate = timed.evaluate;
+        step = timed.run;
       }
+      if (presentation?.reportsStatistics(instance.exports))
+        ingress = {
+          messages: 0,
+          wasmCopyBytes: 0,
+          partsMessages: 0,
+          transferredAssetBytes: 0,
+          sourceBytes: 0,
+          sourceBufferedBytes: 0,
+          sourcePeakBufferedBytes: 0,
+        };
       const configure = instance.exports.ipp_diagnostics_set_level;
       if (typeof configure === "function" && configure(threshold) !== 1) {
         throw new Error("WASM diagnostic level configuration failed");
@@ -486,7 +425,6 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         const { AssetWorkerService } = await import("./resource-worker.js");
         if (closed) return;
         if (
-          typeof instance.exports.ipp_resource_buffered_bytes !== "function" ||
           typeof instance.exports.ipp_resource_chunk !== "function" ||
           typeof instance.exports.ipp_resource_end !== "function" ||
           typeof instance.exports.ipp_resource_input_reserve !== "function"
@@ -496,14 +434,16 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         resources = new AssetWorkerService(
           runtime as WasmHostExports & AssetHostExports,
           session,
-          level as LogLevel,
-          ingress,
-          resourceUrls,
-          finish,
-          () => presentation?.beforeFrame(),
+          {
+            logLevel: level as LogLevel,
+            resourceUrls,
+            failed: finish,
+            prepareProgress: () => presentation?.beforeFrame(),
+            ...(ingress ? { statistics: ingress } : {}),
+          },
         );
       }
-      presentation?.initialize(runtime, session);
+      presentation?.initialize(runtime, session, ingress);
       lastFrame = performance.now();
       nextMaintenanceFrame = lastFrame + FRAME_INTERVAL_MS;
       initialized = true;

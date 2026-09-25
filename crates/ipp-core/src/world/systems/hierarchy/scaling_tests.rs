@@ -4,13 +4,6 @@ use crate::components::{Hierarchy, LookAt};
 use crate::{Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime};
 use std::time::Instant;
 
-/// Debug builds stop at 4k: debug-only commit validation makes large batch
-/// deletion quadratic there. The registered `scaling` suite runs these
-/// tests in release, where 16k stays affordable.
-#[cfg(debug_assertions)]
-const SCALING_SIZES: &[usize] = &[1_000, 4_000];
-
-#[cfg(not(debug_assertions))]
 const SCALING_SIZES: &[usize] = &[1_000, 4_000, 16_000];
 
 fn measure<T>(size: usize, shape: &str, operation: &str, f: impl FnOnce() -> T) -> T {
@@ -79,16 +72,18 @@ fn maintained_scaling_flat_and_deep_creation_restore_and_removal() {
                     entities
                         .iter()
                         .enumerate()
-                        .map(|(i, &entity)| Command::InsertComponentValue {
-                            entity: EntityRef::Handle(entity),
-                            value: ComponentValue::Hierarchy(Hierarchy {
-                                parent: if deep && i > 0 {
-                                    entities[i - 1]
-                                } else {
-                                    EntityId::from_bits(0)
-                                },
-                                ..Default::default()
-                            }),
+                        .map(|(i, &entity)| {
+                            Command::insert_value(
+                                EntityRef::Handle(entity),
+                                ComponentValue::Hierarchy(Hierarchy {
+                                    parent: if deep && i > 0 {
+                                        entities[i - 1]
+                                    } else {
+                                        EntityId::from_bits(0)
+                                    },
+                                    ..Default::default()
+                                }),
+                            )
                         })
                         .collect(),
                 )
@@ -149,12 +144,14 @@ fn maintained_scaling_sparse_look_at_edit_keeps_unrelated_graph_work_constant() 
             world,
             entities[1..]
                 .iter()
-                .map(|&entity| Command::InsertComponentValue {
-                    entity: EntityRef::Handle(entity),
-                    value: ComponentValue::LookAt(LookAt {
-                        target: entities[0],
-                        ..Default::default()
-                    }),
+                .map(|&entity| {
+                    Command::insert_value(
+                        EntityRef::Handle(entity),
+                        ComponentValue::LookAt(LookAt {
+                            target: entities[0],
+                            ..Default::default()
+                        }),
+                    )
                 })
                 .collect(),
         );
@@ -162,14 +159,14 @@ fn maintained_scaling_sparse_look_at_edit_keeps_unrelated_graph_work_constant() 
         apply(
             &mut host,
             world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entities[1]),
-                value: ComponentValue::LookAt(LookAt {
+            vec![Command::insert_value(
+                EntityRef::Handle(entities[1]),
+                ComponentValue::LookAt(LookAt {
                     target: entities[0],
                     enabled: false,
                     ..Default::default()
                 }),
-            }],
+            )],
         );
         assert_eq!(
             VISITS.get(),

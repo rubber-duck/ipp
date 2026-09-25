@@ -495,13 +495,6 @@ impl<'a> GeometryReadAccess<'a> {
 
     /// Asset-generated enclosure. Skinning combines all nonzero influence bounds
     /// into one convex box, which also encloses their normalized linear blends.
-    pub fn mesh_bounding_geometry(
-        &self,
-        entity: EntityId,
-    ) -> Result<CompoundGeometryShape, ErrorReason> {
-        self.mesh_bounding_geometry_into(entity, CompoundGeometryShape::default())
-    }
-
     fn mesh_bounding_geometry_into(
         &self,
         entity: EntityId,
@@ -736,18 +729,7 @@ impl<'a> GeometryReadAccess<'a> {
     }
 }
 
-// Collect CPU demand at the world boundary; the Host polls the union once.
-pub(in crate::world) fn evaluation_mesh_demand(
-    world: &WorldSimulationState,
-    authored: &crate::world::WorldEntityState,
-) -> std::collections::BTreeSet<AssetDemandSelection> {
-    let mut demand = std::collections::BTreeSet::new();
-    visit_evaluation_meshes(world, authored, |source, variant| {
-        demand.insert(AssetDemandSelection::new(crate::MESH_TYPE, source, variant));
-    });
-    demand
-}
-
+/// Collect CPU demand at the world boundary; the Host polls the union once.
 /// Refresh source membership in O(entities × log(distinct sources)), allocating
 /// only for new selections. Reused mesh instances do not copy their shared URI.
 pub(in crate::world) fn update_evaluation_mesh_demand(
@@ -842,15 +824,6 @@ impl crate::WorldContext<'_> {
         self.with_system::<GeometrySystem, _>(GeometrySystem::ID, |system, world| {
             system.evaluate(world)
         });
-    }
-
-    /// Asset-generated enclosure. Skinning combines all nonzero influence bounds
-    /// into one convex box, which also encloses their normalized linear blends.
-    pub fn mesh_bounding_geometry(
-        &self,
-        entity: EntityId,
-    ) -> Result<CompoundGeometryShape, ErrorReason> {
-        self.geometry_read().mesh_bounding_geometry(entity)
     }
 
     /// Asset-generated world-space enclosure without allocating an owned shape union.

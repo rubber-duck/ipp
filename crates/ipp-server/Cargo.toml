@@ -10,7 +10,6 @@ publish.workspace = true
 ipp-core.workspace = true
 ipp-host-session.workspace = true
 ipp-protocol.workspace = true
-ipp-render-gl = { workspace = true, optional = true }
 tungstenite = { workspace = true, optional = true }
 
 [features]
@@ -18,19 +17,23 @@ gui = [
     "surfaces",
     "ipp-protocol/gui",
     "ipp-host-session/gui",
-    "ipp-render-gl?/gui",
+    "ipp-render-gl/gui",
 ]
-surfaces = ["ipp-protocol/surfaces", "ipp-host-session/surfaces", "ipp-render-gl?/surfaces"]
-profiling = ["ipp-protocol/profiling", "ipp-host-session/profiling", "ipp-render-gl?/profiling"]
-mesh-poses = ["ipp-protocol/mesh-poses", "ipp-host-session/mesh-poses", "ipp-render-gl?/mesh-poses"]
-particles = ["ipp-protocol/particles", "ipp-host-session/particles", "ipp-render-gl?/particles"]
+surfaces = ["ipp-protocol/surfaces", "ipp-host-session/surfaces", "ipp-render-gl/surfaces"]
+profiling = ["ipp-protocol/profiling", "ipp-host-session/profiling", "ipp-render-gl/profiling"]
+mesh-poses = ["ipp-protocol/mesh-poses", "ipp-host-session/mesh-poses", "ipp-render-gl/mesh-poses"]
+particles = ["ipp-protocol/particles", "ipp-host-session/particles", "ipp-render-gl/particles"]
 default = ["builtin-assets"]
-diagnostics = ["ipp-core/diagnostics", "ipp-host-session/diagnostics"]
+diagnostics = ["ipp-core/diagnostics", "ipp-host-session/diagnostics", "ipp-render-gl/diagnostics"]
 builtin-assets = ["ipp-protocol/builtin-assets", "ipp-host-session/builtin-assets"]
 websocket = ["dep:tungstenite"]
-render = ["dep:ipp-render-gl"]
-skeletal-animation = ["ipp-protocol/skeletal-animation", "ipp-host-session/skeletal-animation", "ipp-render-gl?/skeletal-animation"]
-shadows = ["render", "ipp-host-session/shadows", "ipp-render-gl?/shadows"]
+skeletal-animation = ["ipp-protocol/skeletal-animation", "ipp-host-session/skeletal-animation", "ipp-render-gl/skeletal-animation"]
+shadows = ["ipp-host-session/shadows", "ipp-render-gl/shadows"]
+
+# The scene profiling example drives the native renderer and reads its statistics;
+# the server itself does not render.
+[dev-dependencies]
+ipp-render-gl.workspace = true
 
 [lints]
 workspace = true
@@ -42,4 +45,4 @@ required-features = ["websocket"]
 
 [[example]]
 name = "profile_scene"
-required-features = ["render", "shadows", "skeletal-animation", "mesh-poses", "particles"]
+required-features = ["diagnostics", "shadows", "skeletal-animation", "mesh-poses", "particles"]

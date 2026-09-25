@@ -85,14 +85,14 @@ fn gui_entity(world: &mut WorldContext<'_>) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(crate::components::Surface::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(crate::components::Surface::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .result

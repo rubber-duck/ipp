@@ -49,7 +49,6 @@ fn local_pose_into(
 fn assign_local_pose(
     runtime: &mut SkeletonRuntimeState,
     resolved: Option<(AssetKey, Vec<Transform>)>,
-    preserved: Option<&std::collections::BTreeSet<u32>>,
 ) -> Vec<Transform> {
     let Some((source, mut local)) = resolved else {
         if let Some(pose) = runtime.pose.as_mut() {
@@ -63,9 +62,7 @@ fn assign_local_pose(
         .filter(|pose| pose.source == source && pose.local.len() == local.len())
     {
         for (index, local) in local.drain(..).enumerate() {
-            if !(preserved.is_some_and(|joints| joints.contains(&(index as u32)))
-                || (crate::allocation_followup_enabled() && pose.sampled[index]))
-            {
+            if !pose.sampled[index] {
                 pose.local[index] = local;
             }
         }
@@ -93,21 +90,8 @@ fn prepare_component(
     if let Some(pose) = &mut value.runtime.pose {
         pose.sampled.fill(false);
     }
-    let reuse = crate::allocation_optimizations_enabled();
-    let resolved = local_pose_into(
-        assets,
-        world,
-        value,
-        if reuse {
-            std::mem::take(scratch)
-        } else {
-            Vec::new()
-        },
-    )?;
-    let capacity = assign_local_pose(&mut value.runtime, resolved, None);
-    if reuse {
-        *scratch = capacity;
-    }
+    let resolved = local_pose_into(assets, world, value, std::mem::take(scratch))?;
+    *scratch = assign_local_pose(&mut value.runtime, resolved);
     Ok(())
 }
 
@@ -118,13 +102,12 @@ pub(in crate::world) fn rebase_sampled_inputs(
     sampled: &Skeleton,
     assets: &AssetManagementService,
     world: WorldId,
-    preserved: Option<&std::collections::BTreeSet<u32>>,
 ) -> Result<(), ErrorReason> {
     if value.source != sampled.source || value.variant != sampled.variant {
         return Ok(());
     }
     let resolved = local_pose(assets, world, sampled)?;
-    assign_local_pose(&mut value.runtime, resolved, preserved);
+    assign_local_pose(&mut value.runtime, resolved);
     Ok(())
 }
 
@@ -229,10 +212,7 @@ pub(in crate::world) fn validate_changes(
     staged: &WorldMutationState,
 ) -> Result<(), ErrorReason> {
     for &(entity, component) in staged.changed.keys() {
-        if crate::allocation_optimizations_enabled()
-            && component != ComponentValue::SKELETON
-            && component != ComponentValue::SKIN
-        {
+        if component != ComponentValue::SKELETON && component != ComponentValue::SKIN {
             continue;
         }
         let value = staged.input_value(&world.components, entity, component);

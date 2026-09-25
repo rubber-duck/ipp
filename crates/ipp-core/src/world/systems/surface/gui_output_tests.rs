@@ -1,3 +1,5 @@
+#[cfg(feature = "gui")]
+use super::gui_shape_sampling::{GuiShapeFillSampling, GuiShapeGlowSampling};
 use super::*;
 use crate::services::asset_management::{AssetKey, AssetSource, AssetTypeId};
 #[cfg(feature = "gui")]

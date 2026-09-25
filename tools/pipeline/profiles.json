@@ -78,6 +78,7 @@
     "headless-gui": {
       "features": [
         "render",
+        "diagnostics",
         "surfaces",
         "gui"
       ],

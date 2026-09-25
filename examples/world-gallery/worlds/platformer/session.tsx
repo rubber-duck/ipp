@@ -350,7 +350,9 @@ export class PlatformerSession {
           throw new Error("Timed out loading platformer scene resources");
         await client.waitForFrame(state.tick);
       }
-      await canvas.capture();
+      // The first completed frame of the loaded scene, without readback.
+      await canvas.flush();
+      await client.presentation!.frame((await client.inspectPage()).tick);
       signal.throwIfAborted();
       await session.applyPlayback();
       await session.releasePreparations();

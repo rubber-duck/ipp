@@ -1,6 +1,6 @@
 use super::*;
 use crate::{ComponentValue, services::asset_management::service::AssetDemandSelection};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 impl AnimationAccess<'_, '_> {
     pub(in crate::world) fn apply_animation_controller_command(
@@ -629,38 +629,22 @@ impl AnimationAccess<'_, '_> {
                 }
             }
             let identity = driver.identity();
-            if !crate::compiled_animation_enabled()
-                && !self
-                    .read()
-                    .animation_target_alive(identity, &self.context.world.state)
-            {
-                continue;
-            }
             #[cfg(feature = "skeletal-animation")]
             if matches!(
                 driver.runtime_target(),
                 super::driver::AnimationRuntimeTarget::JointLocal { .. }
             ) {
-                if crate::allocation_followup_enabled() {
-                    if let Some(original) = driver.joint_original() {
-                        let _ = driver.runtime_target().write_joint_slice(
-                            &mut self.context.world.components,
-                            identity.entity,
-                            original,
-                        );
-                    }
-                    continue;
+                if let Some(original) = driver.joint_original() {
+                    let _ = driver.runtime_target().write_joint_slice(
+                        &mut self.context.world.components,
+                        identity.entity,
+                        original,
+                    );
                 }
-                let _ = driver.runtime_target().write_joints(
-                    &mut self.context.world.components,
-                    identity.entity,
-                    driver.original(),
-                );
                 continue;
             }
             let key = (identity.entity, identity.property.component());
-            if crate::allocation_followup_enabled()
-                && let Some(property) = identity.property.property()
+            if let Some(property) = identity.property.property()
                 && let [offset] = property.offsets.as_slice()
                 && values
                     .numeric_current(key, *offset, &self.context.world.components)
@@ -733,15 +717,12 @@ impl AnimationAccess<'_, '_> {
         ids.clear();
         ids.extend(self.system.state.controllers.keys().copied());
         let retain_outputs = retain_outputs
-            && crate::compiled_animation_enabled()
             && self.context.world.queue.is_empty()
             && !self.context.world.admitting_ingress;
         for &id in &ids {
             self.restore_controller_inputs(id, retain_outputs);
         }
-        if crate::allocation_optimizations_enabled() {
-            self.system.state.controller_ids = ids;
-        }
+        self.system.state.controller_ids = ids;
     }
 
     /// Install persistent descriptions and frozen clocks, rebuilding runtime bindings on readiness.
@@ -921,166 +902,42 @@ impl AnimationAccess<'_, '_> {
         })
     }
 
-    /// Refresh sparse restoration values after committed producer/overlay writes.
-    pub(in crate::world) fn refresh_animation_originals(&mut self, changed: &[(EntityId, u16)]) {
-        #[cfg(feature = "profiling")]
-        let _allocation_scope = crate::profiling::AllocationScope::new(196, "animation.originals");
-
-        let changed: HashSet<_> = changed.iter().copied().collect();
-        let mut controllers = std::mem::take(&mut self.system.state.controllers);
-        for controller in controllers.values_mut() {
-            for driver in &mut controller.drivers {
-                let identity = driver.identity();
-                if !changed.contains(&(identity.entity, identity.property.component())) {
-                    continue;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                if crate::allocation_followup_enabled() && driver.skeleton_source().is_some() {
-                    let _ = self.read().refresh_joint_original(driver.as_mut());
-                    continue;
-                }
-                if let Some(value) = self.context.world.state.producer_value(
-                    &self.context.world.components,
-                    identity.entity,
-                    identity.property.component(),
-                ) && let Ok(original) = self
-                    .read()
-                    .read_bound_animation_target(driver.as_ref(), &value)
-                {
-                    let _ = driver.refresh_original(original);
-                }
-            }
-            if let Some(source) = controller.transition_source_mut() {
-                for driver in &mut source.drivers {
-                    let identity = driver.identity();
-                    if !changed.contains(&(identity.entity, identity.property.component())) {
-                        continue;
-                    }
-                    if let Some(value) = self.context.world.state.producer_value(
-                        &self.context.world.components,
-                        identity.entity,
-                        identity.property.component(),
-                    ) && let Ok(original) = self
-                        .read()
-                        .read_bound_animation_target(driver.as_ref(), &value)
-                    {
-                        let _ = driver.refresh_original(original);
-                    }
-                }
-            }
-        }
-        self.system.state.controllers = controllers;
-    }
-
-    pub(super) fn refresh_all_animation_originals(&mut self) {
-        #[cfg(feature = "profiling")]
-        let _allocation_scope = crate::profiling::AllocationScope::new(196, "animation.originals");
-        let mut controllers = std::mem::take(&mut self.system.state.controllers);
-        for controller in controllers.values_mut() {
-            for driver in &mut controller.drivers {
-                let identity = driver.identity();
-                if let Some(property) = identity.property.property() {
-                    if let Ok(original) = AnimationValue::read_fields(property, |offset| {
-                        self.context.world.state.input_field(
-                            &self.context.world.components,
-                            identity.entity,
-                            property.component,
-                            offset,
-                        )
-                    }) {
-                        let _ = driver.refresh_original(original);
-                    }
-                    continue;
-                }
-                #[cfg(feature = "skeletal-animation")]
-                if crate::allocation_followup_enabled() && driver.skeleton_source().is_some() {
-                    let _ = self.read().refresh_joint_original(driver.as_mut());
-                    continue;
-                }
-                if let Some(value) = self.context.world.state.input_value(
-                    &self.context.world.components,
-                    identity.entity,
-                    identity.property.component(),
-                ) && let Ok(original) = self
-                    .read()
-                    .read_bound_animation_target(driver.as_ref(), &value)
-                {
-                    let _ = driver.refresh_original(original);
-                }
-            }
-        }
-        self.system.state.controllers = controllers;
-    }
-
     pub(super) fn sync_description_demand(&mut self) {
         let state = &mut self.system.state;
-        if crate::stress_optimizations_enabled() {
-            if !state.description_demand_clean {
-                let mut demand = BTreeSet::new();
-                for controller in state.controllers.values() {
-                    add_description_demand(&controller.snapshot.description, &mut demand);
-                    if let Some(transition) = controller.transition.as_deref() {
-                        let source = match &transition.source {
-                            super::system_state::AnimationTransitionSource::Live(source) => {
-                                source.as_ref()
-                            }
-                            super::system_state::AnimationTransitionSource::Frozen {
-                                bindings,
-                                ..
-                            } => bindings.as_ref(),
-                        };
-                        add_description_demand(&source.snapshot.description, &mut demand);
-                    }
-                    if controller.snapshot.state != AnimationPlaybackStatus::Stopped {
-                        for &key in controller.driver_targets.keys() {
-                            if (!ComponentValue::asset_references(key.1).is_empty()
-                                || ComponentValue::supports_dynamic_properties(key.1))
-                                && let Some(value) = self
-                                    .context
-                                    .world
-                                    .components
-                                    .get(key.1, key.0.index() as usize)
-                            {
-                                value.resource_demand(&mut demand);
-                            }
+        if !state.description_demand_clean {
+            let mut demand = BTreeSet::new();
+            for controller in state.controllers.values() {
+                add_description_demand(&controller.snapshot.description, &mut demand);
+                if let Some(transition) = controller.transition.as_deref() {
+                    let source = match &transition.source {
+                        super::system_state::AnimationTransitionSource::Live(source) => {
+                            source.as_ref()
+                        }
+                        super::system_state::AnimationTransitionSource::Frozen {
+                            bindings,
+                            ..
+                        } => bindings.as_ref(),
+                    };
+                    add_description_demand(&source.snapshot.description, &mut demand);
+                }
+                if controller.snapshot.state != AnimationPlaybackStatus::Stopped {
+                    for &key in controller.driver_targets.keys() {
+                        if (!ComponentValue::asset_references(key.1).is_empty()
+                            || ComponentValue::supports_dynamic_properties(key.1))
+                            && let Some(value) = self
+                                .context
+                                .world
+                                .components
+                                .get(key.1, key.0.index() as usize)
+                        {
+                            value.resource_demand(&mut demand);
                         }
                     }
                 }
-                state.demand_revision = state.demand_revision.wrapping_add(1);
-                state.animation_sources = demand;
-                state.description_demand_clean = true;
             }
-            return;
-        }
-        state.demand_revision = state.demand_revision.wrapping_add(1);
-        state.animation_sources.retain(|selection| {
-            selection.kind == ANIMATION_TYPE
-                && state.controllers.values().any(|controller| {
-                    controller
-                        .snapshot
-                        .description
-                        .drivers
-                        .iter()
-                        .any(|driver| {
-                            selection.source == driver.source && selection.variant == driver.variant
-                        })
-                })
-        });
-        for controller in state.controllers.values() {
-            add_description_demand(
-                &controller.snapshot.description,
-                &mut state.animation_sources,
-            );
-            if let Some(transition) = controller.transition.as_deref() {
-                let source = match &transition.source {
-                    super::system_state::AnimationTransitionSource::Live(source) => source.as_ref(),
-                    super::system_state::AnimationTransitionSource::Frozen {
-                        bindings,
-                        ..
-                    } => bindings.as_ref(),
-                };
-                add_description_demand(&source.snapshot.description, &mut state.animation_sources);
-            }
+            state.demand_revision = state.demand_revision.wrapping_add(1);
+            state.animation_sources = demand;
+            state.description_demand_clean = true;
         }
     }
 }

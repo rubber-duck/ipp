@@ -27,10 +27,10 @@ fn create_surface(host: &mut HostRuntime, world: ipp_core::WorldId) -> ipp_core:
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Surface(Surface::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Surface(Surface::default()),
+                ),
             ],
         })
         .unwrap();

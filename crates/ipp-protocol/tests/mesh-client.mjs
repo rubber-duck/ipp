@@ -96,7 +96,7 @@ test("baseline generation exposes standard scene descriptors and codecs", () => 
     "VALUE_BYTES",
   ])
     assert.equal(name in minimal.codec.WIRE, true, name);
-  assert.deepEqual(minimal.codec.WIRE_LAYOUTS["value-bytes"], {
+  assert.deepEqual(minimal.manifest.WIRE_LAYOUTS["value-bytes"], {
     capability: "base",
     fields: [
       { name: "tag", encoding: "variant", limit: 0, target: "value" },
@@ -441,13 +441,16 @@ test("resource event decoder validates event bounds, sessions and baseline resou
     textures.codec.decodeResponse(resourceEvent([texture]), 7n).body.resources,
     [texture],
   );
-  assert.match(textures.source, /IPPT;version=3/);
-  assert.match(textures.source, /rgba8-srgb-linear-alpha/);
-  assert.match(textures.source, /exact-payload/);
-  assert.doesNotMatch(textures.source, /exact-rgba8|max-dimension=1024/);
+  assert.match(textures.manifestSource, /IPPT;version=3/);
+  assert.match(textures.manifestSource, /rgba8-srgb-linear-alpha/);
+  assert.match(textures.manifestSource, /exact-payload/);
+  assert.doesNotMatch(
+    textures.manifestSource,
+    /exact-rgba8|max-dimension=1024/,
+  );
   assert.equal(
     textures.codec.MAX_MESSAGE_BYTES,
-    Number(textures.codec.WIRE_CONVENTIONS["max-message-bytes"]),
+    Number(textures.manifest.WIRE_CONVENTIONS["max-message-bytes"]),
   );
 });
 

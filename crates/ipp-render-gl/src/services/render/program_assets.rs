@@ -8,14 +8,13 @@ use ipp_core::{
         Asset, AssetLoader, AssetSource, AssetTypeId, BufferedAssetLoader,
     },
 };
-use std::{any::Any, cell::Cell, collections::BTreeSet, rc::Rc};
+use std::any::Any;
 
 pub(super) const PROGRAM_TYPE: AssetTypeId = AssetTypeId(14);
 
 pub(super) struct GlProgramData<D: RenderDevice> {
     pub program: Option<D::Program>,
     device: SharedRenderDevice<D>,
-    count: Rc<Cell<usize>>,
 }
 
 impl<D: RenderDevice> Asset for GlProgramData<D> {
@@ -30,7 +29,6 @@ impl<D: RenderDevice> Asset for GlProgramData<D> {
     fn invalidate_graphics(&mut self) {
         if let Some(program) = self.program.take() {
             self.device.borrow_mut().delete_program(program);
-            self.count.set(self.count.get().saturating_sub(1));
         }
     }
 
@@ -51,14 +49,12 @@ impl<D: RenderDevice> Drop for GlProgramData<D> {
     fn drop(&mut self) {
         if let Some(program) = self.program.take() {
             self.device.borrow_mut().delete_program(program);
-            self.count.set(self.count.get().saturating_sub(1));
         }
     }
 }
 
 pub(super) fn loader<D: RenderDevice>(
     device: SharedRenderDevice<D>,
-    count: Rc<Cell<usize>>,
 ) -> impl AssetLoader<Data = GlProgramData<D>> {
     BufferedAssetLoader::new(move |bytes| {
         let bits = u32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid program recipe")?);
@@ -80,11 +76,9 @@ pub(super) fn loader<D: RenderDevice>(
             .borrow_mut()
             .create_program(&vertex, &fragment)
             .map_err(|error| error.to_string())?;
-        count.set(count.get() + 1);
         Ok(GlProgramData {
             program: Some(program),
             device: device.clone(),
-            count: count.clone(),
         })
     })
 }
@@ -143,17 +137,9 @@ impl<D: RenderDevice> RenderService<D> {
 
         self.program_lookup.fill(None);
         let items = world.render_items();
-        let reuse = ipp_core::allocation_optimizations_enabled();
-        let mut recipes = BTreeSet::new();
         let mut recipe_scratch = std::mem::take(&mut self.recipe_scratch);
         recipe_scratch.clear();
-        let mut insert_recipe = |recipe| {
-            if reuse {
-                recipe_scratch.push(recipe);
-            } else {
-                recipes.insert(recipe);
-            }
-        };
+        let mut insert_recipe = |recipe| recipe_scratch.push(recipe);
         let shadows = if world.active_camera().is_some()
             && items.iter().any(|item| {
                 item.pbr.is_some()
@@ -161,34 +147,19 @@ impl<D: RenderDevice> RenderService<D> {
                         .custom_material(item.entity)
                         .is_some_and(|material| material.receives_light || material.casts_shadows)
             }) {
-            cfg!(feature = "shadows")
-                && if ipp_core::render_buffer_reuse_enabled() {
-                    world.light_items().any(|(_, _, light)| light.cast_shadows)
-                } else {
-                    world
-                        .light_items()
-                        .collect::<Vec<_>>()
-                        .iter()
-                        .any(|(_, _, light)| light.cast_shadows)
-                }
+            cfg!(feature = "shadows") && world.light_items().any(|(_, _, light)| light.cast_shadows)
         } else {
             false
         };
-        let mut seen = BTreeSet::new();
         let mut previous_entity = None;
         for item in items {
-            if reuse {
-                // Core render inputs are grouped in deterministic entity order.
-                if previous_entity == Some(item.entity) {
-                    continue;
-                }
-                previous_entity = Some(item.entity);
-            } else if !seen.insert(item.entity) {
+            // Core render inputs are grouped in deterministic entity order.
+            if previous_entity == Some(item.entity) {
                 continue;
             }
+            previous_entity = Some(item.entity);
             #[cfg(feature = "particles")]
             let quad = item.particle.filter(|p| p.sprite).map(|_| {
-                if !ipp_core::render_buffer_reuse_enabled() { self.particle_quad_metadata = None; }
                 &*self.particle_quad_metadata.get_or_insert_with(|| {
                     ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(super::particles::quad_asset())
                 })
@@ -196,12 +167,8 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(not(feature = "particles"))]
             let mesh = world.mesh_metadata(item.mesh);
             #[cfg(feature = "particles")]
-            let mesh = if ipp_core::render_buffer_reuse_enabled() {
-                // Sprite quads are private renderer assets, with no World mesh key.
-                quad.or_else(|| world.mesh_metadata(item.mesh))
-            } else {
-                quad.or(world.mesh_metadata(item.mesh))
-            };
+            // Sprite quads are private renderer assets, with no World mesh key.
+            let mesh = quad.or_else(|| world.mesh_metadata(item.mesh));
             let Some(mesh) = mesh else {
                 continue;
             };
@@ -252,48 +219,36 @@ impl<D: RenderDevice> RenderService<D> {
                 false,
             ));
         }
-        if reuse {
-            recipe_scratch.sort_unstable();
-            recipe_scratch.dedup();
-            let mut keys = std::mem::take(&mut self.program_keys);
-            keys.clear();
-            let world_id = world.id();
-            let result = (|| {
-                for &(config, shadow) in &recipe_scratch {
-                    let name = ProgramSourceName::new(config, shadow);
-                    let key = match world.asset_source_key(PROGRAM_TYPE, name.as_str(), 0) {
-                        Some(key) => key,
-                        None => {
-                            let bits = config.recipe_bits() | (u32::from(shadow) << 9);
-                            world.asset_resources_mut().prepare_internal_source(
-                                world_id,
-                                source(config, shadow),
-                                bits.to_le_bytes().to_vec(),
-                            )?
-                        }
-                    };
-                    self.program_lookup
-                        [(config.recipe_bits() | (u32::from(shadow) << 9)) as usize] = Some(key);
-                    keys.push(key);
-                }
-                world
-                    .asset_resources_mut()
-                    .retain_internal_sources(world_id, &keys)
-            })();
-            self.recipe_scratch = recipe_scratch;
-            self.program_keys = keys;
-            return result.map_err(RenderError::RenderDevice);
-        }
-        let sources = recipes.into_iter().map(|(config, shadow)| {
-            let bits = config.recipe_bits() | (u32::from(shadow) << 9);
-            (source(config, shadow), bits.to_le_bytes().to_vec())
-        });
+        recipe_scratch.sort_unstable();
+        recipe_scratch.dedup();
+        let mut keys = std::mem::take(&mut self.program_keys);
+        keys.clear();
         let world_id = world.id();
-        world
-            .asset_resources_mut()
-            .prepare_internal_sources(world_id, sources)
-            .map_err(RenderError::RenderDevice)?;
-        Ok(())
+        let result = (|| {
+            for &(config, shadow) in &recipe_scratch {
+                let name = ProgramSourceName::new(config, shadow);
+                let key = match world.asset_source_key(PROGRAM_TYPE, name.as_str(), 0) {
+                    Some(key) => key,
+                    None => {
+                        let bits = config.recipe_bits() | (u32::from(shadow) << 9);
+                        world.asset_resources_mut().prepare_internal_source(
+                            world_id,
+                            source(config, shadow),
+                            bits.to_le_bytes().to_vec(),
+                        )?
+                    }
+                };
+                self.program_lookup[(config.recipe_bits() | (u32::from(shadow) << 9)) as usize] =
+                    Some(key);
+                keys.push(key);
+            }
+            world
+                .asset_resources_mut()
+                .retain_internal_sources(world_id, &keys)
+        })();
+        self.recipe_scratch = recipe_scratch;
+        self.program_keys = keys;
+        result.map_err(RenderError::RenderDevice)
     }
 
     pub(super) fn builtin_program<'a>(
@@ -302,13 +257,9 @@ impl<D: RenderDevice> RenderService<D> {
         config: RenderShaderConfig,
         shadow: bool,
     ) -> Option<&'a D::Program> {
-        let resources = world.asset_resources();
-        let key = if ipp_core::allocation_optimizations_enabled() {
-            self.program_lookup[(config.recipe_bits() | (u32::from(shadow) << 9)) as usize]?
-        } else {
-            resources.find(&source(config, shadow))?
-        };
-        resources
+        let key = self.program_lookup[(config.recipe_bits() | (u32::from(shadow) << 9)) as usize]?;
+        world
+            .asset_resources()
             .get(key)?
             .data()?
             .as_any()

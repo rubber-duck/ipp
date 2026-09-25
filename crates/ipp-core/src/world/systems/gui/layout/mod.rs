@@ -9,11 +9,12 @@ pub(super) mod evaluation;
 pub(super) mod skin;
 pub(super) mod system;
 
+#[cfg(test)]
+pub(crate) use evaluation::GuiLayoutDiagnostic;
 pub use evaluation::{
-    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiConstraintError, GuiEvaluatedContent,
-    GuiEvaluatedNode, GuiEvaluatedView, GuiFontResolution, GuiHit, GuiLayoutCache,
-    GuiLayoutDiagnostic, GuiLayoutRequest, GuiPanelResolution, GuiResourceResolver,
-    MAX_LAYOUT_DEPTH, resolve_panel_hit,
+    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiEvaluatedContent, GuiEvaluatedNode,
+    GuiEvaluatedView, GuiFontResolution, GuiHit, GuiLayoutCache, GuiLayoutRequest,
+    GuiPanelResolution, GuiResourceResolver, MAX_LAYOUT_DEPTH, resolve_panel_hit,
 };
 pub use skin::{
     FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, GuiControlVariant, GuiInteractionState, GuiPartMotion,

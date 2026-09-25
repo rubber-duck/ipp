@@ -61,25 +61,12 @@ impl<'a> AnimationReadAccess<'a> {
     }
 
     pub(super) fn source_key(&self, description: &AnimationDriverDescription) -> Option<AssetKey> {
-        if crate::allocation_optimizations_enabled() {
-            return self.asset_resources().find_source(
-                self.world.id,
-                ANIMATION_TYPE,
-                &description.source,
-                description.variant,
-            );
-        }
-        let source =
-            crate::services::asset_management::service::AssetManagementService::scoped_selection(
-                self.world.id,
-                &AssetDemandSelection::new(
-                    ANIMATION_TYPE,
-                    &description.source,
-                    description.variant,
-                ),
-            )
-            .descriptor();
-        self.asset_resources().find(&source)
+        self.asset_resources().find_source(
+            self.world.id,
+            ANIMATION_TYPE,
+            &description.source,
+            description.variant,
+        )
     }
 
     pub(super) fn clip_by_key(&self, key: AssetKey) -> Option<&'a AnimationClip> {
@@ -132,10 +119,13 @@ impl<'a> AnimationReadAccess<'a> {
             return Err(ErrorReason::Capacity);
         }
         if let Some((_, description)) = replace {
-            add_description_demand(description, &mut demand);
+            // Retained controllers were validated when admitted; check only the
+            // demand this description adds, proportionally to the controller.
+            let mut added = BTreeSet::new();
+            add_description_demand(description, &mut added);
+            self.validate_animation_demand(&added)?;
+            demand.extend(added);
         }
-        #[cfg(debug_assertions)]
-        self.validate_animation_demand(&demand)?;
         Ok(demand)
     }
 
@@ -267,8 +257,7 @@ impl<'a> AnimationReadAccess<'a> {
         identity: &AnimationTargetIdentity,
         state: &crate::world::WorldEntityState,
     ) -> bool {
-        if crate::allocation_optimizations_enabled()
-            && let [offset] = identity.property.indices()
+        if let [offset] = identity.property.indices()
             && removable_field(*offset)
         {
             return state
@@ -312,26 +301,6 @@ impl<'a> AnimationReadAccess<'a> {
     ) -> bool {
         if !self.animation_target_alive(driver.identity(), state) {
             return false;
-        }
-        if !crate::allocation_optimizations_enabled()
-            && driver
-                .identity()
-                .property
-                .indices()
-                .iter()
-                .any(|offset| removable_field(*offset))
-        {
-            let identity = driver.identity();
-            let Some(value) = state.input_value(
-                &self.world.components,
-                identity.entity,
-                identity.property.component(),
-            ) else {
-                return false;
-            };
-            if self.read_bound_animation_target(driver, &value).is_err() {
-                return false;
-            }
         }
         #[cfg(feature = "skeletal-animation")]
         if let Some(source) = driver.skeleton_source() {
@@ -648,8 +617,7 @@ impl<'a> AnimationReadAccess<'a> {
     ) -> bool {
         // Dynamic properties and rows may depart within an incarnation. Every
         // rows-capable component addresses region zero's first property.
-        if !crate::animation_update_reuse_enabled()
-            || ComponentValue::supports_dynamic_properties(key.1)
+        if ComponentValue::supports_dynamic_properties(key.1)
             || ComponentValue::has_field(key.1, crate::components::rows::row_region_base(0))
         {
             return false;
@@ -678,26 +646,18 @@ impl<'a> AnimationReadAccess<'a> {
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationValidate);
 
-        if crate::stress_optimizations_enabled() {
-            for key in staged.changed.keys() {
-                if self.unchanged_static_target(*key, staged) {
-                    continue;
-                }
-                if let Some(ids) = self.animation.target_controllers.get(key) {
-                    for id in ids {
-                        for driver in self.animation.controllers[id].drivers_for(*key) {
-                            let identity = driver.identity();
-                            if (identity.entity, identity.property.component()) == *key {
-                                self.validate_animation_driver(driver, staged)?;
-                            }
+        for key in staged.changed.keys() {
+            if self.unchanged_static_target(*key, staged) {
+                continue;
+            }
+            if let Some(ids) = self.animation.target_controllers.get(key) {
+                for id in ids {
+                    for driver in self.animation.controllers[id].drivers_for(*key) {
+                        let identity = driver.identity();
+                        if (identity.entity, identity.property.component()) == *key {
+                            self.validate_animation_driver(driver, staged)?;
                         }
                     }
-                }
-            }
-        } else {
-            for controller in self.animation.controllers.values() {
-                for driver in &controller.drivers {
-                    self.validate_animation_driver(driver.as_ref(), staged)?;
                 }
             }
         }
@@ -710,19 +670,16 @@ impl<'a> AnimationReadAccess<'a> {
         staged: &WorldMutationState,
     ) -> Result<(), ErrorReason> {
         let identity = driver.identity();
-        if crate::allocation_optimizations_enabled()
-            && !staged
-                .changed
-                .contains_key(&(identity.entity, identity.property.component()))
+        if !staged
+            .changed
+            .contains_key(&(identity.entity, identity.property.component()))
         {
             return Ok(());
         }
         if !self.animation_binding_alive(driver, staged) {
             return Ok(());
         }
-        if crate::allocation_optimizations_enabled()
-            && let Some(property) = identity.property.property()
-        {
+        if let Some(property) = identity.property.property() {
             AnimationValue::read_fields(property, |offset| {
                 staged.input_field(
                     &self.world.components,

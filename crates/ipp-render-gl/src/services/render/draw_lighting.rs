@@ -53,18 +53,6 @@ impl DrawLightingTable {
         &mut row.draw
     }
 
-    pub fn insert(&mut self, entity: EntityId, draw: PreparedDrawLighting) {
-        let slot = entity.index() as usize;
-        if self.rows.len() <= slot {
-            self.rows.resize_with(slot + 1, || None);
-        }
-        self.rows[slot] = Some(DrawLightingRow {
-            entity,
-            epoch: self.epoch,
-            draw,
-        });
-    }
-
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut PreparedDrawLighting> {
         let epoch = self.epoch;
         self.rows.iter_mut().filter_map(move |row| {

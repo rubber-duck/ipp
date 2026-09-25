@@ -14,6 +14,9 @@ miniz_oxide = { workspace = true, optional = true }
 # the dependency-free basic-LTR subset for plain Surface labels.
 unicode-segmentation = { workspace = true, optional = true }
 
+[dev-dependencies]
+ipp-core = { workspace = true, features = ["checked-invariants"] }
+
 [features]
 profiling = []
 mesh-poses = []
@@ -26,6 +29,12 @@ builtin-assets = []
 skeletal-animation = []
 zip-data-source = ["dep:miniz_oxide"]
 shadows = []
+# Test-only oracle: assert (panic) after each commit that every committed
+# component passes whole-component validation. It never changes a batch result.
+# Only the self dev-dependency below enables it, for ipp-core's own unit and
+# integration test targets; it must never appear in a build profile or in a
+# dependent crate's feature list.
+checked-invariants = []
 
 [lints]
 workspace = true

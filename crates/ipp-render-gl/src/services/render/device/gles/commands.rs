@@ -5,6 +5,18 @@ impl RenderDevice for GlesRenderDevice {
         self.error_checks.set_exhaustive(enabled);
     }
 
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        let axis = |viewport: i32| {
+            (viewport.max(0) as u32)
+                .min(self.max_renderbuffer_size)
+                .min(self.max_texture_size)
+        };
+        Some(crate::ViewportLimits {
+            max_width: axis(self.max_viewport[0]),
+            max_height: axis(self.max_viewport[1]),
+        })
+    }
+
     type Program = GlesRenderProgram;
 
     type Mesh = GlesRenderMesh;

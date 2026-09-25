@@ -6,7 +6,7 @@
 //! retained geometry. Runs publish reference-counted demand before their World draws, and
 //! the Service populates the missing entries of a frame before its main pass.
 //!
-//! Pages without demand stay resident. They retire after a configurable number of idle
+//! Pages without demand stay resident. They retire after a renderer-owned number of idle
 //! demand publications, when allocation pressure needs their space, or all at once when
 //! no World demands any glyph. Pressure reclaims a partially live page only when no idle
 //! page remains. Retained batches check the pages they sample, so retiring one page
@@ -30,12 +30,14 @@ use ipp_core::systems::surface::{
 use super::gui_batch::{GUI_FILL_GLYPH, GuiVertex};
 use super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
 use super::retained_surfaces::SurfacePaint;
-use crate::{RenderDevice, RenderError, RenderStats};
+use crate::services::render::frame_statistics::RenderFrameWork;
+use crate::{RenderDevice, RenderError};
 
 /// Page width and height in texels for each atlas page texture.
 pub const ATLAS_PAGE_SIZE: u32 = 512;
 
 /// Bytes per atlas texel: pages store single-channel R8 coverage.
+#[cfg(any(test, feature = "diagnostics"))]
 pub const ATLAS_BYTES_PER_TEXEL: usize = 1;
 
 /// Glyph coverage entries a frame populates whenever that many are missing, however
@@ -52,7 +54,7 @@ pub const DEFAULT_POPULATE_BUDGET_MS: f64 = 2.0;
 /// Estimated population cost per glyph, in milliseconds, before a measurement and on
 /// platforms without a clock. Native population measures its own passes; WebGL draws
 /// are queued to another process, so its estimate stays fixed. Both are calibrated
-/// from cold terminal and dashboard populations (see `RenderStats::glyph_populates`).
+/// from cold terminal and dashboard populations (see `RenderStatistics::glyph_populates`).
 #[cfg(not(target_arch = "wasm32"))]
 const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.005;
 #[cfg(target_arch = "wasm32")]
@@ -80,7 +82,12 @@ const BAND_COVERAGE: f32 = 0.88;
 /// Glyph quads one retained batch holds at most.
 const MAX_BATCH_GLYPHS: usize = 256;
 
-/// Bounds a Host may place on the shared glyph atlas.
+/// Bounds of the shared glyph atlas, owned by the renderer.
+///
+/// Production uses [`Self::DEFAULT`]: GL exposes no memory size, and a 512-texel page
+/// fits every WebGL 2 and GLES 3 texture limit, so the page budget is a documented
+/// heuristic rather than a device query. Hosts do not configure it; `diagnostics`
+/// builds may override it for tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlyphAtlasLimits {
     /// Resident page budget, at least one. Allocation beyond it reclaims idle pages first.
@@ -91,7 +98,8 @@ pub struct GlyphAtlasLimits {
 }
 
 impl GlyphAtlasLimits {
-    /// Four pages; an idle page retires after about ten seconds of one World at 60 Hz.
+    /// Four pages (1 MiB of coverage); an idle page retires after about ten seconds of
+    /// one World at 60 Hz.
     pub const DEFAULT: Self = Self {
         max_pages: 4,
         idle_page_publications: 600,
@@ -303,6 +311,10 @@ pub struct GlyphAtlas<D: RenderDevice> {
     /// Advances whenever resident entries are removed, invalidating residency checks.
     residency_generation: u64,
     needs_reclaim: bool,
+    /// Pages holding a texture, maintained where textures are created and released.
+    #[cfg(any(test, feature = "diagnostics"))]
+    resident_pages: u32,
+    #[cfg(any(test, feature = "diagnostics"))]
     retired_pages: u32,
     population_backoff: BTreeMap<GlyphKey, GlyphPopulationBackoff>,
 }
@@ -320,12 +332,17 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             demand_tick: 0,
             residency_generation: 0,
             needs_reclaim: false,
+            #[cfg(any(test, feature = "diagnostics"))]
+            resident_pages: 0,
+            #[cfg(any(test, feature = "diagnostics"))]
             retired_pages: 0,
             population_backoff: BTreeMap::new(),
         }
     }
 
-    /// Replace the atlas bounds. A lowered page budget applies at the next publication.
+    /// Replace the renderer-owned atlas bounds for testing. A lowered page budget
+    /// applies at the next publication.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn set_limits(&mut self, limits: GlyphAtlasLimits) {
         self.limits = GlyphAtlasLimits {
             max_pages: limits.max_pages.max(1),
@@ -340,6 +357,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             if let Some(handle) = page.handle {
                 device.delete_glyph_atlas_page(handle);
             }
+        }
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.resident_pages = 0;
         }
         self.entries.clear();
         self.demand.clear();
@@ -358,6 +379,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
             if let Some(handle) = page.handle.take() {
                 device.delete_glyph_atlas_page(handle);
             }
+        }
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.resident_pages = 0;
         }
         for slot in self.entries.values_mut() {
             slot.populated = false;
@@ -488,27 +513,34 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
         self.entries.retain(|_, slot| slot.entry.page_index != id);
         self.residency_generation = self.residency_generation.wrapping_add(1);
-        self.retired_pages += 1;
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.retired_pages += 1;
+        }
         if let Some(handle) = page.handle {
+            #[cfg(any(test, feature = "diagnostics"))]
+            {
+                self.resident_pages -= 1;
+            }
             self.device.borrow_mut().delete_glyph_atlas_page(handle);
         }
     }
 
     /// Number of atlas pages holding a resident texture.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn page_count(&self) -> u32 {
-        self.pages
-            .values()
-            .filter(|page| page.handle.is_some())
-            .count() as u32
+        self.resident_pages
     }
 
     /// Total resident bytes occupied by atlas page textures (R8 coverage).
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn resident_bytes(&self) -> usize {
         self.page_count() as usize
             * (ATLAS_PAGE_SIZE as usize * ATLAS_PAGE_SIZE as usize * ATLAS_BYTES_PER_TEXEL)
     }
 
     /// Pages retired since the last call, by idle expiry, pressure or lost demand.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn take_retired_pages(&mut self) -> u32 {
         std::mem::take(&mut self.retired_pages)
     }
@@ -637,6 +669,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                     .device
                     .borrow_mut()
                     .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?;
+                #[cfg(any(test, feature = "diagnostics"))]
+                {
+                    self.resident_pages += 1;
+                }
                 let index = self.next_page;
                 self.next_page += 1;
                 let page = self
@@ -695,6 +731,10 @@ impl<D: RenderDevice> GlyphAtlas<D> {
                     .borrow_mut()
                     .create_glyph_atlas_page(ATLAS_PAGE_SIZE, ATLAS_PAGE_SIZE)?,
             );
+            #[cfg(any(test, feature = "diagnostics"))]
+            {
+                self.resident_pages += 1;
+            }
         }
         Ok(())
     }
@@ -729,10 +769,12 @@ impl Default for GlyphPopulationBudget {
 
 impl GlyphPopulationBudget {
     /// Samples smaller than this many glyphs are dominated by fixed pass costs.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     const MIN_SAMPLE_GLYPHS: usize = 8;
 
     /// Replace the time budget; zero populates only the floor, and an infinite or
     /// non-finite budget populates up to the cap.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub fn set_budget_ms(&mut self, budget_ms: f64) {
         self.budget_ms = if budget_ms.is_nan() {
             f64::INFINITY
@@ -752,6 +794,7 @@ impl GlyphPopulationBudget {
     }
 
     /// Fold one measured population pass into the per-glyph estimate.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn record(&mut self, glyphs: usize, elapsed_ms: f64) {
         if glyphs < Self::MIN_SAMPLE_GLYPHS || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
             return;
@@ -832,10 +875,11 @@ impl GlyphFrameWork {
     }
 
     /// Report this frame's work in the submission statistics.
-    pub fn publish(&self, stats: &mut RenderStats) {
-        stats.glyph_misses = self.misses;
-        stats.glyph_populates = self.populates;
-        stats.glyph_population_failures = self.failures;
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn publish(&self, statistics: &mut crate::RenderStatistics) {
+        statistics.glyph_misses = self.misses;
+        statistics.glyph_populates = self.populates;
+        statistics.glyph_population_failures = self.failures;
     }
 }
 
@@ -949,11 +993,6 @@ pub struct GlyphBatchRenderCache {
 }
 
 impl GlyphBatchRenderCache {
-    /// Create a new empty text batch render cache.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Release every retained text run; demand belongs to the atlas.
     pub fn clear(&mut self) {
         self.surfaces.clear();
@@ -1131,7 +1170,7 @@ impl GlyphBatchRenderCache {
         &mut self,
         atlas: &GlyphAtlas<D>,
         run: &TextRun<'_>,
-        stats: &mut RenderStats,
+        stats: &mut RenderFrameWork,
     ) -> bool {
         let Some(record) = self
             .surfaces
@@ -1231,13 +1270,14 @@ struct PageBucket {
 /// Quads join the last batch of their page unless a later batch holds an overlapping quad
 /// of another colour. Same-colour coverage composites identically in either order, so a
 /// run of one colour needs one batch per page however its pages interleave.
+#[cfg_attr(not(any(test, feature = "diagnostics")), allow(unused_variables))]
 fn rebuild_batches<D: RenderDevice>(
     atlas: &GlyphAtlas<D>,
     record: &mut RetainedGlyphRun,
     run: &TextRun<'_>,
     band: u16,
     revision: &mut u64,
-    stats: &mut RenderStats,
+    stats: &mut RenderFrameWork,
 ) {
     let style = run.style;
     let unit = run.font_size / run.units_per_em as f32;
@@ -1343,7 +1383,10 @@ fn rebuild_batches<D: RenderDevice>(
             page_index: bucket.page_index,
             revision: *revision,
         });
-        stats.gui_rebuilds += 1;
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            stats.statistics.gui_rebuilds += 1;
+        }
     }
 
     record.built_hash = Some(record.geometry_hash);

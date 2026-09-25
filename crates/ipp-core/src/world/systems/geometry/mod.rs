@@ -21,7 +21,7 @@ pub use spatial::{
 mod update;
 
 pub(crate) use update::GeometryEvaluationState;
-pub(in crate::world) use update::{evaluation_mesh_demand, update_evaluation_mesh_demand};
+pub(in crate::world) use update::update_evaluation_mesh_demand;
 
 mod shape;
 mod transform;

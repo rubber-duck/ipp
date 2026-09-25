@@ -107,32 +107,6 @@ export type {
 } from "./client.js";
 export { RequestNotSentError, RequestRejectedError } from "./client.js";
 
-/** One exported layout bound; the executed target contract is its only source. */
-function wireFieldLimit(layout: string, field: string): number {
-  const limit = (
-    WIRE_LAYOUTS as Readonly<
-      Record<
-        string,
-        { readonly fields: readonly { name: string; limit: number }[] }
-      >
-    >
-  )[layout]?.fields.find((candidate) => candidate.name === field)?.limit;
-  if (!Number.isSafeInteger(limit) || limit! <= 0)
-    throw new Error(`Generated contract omits the ${layout}.${field} bound`);
-  return limit!;
-}
-/** Complete application message budget declared by the target contract. */
-export const MAX_MESSAGE_BYTES = Number(WIRE_CONVENTIONS["max-message-bytes"]);
-if (!Number.isSafeInteger(MAX_MESSAGE_BYTES) || MAX_MESSAGE_BYTES <= 0)
-  throw new Error("Generated contract omits the message budget");
-/** Inspected byte fields, including named-property descriptor tables. */
-export const INSPECTED_BYTES_LIMIT = wireFieldLimit(
-  "snapshot-value-bytes",
-  "value",
-);
-/** Whole schema rows tables written by insertion or inspected by snapshots. */
-const ROWS_VALUE_BYTES = wireFieldLimit("value-rows", "value");
-const INSPECTED_ROWS_LIMIT = wireFieldLimit("snapshot-value-rows", "value");
 /** Offset span of one rows region; region k starts at (k + 1) spans. */
 const ROW_REGION_SPAN = 0x10000000;
 const ROW_PROPERTY_KINDS = [
@@ -297,27 +271,6 @@ export function decodeRowsTable<Row = Record<string, RowPropertyValue>>(
   if (at !== bytes.length) fail("trailing rows table bytes");
   return { nextSlot, rows };
 }
-// #if gui
-const GUI_EDITS_BYTES = wireFieldLimit("request-gui", "edits");
-const GUI_INPUT_BYTES = wireFieldLimit("request-gui-input", "input");
-const GUI_ACTION_BYTES = wireFieldLimit(
-  "request-gui-semantic-action",
-  "action",
-);
-const GUI_INSPECT_BYTES = wireFieldLimit("response-gui-inspect", "payload");
-const GUI_SNAPSHOT_BYTES = wireFieldLimit(
-  "response-gui-semantic-snapshot",
-  "snapshot",
-);
-const GUI_OBSERVATION_BYTES = wireFieldLimit(
-  "response-gui-observations",
-  "observations",
-);
-const GUI_UNHANDLED_BYTES = wireFieldLimit(
-  "response-gui-unhandled",
-  "unhandled",
-);
-// #endif
 /** Entity references and command builders; submit commands through client.batch(). */
 export const Entity = {
   handle(id: bigint): EntityRef {
@@ -1227,10 +1180,7 @@ function readResources(
         if (resource.total < resource.completed) fail("invalid progress");
       }
     }
-    if (status === "failed")
-      resource.error = r.string(
-        WIRE_LAYOUTS["resource-status-failed"].fields[1].limit,
-      );
+    if (status === "failed") resource.error = r.string(RESOURCE_ERROR_BYTES);
     const boolean = () => {
       const value = r.u8();
       if (value > 1) fail("representation boolean");
@@ -2289,11 +2239,7 @@ export class IppHostClient extends GeneratedHostClientBase<IppClient> {
     return WIRE[name as keyof typeof WIRE] ?? fail("Host contract tag");
   }
   protected hostMagic(response: boolean): Uint8Array<ArrayBuffer> {
-    const hex =
-      WIRE_CONVENTIONS[response ? "host-response-magic" : "host-request-magic"];
-    return new Uint8Array(
-      hex.match(/../g)!.map((byte) => Number.parseInt(byte, 16)),
-    );
+    return new Uint8Array(response ? HOST_RESPONSE_MAGIC : HOST_REQUEST_MAGIC);
   }
   readonly schemaHash = SCHEMA_HASH;
   readonly capabilities = CAPABILITIES;

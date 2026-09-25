@@ -38,19 +38,19 @@ pub(super) fn setup() -> Fixture {
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(GuiRoot::default()),
-                    },
+                    ),
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::GuiRoot(GuiRoot::default()),
+                    ),
                 ],
             })
             .unwrap();

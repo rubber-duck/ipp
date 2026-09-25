@@ -42,7 +42,7 @@ use crate::{
     ErrorReason, FieldValue, FieldWrite, components::registry, identity::Allocator,
 };
 
-/// Explicit upper bounds for ingress and transient component activation.
+/// Explicit upper bounds for ingress.
 #[derive(Clone, Copy, Debug)]
 pub struct WorldLimits {
     /// Maximum operations in one indivisible batch; defaults to no count quota.
@@ -52,8 +52,6 @@ pub struct WorldLimits {
     pub max_batch_bytes: usize,
     /// Maximum queued batches, system commands and queries per frame.
     pub max_queued_batches: usize,
-    /// Maximum transient component activation bytes during an update.
-    pub max_staging_bytes: usize,
 }
 
 impl Default for WorldLimits {
@@ -62,7 +60,6 @@ impl Default for WorldLimits {
             max_operations: usize::MAX,
             max_batch_bytes: usize::MAX,
             max_queued_batches: 64,
-            max_staging_bytes: 16 << 20,
         }
     }
 }
@@ -195,8 +192,6 @@ pub(crate) struct WorldEntityState {
     #[cfg(feature = "surfaces")]
     deferred_mutations: Vec<DeferredComponentMutation>,
     explicit_fields: BTreeSet<(EntityId, u16, u32)>,
-    activation_budget: usize,
-    prepared_bytes: usize,
     allocator: Allocator,
     retired_entities: Vec<EntityId>,
     // Applied effects are drained even when a later operation fails.

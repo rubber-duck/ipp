@@ -108,6 +108,13 @@ pub struct DeviceState {
 pub struct TestDevice(pub Rc<DeviceState>);
 
 impl RenderDevice for TestDevice {
+    fn viewport_limits(&self) -> Option<ipp_render_gl::ViewportLimits> {
+        Some(ipp_render_gl::ViewportLimits {
+            max_width: 4096,
+            max_height: 4096,
+        })
+    }
+
     #[cfg(feature = "surfaces")]
     type SurfacePath = ();
     #[cfg(feature = "surfaces")]
@@ -609,10 +616,7 @@ pub fn create(world: &mut WorldContext<'_>, values: Vec<ComponentValue>) -> Enti
     operations.extend(
         values
             .into_iter()
-            .map(|value| Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value,
-            }),
+            .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
     );
     world
         .enqueue(Batch {
@@ -712,23 +716,87 @@ pub fn advance(
     world.step(dt)
 }
 
+/// A completed render's summary together with its diagnostics statistics.
+///
+/// Statistics fields are reached through `Deref`, so fixtures read every counter of
+/// one frame from one value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameStats {
+    pub draw_calls: u32,
+    pub triangles: u32,
+    pub failed_draw_calls: u32,
+    pub invalid_camera: bool,
+    statistics: ipp_render_gl::RenderStatistics,
+}
+
+impl FrameStats {
+    /// Combine a render's summary with the statistics the renderer kept for it.
+    pub fn new(
+        summary: ipp_render_gl::RenderFrameSummary,
+        statistics: ipp_render_gl::RenderStatistics,
+    ) -> Self {
+        Self {
+            draw_calls: summary.draw_calls,
+            triangles: summary.triangles,
+            failed_draw_calls: summary.failed_draw_calls,
+            invalid_camera: summary.invalid_camera,
+            statistics,
+        }
+    }
+}
+
+impl std::ops::Deref for FrameStats {
+    type Target = ipp_render_gl::RenderStatistics;
+
+    fn deref(&self) -> &Self::Target {
+        &self.statistics
+    }
+}
+
+impl std::ops::DerefMut for FrameStats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.statistics
+    }
+}
+
+/// Render and collect the completed frame's summary and statistics.
+pub trait RenderFrameStats {
+    fn render_stats(
+        &mut self,
+        world: &mut ipp_core::WorldContext<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<FrameStats, ipp_render_gl::RenderError>;
+}
+
+impl<D: ipp_render_gl::RenderDevice> RenderFrameStats for ipp_render_gl::RenderService<D> {
+    fn render_stats(
+        &mut self,
+        world: &mut ipp_core::WorldContext<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<FrameStats, ipp_render_gl::RenderError> {
+        let summary = self.render(world, width, height)?;
+        Ok(FrameStats::new(summary, *self.statistics()))
+    }
+}
+
 pub fn render_frame<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     world: &mut WorldContext<'_>,
     width: u32,
     height: u32,
-) -> Result<ipp_render_gl::RenderStats, String> {
-    renderer.begin_frame();
+) -> Result<FrameStats, String> {
     update(world).map_err(|error| error.to_string())?;
     let result = renderer
-        .render(world, width, height)
+        .render_stats(world, width, height)
         .map_err(|error| error.to_string())?;
     if world.asset_resources().iter().any(|resource| {
         resource.source().kind == AssetTypeId(14) && *resource.status() == AssetLoadStatus::Unloaded
     }) {
         update(world).map_err(|error| error.to_string())?;
         return renderer
-            .render(world, width, height)
+            .render_stats(world, width, height)
             .map_err(|error| error.to_string());
     }
     Ok(result)
@@ -837,13 +905,13 @@ pub fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
     world
         .enqueue(Batch {
             id: world.tick() + 1,
-            operations: vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Transform(Transform {
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Transform(Transform {
                     z,
                     ..Transform::default()
                 }),
-            }],
+            )],
         })
         .unwrap();
     update(world).unwrap();

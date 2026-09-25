@@ -92,7 +92,7 @@ test("Blender streamed imports overlap extraction and preserve complete images a
           if (!size) assert.equal(timing.maxBatchCommands, 256);
         }
         if (process.env.IPP_BROWSER_ANGLE)
-          verifyHardwareRenderer(state.backend.unmaskedRenderer);
+          verifyHardwareRenderer(state.statistics!.device.unmaskedRenderer);
         assert.equal(state.inspection.renderDiagnostics.length, 0);
         assert.ok(state.summary.foregroundPixels > 1000);
         assert.ok(state.inspection.entities.length > 300);
@@ -143,7 +143,7 @@ test("Blender streamed imports overlap extraction and preserve complete images a
           size,
           ...timing,
           entities: expectedCount,
-          renderer: state.backend.unmaskedRenderer,
+          renderer: state.statistics!.device.unmaskedRenderer,
         });
         await recordCapture(
           page,

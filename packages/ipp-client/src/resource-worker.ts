@@ -2,6 +2,7 @@ import { SourceAvailability } from "./source-availability.js";
 import { resourceFetchUrl, type ResourceUrlMapping } from "./resource-urls.js";
 /** Host I/O bridge. Only the synchronous host pump calls WASM exports. */
 import { DiagnosticLogger, type LogLevel } from "./logging.js";
+import type { IngressStatistics } from "./presentation.js";
 
 const CHUNK_BYTES = 64 << 10;
 const MAX_ACTIVE = 8;
@@ -13,7 +14,8 @@ export interface AssetHostExports {
   ipp_service_resources(): number;
   ipp_resource_poll(): number;
   ipp_asset_error_max_bytes(): number;
-  ipp_resource_buffered_bytes(): number;
+  /** Exported only by `diagnostics` builds, for ingress statistics. */
+  ipp_resource_buffered_bytes?(): number;
   ipp_resource_chunk(session: bigint, id: bigint, length: number): number;
   ipp_resource_end(
     session: bigint,
@@ -24,6 +26,16 @@ export interface AssetHostExports {
   ipp_resource_input_reserve(length: number): number;
   ipp_output_ptr(): number;
   ipp_output_len(): number;
+}
+
+export interface AssetWorkerOptions {
+  logLevel?: LogLevel;
+  resourceUrls?: readonly ResourceUrlMapping[];
+  failed?: (error: Error) => void;
+  /** Called before the Host progresses resources. */
+  prepareProgress?: () => void;
+  /** Counters of a diagnostics build; without them the service measures nothing. */
+  statistics?: IngressStatistics;
 }
 
 interface Acquisition {
@@ -51,21 +63,25 @@ export class AssetWorkerService {
   private closed = false;
   private pumpTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly logger: DiagnosticLogger;
+  private readonly resourceUrls: readonly ResourceUrlMapping[];
+  private readonly failed: (error: Error) => void;
+  private readonly prepareProgress: () => void;
+  private readonly statistics: IngressStatistics | undefined;
 
   constructor(
     private readonly runtime: AssetHostExports,
     private readonly session: bigint,
-    logLevel: LogLevel = "info",
-    private readonly counters: Record<string, number> = {},
-    private readonly resourceUrls: readonly ResourceUrlMapping[] = [],
-    private readonly failed: (error: Error) => void = (error) => {
-      throw error;
-    },
-    private readonly prepareProgress: () => void = () => {},
+    options: AssetWorkerOptions = {},
   ) {
-    this.logger = new DiagnosticLogger("resources", logLevel);
-    counters.sourceBytes = 0;
-    counters.sourcePeakBufferedBytes = 0;
+    this.logger = new DiagnosticLogger("resources", options.logLevel ?? "info");
+    this.resourceUrls = options.resourceUrls ?? [];
+    this.failed =
+      options.failed ??
+      ((error) => {
+        throw error;
+      });
+    this.prepareProgress = options.prepareProgress ?? (() => {});
+    this.statistics = options.statistics;
   }
 
   /** Real retained JS staging; each active reader holds at most one bounded chunk. */
@@ -80,7 +96,7 @@ export class AssetWorkerService {
 
   pump(): void {
     if (this.closed) return;
-    this.measureBuffers();
+    if (this.statistics) this.measureBuffers(this.statistics);
     this.pollRequests();
     let receivedInput = false;
 
@@ -126,8 +142,8 @@ export class AssetWorkerService {
         }
         this.check(result);
         receivedInput = true;
-        this.counters.sourceBytes =
-          (this.counters.sourceBytes ?? 0) + request.chunk.byteLength;
+        if (this.statistics)
+          this.statistics.sourceBytes += request.chunk.byteLength;
         delete request.chunk;
       }
       if (request.done) {
@@ -237,12 +253,13 @@ export class AssetWorkerService {
     );
   }
 
-  private measureBuffers(): void {
-    this.counters.sourceBufferedBytes =
-      this.bufferedBytes + this.runtime.ipp_resource_buffered_bytes();
-    this.counters.sourcePeakBufferedBytes = Math.max(
-      this.counters.sourcePeakBufferedBytes ?? 0,
-      this.counters.sourceBufferedBytes,
+  /** Diagnostics builds sample staging at each pump to record its peak. */
+  private measureBuffers(statistics: IngressStatistics): void {
+    statistics.sourceBufferedBytes =
+      this.bufferedBytes + (this.runtime.ipp_resource_buffered_bytes?.() ?? 0);
+    statistics.sourcePeakBufferedBytes = Math.max(
+      statistics.sourcePeakBufferedBytes,
+      statistics.sourceBufferedBytes,
     );
   }
 

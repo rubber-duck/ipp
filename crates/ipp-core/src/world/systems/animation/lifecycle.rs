@@ -275,19 +275,17 @@ impl AnimationSystem {
         // Numeric playback time edits preserve readiness. Source replacement
         // must prepare the new particle cache even when the component survives.
         #[cfg(feature = "particles")]
-        if crate::compiled_animation_enabled() {
-            for (&key, value) in context.staged.prepared.iter() {
-                if let ComponentValue::ParticlePlayback(next) = value
-                    && context
-                        .world_data
-                        .components
-                        .particle_playback(key.0.index() as usize)
-                        .is_some_and(|old| old.source != next.source || old.variant != next.variant)
-                    && let Some(ids) = self.state.target_controllers.get(&key)
-                {
-                    for id in ids {
-                        self.state.controllers.get_mut(id).unwrap().ready = false;
-                    }
+        for (&key, value) in context.staged.prepared.iter() {
+            if let ComponentValue::ParticlePlayback(next) = value
+                && context
+                    .world_data
+                    .components
+                    .particle_playback(key.0.index() as usize)
+                    .is_some_and(|old| old.source != next.source || old.variant != next.variant)
+                && let Some(ids) = self.state.target_controllers.get(&key)
+            {
+                for id in ids {
+                    self.state.controllers.get_mut(id).unwrap().ready = false;
                 }
             }
         }
@@ -307,12 +305,11 @@ impl AnimationSystem {
         }
         let affected = self.state.affected_by(context.staged);
         #[cfg(feature = "skeletal-animation")]
-        if crate::compiled_animation_enabled()
-            && context
-                .staged
-                .changed
-                .keys()
-                .any(|key| key.1 == ComponentValue::SKELETON)
+        if context
+            .staged
+            .changed
+            .keys()
+            .any(|key| key.1 == ComponentValue::SKELETON)
         {
             // Changing pose inputs can suspend internal pose preparation even
             // when the skeleton identity and its joint ordinals stay valid.
@@ -333,12 +330,10 @@ impl AnimationSystem {
             let removed: Vec<_> = controller
                 .changed_drivers(context.staged)
                 .filter(|driver| {
-                    (!crate::allocation_optimizations_enabled()
-                        || context.staged.changed.contains_key(&(
-                            driver.identity().entity,
-                            driver.identity().property.component(),
-                        )))
-                        && departs_individually(&driver.description().property)
+                    context.staged.changed.contains_key(&(
+                        driver.identity().entity,
+                        driver.identity().property.component(),
+                    )) && departs_individually(&driver.description().property)
                         && !read.animation_binding_alive(*driver, context.staged)
                 })
                 .map(|driver| driver.description().clone())
@@ -391,12 +386,10 @@ impl AnimationSystem {
                 .filter_map(|&id| {
                     let controller = &self.state.controllers[&id];
                     (controller.changed_drivers(context.staged).any(|driver| {
-                        (!crate::allocation_optimizations_enabled()
-                            || context.staged.changed.contains_key(&(
-                                driver.identity().entity,
-                                driver.identity().property.component(),
-                            )))
-                            && !read.animation_binding_alive(driver, context.staged)
+                        context.staged.changed.contains_key(&(
+                            driver.identity().entity,
+                            driver.identity().property.component(),
+                        )) && !read.animation_binding_alive(driver, context.staged)
                     }) || controller.transition.as_deref().is_some_and(|transition| {
                         transition
                             .program

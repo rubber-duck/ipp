@@ -1,3 +1,5 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { activateFixtureCamera } from "../integration/camera-fixtures.js";
 import * as React from "react";
 import type { ReactNode } from "react";
@@ -110,7 +112,9 @@ export interface CaptureReport {
   readonly drawCalls: number;
   readonly triangles: number;
   readonly contextGeneration: number;
-  readonly backend: Readonly<Record<string, unknown>>;
+  readonly failedDrawCalls: number;
+  readonly invalidCamera: boolean;
+  readonly statistics?: RenderStatisticsSnapshot | undefined;
   readonly summary: ImageSummary;
   readonly inspection: Inspection;
 }
@@ -577,10 +581,10 @@ export async function recoverContext(): Promise<{
 }> {
   const state = requireActive();
   const before = requireCapture(state, "before-context-loss");
-  state.presentation.loseContext();
+  presentationTesting(state.presentation).loseContext();
   await compositorBarrier();
   const resources = (await state.client.inspect()).resources;
-  state.presentation.restoreContext();
+  presentationTesting(state.presentation).restoreContext();
   for (const resource of resources) {
     await waitForResource(
       state.client,
@@ -680,7 +684,9 @@ export async function captureCube(label: string): Promise<CaptureReport> {
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
     contextGeneration: frame.contextGeneration,
-    backend: frame.backend,
+    failedDrawCalls: frame.failedDrawCalls,
+    invalidCamera: frame.invalidCamera,
+    statistics: frame.statistics,
     summary: summarizeImage(frame),
     inspection,
   };

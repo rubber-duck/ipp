@@ -22,19 +22,6 @@ pub struct TextureUpload {
     pub bytes: Vec<u8>,
 }
 
-/// Accepted source and decoded sizes, excluding container overhead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TextureStats {
-    /// Encoded source byte count.
-    pub source_bytes: u32,
-    /// Retained RGBA8 pixel byte count.
-    pub pixel_bytes: u32,
-    /// Width in texels.
-    pub width: u32,
-    /// Height in texels.
-    pub height: u32,
-}
-
 /// Immutable CPU pixels retained for rendering and context recovery.
 #[derive(Debug)]
 pub struct TextureAsset {
@@ -60,7 +47,7 @@ impl TextureAsset {
     }
 
     /// Validate the complete encoded payload and decode its present attributes.
-    pub fn decode(bytes: &[u8]) -> Result<(Self, TextureStats), ErrorReason> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ErrorReason> {
         if bytes.len() < 16 || &bytes[..4] != b"IPPT" {
             return Err(ErrorReason::InvalidAsset);
         }
@@ -82,19 +69,11 @@ impl TextureAsset {
             .map_err(|_| ErrorReason::Capacity)?;
         pixels.extend_from_slice(&bytes[16..]);
 
-        Ok((
-            Self {
-                width,
-                height,
-                pixels,
-            },
-            TextureStats {
-                source_bytes: pixel_bytes + 16,
-                pixel_bytes,
-                width,
-                height,
-            },
-        ))
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
     }
 }
 
@@ -107,7 +86,7 @@ pub(crate) fn pixel_bytes(width: u32, height: u32) -> Result<u32, ErrorReason> {
         .checked_mul(height)
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or(ErrorReason::InvalidAsset)?;
-    // Stats and the encoded length use u32. RenderDevice limits are checked by GL.
+    // The encoded length uses u32. RenderDevice limits are checked by GL.
     if bytes.checked_add(16).is_none() {
         return Err(ErrorReason::InvalidAsset);
     }
@@ -135,9 +114,7 @@ impl crate::services::asset_management::Asset for TextureAsset {
 /// Construct a headless decoder; graphics Hosts may register their own loader.
 pub fn cpu_texture_loader() -> impl super::AssetLoader<Data = TextureAsset> {
     super::BufferedAssetLoader::new(move |bytes| {
-        TextureAsset::decode(bytes)
-            .map(|(data, _)| data)
-            .map_err(|error| error.to_string())
+        TextureAsset::decode(bytes).map_err(|error| error.to_string())
     })
 }
 

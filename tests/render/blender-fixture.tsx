@@ -1,3 +1,4 @@
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type { FrameCapture } from "@ipp/client";
 import { createRoot, Entity, Transform, type ReactWorldRoot } from "@ipp/react";
 import type { BlenderViewerHandle } from "../../examples/blender-viewer/main.js";
@@ -94,7 +95,9 @@ export async function capture(
     tick: frame.tick,
     contextGeneration: frame.contextGeneration,
     summary: summarizeImage(frame),
-    backend: frame.backend,
+    failedDrawCalls: frame.failedDrawCalls,
+    invalidCamera: frame.invalidCamera,
+    statistics: frame.statistics,
   };
 }
 
@@ -202,9 +205,9 @@ export function colorCounts(label: string) {
 
 export async function restoreContext() {
   const presentation = viewer().canvas.client.presentation!;
-  presentation.loseContext();
+  presentationTesting(presentation).loseContext();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  presentation.restoreContext();
+  presentationTesting(presentation).restoreContext();
   await viewer().canvas.client.waitForFrame();
 }
 
@@ -452,7 +455,7 @@ export async function captureCommandBatchBoundary() {
     completeTick: complete.tick,
     completedDifference: compareImages(before, complete),
     restoredDifference: compareImages(before, after),
-    renderer: complete.backend.unmaskedRenderer,
+    renderer: complete.statistics!.device.unmaskedRenderer,
   };
 }
 

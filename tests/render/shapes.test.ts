@@ -1,3 +1,4 @@
+import type { IngressStatistics, RenderStatisticsSnapshot } from "@ipp/client";
 import { invoke, writeDataUrl, bigintJson, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
@@ -133,7 +134,7 @@ for (const variant of ["development", "production"] as const) {
             );
             originalCaptures.set(shape, capture);
             assert.equal(
-              backendNumber(capture.backend, "shaderProgramsLive"),
+              deviceNumber(capture.statistics, "shaderProgramsLive"),
               1,
               "Only the selected shape recipe remains resident",
             );
@@ -145,8 +146,8 @@ for (const variant of ["development", "production"] as const) {
               `unchanged-${shape}`,
             );
             assert.equal(
-              backendNumber(unchanged.backend, "shaderProgramsCreated"),
-              backendNumber(capture.backend, "shaderProgramsCreated"),
+              deviceNumber(unchanged.statistics, "shaderProgramsCreated"),
+              deviceNumber(capture.statistics, "shaderProgramsCreated"),
               "Unchanged draws must reuse their resident program",
             );
             const evidence = await invoke<ShapeImageEvidence>(
@@ -337,7 +338,7 @@ for (const variant of ["development", "production"] as const) {
           );
 
           const transferredBeforeRecovery = ingressNumber(
-            afterInvalid.backend,
+            afterInvalid.statistics,
             "transferredAssetBytes",
           );
           const recovery = await invoke<RecoveryReport>(
@@ -375,22 +376,28 @@ for (const variant of ["development", "production"] as const) {
                 recovery.resourceCountBefore,
               );
               assert.equal(
-                ingressNumber(recovery.after.backend, "transferredAssetBytes"),
+                ingressNumber(
+                  recovery.after.statistics,
+                  "transferredAssetBytes",
+                ),
                 transferredBeforeRecovery,
                 "built-in recovery must not require producer transfers",
               );
               assert.ok(
-                backendNumber(recovery.after.backend, "totalUploadedBytes") >
-                  backendNumber(afterInvalid.backend, "totalUploadedBytes"),
+                totalUploadedBytes(recovery.after.statistics) >
+                  totalUploadedBytes(afterInvalid.statistics),
                 "context recovery must rebuild visible GPU resources",
               );
               assert.equal(
-                backendNumber(recovery.after.backend, "shaderProgramsCreated"),
-                backendNumber(afterInvalid.backend, "shaderProgramsCreated") +
+                deviceNumber(
+                  recovery.after.statistics,
+                  "shaderProgramsCreated",
+                ),
+                deviceNumber(afterInvalid.statistics, "shaderProgramsCreated") +
                   1,
               );
               assert.equal(
-                backendNumber(recovery.after.backend, "shaderProgramsLive"),
+                deviceNumber(recovery.after.statistics, "shaderProgramsLive"),
                 1,
               );
             },
@@ -934,24 +941,38 @@ async function writeFailureImages(
   ]);
 }
 
-function backendNumber(
-  backend: Readonly<Record<string, unknown>>,
+function requireStatistics(
+  statistics: RenderStatisticsSnapshot | undefined,
+): RenderStatisticsSnapshot {
+  if (!statistics)
+    throw new Error("capture omitted statistics; select a diagnostics build");
+  return statistics;
+}
+
+function deviceNumber(
+  statistics: RenderStatisticsSnapshot | undefined,
   field: string,
 ): number {
-  const value = backend[field];
-  if (typeof value !== "number")
-    throw new Error(`capture backend.${field} is not numeric`);
+  const value = requireStatistics(statistics).device[field];
+  if (typeof value !== "number") {
+    throw new Error(`capture statistics.device.${field} is not numeric`);
+  }
   return value;
 }
 
-function ingressNumber(
-  backend: Readonly<Record<string, unknown>>,
-  field: string,
+function totalUploadedBytes(
+  statistics: RenderStatisticsSnapshot | undefined,
 ): number {
-  const ingress = backend.ingress;
-  if (!ingress || typeof ingress !== "object")
-    throw new Error("capture omitted ingress counters");
-  return backendNumber(ingress as Readonly<Record<string, unknown>>, field);
+  return requireStatistics(statistics).frame.totalUploadedBytes;
+}
+
+function ingressNumber(
+  statistics: RenderStatisticsSnapshot | undefined,
+  field: keyof IngressStatistics,
+): number {
+  const ingress = requireStatistics(statistics).ingress;
+  if (!ingress) throw new Error("capture statistics omitted ingress counters");
+  return ingress[field];
 }
 
 function recordConsoleError(message: ConsoleMessage, errors: string[]): void {

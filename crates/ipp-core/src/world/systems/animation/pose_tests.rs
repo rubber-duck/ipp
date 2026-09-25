@@ -2,6 +2,32 @@ use super::{Transform, sample_joints};
 use crate::systems::animation::*;
 use crate::{ComponentValue, EntityId, services::asset_management::AssetKey};
 
+/// Read the valid local joints addressed by a joint driver's runtime target.
+fn read_joints(
+    target: &super::super::driver::AnimationRuntimeTarget,
+    storage: &crate::components::registry::ComponentStorage,
+    entity: EntityId,
+) -> AnimationValue {
+    let super::super::driver::AnimationRuntimeTarget::JointLocal {
+        source,
+        joints,
+    } = target
+    else {
+        panic!("joint driver target");
+    };
+    let pose = storage
+        .skeleton(entity.index() as usize)
+        .and_then(|value| value.runtime.pose.as_ref())
+        .filter(|pose| pose.valid && pose.source == *source)
+        .expect("valid sampled pose");
+    AnimationValue::Pose(
+        joints
+            .iter()
+            .map(|&joint| pose.local[joint as usize])
+            .collect(),
+    )
+}
+
 #[test]
 fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_layers() {
     use super::super::driver::make_driver;
@@ -46,7 +72,7 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                 let entity = EntityId::from_bits(1 << 32);
                 let source = AssetKey::from_u64(1);
                 let original = vec![joint(6.0), joint(8.0)];
-                let driver = make_driver(
+                let mut driver = make_driver(
                     AnimationDriverDescription {
                         target: entity,
                         property: target.clone(),
@@ -66,6 +92,7 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                     Some(source),
                 )
                 .unwrap();
+                driver.resolve_track(&clip).unwrap();
                 let mut storage = crate::components::registry::ComponentStorage::default();
                 storage.reserve(1);
                 storage.set(
@@ -99,7 +126,7 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                         .write_joint_slice(&mut storage, entity, &original)
                         .unwrap();
                     let expected = driver
-                        .sample(&clip, time, AnimationValue::Pose(original.clone()))
+                        .sample_bound(time, AnimationValue::Pose(original.clone()))
                         .unwrap();
                     sample_joints(
                         driver.as_ref(),
@@ -110,10 +137,7 @@ fn borrowed_pose_sampling_matches_owned_sampling_for_all_interpolations_and_laye
                     )
                     .unwrap();
                     assert_eq!(
-                        driver
-                            .runtime_target()
-                            .read_joints(&storage, entity)
-                            .unwrap(),
+                        read_joints(driver.runtime_target(), &storage, entity),
                         expected,
                         "{additive}/{weight}/{time}"
                     );

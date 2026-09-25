@@ -6,9 +6,13 @@ impl WorldContext<'_> {
         if let Some(reason) = self.world.fault {
             return Err(reason);
         }
+        // An unlimited byte quota admits every size, so skip the walk over every
+        // operation and inserted value.
+        let max_bytes = self.world.limits.max_batch_bytes;
         if self.world.queue.len() >= self.world.limits.max_queued_batches
             || batch.operations.len() > self.world.limits.max_operations
-            || batch_bytes(&batch).is_none_or(|bytes| bytes > self.world.limits.max_batch_bytes)
+            || (max_bytes != usize::MAX
+                && batch_bytes(&batch).is_none_or(|bytes| bytes > max_bytes))
         {
             #[cfg(feature = "diagnostics")]
             if !batch.operations.is_empty() {
@@ -156,10 +160,7 @@ impl World {
     }
 
     fn simulation_state(limits: WorldLimits) -> Result<WorldSimulationState, ErrorReason> {
-        if limits.max_operations == 0
-            || limits.max_queued_batches == 0
-            || limits.max_staging_bytes == 0
-        {
+        if limits.max_operations == 0 || limits.max_queued_batches == 0 {
             return Err(ErrorReason::Capacity);
         }
         Ok(WorldSimulationState {
@@ -179,16 +180,9 @@ impl World {
             metadata: WorldMetadata::default(),
             limits,
             capacity_hints: WorldCapacityHints::default(),
-            state: WorldEntityState {
-                activation_budget: limits.max_staging_bytes,
-                ..WorldEntityState::default()
-            },
+            state: WorldEntityState::default(),
             components: registry::ComponentStorage::default(),
-            queue: if crate::allocation_optimizations_enabled() {
-                VecDeque::with_capacity(64)
-            } else {
-                VecDeque::new()
-            },
+            queue: VecDeque::with_capacity(64),
             command_buffers: Vec::new(),
             lifecycle_cleanup: Vec::new(),
             tick: 0,
@@ -229,7 +223,9 @@ pub(super) fn batch_bytes(batch: &Batch) -> Option<usize> {
             Command::InsertComponentValue {
                 value,
                 ..
-            } => value.retained_bytes()?,
+            } => {
+                std::mem::size_of::<crate::ComponentValue>().checked_add(value.retained_bytes()?)?
+            }
             Command::InsertComponent {
                 fields,
                 ..

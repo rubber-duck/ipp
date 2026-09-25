@@ -1,3 +1,4 @@
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {
   CameraMotion,
@@ -179,8 +180,8 @@ export async function recoverGpuFailure() {
   const current = state();
   const before = frame("gpu-allocation-failed");
   const presentation = current.fixture.client.presentation!;
-  presentation.loseContext();
-  presentation.restoreContext();
+  presentationTesting(presentation).loseContext();
+  presentationTesting(presentation).restoreContext();
   const deadline = performance.now() + 10_000;
   for (;;) {
     const captured = await capture("gpu-recovered");
@@ -192,7 +193,7 @@ export async function recoverGpuFailure() {
     }
     if (performance.now() >= deadline) {
       throw new Error(
-        `GPU recovery did not restore both meshes: ${JSON.stringify(captured.backend)}`,
+        `GPU recovery did not restore both meshes: ${JSON.stringify({ drawCalls: captured.drawCalls, failedDrawCalls: captured.failedDrawCalls })}`,
       );
     }
     await current.fixture.client.waitForFrame(captured.tick);

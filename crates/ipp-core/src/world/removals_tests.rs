@@ -1,12 +1,9 @@
 use super::*;
-use crate::{
-    components::{BufferCounters, PreparedBuffer},
-    systems::*,
-};
-use std::{
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use crate::{components::CustomMaterial, systems::*};
+use std::sync::{Arc, Mutex};
+
+/// A heap-owning authored field: storage retains it until the removal barrier.
+const SOURCE: &str = "file:///materials/removal.shader";
 
 type Trace = Arc<Mutex<Vec<(&'static str, &'static str, usize)>>>;
 type Target = Arc<Mutex<Option<EntityId>>>;
@@ -51,16 +48,16 @@ impl System for Probe {
             context.world.defer_remove_entity(entity).unwrap();
             context.world.defer_remove_entity(entity).unwrap();
         }
-        let buffer = context
+        let material = context
             .world
             .world
             .components
-            .prepared_buffer(entity.index() as usize)
+            .custom_material(entity.index() as usize)
             .unwrap();
         self.trace
             .lock()
             .unwrap()
-            .push((self.name, "update", buffer.counters.released.get()));
+            .push((self.name, "update", material.source.len()));
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
@@ -70,19 +67,19 @@ impl System for Probe {
         if !context.changed_components().any(|(id, _)| id == entity) {
             return;
         }
-        let buffer = context
+        let material = context
             .world_data
             .components
-            .prepared_buffer(entity.index() as usize)
+            .custom_material(entity.index() as usize)
             .unwrap();
         self.trace
             .lock()
             .unwrap()
-            .push((self.name, "before", buffer.counters.released.get()));
+            .push((self.name, "before", material.source.len()));
         assert!(
             context
                 .world()
-                .effective_component(entity, ComponentValue::PREPARED_BUFFER)
+                .effective_component(entity, ComponentValue::CUSTOM_MATERIAL)
                 .is_some()
         );
         // Cleanup cannot enqueue another update-originated cascade.
@@ -101,10 +98,10 @@ impl System for Probe {
                 context
                     .world_data
                     .components
-                    .prepared_buffer(entity.index() as usize)
+                    .custom_material(entity.index() as usize)
                     .is_none()
             );
-            self.trace.lock().unwrap().push((self.name, "after", 1));
+            self.trace.lock().unwrap().push((self.name, "after", 0));
         }
     }
 }
@@ -124,7 +121,6 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
     }
     let mut host = crate::HostRuntime::with_system_factories(factories).unwrap();
     let id = host.create_world(Default::default()).unwrap();
-    let counters = Rc::new(BufferCounters::default());
     let mut world = host.world_mut(id).unwrap();
     world
         .enqueue(Batch {
@@ -134,14 +130,13 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
                     alias: 0,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(0),
-                    value: ComponentValue::PreparedBuffer(PreparedBuffer {
-                        length: 16,
-                        counters: counters.clone(),
-                        allocation: None,
+                Command::insert_value(
+                    EntityRef::Alias(0),
+                    ComponentValue::CustomMaterial(CustomMaterial {
+                        source: SOURCE.into(),
+                        ..CustomMaterial::default()
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -155,15 +150,14 @@ fn queued_entity_storage_lives_through_every_update_and_invalidation_handler() {
     assert_eq!(
         *trace.lock().unwrap(),
         [
-            ("test.remove", "update", 0),
-            ("test.later", "update", 0),
-            ("test.remove", "before", 0),
-            ("test.later", "before", 0),
-            ("test.remove", "after", 1),
-            ("test.later", "after", 1),
+            ("test.remove", "update", SOURCE.len()),
+            ("test.later", "update", SOURCE.len()),
+            ("test.remove", "before", SOURCE.len()),
+            ("test.later", "before", SOURCE.len()),
+            ("test.remove", "after", 0),
+            ("test.later", "after", 0),
         ]
     );
-    assert_eq!(counters.released.get(), 1);
     assert!(world.inspect(entity).is_none());
     assert!(world.world.deferred_removals.is_empty());
 }

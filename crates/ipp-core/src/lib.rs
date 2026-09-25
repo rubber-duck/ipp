@@ -77,18 +77,18 @@ pub use systems::surface::{
 
 #[cfg(feature = "gui")]
 pub use systems::gui::{
-    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiCommand, GuiConstraintError, GuiContainerKind,
-    GuiControlState, GuiControlValue, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView,
-    GuiFontResolution, GuiHit, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand,
-    GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus,
-    GuiInputSystem, GuiInputSystemFactory, GuiInputTarget, GuiInspectQuery, GuiInspectResponse,
-    GuiInspectedNode, GuiKey, GuiLayoutCache, GuiLayoutDiagnostic, GuiLayoutRequest,
-    GuiLayoutSystem, GuiLayoutSystemFactory, GuiNode, GuiNodeData, GuiNodeDataProperty,
-    GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodePropertyRef, GuiNodeRowProperty,
-    GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPanelResolution,
-    GuiPointerButton, GuiResourceResolver, GuiRoot, GuiSystem, GuiSystemFactory,
-    GuiTextCompositionState, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput,
-    GuiUnhandledReason, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, resolve_panel_hit,
+    DEFAULT_UNITS_PER_METRE, GuiBlockerHit, GuiCommand, GuiContainerKind, GuiControlState,
+    GuiControlValue, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiFontResolution,
+    GuiHit, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
+    GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
+    GuiInputSystemFactory, GuiInputTarget, GuiInspectQuery, GuiInspectResponse, GuiInspectedNode,
+    GuiKey, GuiLayoutCache, GuiLayoutRequest, GuiLayoutSystem, GuiLayoutSystemFactory, GuiNode,
+    GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
+    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow,
+    GuiNodes, GuiPanelResolution, GuiPointerButton, GuiResourceResolver, GuiRoot, GuiSystem,
+    GuiSystemFactory, GuiTextCompositionState, GuiTextFocusState, GuiTextFocusUpdate,
+    GuiUnhandledInput, GuiUnhandledReason, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH,
+    resolve_panel_hit,
 };
 
 #[cfg(feature = "gui")]
@@ -105,13 +105,12 @@ pub use systems::geometry::queries::{
     GeometryPickQuery, WorldPlane,
 };
 
-pub use services::asset_management::mesh::{MESH_TYPE, MeshAsset, MeshKey, MeshStats, MeshUpload};
+pub use services::asset_management::mesh::{MESH_TYPE, MeshAsset, MeshKey, MeshUpload};
 
 pub use world::{DebugRenderItem, RenderDiagnostic, RenderItem};
 
 pub use services::asset_management::texture::{
-    TEXTURE_TYPE, TextureAsset, TextureDecoder, TextureHeader, TextureKey, TextureStats,
-    TextureUpload,
+    TEXTURE_TYPE, TextureAsset, TextureDecoder, TextureHeader, TextureKey, TextureUpload,
 };
 
 pub use services::asset_management::service::{
@@ -132,102 +131,3 @@ pub use host::{HostRuntime, WorldId};
 /// Opt-in stage timing and allocation counters; never enabled by default.
 #[cfg(feature = "profiling")]
 pub mod profiling;
-
-/// Production allocation reductions.
-#[doc(hidden)]
-#[inline]
-pub fn allocation_optimizations_enabled() -> bool {
-    true
-}
-
-/// Reusable joint, property and response storage.
-#[doc(hidden)]
-#[inline]
-pub fn allocation_followup_enabled() -> bool {
-    true
-}
-
-/// Indexed animation mutation callbacks.
-#[doc(hidden)]
-#[inline]
-pub fn stress_optimizations_enabled() -> bool {
-    true
-}
-
-/// Retained lighting preparation.
-#[doc(hidden)]
-#[inline]
-pub fn lighting_reuse_enabled() -> bool {
-    true
-}
-
-/// Retained mesh-demand and particle evaluation scratch.
-#[doc(hidden)]
-#[inline]
-pub fn evaluation_scratch_reuse_enabled() -> bool {
-    true
-}
-
-/// Retained draw preparation buffers.
-#[doc(hidden)]
-#[inline]
-pub fn render_buffer_reuse_enabled() -> bool {
-    true
-}
-
-/// Direct lookup of bound drivers affected by a component mutation.
-#[doc(hidden)]
-#[inline]
-pub fn animation_binding_index_enabled() -> bool {
-    true
-}
-
-/// Invalidate skin palettes once between skinning evaluations.
-#[doc(hidden)]
-#[inline]
-pub fn skinning_invalidation_reuse_enabled() -> bool {
-    true
-}
-
-/// Reuse validated animation metadata and coherent key intervals.
-#[doc(hidden)]
-#[inline]
-pub fn animation_update_reuse_enabled() -> bool {
-    true
-}
-
-/// Bind typed animation curves once, with lifecycle-driven preparation.
-#[doc(hidden)]
-#[inline]
-pub fn compiled_animation_enabled() -> bool {
-    true
-}
-
-/// Driver tracks borrow shared immutable key storage.
-#[doc(hidden)]
-#[inline]
-pub fn animation_track_copy_enabled() -> bool {
-    false
-}
-
-/// Driver-local current-segment working set.
-#[doc(hidden)]
-#[inline]
-pub fn animation_segment_copy_enabled() -> bool {
-    true
-}
-
-#[inline]
-pub(crate) fn direct_numeric_updates_enabled() -> bool {
-    true
-}
-
-#[inline]
-pub(crate) fn compiled_hierarchy_enabled() -> bool {
-    true
-}
-
-#[inline]
-pub(crate) fn compiled_property_bindings_enabled() -> bool {
-    true
-}

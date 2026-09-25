@@ -285,9 +285,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             }
             Ok::<_, String>(())
         })();
-        if ipp_core::allocation_optimizations_enabled() {
-            self.session.replies = replies;
-        }
+        self.session.replies = replies;
         result?;
         if !system_outcomes.is_empty() {
             return Err("core published an uncorrelated system command outcome".into());
@@ -400,13 +398,10 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             }
             original
         };
-        let mut bytes = if ipp_core::allocation_followup_enabled() {
-            self.response_buffers
-                .pop()
-                .unwrap_or_else(|| Vec::with_capacity(4096))
-        } else {
-            Vec::new()
-        };
+        let mut bytes = self
+            .response_buffers
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(4096));
         let result = ipp_protocol::encode_response_into(
             &Response {
                 session: self.session.id,

@@ -48,11 +48,9 @@ impl<P: HostServices> Host<P> {
 
     /// Borrow a logical session and the world selected by its Host routing record.
     pub fn session_mut(&mut self, id: u64) -> Option<WorldSessionContext<'_, P>> {
-        if ipp_core::allocation_followup_enabled() {
-            let slots = self.sessions.len().saturating_mul(2 * MAX_OUTBOX);
-            self.response_buffers
-                .reserve(slots.saturating_sub(self.response_buffers.len()));
-        }
+        let slots = self.sessions.len().saturating_mul(2 * MAX_OUTBOX);
+        self.response_buffers
+            .reserve(slots.saturating_sub(self.response_buffers.len()));
         let session = self.sessions.get_mut(&id)?;
         Some(WorldSessionContext {
             world: self.runtime.world_mut(session.world)?,
@@ -65,10 +63,7 @@ impl<P: HostServices> Host<P> {
     /// Recycle storage only after all transport reads and copies have finished.
     pub fn recycle_response_buffer(&mut self, mut bytes: Vec<u8>) {
         bytes.clear();
-        if bytes.capacity() != 0
-            && ipp_core::allocation_followup_enabled()
-            && self.response_buffers.len() < self.response_buffers.capacity()
-        {
+        if bytes.capacity() != 0 && self.response_buffers.len() < self.response_buffers.capacity() {
             self.response_buffers.push(bytes);
         }
     }
@@ -102,7 +97,6 @@ impl<P: HostServices> Host<P> {
         let mut failures = self.process_host_requests();
         failures.extend(self.process_command_batches());
         self.services.service_resources(&mut self.runtime)?;
-        let reuse = ipp_core::allocation_optimizations_enabled();
         let mut scratch = std::mem::take(&mut self.frame_scratch);
         scratch.sessions.clear();
         scratch.prepared.clear();
@@ -228,9 +222,7 @@ impl<P: HostServices> Host<P> {
             }
         }
         self.runtime.flush_resource_lifecycle();
-        if reuse {
-            self.frame_scratch = scratch;
-        }
+        self.frame_scratch = scratch;
         Ok(failures)
     }
 

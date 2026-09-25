@@ -14,11 +14,7 @@ impl<P: HostServices> Host<P> {
                 throttled: false,
                 session: None,
                 temporary_worlds: BTreeSet::new(),
-                pending: if ipp_core::allocation_optimizations_enabled() {
-                    VecDeque::with_capacity(crate::MAX_PENDING)
-                } else {
-                    VecDeque::new()
-                },
+                pending: VecDeque::with_capacity(crate::MAX_PENDING),
                 outbox: VecDeque::new(),
                 failure: None,
                 transfer: None,
@@ -84,27 +80,20 @@ impl<P: HostServices> Host<P> {
             if bytes.get(..8) != Some(session.to_le_bytes().as_slice()) {
                 return Err("SessionMismatch".into());
             }
-            if ipp_core::allocation_optimizations_enabled() {
-                let world_id = self
-                    .sessions
-                    .get(&session)
-                    .ok_or("Session is closed")?
-                    .world;
-                let mut world = self.runtime.world_mut(world_id).ok_or("World is closed")?;
-                let mut buffer = world.take_command_buffer();
-                let request = ipp_protocol::decode_request_with_buffer(bytes, session, &mut buffer);
-                world.recycle_command_buffer(buffer);
-                connection
-                    .pending
-                    .push_back(HostConnectionIngress::DecodedWorld(
-                        request.map_err(|error| error.to_string())?,
-                    ));
-                return Ok(());
-            }
-            ipp_protocol::decode_request(bytes, session).map_err(|error| error.to_string())?;
+            let world_id = self
+                .sessions
+                .get(&session)
+                .ok_or("Session is closed")?
+                .world;
+            let mut world = self.runtime.world_mut(world_id).ok_or("World is closed")?;
+            let mut buffer = world.take_command_buffer();
+            let request = ipp_protocol::decode_request_with_buffer(bytes, session, &mut buffer);
+            world.recycle_command_buffer(buffer);
             connection
                 .pending
-                .push_back(HostConnectionIngress::World(bytes.to_vec()));
+                .push_back(HostConnectionIngress::DecodedWorld(
+                    request.map_err(|error| error.to_string())?,
+                ));
         }
         Ok(())
     }
@@ -149,12 +138,11 @@ impl<P: HostServices> Host<P> {
     }
 
     pub(crate) fn process_host_requests(&mut self) -> Vec<(u64, String)> {
-        if ipp_core::allocation_optimizations_enabled()
-            && self
-                .connections
-                .states
-                .values()
-                .all(|connection| connection.pending.is_empty() && connection.failure.is_none())
+        if self
+            .connections
+            .states
+            .values()
+            .all(|connection| connection.pending.is_empty() && connection.failure.is_none())
         {
             return Vec::new();
         }
@@ -185,17 +173,6 @@ impl<P: HostServices> Host<P> {
                         }
                         continue;
                     }
-                    HostConnectionIngress::World(bytes) => {
-                        if let Some(mut session) = connection
-                            .session
-                            .and_then(|session| self.session_mut(session))
-                            && let Err(error) = session.receive(&bytes)
-                        {
-                            failures.push((id, error));
-                            break;
-                        }
-                        continue;
-                    }
                     HostConnectionIngress::Control(request) => request,
                 };
                 // Prior World work commits in this frame before a subsequent Host
@@ -218,11 +195,7 @@ impl<P: HostServices> Host<P> {
                             self.command_batch_owner(session.world) == Some(id)
                         })
                     }) && let Some(position) = connection.pending.iter().position(|ingress| {
-                        matches!(
-                            ingress,
-                            HostConnectionIngress::World(_)
-                                | HostConnectionIngress::DecodedWorld(_)
-                        )
+                        matches!(ingress, HostConnectionIngress::DecodedWorld(_))
                     }) {
                         let ingress = connection
                             .pending

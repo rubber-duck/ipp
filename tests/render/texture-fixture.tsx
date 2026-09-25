@@ -1,3 +1,5 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { activateFixtureCamera } from "../integration/camera-fixtures.js";
 import type { AssetWorldClient as Client } from "@ipp/client";
 import type {
@@ -143,7 +145,7 @@ export interface TextureRuntimeConfiguration {
 export interface TextureSetupReport {
   readonly resources: readonly AssetResourceSnapshot[];
   readonly componentId: number;
-  readonly startupBackend: Readonly<Record<string, unknown>>;
+  readonly startupStatistics?: RenderStatisticsSnapshot | undefined;
   readonly inspection: WorldInspection;
 }
 
@@ -175,7 +177,9 @@ export interface CaptureReport {
   readonly drawCalls: number;
   readonly triangles: number;
   readonly contextGeneration: number;
-  readonly backend: Readonly<Record<string, unknown>>;
+  readonly failedDrawCalls: number;
+  readonly invalidCamera: boolean;
+  readonly statistics?: RenderStatisticsSnapshot | undefined;
   readonly summary: ImageSummary;
   readonly inspection: Inspection;
   readonly resourceCount: number;
@@ -303,7 +307,7 @@ export async function initializeTextures(
     return {
       resources,
       componentId: contract.UnlitTexture.id,
-      startupBackend: startupFrame.backend,
+      startupStatistics: startupFrame.statistics,
       inspection: await inspectScene(active, "texture-cube"),
     };
   } catch (error) {
@@ -522,9 +526,9 @@ export async function recoverTextureContext(beforeLabel: string): Promise<{
   const state = requireActive();
   const before = requireCapture(state, beforeLabel);
   const resourceCountBefore = (await state.client.inspect()).resources.length;
-  state.presentation.loseContext();
+  presentationTesting(state.presentation).loseContext();
   await compositorBarrier();
-  state.presentation.restoreContext();
+  presentationTesting(state.presentation).restoreContext();
   const after = await captureTextureFrame("after-context-restore");
   if (after.contextGeneration <= before.contextGeneration) {
     throw new Error("context generation did not advance after restoration");
@@ -545,9 +549,9 @@ export async function rejectedTextureRecovery(): Promise<{
 }> {
   const state = requireActive();
   const before = await waitForResource(state, state.sources.checker, "loaded");
-  state.presentation.loseContext();
+  presentationTesting(state.presentation).loseContext();
   await compositorBarrier();
-  state.presentation.restoreContext();
+  presentationTesting(state.presentation).restoreContext();
   const after = await waitForResource(state, state.sources.checker, "failed");
   const inspection = await state.client.inspect();
   const frame = await state.presentation.capture(inspection.tick);
@@ -580,7 +584,9 @@ export async function captureTextureFrame(
     drawCalls: frame.drawCalls,
     triangles: frame.triangles,
     contextGeneration: frame.contextGeneration,
-    backend: frame.backend,
+    failedDrawCalls: frame.failedDrawCalls,
+    invalidCamera: frame.invalidCamera,
+    statistics: frame.statistics,
     summary: summarizeImage(frame),
     inspection,
     resourceCount: inspection.resources.length,

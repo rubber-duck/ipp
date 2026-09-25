@@ -21,14 +21,11 @@ fn invalid_light_batch_keeps_prior_components_and_light_order_is_stable() {
                 alias: 0,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::Light(light),
-            },
+            Command::insert_value(
+                EntityRef::Alias(0),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(EntityRef::Alias(0), ComponentValue::Light(light)),
         ]
     };
     world

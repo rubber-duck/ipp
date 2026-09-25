@@ -35,17 +35,17 @@ fn create(world: &mut WorldContext<'_>, geometry: BoundingGeometry, x: f32) -> E
                 alias: 0,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Alias(0),
+                ComponentValue::Transform(Transform {
                     x,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::BoundingGeometry(geometry),
-            },
+            ),
+            Command::insert_value(
+                EntityRef::Alias(0),
+                ComponentValue::BoundingGeometry(geometry),
+            ),
         ],
     )[0]
     .1
@@ -173,13 +173,13 @@ fn mesh_generated_geometry_reuses_its_component_allocation() {
     let entity = create(&mut world, BoundingGeometry::default(), 0.0);
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::MeshInstance(ipp_core::components::MeshInstance {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::MeshInstance(ipp_core::components::MeshInstance {
                 source: "asset://1/1".into(),
                 variant: 0,
             }),
-        }],
+        )],
     );
     let allocation = world.bounding_geometry(entity).unwrap().parts.as_ptr();
     for _ in 0..12 {

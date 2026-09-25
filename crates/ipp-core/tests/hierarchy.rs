@@ -27,10 +27,10 @@ fn create(world: &mut WorldContext<'_>, transform: Option<Transform>) -> EntityI
         metadata: EntityMetadata::default(),
     }];
     if let Some(transform) = transform {
-        operations.push(Command::InsertComponentValue {
-            entity: EntityRef::Alias(1),
-            value: ComponentValue::Transform(transform),
-        });
+        operations.push(Command::insert_value(
+            EntityRef::Alias(1),
+            ComponentValue::Transform(transform),
+        ));
     }
     let report = run(world, operations);
     assert!(report.outcomes[0].result.is_ok(), "{report:?}");
@@ -38,10 +38,7 @@ fn create(world: &mut WorldContext<'_>, transform: Option<Transform>) -> EntityI
 }
 
 fn put(entity: EntityId, value: ComponentValue) -> Command {
-    Command::InsertComponentValue {
-        entity: EntityRef::Handle(entity),
-        value,
-    }
+    Command::insert_value(EntityRef::Handle(entity), value)
 }
 
 fn parent(entity: EntityId, parent: EntityId) -> Command {

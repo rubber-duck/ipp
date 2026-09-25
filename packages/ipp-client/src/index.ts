@@ -20,7 +20,6 @@ export type {
   WorkerConnectOptions,
   ResourceUrlMapping,
 } from "./client.js";
-export { MAX_CAPTURE_DIMENSION } from "./presentation.js";
 export { applyCommandPages, CommandEncodingError } from "./command-pages.js";
 export { FieldKind } from "./types.js";
 export type * from "./types.js";

@@ -46,7 +46,7 @@ Lighting, shadow reception and shadow casting default off. Blended materials do 
 
 ## Availability and recovery
 
-Select custom, PBR, then unlit from the same entity, with solid unlit red as the final custom-material fallback. Missing resources, incompatible property types/attributes, device limits and compilation/link errors preserve authored state and use fallback. `RenderService::custom_material_diagnostics()` identifies affected entities; configured diagnostic logging reports reason changes. Compilation failure is retained by the immutable shader resource. Parameter writes reuse loaded programs; new definitions and ordinary unload/context recovery trigger a new loading attempt. Surface and shadow participation always use the same selected candidate.
+Select custom, PBR, then unlit from the same entity, with solid unlit red as the final custom-material fallback. Missing resources, incompatible property types/attributes, device limits and compilation/link errors preserve authored state and use fallback. In `diagnostics` builds, `RenderService::custom_material_diagnostics()` identifies affected entities with their structured reasons, and configured diagnostic logging reports reason changes. Compilation failure is retained by the immutable shader resource. Parameter writes reuse loaded programs; new definitions and ordinary unload/context recovery trigger a new loading attempt. Surface and shadow participation always use the same selected candidate.
 
 ## Assets and validation
 

@@ -47,15 +47,15 @@ fn setup() -> Fixture {
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
+                    ),
                 ],
             })
             .unwrap();
@@ -196,10 +196,10 @@ fn admit_gui_root(fixture: &mut Fixture) -> Result<(), crate::BatchError> {
     context
         .enqueue(Batch {
             id: context.tick() + 1,
-            operations: vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(panel),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            }],
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(panel),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            )],
         })
         .unwrap();
     let report = context.step(0.0).unwrap();
@@ -242,10 +242,10 @@ fn masked_withdrawal_then_admission_keeps_single_owner() {
                         owner: StateOverlayRef::Handle(owner_b),
                         overlay: StateOverlayRef::Handle(overlay_b),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Handle(panel),
-                        value: ComponentValue::GuiRoot(GuiRoot::default()),
-                    },
+                    Command::insert_value(
+                        EntityRef::Handle(panel),
+                        ComponentValue::GuiRoot(GuiRoot::default()),
+                    ),
                 ],
             })
             .unwrap();
@@ -271,10 +271,10 @@ fn admission_then_withdrawal_preserves_single_owner() {
             .enqueue(Batch {
                 id: context.tick() + 1,
                 operations: vec![
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Handle(panel),
-                        value: ComponentValue::GuiRoot(GuiRoot::default()),
-                    },
+                    Command::insert_value(
+                        EntityRef::Handle(panel),
+                        ComponentValue::GuiRoot(GuiRoot::default()),
+                    ),
                     Command::ReleaseComponentStateOverlay {
                         owner: StateOverlayRef::Handle(owner_b),
                         overlay: StateOverlayRef::Handle(overlay_b),
@@ -631,10 +631,10 @@ fn producer_items_refuse_gui_root_adoption() {
         context
             .enqueue(Batch {
                 id: context.tick() + 1,
-                operations: vec![Command::InsertComponentValue {
-                    entity: EntityRef::Handle(panel),
-                    value: ComponentValue::Surface(surface),
-                }],
+                operations: vec![Command::insert_value(
+                    EntityRef::Handle(panel),
+                    ComponentValue::Surface(surface),
+                )],
             })
             .unwrap();
         let report = context.step(0.0).unwrap();

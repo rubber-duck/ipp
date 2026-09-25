@@ -264,6 +264,8 @@ unsafe extern "C" {
 
     fn set_draw_checks(enabled: u32);
 
+    fn viewport_limit(axis: u32) -> u32;
+
     fn end_frame(check: u32) -> u32;
 
     fn delete_mesh(id: u32);
@@ -383,6 +385,16 @@ impl RenderDevice for WebGlRenderDevice {
         unsafe {
             set_draw_checks(u32::from(enabled));
         }
+    }
+
+    fn viewport_limits(&self) -> Option<crate::ViewportLimits> {
+        // SAFETY: Scalar capability queries; no Rust memory crosses the boundary and
+        // the bridge cannot reenter Rust. A lost or disposed context reports zero.
+        let (max_width, max_height) = unsafe { (viewport_limit(0), viewport_limit(1)) };
+        (max_width > 0 && max_height > 0).then_some(crate::ViewportLimits {
+            max_width,
+            max_height,
+        })
     }
 
     type Program = WebGlRenderProgram;

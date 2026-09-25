@@ -1,6 +1,5 @@
 import type { Client } from "@ipp/client";
 import type { FrameCapture } from "@ipp/client";
-import { MAX_CAPTURE_DIMENSION } from "@ipp/client";
 import type { ComponentDescriptor, Inspection } from "@ipp/client";
 import type { IppCanvasHandle } from "@ipp/react/web";
 
@@ -92,14 +91,22 @@ export async function captureViewer(
   const canvas = document.querySelector<HTMLCanvasElement>("#ipp-world-canvas");
   if (!canvas) throw new Error("Viewer canvas is missing from the DOM");
   const bounds = canvas.getBoundingClientRect();
+  // The drawing buffer follows CSS size × density within the device limits.
+  const limits = handle.client.presentation!.viewportLimits;
   const ratio = Math.min(
     window.devicePixelRatio,
-    MAX_CAPTURE_DIMENSION / bounds.width,
-    MAX_CAPTURE_DIMENSION / bounds.height,
+    limits ? limits.maxWidth / bounds.width : Number.POSITIVE_INFINITY,
+    limits ? limits.maxHeight / bounds.height : Number.POSITIVE_INFINITY,
   );
   const expected = {
-    width: Math.max(1, Math.round(bounds.width * ratio)),
-    height: Math.max(1, Math.round(bounds.height * ratio)),
+    width: Math.min(
+      limits?.maxWidth ?? Number.POSITIVE_INFINITY,
+      Math.max(1, Math.round(bounds.width * ratio)),
+    ),
+    height: Math.min(
+      limits?.maxHeight ?? Number.POSITIVE_INFINITY,
+      Math.max(1, Math.round(bounds.height * ratio)),
+    ),
   };
   const sizeDeadline = performance.now() + 10_000;
   let frame = await handle.capture();

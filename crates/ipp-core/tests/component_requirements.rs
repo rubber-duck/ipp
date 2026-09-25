@@ -26,10 +26,7 @@ fn apply(world: &mut WorldContext<'_>, operations: Vec<Command>) -> Vec<(u32, En
 }
 
 fn insert(entity: EntityId, value: ComponentValue) -> Command {
-    Command::InsertComponentValue {
-        entity: EntityRef::Handle(entity),
-        value,
-    }
+    Command::insert_value(EntityRef::Handle(entity), value)
 }
 
 fn remove(entity: EntityId, component: u16) -> Command {

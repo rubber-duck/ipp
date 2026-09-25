@@ -114,9 +114,12 @@ impl Store {
             }
         }
 
-        self.cache
-            .finish_frame(world, time, true, &mut self.targets)
-            .expect("completed frame counts")
+        assert!(
+            self.cache
+                .finish_frame(world, time, true, &mut self.targets),
+            "completed frame counts"
+        );
+        self.cache.counts()
     }
 
     fn frame(&mut self, time: f64, inputs: &[SurfaceCacheInput]) -> SurfaceCacheFrameCounts {
@@ -515,11 +518,10 @@ fn surfaces_leaving_the_plan_release_their_entries_after_completed_frames() {
         .cache
         .plan(WORLD, 0.1, 4096, &[input(1, 5.0, 1, 1)], &mut store.targets)
         .unwrap();
-    assert_eq!(
-        store
+    assert!(
+        !store
             .cache
-            .finish_frame(WORLD, 0.1, false, &mut store.targets),
-        None
+            .finish_frame(WORLD, 0.1, false, &mut store.targets)
     );
     assert_eq!(store.cache.resident().0, 2);
 
@@ -564,7 +566,7 @@ fn worlds_share_the_budget_and_forget_only_their_own_entries() {
     assert_eq!(store.diagnostic(1).size, [0, 0]);
     assert_eq!(store.cache.resident(), (1, 4 * 100 * 50));
 
-    store.cache.set_budget(DEFAULT_SURFACE_CACHE_BUDGET_BYTES);
+    store.cache.set_budget(SURFACE_CACHE_BUDGET_BYTES);
     store.frame_in(WORLD, 0.1, &[input(1, 5.0, 1, 1)]);
     assert_eq!(store.cache.resident().0, 2);
 
@@ -622,11 +624,10 @@ fn context_loss_during_allocation_fails_the_plan() {
             .plan(WORLD, 0.0, 4096, &[input(1, 5.0, 1, 1)], &mut store.targets),
         Err(RenderError::ContextLost)
     );
-    assert_eq!(
-        store
+    assert!(
+        !store
             .cache
-            .finish_frame(WORLD, 0.0, false, &mut store.targets),
-        None
+            .finish_frame(WORLD, 0.0, false, &mut store.targets)
     );
 }
 
@@ -642,11 +643,12 @@ fn a_failed_composite_is_not_counted_as_a_reuse() {
         .cache
         .failed(WORLD, entity(1), 0.1, &mut store.targets);
 
-    let frame = store
-        .cache
-        .finish_frame(WORLD, 0.1, true, &mut store.targets)
-        .unwrap();
-    assert_eq!(frame, counts(0, 0, 1, 1, 0));
+    assert!(
+        store
+            .cache
+            .finish_frame(WORLD, 0.1, true, &mut store.targets)
+    );
+    assert_eq!(store.cache.counts(), counts(0, 0, 1, 1, 0));
     assert_eq!(store.diagnostic(1).reuses, 0);
     assert!(store.targets.live.is_empty());
 }

@@ -5,7 +5,7 @@ mod support;
 use support::WorldTestDriver;
 
 use ipp_core::ComponentValue;
-use ipp_core::{ErrorReason, MeshKey, MeshStats, MeshUpload};
+use ipp_core::{ErrorReason, MeshKey, MeshUpload};
 
 fn test_world(host: &mut ipp_core::HostRuntime) -> ipp_core::WorldContext<'_> {
     let world_id = host.create_world(ipp_core::WorldLimits::default()).unwrap();
@@ -59,12 +59,34 @@ fn key(asset_id: u64) -> MeshKey {
     }
 }
 
+/// Accepted source and decoded allocation sizes, derived from the decoded asset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MeshSizes {
+    source_bytes: u32,
+    vertex_bytes: u32,
+    index_bytes: u32,
+    vertices: u32,
+    indices: u32,
+}
+
+impl MeshSizes {
+    fn of(bytes: &[u8], mesh: &ipp_core::MeshAsset) -> Self {
+        Self {
+            source_bytes: bytes.len() as u32,
+            vertex_bytes: mesh.vertex_bytes() as u32,
+            index_bytes: std::mem::size_of_val(mesh.indices()) as u32,
+            vertices: mesh.vertex_count() as u32,
+            indices: mesh.indices().len() as u32,
+        }
+    }
+}
+
 fn publish(
     world: &mut ipp_core::WorldContext<'_>,
     asset_id: u64,
     bytes: Vec<u8>,
-) -> Result<MeshStats, ErrorReason> {
-    let decoded = ipp_core::MeshAsset::decode(&bytes).map(|(_, stats)| stats);
+) -> Result<MeshSizes, ErrorReason> {
+    let decoded = ipp_core::MeshAsset::decode(&bytes).map(|mesh| MeshSizes::of(&bytes, &mesh));
     world.enqueue_mesh(MeshUpload {
         id: asset_id,
         key: key(asset_id),

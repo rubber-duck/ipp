@@ -2,7 +2,6 @@
 //! Draining drops/moves every value; retained capacity contains no component mirror.
 
 use crate::{ComponentValue, EntityId, ErrorReason, components::schema::FieldValue};
-use std::collections::BTreeMap;
 
 type Key = (EntityId, u16);
 pub(super) type ComponentScratch = Vec<(Key, Option<ComponentValue>)>;
@@ -11,8 +10,6 @@ pub(super) type PropertyScratch = Vec<((Key, u32), FieldValue)>;
 pub(super) struct AnimationComponentValues {
     values: ComponentScratch,
     properties: PropertyScratch,
-    legacy: BTreeMap<Key, ComponentValue>,
-    reuse: bool,
 }
 
 impl AnimationComponentValues {
@@ -21,8 +18,6 @@ impl AnimationComponentValues {
         Self {
             values,
             properties,
-            legacy: BTreeMap::new(),
-            reuse: crate::allocation_optimizations_enabled(),
         }
     }
 
@@ -31,22 +26,6 @@ impl AnimationComponentValues {
         key: Key,
         create: impl FnOnce() -> Result<ComponentValue, ErrorReason>,
     ) -> Result<&mut ComponentValue, ErrorReason> {
-        if !self.reuse {
-            return match self.legacy.entry(key) {
-                std::collections::btree_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let mut value = create()?;
-                    for ((target, offset), property) in &self.properties {
-                        if *target == key {
-                            value
-                                .set_field(*offset, property.clone())
-                                .map_err(|_| ErrorReason::InvalidField)?;
-                        }
-                    }
-                    Ok(entry.insert(value))
-                }
-            };
-        }
         let index = match self.values.binary_search_by_key(&key, |(key, _)| *key) {
             Ok(index) => index,
             Err(index) => {
@@ -73,7 +52,6 @@ impl AnimationComponentValues {
         self.values
             .iter_mut()
             .filter_map(|(_, value)| value.as_mut())
-            .chain(self.legacy.values_mut())
     }
 
     /// The patch contains only owned numeric properties. Reads see earlier writes in
@@ -85,8 +63,7 @@ impl AnimationComponentValues {
         storage: &crate::components::registry::ComponentStorage,
     ) -> Option<FieldValue> {
         if !crate::components::registry::ComponentStorage::supports_numeric_property(key.1, offset)
-            && !(crate::direct_numeric_updates_enabled()
-                && super::numeric_fields::range(key.1, offset).is_some())
+            && super::numeric_fields::range(key.1, offset).is_none()
         {
             return None;
         }
@@ -130,13 +107,6 @@ impl AnimationComponentValues {
             FieldValue::Rows(_) | FieldValue::Unset => return Err(ErrorReason::InvalidField),
             _ => {}
         }
-        if !self.reuse
-            && let Some(component) = self.legacy.get_mut(&key)
-        {
-            return component
-                .set_field(offset, value)
-                .map_err(|_| ErrorReason::InvalidField);
-        }
         let index = match self.values.binary_search_by_key(&key, |(key, _)| *key) {
             Ok(index) => index,
             Err(index) => {
@@ -167,14 +137,7 @@ impl AnimationComponentValues {
         &PropertyScratch,
         impl Iterator<Item = (Key, Option<ComponentValue>)> + '_,
     ) {
-        (
-            &self.properties,
-            self.values.drain(..).chain(
-                std::mem::take(&mut self.legacy)
-                    .into_iter()
-                    .map(|(key, value)| (key, Some(value))),
-            ),
-        )
+        (&self.properties, self.values.drain(..))
     }
 
     pub fn into_scratch(mut self) -> (ComponentScratch, PropertyScratch) {
@@ -202,8 +165,6 @@ mod tests {
         storage.reserve(1);
         storage.set(0, ComponentValue::CustomMaterial(original));
         let mut values = AnimationComponentValues::new(Vec::new(), Vec::new());
-        // This invariant concerns reusable numeric staging.
-        values.reuse = true;
         values
             .set_numeric(key, offset, FieldValue::Dynamic(DynamicValue::F32(2.0)))
             .unwrap();

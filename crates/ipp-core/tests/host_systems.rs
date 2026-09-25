@@ -555,13 +555,13 @@ fn destroying_one_consumer_preserves_another_worlds_in_flight_reader() {
                         alias: 0,
                         metadata: Default::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(0),
-                        value: ComponentValue::MeshInstance(MeshInstance {
+                    Command::insert_value(
+                        EntityRef::Alias(0),
+                        ComponentValue::MeshInstance(MeshInstance {
                             source: "fixture:///shared.mesh".into(),
                             variant: 0,
                         }),
-                    },
+                    ),
                 ],
             })
             .unwrap();

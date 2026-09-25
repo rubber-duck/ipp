@@ -362,16 +362,21 @@ async function releaseMotionOwnership(
   );
 }
 
-async function captureCompleteProjectorFrame(
+/**
+ * Wait until the projector resources are loaded, then for a completed frame
+ * that drew them without failed draws. Readiness comes from inspection and
+ * the frame summary; no pixels are read back.
+ */
+async function awaitCompleteProjectorFrame(
   canvas: IppCanvasHandle,
   active: () => boolean,
 ): Promise<void> {
   const client = canvas.client as AnimationWorldClient;
   for (let attempt = 0; attempt < 120; attempt += 1) {
     if (!active()) return;
-    const frame = await canvas.capture();
-    if (!active()) return;
+    await canvas.flush();
     const inspection = await client.inspect();
+    if (!active()) return;
     const resources = projectorResourceSources();
     const projector = resources.map(({ kind, source }) =>
       inspection.resources.find(
@@ -407,11 +412,12 @@ async function captureCompleteProjectorFrame(
       );
     if (
       projector.every((resource) => resource?.status === "loaded") &&
-      shaders.every((resource) => resource?.status === "loaded") &&
-      Number(frame.backend.failedDrawCalls ?? 0) === 0 &&
-      frame.drawCalls > 0
-    )
-      return;
+      shaders.every((resource) => resource?.status === "loaded")
+    ) {
+      const frame = await client.presentation!.frame(inspection.tick);
+      if (!active()) return;
+      if (frame.failedDrawCalls === 0 && frame.drawCalls > 0) return;
+    }
     await client.waitForFrame(inspection.tick);
   }
   throw new Error("Projector resources did not produce a complete frame");
@@ -687,7 +693,7 @@ export function useGuiScene(
     if (finishingFrame.current) return;
     finishingFrame.current = true;
     const request = generation.current;
-    void captureCompleteProjectorFrame(
+    void awaitCompleteProjectorFrame(
       canvas,
       () => generation.current === request,
     ).then(

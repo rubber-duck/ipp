@@ -330,9 +330,10 @@ impl<T: RowPropertyValue> RowPropertyField for Option<T> {
     }
 }
 
-/// Per-slot state inside one rows field.
+/// Per-slot state inside one rows field, observed by tests.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowSlotState {
+pub(crate) enum RowSlotState {
     /// Never held a row in this incarnation; may receive [`Rows::insert`].
     Unallocated,
     /// Holds a row.
@@ -410,7 +411,8 @@ impl<R: SchemaRow> Rows<R> {
     }
 
     /// Classify a slot.
-    pub fn slot_state(&self, slot: u32) -> RowSlotState {
+    #[cfg(test)]
+    pub(crate) fn slot_state(&self, slot: u32) -> RowSlotState {
         if self.position(slot).is_some() {
             RowSlotState::Live
         } else if self.dead.binary_search(&slot).is_ok() {
@@ -573,7 +575,7 @@ impl<R: SchemaRow> Rows<R> {
 
     /// Add every nonempty asset property to a component's resource demand; the
     /// owning component calls this from its lifecycle resource hook.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(any(test, feature = "gui"))]
     pub(crate) fn resource_demand(
         &self,
         demand: &mut std::collections::BTreeSet<
@@ -719,52 +721,6 @@ impl<R: SchemaRow> SchemaRowsField for Rows<R> {
 
     fn visit_assets(&self, visit: &mut dyn FnMut(&AssetSource)) {
         self.visit_assets(visit)
-    }
-}
-
-/// A boxed table behaves exactly like the table; components box large or
-/// rarely used tables to keep their value, and so every `Command`, small.
-impl<R: SchemaRow> SchemaField for Box<Rows<R>> {
-    const KIND: FieldKind = FieldKind::Rows;
-
-    fn to_value(&self) -> FieldValue {
-        (**self).to_value()
-    }
-
-    fn from_value(value: FieldValue) -> Result<Self, FieldError> {
-        Rows::from_value(value).map(Box::new)
-    }
-
-    fn write_default(&self, sink: &mut impl ContractSink) {
-        (**self).write_default(sink)
-    }
-
-    fn retained_bytes(&self) -> Option<usize> {
-        Some(std::mem::size_of::<Rows<R>>() + Rows::retained_bytes(self))
-    }
-}
-
-impl<R: SchemaRow> SchemaRowsField for Box<Rows<R>> {
-    const LAYOUT: RowsLayout = R::LAYOUT;
-
-    fn has_row_field(relative: u32) -> bool {
-        Rows::<R>::has_row_field(relative)
-    }
-
-    fn row_field(&self, relative: u32) -> Result<FieldValue, FieldError> {
-        (**self).row_field(relative)
-    }
-
-    fn set_row_field(&mut self, relative: u32, value: FieldValue) -> Result<(), FieldError> {
-        (**self).set_row_field(relative, value)
-    }
-
-    fn validate_row_field(relative: u32, kind: FieldKind) -> Result<(), FieldError> {
-        Rows::<R>::validate_row_field(relative, kind)
-    }
-
-    fn visit_assets(&self, visit: &mut dyn FnMut(&AssetSource)) {
-        (**self).visit_assets(visit)
     }
 }
 

@@ -1,4 +1,5 @@
 /** Backend-independent material scenarios driven through the generated worker client. */
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
   AnimationWorldClient,
@@ -243,11 +244,11 @@ export function difference(a: string, b: string) {
   return compareImages(captures.get(a)!, captures.get(b)!);
 }
 export async function recoverContext() {
-  client.presentation!.loseContext();
+  presentationTesting(client.presentation!).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  client.presentation!.restoreContext();
+  presentationTesting(client.presentation!).restoreContext();
 }
 export async function overlays() {
   const result = successfulBatch(

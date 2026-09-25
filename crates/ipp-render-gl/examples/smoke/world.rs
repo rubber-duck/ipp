@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use super::frame_stats::RenderFrameStats;
 use ipp_core::{
     Batch, Command, ComponentValue, EntityRef, FieldValue, FieldWrite, WorldContext,
     components::{MeshInstance, Transform, UnlitMaterial},
@@ -131,7 +132,7 @@ pub fn run<D: RenderDevice>(
         world.mesh(key).is_none(),
         "GPU resources discard bulk CPU streams"
     );
-    let mesh_asset = ipp_core::MeshAsset::decode(&fixture)?.0;
+    let mesh_asset = ipp_core::MeshAsset::decode(&fixture)?;
     assert_eq!(
         (mesh_asset.vertex_count(), mesh_asset.indices().len()),
         (24, 36)
@@ -350,7 +351,7 @@ pub fn run<D: RenderDevice>(
         [0.001, MATERIAL[1], MATERIAL[2]],
     );
     assert_eq!(
-        renderer.cached_program_count(),
+        resident_programs(world.asset_resources()),
         1,
         "layout does not add shader behavior"
     );
@@ -379,20 +380,20 @@ pub fn run<D: RenderDevice>(
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::BoundingGeometry(ipp_core::components::BoundingGeometry {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::BoundingGeometry(ipp_core::components::BoundingGeometry {
                     geometry: ipp_core::systems::geometry::GeometryDefinition::from(
                         ipp_core::systems::geometry::GeometryShape::default(),
                     )
                     .encode()?,
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )?;
     let patch = ipp_core::RenderStatePatch {
@@ -420,7 +421,7 @@ pub(crate) fn deliver_to_host<D: RenderDevice>(
     id: ipp_core::WorldId,
     mesh: &[u8],
     texture: Option<&[u8]>,
-) -> Result<ipp_render_gl::RenderStats> {
+) -> Result<crate::smoke::frame_stats::FrameStats> {
     let _ = texture;
     let mut uploaded = 0u32;
     for _ in 0..512 {
@@ -574,14 +575,29 @@ pub(crate) fn empty_world(host: &mut ipp_core::HostRuntime) -> WorldContext<'_> 
     host.world_mut(id).unwrap()
 }
 
+/// Linked GL program resources resident in one Host: built-in recipes and compiled
+/// custom shaders, each counted once however many passes it links.
+pub(crate) fn resident_programs(
+    resources: &ipp_core::services::asset_management::AssetManagementService,
+) -> usize {
+    resources
+        .iter()
+        .filter(|resource| {
+            let kind = resource.source().kind;
+            (kind == ipp_core::services::asset_management::shader::SHADER_TYPE
+                || resource.source().uri.starts_with("ipp-render://program/"))
+                && resource.graphics_ready() == Some(true)
+        })
+        .count()
+}
+
 /// The embedding host progresses resources and evaluates before presentation.
 pub(crate) fn render_frame<D: RenderDevice>(
     renderer: &mut RenderService<D>,
     world: &mut WorldContext<'_>,
     width: u32,
     height: u32,
-) -> std::result::Result<ipp_render_gl::RenderStats, String> {
-    renderer.begin_frame();
+) -> std::result::Result<crate::smoke::frame_stats::FrameStats, String> {
     let mut uploaded = 0u32;
     // New built-in recipes are registered during demand collection. Complete
     // their next Host loading phase before callers inspect a completed frame.
@@ -592,7 +608,7 @@ pub(crate) fn render_frame<D: RenderDevice>(
         world.poll_all_assets();
         world.step(0.0).map_err(|error| error.to_string())?;
         let mut stats = renderer
-            .render(world, width, height)
+            .render_stats(world, width, height)
             .map_err(|error| error.to_string())?;
         uploaded = uploaded.saturating_add(stats.uploaded_bytes);
         if !world.asset_resources().iter().any(|resource| {
@@ -631,8 +647,7 @@ pub(crate) fn render_host_frame<D: RenderDevice>(
     id: ipp_core::WorldId,
     width: u32,
     height: u32,
-) -> std::result::Result<ipp_render_gl::RenderStats, String> {
-    renderer.begin_frame();
+) -> std::result::Result<crate::smoke::frame_stats::FrameStats, String> {
     let mut uploaded = 0u32;
     for _ in 0..8 {
         host.world_mut(id)
@@ -643,7 +658,7 @@ pub(crate) fn render_host_frame<D: RenderDevice>(
         let mut world = host.world_mut(id).unwrap();
         world.step(0.0).map_err(|error| error.to_string())?;
         let mut stats = renderer
-            .render(&mut world, width, height)
+            .render_stats(&mut world, width, height)
             .map_err(|error| error.to_string())?;
         uploaded = uploaded.saturating_add(stats.uploaded_bytes);
         if !world.asset_resources().iter().any(|resource| {
@@ -680,24 +695,24 @@ pub fn multiple_worlds<D: RenderDevice>(
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Transform(Transform {
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Transform(Transform {
                         x,
                         ..Default::default()
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::MeshInstance(MeshInstance {
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::MeshInstance(MeshInstance {
                         source: "fixture:///shared.mesh".into(),
                         variant: 0,
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::UnlitMaterial(UnlitMaterial::default()),
-                },
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::UnlitMaterial(UnlitMaterial::default()),
+                ),
             ],
         )?;
         worlds.push(world.id());
@@ -723,15 +738,14 @@ pub fn multiple_worlds<D: RenderDevice>(
     let mut captures = Vec::new();
     // Collect both Worlds' program demand, then run the shared Host loading phase.
     for &id in &worlds {
-        renderer.render(&mut host.world_mut(id).unwrap(), WIDTH, HEIGHT)?;
+        renderer.render_stats(&mut host.world_mut(id).unwrap(), WIDTH, HEIGHT)?;
     }
     host.progress_assets();
     for &id in &worlds {
         host.world_mut(id).unwrap().step(0.0)?;
     }
-    renderer.begin_frame();
     for (index, &id) in worlds.iter().enumerate() {
-        let stats = renderer.render(&mut host.world_mut(id).unwrap(), WIDTH, HEIGHT)?;
+        let stats = renderer.render_stats(&mut host.world_mut(id).unwrap(), WIDTH, HEIGHT)?;
         assert_eq!(stats.draw_calls, 1);
         if index == 1 {
             assert_eq!(
@@ -753,10 +767,9 @@ pub fn multiple_worlds<D: RenderDevice>(
     let mut surviving = host.world_mut(worlds[1]).unwrap();
     surviving.step(0.0)?;
     assert_eq!(surviving.resource_snapshots()[0].id, resource);
-    renderer.begin_frame();
     assert_eq!(
         renderer
-            .render(&mut surviving, WIDTH, HEIGHT)?
+            .render_stats(&mut surviving, WIDTH, HEIGHT)?
             .uploaded_bytes,
         0
     );

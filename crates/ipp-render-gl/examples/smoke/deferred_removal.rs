@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+use super::frame_stats::RenderFrameStats;
 use ipp_core::{
     Command, ComponentValue, EntityId, EntityRef, ErrorReason, HostRuntime, WorldId,
     components::{MeshInstance, Transform, UnlitMaterial},
@@ -274,7 +275,6 @@ pub fn run<D: RenderDevice>(
         let (world, target) = scene(&mut host)?;
         let (peer, _) = scene(&mut host)?;
         load(&mut host, [world, peer], fixture)?;
-        renderer.begin_frame();
         assert_eq!(
             super::world::render_frame(
                 renderer,
@@ -290,7 +290,7 @@ pub fn run<D: RenderDevice>(
         assert!(coverage(&visible).0 > 1000);
         assert_eq!(
             renderer
-                .render(&mut host.world_mut(peer).unwrap(), WIDTH, HEIGHT)?
+                .render_stats(&mut host.world_mut(peer).unwrap(), WIDTH, HEIGHT)?
                 .draw_calls,
             1
         );
@@ -385,10 +385,9 @@ pub fn run<D: RenderDevice>(
             host.world_mut(world).unwrap().render_items().is_empty(),
             "prepared rows must be rebuilt after deferred cleanup"
         );
-        renderer.begin_frame();
         assert_eq!(
             renderer
-                .render(&mut host.world_mut(world).unwrap(), WIDTH, HEIGHT)?
+                .render_stats(&mut host.world_mut(world).unwrap(), WIDTH, HEIGHT)?
                 .draw_calls,
             0
         );
@@ -401,7 +400,7 @@ pub fn run<D: RenderDevice>(
         );
         assert_eq!(
             renderer
-                .render(&mut host.world_mut(peer).unwrap(), WIDTH, HEIGHT)?
+                .render_stats(&mut host.world_mut(peer).unwrap(), WIDTH, HEIGHT)?
                 .draw_calls,
             1
         );
@@ -427,21 +426,21 @@ fn scene(host: &mut HostRuntime) -> Result<(WorldId, EntityId)> {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: SOURCE.into(),
                     variant: 0,
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::UnlitMaterial(UnlitMaterial::default()),
-            },
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::UnlitMaterial(UnlitMaterial::default()),
+            ),
         ],
     )?;
     let target = world

@@ -65,12 +65,6 @@ impl WorldEntityState {
         components: &'a registry::ComponentStorage,
         entity: EntityId,
     ) -> Option<std::borrow::Cow<'a, crate::components::Skeleton>> {
-        if !crate::allocation_optimizations_enabled() {
-            return match self.input_value(components, entity, ComponentValue::SKELETON)? {
-                ComponentValue::Skeleton(value) => Some(std::borrow::Cow::Owned(value)),
-                _ => None,
-            };
-        }
         let layer = self
             .entities
             .get(&entity)?

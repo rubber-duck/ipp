@@ -6,9 +6,10 @@ import {
   manifestVariant,
 } from "./generated-client.mjs";
 
-const { codec } = await generateClient("animation", []);
+const client = await generateClient("animation", []);
+const { codec, manifest } = client;
 const { codec: lean } = await generateClient("animation-baseline");
-const layout = (name, values) => encodeManifestLayout(codec, name, values);
+const layout = (name, values) => encodeManifestLayout(client, name, values);
 
 test("baseline contracts expose property animation and omit skeletal codecs", () => {
   assert.equal(codec.CAPABILITIES.animation, true);
@@ -16,9 +17,9 @@ test("baseline contracts expose property animation and omit skeletal codecs", ()
   assert.equal(codec.CAPABILITIES.assets, true);
   assert.equal("Skeleton" in codec.components, false);
   assert.equal("Transform" in codec.components, true);
-  assert.equal("request-upload-asset" in codec.WIRE_LAYOUTS, false);
+  assert.equal("request-upload-asset" in manifest.WIRE_LAYOUTS, false);
   assert.equal("uploadAsset" in codec.IppClient.prototype, false);
-  assert.equal(codec.ASSET_FORMATS.ASSET_ANIMATION.typeId, 10);
+  assert.equal(manifest.ASSET_FORMATS.ASSET_ANIMATION.typeId, 10);
   assert.equal("encodeAnimationClip" in lean, true);
   assert.equal("playback" in lean.IppClient.prototype, true);
   assert.equal("registerAsset" in lean.IppClient.prototype, true);
@@ -49,7 +50,7 @@ test("every playback control agrees with the wire manifest and reserves identity
       layout("request-playback", {
         session: 7n,
         request_id: 0n,
-        tag: manifestVariant(codec, "REQUEST_PLAYBACK"),
+        tag: manifestVariant(client, "REQUEST_PLAYBACK"),
         controller: 41n,
         control: index,
         time: control.time ?? 0,
@@ -97,7 +98,7 @@ test("playback events and controller clocks decode from manifest bytes with stri
     session: 7n,
     request_id: 0n,
     tick: 50n,
-    tag: manifestVariant(codec, "RESPONSE_PLAYBACK"),
+    tag: manifestVariant(client, "RESPONSE_PLAYBACK"),
     events: [event],
   }).bytes;
   assert.deepEqual(codec.decodeResponse(packet, 7n).body, {
@@ -119,7 +120,7 @@ test("playback events and controller clocks decode from manifest bytes with stri
       session: 7n,
       request_id: 0n,
       tick: 50n,
-      tag: manifestVariant(codec, "RESPONSE_PLAYBACK"),
+      tag: manifestVariant(client, "RESPONSE_PLAYBACK"),
       events: [
         layout("playback-event", {
           controller: layout("controller-state", { id: 41n, state, time: 0 }),
@@ -136,7 +137,7 @@ test("playback events and controller clocks decode from manifest bytes with stri
       session: 7n,
       request_id: 2n,
       tick: 50n,
-      tag: manifestVariant(codec, "RESPONSE_INSPECT"),
+      tag: manifestVariant(client, "RESPONSE_INSPECT"),
       time: 10,
       entities: [],
       resources: [],
@@ -392,7 +393,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
       layout(`request-controller-${action}`, {
         session: 7n,
         request_id: 19n,
-        tag: manifestVariant(codec, tag),
+        tag: manifestVariant(client, tag),
         ...extra,
       }).bytes,
     );
@@ -417,7 +418,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
     layout("request-controller-transition", {
       session: 7n,
       request_id: 20n,
-      tag: manifestVariant(codec, "REQUEST_CONTROLLER_TRANSITION"),
+      tag: manifestVariant(client, "REQUEST_CONTROLLER_TRANSITION"),
       id: 13n,
       description: manifestDescription,
       duration: 0,
@@ -432,7 +433,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
     session: 7n,
     request_id: 19n,
     tick: 50n,
-    tag: manifestVariant(codec, "RESPONSE_INSPECT"),
+    tag: manifestVariant(client, "RESPONSE_INSPECT"),
     time: 10,
     entities: [],
     resources: [],
@@ -469,7 +470,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
       session: 7n,
       request_id: 19n,
       tick: 50n,
-      tag: manifestVariant(codec, "RESPONSE_CONTROLLER"),
+      tag: manifestVariant(client, "RESPONSE_CONTROLLER"),
       id,
     }).bytes;
     assert.deepEqual(codec.decodeResponse(response, 7n).body, {

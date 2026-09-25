@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use super::frame_stats::RenderFrameStats;
 use ipp_core::{
     Command, ComponentValue, EntityRef, RenderStatePatch, WorldContext,
     components::{BoundingGeometry, Transform},
@@ -212,7 +213,7 @@ pub fn run<D: RenderDevice>(
             ..unit_geometry()
         },
     )?;
-    let single = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
+    super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
     add(
         &mut sharing,
         0,
@@ -227,15 +228,18 @@ pub fn run<D: RenderDevice>(
     )?;
     let shared = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
     assert_eq!(shared.draw_calls, 2);
-    assert_eq!(shared.debug_resident_bytes, single.debug_resident_bytes);
     assert_eq!(shared.uploaded_bytes, 0);
-    let empty = super::world::render_frame(
+    // A frame without debug demand releases the private mesh; the next demand
+    // uploads it again.
+    super::world::render_frame(
         renderer,
         &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
         WIDTH,
         HEIGHT,
     )?;
-    assert_eq!(empty.debug_resident_bytes, 0);
+    let reloaded = super::world::render_frame(renderer, &mut sharing, WIDTH, HEIGHT)?;
+    assert_eq!(reloaded.draw_calls, 2);
+    assert!(reloaded.uploaded_bytes > 0);
     let mut bounded_host = ipp_core::HostRuntime::new();
     let mut bounded = self::world(&mut bounded_host, renderer)?;
     for index in 0..129 {
@@ -252,7 +256,7 @@ pub fn run<D: RenderDevice>(
     }
     let capacity = super::world::render_frame(renderer, &mut bounded, WIDTH, HEIGHT)?;
     assert_eq!((capacity.draw_calls, capacity.failed_draw_calls), (129, 0));
-    assert!(capacity.debug_resident_bytes > 0);
+    assert!(capacity.uploaded_bytes > 0);
     let repeat = super::world::render_frame(renderer, &mut bounded, WIDTH, HEIGHT)?;
     assert_eq!((repeat.draw_calls, repeat.failed_draw_calls), (129, 0));
     assert_eq!(repeat.uploaded_bytes, 0);
@@ -312,7 +316,7 @@ pub fn run<D: RenderDevice>(
     assert!(count(&before, [255, 0, 0, 255]) > 100);
     assert_eq!(
         renderer
-            .render(&mut recovering, WIDTH, HEIGHT)?
+            .render_stats(&mut recovering, WIDTH, HEIGHT)?
             .uploaded_bytes,
         0
     );
@@ -325,7 +329,16 @@ pub fn run<D: RenderDevice>(
     let resumed = super::world::render_frame(renderer, &mut recovering, WIDTH, HEIGHT)?;
     assert_eq!((resumed.draw_calls, resumed.failed_draw_calls), (1, 0));
     assert_eq!(resumed.uploaded_bytes, 0);
-    assert_eq!(resumed.debug_resident_bytes as usize, outline_bytes);
+    // Only the remaining declaration's mesh stays demanded: after a release it is
+    // the whole upload.
+    super::world::render_frame(
+        renderer,
+        &mut super::world::empty_world(&mut ipp_core::HostRuntime::new()),
+        WIDTH,
+        HEIGHT,
+    )?;
+    let remaining = super::world::render_frame(renderer, &mut recovering, WIDTH, HEIGHT)?;
+    assert_eq!(remaining.uploaded_bytes as usize, outline_bytes);
     assert_eq!(recovering.inspect(second).unwrap(), declaration);
     let after = capture()?;
     save(output, "debug-release-preserved", &after)?;
@@ -373,13 +386,13 @@ fn world<'a, D: RenderDevice>(
     let camera = world.active_camera().unwrap();
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(camera),
-            value: ComponentValue::Transform(Transform {
+        vec![Command::insert_value(
+            EntityRef::Handle(camera),
+            ComponentValue::Transform(Transform {
                 z: 6.0,
                 ..Transform::default()
             }),
-        }],
+        )],
     )?;
     Ok(world)
 }
@@ -397,14 +410,14 @@ fn add(
                 alias,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(alias),
-                value: ComponentValue::Transform(transform),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(alias),
-                value: ComponentValue::BoundingGeometry(debug),
-            },
+            Command::insert_value(
+                EntityRef::Alias(alias),
+                ComponentValue::Transform(transform),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(alias),
+                ComponentValue::BoundingGeometry(debug),
+            ),
         ],
     )
 }

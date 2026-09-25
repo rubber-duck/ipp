@@ -102,14 +102,13 @@ fn label_world(cache: Option<SurfaceCache>) -> (HostRuntime, WorldId, crate::Ent
             alias: 1,
             metadata: Default::default(),
         },
-        Command::InsertComponentValue {
-            entity: EntityRef::Alias(1),
-            value: ComponentValue::Surface(label_surface(1)),
-        },
+        Command::insert_value(
+            EntityRef::Alias(1),
+            ComponentValue::Surface(label_surface(1)),
+        ),
     ];
-    operations.extend(cache.map(|cache| Command::InsertComponentValue {
-        entity: EntityRef::Alias(1),
-        value: ComponentValue::SurfaceCache(cache),
+    operations.extend(cache.map(|cache| {
+        Command::insert_value(EntityRef::Alias(1), ComponentValue::SurfaceCache(cache))
     }));
     world
         .enqueue(Batch {
@@ -216,13 +215,13 @@ fn opted_in_revisions_hold_across_unchanged_and_placement_only_frames() {
     let model = item(&world, entity).model;
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::Transform(Transform {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::Transform(Transform {
                 x: 3.0,
                 ..Default::default()
             }),
-        }],
+        )],
     )
     .unwrap();
     assert_ne!(
@@ -574,10 +573,10 @@ fn removing_and_restoring_the_policy_or_surface_takes_fresh_revisions() {
     };
     run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::SurfaceCache(policy),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::SurfaceCache(policy),
+        )],
     )
     .unwrap();
     let (restored, paint, resource) = published(&world, entity);
@@ -596,14 +595,11 @@ fn removing_and_restoring_the_policy_or_surface_takes_fresh_revisions() {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(label_surface(1)),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::SurfaceCache(policy),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(label_surface(1)),
+            ),
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::SurfaceCache(policy)),
         ],
     )
     .unwrap();
@@ -654,13 +650,13 @@ fn invalid_policies_are_rejected_without_changing_published_inputs() {
     let before = published(&world, entity);
     let result = run(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::SurfaceCache(SurfaceCache {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::SurfaceCache(SurfaceCache {
                 texels_per_metre: -4.0,
                 ..Default::default()
             }),
-        }],
+        )],
     );
     assert_eq!(result, Err(ErrorReason::InvalidValue));
     assert_eq!(published(&world, entity), before);
@@ -719,23 +715,23 @@ mod gui {
                         alias: 1,
                         metadata: Default::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(skinned_root()),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::SurfaceCache(SurfaceCache::default()),
-                    },
+                    ),
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::GuiRoot(skinned_root()),
+                    ),
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::SurfaceCache(SurfaceCache::default()),
+                    ),
                 ],
             })
             .unwrap();

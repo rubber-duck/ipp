@@ -268,8 +268,11 @@ pub const MAX_LAYOUT_DEPTH: usize = 128;
 /// Rejected or degraded layout input, reported per node without aborting
 /// the evaluation. Diagnostics never synthesize geometry: affected nodes are
 /// marked unavailable so routing and paint skip them observably.
+///
+/// Crate-private: tests observe them through the view; no production sink
+/// consumes them yet.
 #[derive(Clone, Debug, PartialEq)]
-pub enum GuiLayoutDiagnostic {
+pub(crate) enum GuiLayoutDiagnostic {
     /// A flex child inside an unbounded main axis, or with a non-positive
     /// factor. The child keeps zero main-axis extent.
     UnboundedFlex {
@@ -316,7 +319,7 @@ pub enum GuiLayoutDiagnostic {
 
 /// How one constraint bound failed validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GuiConstraintError {
+pub(crate) enum GuiConstraintError {
     /// Bound was non-finite.
     NonFinite,
     /// Bound was negative where only zero or positive is meaningful.
@@ -556,11 +559,13 @@ pub struct GuiEvaluatedView {
     /// Evaluated nodes in painter order.
     pub nodes: Vec<GuiEvaluatedNode>,
     /// Diagnostics accumulated during the latest reflow.
-    pub diagnostics: Vec<GuiLayoutDiagnostic>,
-    /// Cumulative text remeasurements across evaluations.
-    pub remeasure_count: u64,
-    /// Cumulative reflows across evaluations.
-    pub reflow_count: u64,
+    pub(crate) diagnostics: Vec<GuiLayoutDiagnostic>,
+    /// Cumulative text remeasurements across evaluations, observed by tests.
+    #[cfg(test)]
+    pub(crate) remeasure_count: u64,
+    /// Cumulative reflows across evaluations, observed by tests.
+    #[cfg(test)]
+    pub(crate) reflow_count: u64,
     /// False when root-level input (Surface size, units factor, missing
     /// tree) made evaluation impossible.
     pub available: bool,
@@ -1037,6 +1042,7 @@ struct Evaluator<'a, 'r> {
     /// Deferred placement per record, index-aligned with `nodes`.
     placements: Vec<DeferredPlacement>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
+    #[cfg(test)]
     remeasured: u64,
 }
 
@@ -1601,7 +1607,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             });
             return LeafOutcome::unavailable();
         };
-        self.remeasured += 1;
+        #[cfg(test)]
+        {
+            self.remeasured += 1;
+        }
+
         self.texts.insert(
             id,
             RetainedText {
@@ -2805,12 +2815,7 @@ fn evaluate_tree(
     request: &GuiLayoutRequest<'_>,
     resolver: &dyn GuiResourceResolver,
     texts: BTreeMap<GuiNodeId, RetainedText>,
-) -> (
-    Vec<GuiEvaluatedNode>,
-    Vec<GuiLayoutDiagnostic>,
-    u64,
-    BTreeMap<GuiNodeId, RetainedText>,
-) {
+) -> EvaluatedTree {
     let units = request.units_per_metre;
     let logical = [
         request.surface_size[0] * units,
@@ -2824,6 +2829,7 @@ fn evaluate_tree(
         nodes: Vec::new(),
         placements: Vec::new(),
         texts,
+        #[cfg(test)]
         remeasured: 0,
     };
 
@@ -2849,12 +2855,23 @@ fn evaluate_tree(
 
     evaluator.resolve_placement(Some([0.0, 0.0, logical[0], logical[1]]));
 
-    (
-        evaluator.nodes,
-        evaluator.diagnostics,
-        evaluator.remeasured,
-        evaluator.texts,
-    )
+    EvaluatedTree {
+        nodes: evaluator.nodes,
+        diagnostics: evaluator.diagnostics,
+        texts: evaluator.texts,
+        #[cfg(test)]
+        remeasured: evaluator.remeasured,
+    }
+}
+
+/// Output of one full constraint pass.
+struct EvaluatedTree {
+    nodes: Vec<GuiEvaluatedNode>,
+    diagnostics: Vec<GuiLayoutDiagnostic>,
+    texts: BTreeMap<GuiNodeId, RetainedText>,
+    /// Text measurements this pass performed.
+    #[cfg(test)]
+    remeasured: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -2878,7 +2895,9 @@ struct RetainedGuiRoot {
     visual_fp: u64,
     paint_fp: u64,
     texts: BTreeMap<GuiNodeId, RetainedText>,
+    #[cfg(test)]
     remeasure_count: u64,
+    #[cfg(test)]
     reflow_count: u64,
     view: GuiEvaluatedView,
 }
@@ -3091,22 +3110,28 @@ impl GuiLayoutCache {
                     return &retained.view;
                 }
 
-                let (nodes, diagnostics, remeasured, texts) =
-                    evaluate_tree(request, resolver, std::mem::take(&mut retained.texts));
-                retained.texts = texts;
-                retained.remeasure_count += remeasured;
+                let tree = evaluate_tree(request, resolver, std::mem::take(&mut retained.texts));
+                retained.texts = tree.texts;
+                #[cfg(test)]
+                {
+                    retained.remeasure_count += tree.remeasured;
+                }
+
                 retained.struct_fp = struct_fp;
                 retained.layout_fp = layout_fp;
                 retained.visual_fp = visual_fp;
                 retained.paint_fp = paint_fp;
                 retained.paint_revision += 1;
                 retained.content_revision += 1;
-                retained.base = retained_geometry(&nodes);
+                retained.base = retained_geometry(&tree.nodes);
                 let view = &mut retained.view;
-                view.nodes = nodes;
-                view.diagnostics = diagnostics;
+                view.nodes = tree.nodes;
+                view.diagnostics = tree.diagnostics;
                 view.paint_revision = retained.paint_revision;
-                view.remeasure_count = retained.remeasure_count;
+                #[cfg(test)]
+                {
+                    view.remeasure_count = retained.remeasure_count;
+                }
             } else if retained.paint_fp != paint_fp {
                 refresh_paint(request.root, &mut retained.view);
                 retained.paint_fp = paint_fp;
@@ -3118,20 +3143,23 @@ impl GuiLayoutCache {
             return &retained.view;
         }
 
-        let (nodes, diagnostics, remeasured, texts) =
-            evaluate_tree(request, resolver, std::mem::take(&mut retained.texts));
+        let tree = evaluate_tree(request, resolver, std::mem::take(&mut retained.texts));
 
         retained.struct_fp = struct_fp;
         retained.layout_fp = layout_fp;
         retained.visual_fp = visual_fp;
         retained.paint_fp = paint_fp;
-        retained.texts = texts;
-        retained.remeasure_count += remeasured;
-        retained.reflow_count += 1;
+        retained.texts = tree.texts;
+        #[cfg(test)]
+        {
+            retained.remeasure_count += tree.remeasured;
+            retained.reflow_count += 1;
+        }
+
         retained.layout_revision += 1;
         retained.paint_revision += 1;
         retained.content_revision += 1;
-        retained.base = retained_geometry(&nodes);
+        retained.base = retained_geometry(&tree.nodes);
         let view = GuiEvaluatedView {
             entity,
             root_incarnation: request.root_incarnation,
@@ -3140,9 +3168,11 @@ impl GuiLayoutCache {
             evaluation_tick: request.evaluation_tick,
             root_bounds: [0.0, 0.0, logical[0], logical[1]],
             units_per_metre: request.units_per_metre,
-            nodes,
-            diagnostics,
+            nodes: tree.nodes,
+            diagnostics: tree.diagnostics,
+            #[cfg(test)]
             remeasure_count: retained.remeasure_count,
+            #[cfg(test)]
             reflow_count: retained.reflow_count,
             available: true,
         };
@@ -3226,7 +3256,9 @@ impl RetainedGuiRoot {
             visual_fp: u64::MAX,
             paint_fp: u64::MAX,
             texts: BTreeMap::new(),
+            #[cfg(test)]
             remeasure_count: 0,
+            #[cfg(test)]
             reflow_count: 0,
             view: GuiEvaluatedView {
                 entity,
@@ -3238,7 +3270,9 @@ impl RetainedGuiRoot {
                 units_per_metre,
                 nodes: Vec::new(),
                 diagnostics: Vec::new(),
+                #[cfg(test)]
                 remeasure_count: 0,
+                #[cfg(test)]
                 reflow_count: 0,
                 available: true,
             },

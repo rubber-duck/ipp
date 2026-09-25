@@ -71,41 +71,31 @@ pub(crate) trait ComponentLifecycle: Clone {
     /// may move allocations into this value; they must not clone evaluated buffers.
     fn preserve_runtime(&mut self, _previous: &mut Self) {}
 
-    /// Prepare a private effective value, including its owned activation resources.
-    /// Failure or superseded preparation drops only private resources. The world
-    /// installs the result after invalidating bindings; replacing/removing effective
-    /// storage releases its old resources through ordinary Rust ownership.
-    /// Implementations that override this also override [`Self::defers_preparation`].
-    fn prepare_effective(&self, _max_activation_bytes: usize) -> Result<Self, crate::ErrorReason> {
-        Ok(self.clone())
-    }
-
-    /// Whether preparation is an infallible copy without activation resources, so a
-    /// batch copies the staged value once at commit instead of after every
-    /// operation. Types with fallible or resource-owning preparation return false
-    /// and prepare after each operation, which attributes failure to it.
-    fn defers_preparation() -> bool {
-        true
-    }
-
-    /// Owned internal allocations in a prepared effective value. Exposed fields
-    /// are bounded at ingress. Asset-bearing types check the supplied transient
-    /// preparation allowance before allocating.
-    fn activation_bytes(&self) -> usize {
-        0
-    }
-
     /// Keep derived storage consistent after a field was replaced, before
     /// field-local validation. Every field write through the registry runs it.
     fn after_field_write(&mut self, _offset: u32) {}
 
-    /// Validate field-local semantics after typed replacement.
+    /// Validate field-local semantics after `offset` was written, independently
+    /// of other fields. Ingress and overlay contributions apply it to every
+    /// field write, so it must accept any other valid field combination.
     fn validate_field(&self, _offset: u32) -> Result<(), crate::ErrorReason> {
         Ok(())
     }
 
-    /// Validate a complete authored/effective value before commit.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    /// Whether ingress validates the complete value after every operation that
+    /// changes it. The default suits small components whose invariants span
+    /// several fields, such as a camera's clip planes: an operation's writes may
+    /// pass through intermediate combinations, and the checked result does not
+    /// depend on their order. Components with large or indexed state return
+    /// false; [`Self::validate_field`] then checks each write proportionally and
+    /// whole insertions still run [`Self::validate`].
+    fn validates_after_operation() -> bool {
+        true
+    }
+
+    /// Validate a complete value: whole insertions, evaluated replacements,
+    /// restored persistence and, per [`Self::validates_after_operation`], each
+    /// operation's result.
     fn validate(&self) -> Result<(), crate::ErrorReason> {
         Ok(())
     }

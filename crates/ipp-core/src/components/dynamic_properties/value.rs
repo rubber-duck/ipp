@@ -144,64 +144,51 @@ impl DynamicValue {
         if values.len() != weights.len() || values.iter().any(|v| v.kind() != first.kind()) {
             return Err(FieldError::WrongType);
         }
-        let result = if let Some(lanes) = first.floats() {
-            if crate::allocation_optimizations_enabled() {
-                let mut bytes = [0u8; 65];
-                bytes[0] = first.kind() as u8;
-                for i in 0..lanes.len() {
-                    let value = values
-                        .iter()
-                        .zip(weights)
-                        .map(|(v, w)| f64::from(v.floats().unwrap()[i]) * w)
-                        .sum::<f64>() as f32;
-                    bytes[1 + i * 4..5 + i * 4].copy_from_slice(&value.to_le_bytes());
-                }
-                return Self::decode(&bytes[..1 + lanes.len() * 4]);
-            }
-            let mut bytes = vec![first.kind() as u8];
+        if let Some(lanes) = first.floats() {
+            let mut bytes = [0u8; 65];
+            bytes[0] = first.kind() as u8;
             for i in 0..lanes.len() {
                 let value = values
                     .iter()
                     .zip(weights)
                     .map(|(v, w)| f64::from(v.floats().unwrap()[i]) * w)
                     .sum::<f64>() as f32;
-                bytes.extend(value.to_le_bytes());
+                bytes[1 + i * 4..5 + i * 4].copy_from_slice(&value.to_le_bytes());
             }
-            Self::decode(&bytes)?
-        } else {
-            match first {
-                Self::I32(_) => {
-                    let value = values
-                        .iter()
-                        .zip(weights)
-                        .map(|(v, w)| {
-                            if let Self::I32(v) = v {
-                                f64::from(*v) * w
-                            } else {
-                                unreachable!()
-                            }
-                        })
-                        .sum::<f64>()
-                        .round();
-                    Self::I32(value.clamp(i32::MIN as f64, i32::MAX as f64) as i32)
-                }
-                Self::U32(_) => {
-                    let value = values
-                        .iter()
-                        .zip(weights)
-                        .map(|(v, w)| {
-                            if let Self::U32(v) = v {
-                                f64::from(*v) * w
-                            } else {
-                                unreachable!()
-                            }
-                        })
-                        .sum::<f64>()
-                        .round();
-                    Self::U32(value.clamp(0.0, u32::MAX as f64) as u32)
-                }
-                _ => return Err(FieldError::WrongType),
+            return Self::decode(&bytes[..1 + lanes.len() * 4]);
+        }
+        let result = match first {
+            Self::I32(_) => {
+                let value = values
+                    .iter()
+                    .zip(weights)
+                    .map(|(v, w)| {
+                        if let Self::I32(v) = v {
+                            f64::from(*v) * w
+                        } else {
+                            unreachable!()
+                        }
+                    })
+                    .sum::<f64>()
+                    .round();
+                Self::I32(value.clamp(i32::MIN as f64, i32::MAX as f64) as i32)
             }
+            Self::U32(_) => {
+                let value = values
+                    .iter()
+                    .zip(weights)
+                    .map(|(v, w)| {
+                        if let Self::U32(v) = v {
+                            f64::from(*v) * w
+                        } else {
+                            unreachable!()
+                        }
+                    })
+                    .sum::<f64>()
+                    .round();
+                Self::U32(value.clamp(0.0, u32::MAX as f64) as u32)
+            }
+            _ => return Err(FieldError::WrongType),
         };
         result.validate()?;
         Ok(result)

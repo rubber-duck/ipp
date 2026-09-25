@@ -22,21 +22,6 @@ pub struct MeshUpload {
     pub bytes: Vec<u8>,
 }
 
-/// Accepted source and decoded allocation sizes, excluding container overhead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MeshStats {
-    /// Encoded source payload byte count.
-    pub source_bytes: u32,
-    /// Decoded vertex byte count.
-    pub vertex_bytes: u32,
-    /// Decoded index byte count.
-    pub index_bytes: u32,
-    /// Decoded vertex count.
-    pub vertices: u32,
-    /// Decoded triangle index count.
-    pub indices: u32,
-}
-
 /// Immutable decoded CPU data retained for rendering and context recovery.
 #[derive(Debug)]
 pub struct MeshAsset {
@@ -156,7 +141,7 @@ impl MeshAsset {
     }
 
     /// Validate the complete encoded payload and decode its present attributes.
-    pub fn decode(bytes: &[u8]) -> Result<(Self, MeshStats), ErrorReason> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ErrorReason> {
         if bytes.len() < 16 || &bytes[..4] != b"IPPM" {
             return Err(ErrorReason::InvalidAsset);
         }
@@ -248,15 +233,8 @@ impl MeshAsset {
             return Err(ErrorReason::InvalidAsset);
         }
 
-        let stats = MeshStats {
-            source_bytes: bytes.len() as u32,
-            vertex_bytes: mesh.vertex_bytes() as u32,
-            index_bytes,
-            vertices,
-            indices,
-        };
         mesh.metadata = super::mesh_metadata::MeshMetadata::from_mesh(&mesh);
-        Ok((mesh, stats))
+        Ok(mesh)
     }
 
     fn decode_interleaved(
@@ -453,9 +431,7 @@ impl crate::services::asset_management::Asset for MeshAsset {
 /// Construct a headless decoder; graphics Hosts may register their own loader.
 pub fn cpu_mesh_loader() -> impl super::AssetLoader<Data = MeshAsset> {
     super::BufferedAssetLoader::new(move |bytes| {
-        MeshAsset::decode(bytes)
-            .map(|(data, _)| data)
-            .map_err(|error| error.to_string())
+        MeshAsset::decode(bytes).map_err(|error| error.to_string())
     })
 }
 

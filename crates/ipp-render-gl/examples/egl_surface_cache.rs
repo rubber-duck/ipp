@@ -34,9 +34,9 @@ mod scenario {
         WorldId,
     };
     use ipp_render_gl::{
-        GlesRenderDevice, RenderService, RenderStats, SurfaceCacheDiagnostic,
-        SurfaceCachePresentation,
+        GlesRenderDevice, RenderService, SurfaceCacheDiagnostic, SurfaceCachePresentation,
     };
+    use smoke::frame_stats::{FrameStats, RenderFrameStats};
     use std::collections::BTreeMap;
     use std::mem::offset_of;
     use std::path::Path;
@@ -180,56 +180,56 @@ mod scenario {
                             alias: 1,
                             metadata: Default::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(1),
-                            value: ComponentValue::Transform(Transform {
+                        Command::insert_value(
+                            EntityRef::Alias(1),
+                            ComponentValue::Transform(Transform {
                                 z: NEAR,
                                 ..Default::default()
                             }),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(1),
-                            value: ComponentValue::Camera(Camera {
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(1),
+                            ComponentValue::Camera(Camera {
                                 projection: 1,
                                 ortho_height: 3.0,
                                 ..Default::default()
                             }),
-                        },
+                        ),
                         Command::Create {
                             alias: 2,
                             metadata: Default::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(2),
-                            value: ComponentValue::Transform(Transform::default()),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(2),
-                            value: ComponentValue::Surface(panel_surface),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(2),
-                            value: ComponentValue::GuiRoot(GuiRoot::default()),
-                        },
+                        Command::insert_value(
+                            EntityRef::Alias(2),
+                            ComponentValue::Transform(Transform::default()),
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(2),
+                            ComponentValue::Surface(panel_surface),
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(2),
+                            ComponentValue::GuiRoot(GuiRoot::default()),
+                        ),
                         Command::Create {
                             alias: 3,
                             metadata: Default::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(3),
-                            value: ComponentValue::Transform(Transform {
+                        Command::insert_value(
+                            EntityRef::Alias(3),
+                            ComponentValue::Transform(Transform {
                                 z: -1.0,
                                 ..Default::default()
                             }),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(3),
-                            value: ComponentValue::Surface(backdrop),
-                        },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(3),
-                            value: ComponentValue::GuiRoot(GuiRoot::default()),
-                        },
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(3),
+                            ComponentValue::Surface(backdrop),
+                        ),
+                        Command::insert_value(
+                            EntityRef::Alias(3),
+                            ComponentValue::GuiRoot(GuiRoot::default()),
+                        ),
                     ],
                 })?;
                 let report = world_context.step(0.0)?;
@@ -606,10 +606,10 @@ mod scenario {
         fn opt_in(&mut self, enabled: bool) -> Result<()> {
             let panel = self.panel;
             self.batch(vec![if enabled {
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(panel),
-                    value: ComponentValue::SurfaceCache(POLICY),
-                }
+                Command::insert_value(
+                    EntityRef::Handle(panel),
+                    ComponentValue::SurfaceCache(POLICY),
+                )
             } else {
                 Command::RemoveComponent {
                     entity: EntityRef::Handle(panel),
@@ -632,7 +632,7 @@ mod scenario {
 
         /// One Host frame: deliver requested bytes, advance World time by `dt`
         /// and present once, so per-frame cache counters describe this frame.
-        fn frame(&mut self, dt: f64) -> Result<RenderStats> {
+        fn frame(&mut self, dt: f64) -> Result<FrameStats> {
             let stats = self.present(dt)?;
             if stats.failed_draw_calls != 0 {
                 return Err(format!("failed draws: {stats:?}").into());
@@ -641,8 +641,7 @@ mod scenario {
         }
 
         /// One frame that may still skip draws while resources are re-uploaded.
-        fn present(&mut self, dt: f64) -> Result<RenderStats> {
-            self.renderer.begin_frame();
+        fn present(&mut self, dt: f64) -> Result<FrameStats> {
             self.host
                 .world_mut(self.world)
                 .unwrap()
@@ -663,7 +662,7 @@ mod scenario {
                     .as_ref()
                     .map_err(|error| format!("cache scene batch failed: {error:?}"))?;
             }
-            Ok(self.renderer.render(&mut world, WIDTH, HEIGHT)?)
+            Ok(self.renderer.render_stats(&mut world, WIDTH, HEIGHT)?)
         }
 
         /// Present until the panel's presentation satisfies `done`: routed GUI
@@ -672,7 +671,7 @@ mod scenario {
             &mut self,
             label: &str,
             done: impl Fn(SurfaceCachePresentation) -> bool,
-        ) -> Result<RenderStats> {
+        ) -> Result<FrameStats> {
             for _ in 0..4 {
                 let stats = self.frame(DT)?;
                 if done(self.record()?.presentation) {
@@ -712,8 +711,8 @@ mod scenario {
         }
 
         /// Present until every asset is ready and a frame uploads nothing.
-        fn settle(&mut self, sources: &[AssetSource]) -> Result<RenderStats> {
-            let mut last = RenderStats::default();
+        fn settle(&mut self, sources: &[AssetSource]) -> Result<FrameStats> {
+            let mut last = FrameStats::default();
             for _ in 0..256 {
                 last = self.present(DT)?;
                 if self.resident(sources)
@@ -824,7 +823,7 @@ mod scenario {
         fn expect(
             &mut self,
             label: &str,
-            stats: &RenderStats,
+            stats: &FrameStats,
             presentation: SurfaceCachePresentation,
             repaints: u32,
             allocations: u32,

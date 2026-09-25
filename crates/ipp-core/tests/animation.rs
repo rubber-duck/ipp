@@ -91,12 +91,12 @@ fn create(world: &mut ipp_core::WorldContext<'_>, value: f32) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Scalar(Scalar {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Scalar(Scalar {
                     value,
                 }),
-            },
+            ),
         ],
     )
     .result
@@ -314,12 +314,12 @@ fn replacement_in_failed_batch_invalidates_playback() {
         .enqueue_playback(player, AnimationPlaybackControl::Play)
         .unwrap();
     world.update_for_test(0.5).unwrap();
-    let replacement = Command::InsertComponentValue {
-        entity: EntityRef::Handle(target),
-        value: ComponentValue::Scalar(Scalar {
+    let replacement = Command::insert_value(
+        EntityRef::Handle(target),
+        ComponentValue::Scalar(Scalar {
             value: 7.0,
         }),
-    };
+    );
     let rejected = submit(
         &mut world,
         vec![
@@ -380,14 +380,14 @@ fn drivers_consume_animation_after_sampling() {
     let target = create(&mut world, 20.0);
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(target),
-            value: ComponentValue::LinearDriver(components::LinearDriver {
+        vec![Command::insert_value(
+            EntityRef::Handle(target),
+            ComponentValue::LinearDriver(components::LinearDriver {
                 source,
                 scale: 2.0,
                 bias: 1.0,
             }),
-        }],
+        )],
     )
     .result
     .unwrap();
@@ -413,14 +413,14 @@ fn overlapping_animation_and_constraint_outputs_restore_in_reverse_order() {
     let target = create(&mut world, 20.0);
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(target),
-            value: ComponentValue::LinearDriver(components::LinearDriver {
+        vec![Command::insert_value(
+            EntityRef::Handle(target),
+            ComponentValue::LinearDriver(components::LinearDriver {
                 source,
                 scale: 2.0,
                 bias: 1.0,
             }),
-        }],
+        )],
     )
     .result
     .unwrap();
@@ -515,17 +515,17 @@ fn discrete_asset_sources_and_continuous_fields_keep_partial_updates() {
     submit(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "https://example.test/base.mesh".into(),
                     variant: 0,
                 }),
-            },
+            ),
         ],
     )
     .result
@@ -609,10 +609,10 @@ fn quaternion_tracks_normalize_endpoints_and_coordinate_writes_as_one_rotation()
     let target = create(&mut world, 0.0);
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(target),
-            value: ComponentValue::Transform(Transform::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(target),
+            ComponentValue::Transform(Transform::default()),
+        )],
     )
     .result
     .unwrap();
@@ -708,14 +708,14 @@ fn discrete_driver_binding_and_continuous_source_share_the_frozen_seek_time() {
     let target = create(&mut world, 0.0);
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(target),
-            value: ComponentValue::LinearDriver(LinearDriver {
+        vec![Command::insert_value(
+            EntityRef::Handle(target),
+            ComponentValue::LinearDriver(LinearDriver {
                 source,
                 scale: 1.0,
                 bias: 0.0,
             }),
-        }],
+        )],
     )
     .result
     .unwrap();
@@ -751,15 +751,24 @@ fn discrete_driver_binding_and_continuous_source_share_the_frozen_seek_time() {
     seek(&mut world, continuous, 1.0);
     seek(&mut world, p, 1.0);
     assert_eq!(scalar(&world, target), (0.0, 5.0));
-    #[cfg(debug_assertions)]
-    {
-        let invalid = seek(&mut world, p, 2.0);
-        assert!(invalid.playback_events.iter().any(|event| {
-            event.controller.id == p
-                && event.kind == AnimationPlaybackEventKind::Failed
-                && event.reason == Some(ErrorReason::UnsupportedDependency)
-        }));
-    }
+    // Animating the source onto the target itself makes the driver inactive
+    // without failing playback; the target keeps its underlying value.
+    let invalid = seek(&mut world, p, 2.0);
+    assert!(
+        invalid
+            .playback_events
+            .iter()
+            .all(|event| event.kind != AnimationPlaybackEventKind::Failed)
+    );
+    assert_eq!(scalar(&world, target), (0.0, 0.0));
+    let recovered = seek(&mut world, p, 1.0);
+    assert!(
+        recovered
+            .playback_events
+            .iter()
+            .all(|event| event.kind != AnimationPlaybackEventKind::Failed)
+    );
+    assert_eq!(scalar(&world, target), (0.0, 5.0));
     world
         .enqueue_playback(p, AnimationPlaybackControl::Stop)
         .unwrap();
@@ -1100,6 +1109,33 @@ fn pending_clip_waits_without_advancing_and_samples_the_saved_seek_when_ready() 
 }
 
 #[test]
+fn controller_asset_demand_is_validated_when_the_controller_is_admitted() {
+    let mut host = HostRuntime::new();
+    let id = host.create_world(WorldLimits::default()).unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    let target = create(&mut world, 7.0);
+    let clip = curve(AnimationInterpolation::Linear);
+    let valid = description(target, &clip, 1);
+    let controller = world.create_animation_controller(valid.clone()).unwrap();
+
+    // An owned asset URI whose type differs from the clip type cannot be demanded.
+    let mut invalid = valid.clone();
+    invalid.drivers[0].source = "asset://11/1".into();
+    assert_eq!(
+        world.create_animation_controller(invalid.clone()),
+        Err(ErrorReason::Capacity)
+    );
+    assert_eq!(world.animation_controllers().len(), 1);
+    assert!(world.animation_controller(controller).is_some());
+    invalid.drivers[0].source = "asset://10/not-a-number".into();
+    assert_eq!(
+        world.create_animation_controller(invalid),
+        Err(ErrorReason::Capacity)
+    );
+    assert_eq!(world.animation_controllers().len(), 1);
+}
+
+#[test]
 fn controller_descriptions_grow_while_ingress_remains_bounded() {
     let mut host = HostRuntime::new();
     let id = host
@@ -1196,14 +1232,9 @@ fn reservation_hints_have_no_estimated_byte_ceiling() {
 }
 
 #[test]
-fn bound_animation_state_does_not_consume_the_activation_budget() {
+fn producer_write_under_bound_animation_is_revealed_when_playback_stops() {
     let mut host = HostRuntime::new();
-    let id = host
-        .create_world(WorldLimits {
-            max_staging_bytes: 1,
-            ..Default::default()
-        })
-        .unwrap();
+    let id = host.create_world(WorldLimits::default()).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let target = create(&mut world, 7.0);
     let clip = curve(AnimationInterpolation::Linear);
@@ -1266,10 +1297,10 @@ fn failed_controller_keeps_successful_samples_without_restoring_prior_contributi
     let target = create(&mut world, 91.0);
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(target),
-            value: ComponentValue::Transform(Transform::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(target),
+            ComponentValue::Transform(Transform::default()),
+        )],
     )
     .result
     .unwrap();
@@ -1406,12 +1437,12 @@ fn overlays_remain_authored_inputs_through_animation_and_withdrawal() {
                     classes: vec![],
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Scalar(Scalar {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Scalar(Scalar {
                     value: 20.0,
                 }),
-            },
+            ),
         ],
     )
     .result
@@ -1495,17 +1526,17 @@ fn external_clip_source_hints_cannot_bypass_sampled_producer_namespace_isolation
     submit(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "https://example.test/base.mesh".into(),
                     variant: 0,
                 }),
-            },
+            ),
         ],
     )
     .result
@@ -1601,17 +1632,17 @@ fn restored_producer_clip_preserves_its_original_nested_source_namespace() {
     submit(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "https://example.test/base.mesh".into(),
                     variant: 0,
                 }),
-            },
+            ),
         ],
     )
     .result
@@ -1822,12 +1853,12 @@ fn compiled_numeric_frames_notify_once_per_batch_without_commit_hooks() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(target),
-                value: ComponentValue::Scalar(Scalar {
+            vec![Command::insert_value(
+                EntityRef::Handle(target),
+                ComponentValue::Scalar(Scalar {
                     value: 123.0
-                }),
-            }]
+                })
+            )]
         )
         .result
         .is_ok()
@@ -1976,10 +2007,7 @@ fn resource_owning_numeric_lanes_preserve_state_without_commit_hooks() {
             &mut world,
             components
                 .into_iter()
-                .map(|(value, _)| Command::InsertComponentValue {
-                    entity: EntityRef::Handle(target),
-                    value,
-                })
+                .map(|(value, _)| Command::insert_value(EntityRef::Handle(target), value))
                 .collect()
         )
         .result
@@ -2178,10 +2206,10 @@ fn mixed_resource_and_numeric_drivers_commit_only_resource_transitions() {
     material.properties.set("image", asset(1)).unwrap();
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::CustomMaterial(material),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::CustomMaterial(material),
+        )],
     )
     .result
     .unwrap();

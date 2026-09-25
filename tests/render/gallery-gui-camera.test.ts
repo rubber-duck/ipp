@@ -1,3 +1,4 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -182,18 +183,22 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
           ({ metadata }) => metadata.symbolicId === "gui-demo",
         )!.id;
         const { frame } = await g.capture(label);
-        const records = frame.backend.surfaceCaches as
+        const records = frame.statistics!.surfaces!.surfaceCaches as
           | readonly SurfaceCacheRecord[]
           | undefined;
         assert.ok(records, "Surface cache diagnostics are unavailable");
-        const { ingress: _ingress, ...stats } = frame.backend;
+        const { ingress: _ingress, ...stats } = frame.statistics!;
         await scenario.evidence.record(`${label}-surface-cache`, stats);
         return {
           record: records.find(({ entity }) => entity === panel),
-          backend: frame.backend,
-          repaints: Number(frame.backend.totalSurfaceCacheRepaints),
-          allocations: Number(frame.backend.totalSurfaceCacheAllocations),
-          uploaded: Number(frame.backend.totalUploadedBytes),
+          statistics: frame.statistics,
+          repaints: Number(
+            frame.statistics!.surfaces!.totalSurfaceCacheRepaints,
+          ),
+          allocations: Number(
+            frame.statistics!.surfaces!.totalSurfaceCacheAllocations,
+          ),
+          uploaded: Number(frame.statistics!.frame.totalUploadedBytes),
         };
       };
       const cacheUntil = async (
@@ -261,8 +266,8 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       assert.equal(orbited.repaints - bandOne.repaints, 0);
       assert.equal(orbited.allocations - bandOne.allocations, 0);
       assert.equal(orbited.uploaded - bandOne.uploaded, 0);
-      assert.equal(orbited.backend.surfaceCacheReuses, 1);
-      assert.equal(orbited.backend.uploadedBytes, 0);
+      assert.equal(orbited.statistics!.surfaces!.surfaceCacheReuses, 1);
+      assert.equal(orbited.statistics!.frame.uploadedBytes, 0);
       // Dollying past the next boundary resizes the same image once.
       edge = await panelEdge();
       await dollyOut(2 * CACHE_DIRECT_DISTANCE * 1.2);
@@ -274,7 +279,7 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
         expectedCacheSize(2),
       );
       assert.equal(
-        bandTwo.backend.surfaceCacheResidentBytes,
+        bandTwo.statistics!.surfaces!.surfaceCacheResidentBytes,
         4 * expectedCacheSize(2)[0] * expectedCacheSize(2)[1],
       );
       await g.page.locator("#reset-camera").click();
@@ -319,12 +324,12 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       // Accumulated render work since the worker started, read at a frame.
       const renderTotals = async (label: string) => {
         const { frame } = await g.call<{
-          frame: { tick: bigint; backend: Record<string, unknown> };
+          frame: { tick: bigint; statistics?: RenderStatisticsSnapshot };
         }>("captureUnflushedViewer", label);
         return {
           tick: Number(frame.tick),
-          rebuilds: Number(frame.backend.totalGuiRebuilds),
-          uploaded: Number(frame.backend.totalUploadedBytes),
+          rebuilds: Number(frame.statistics!.gui!.totalGuiRebuilds),
+          uploaded: Number(frame.statistics!.frame.totalUploadedBytes),
         };
       };
       // Retained analytic text leaves the idle demo only small per-frame

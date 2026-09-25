@@ -164,25 +164,13 @@ impl System for LookAtSystem {
                 .rebuild(context.world_data, context.staged, &graph);
             self.refresh = true;
         }
-        if crate::allocation_optimizations_enabled() {
-            for &(entity, _) in context.staged.changed.keys() {
-                if let Some(value) = context
-                    .world_data
-                    .components
-                    .look_at_mut(entity.index() as usize)
-                {
-                    value.runtime.rotation = None;
-                }
-            }
-        } else {
-            for (entity, _) in context.changed_components().collect::<Vec<_>>() {
-                if let Some(value) = context
-                    .world_data
-                    .components
-                    .look_at_mut(entity.index() as usize)
-                {
-                    value.runtime.rotation = None;
-                }
+        for &(entity, _) in context.staged.changed.keys() {
+            if let Some(value) = context
+                .world_data
+                .components
+                .look_at_mut(entity.index() as usize)
+            {
+                value.runtime.rotation = None;
             }
         }
         self.refresh |= context.changed_components().next().is_some();

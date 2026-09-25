@@ -1,5 +1,102 @@
 use super::*;
 
+/// Scalar reference ranking for prepared light influence.
+fn influence(candidate: &Candidate, origin: [f64; 3], bounds: Option<[[f64; 3]; 2]>) -> f64 {
+    let (_, model, light) = candidate;
+    let luminance =
+        0.2126 * f64::from(light.r) + 0.7152 * f64::from(light.g) + 0.0722 * f64::from(light.b);
+    let energy = luminance * f64::from(light.intensity);
+    if energy <= 0.0 || !energy.is_finite() {
+        return 0.0;
+    }
+    if light.kind == 0 {
+        return energy;
+    }
+    let center = bounds.map_or(origin, |b| {
+        std::array::from_fn(|i| (b[0][i] + b[1][i]) * 0.5)
+    });
+    let radius = bounds.map_or(0.0, |b| {
+        (0..3)
+            .map(|i| ((b[1][i] - b[0][i]) * 0.5).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    });
+    let delta: [f64; 3] = std::array::from_fn(|i| center[i] - f64::from(model[12 + i]));
+    let distance = delta.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let nearest = (distance - radius).max(0.01);
+    let range = f64::from(light.range);
+    let mut attenuation = (1.0 - (nearest / range).powi(4)).clamp(0.0, 1.0) / nearest.powi(2);
+    if light.kind == 2 && distance > radius {
+        let forward = [
+            -f64::from(model[8]),
+            -f64::from(model[9]),
+            -f64::from(model[10]),
+        ];
+        let length = forward.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let cosine = (delta.iter().zip(forward).map(|(a, b)| a * b).sum::<f64>()
+            / (distance * length))
+            .clamp(-1.0, 1.0);
+        let angle = (cosine.acos() - (radius / distance).min(1.0).asin()).max(0.0);
+        let inner = f64::from(light.inner_cone).cos();
+        let outer = f64::from(light.outer_cone).cos();
+        attenuation *= ((angle.cos() - outer) / (inner - outer).max(1e-6))
+            .clamp(0.0, 1.0)
+            .powi(2);
+    }
+    // Missing bounds never prove exclusion. Keep an approximate weak candidate
+    // even when its origin lies outside the light's range or cone.
+    if bounds.is_none() {
+        attenuation = attenuation.max(f64::EPSILON / nearest.powi(2));
+    }
+    let score = energy * attenuation;
+    if score.is_finite() {
+        score
+    } else {
+        0.0
+    }
+}
+
+fn select(
+    candidates: &[Candidate],
+    origin: [f64; 3],
+    enclosure: Option<[[f64; 3]; 2]>,
+    previous: &[EntityId],
+) -> Vec<RankedLight> {
+    let mut selected = Vec::with_capacity(MAX_LIGHTS + 1);
+    select_into(candidates, origin, enclosure, previous, &mut selected);
+    selected
+}
+
+fn select_into(
+    candidates: &[Candidate],
+    origin: [f64; 3],
+    enclosure: Option<[[f64; 3]; 2]>,
+    previous: &[EntityId],
+    selected: &mut Vec<RankedLight>,
+) {
+    selected.clear();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let score = influence(candidate, origin, enclosure);
+        if score > 0.0 {
+            retain_best(
+                selected,
+                RankedLight {
+                    index,
+                    score,
+                    rank: score
+                        * if previous.contains(&candidate.0) {
+                            1.1
+                        } else {
+                            1.0
+                        },
+                    entity: candidate.0,
+                },
+                MAX_LIGHTS,
+            );
+        }
+    }
+}
+
 fn point(id: u64, x: f32) -> Candidate {
     let mut matrix = [0.0; 16];
     for i in 0..4 {

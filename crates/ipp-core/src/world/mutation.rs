@@ -58,8 +58,7 @@ impl SystemRuntimeAccess<'_> {
         entity: EntityId,
         component: u16,
     ) -> bool {
-        crate::allocation_optimizations_enabled()
-            && !self.world.state.dirty.contains(&(entity, component))
+        !self.world.state.dirty.contains(&(entity, component))
             && !self.world.state.prepared.contains_key(&(entity, component))
             && self
                 .world
@@ -160,7 +159,7 @@ impl SystemRuntimeAccess<'_> {
                 });
                 result = std::mem::replace(&mut result, Ok(())).and(resolved);
             });
-        result = result.and(staged.prepare_changes(&self.world.components, self.world.limits));
+        result = result.and(staged.prepare_changes());
         staged.record_component_observations(&self.world.components);
         self.world.state = staged.entities_state;
         result
@@ -408,9 +407,7 @@ impl WorldContext<'_> {
             .visit_scoped(self.world.identity, None, |system, _| {
                 system.finish_batch(&mut outcome)
             });
-        if crate::allocation_optimizations_enabled() {
-            self.recycle_command_buffer(batch.operations);
-        }
+        self.recycle_command_buffer(batch.operations);
         outcome
     }
 

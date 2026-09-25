@@ -16,11 +16,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             return Err("invalid host frame delta".to_owned());
         }
 
-        let mut replies = if ipp_core::allocation_optimizations_enabled() {
-            std::mem::take(&mut self.session.replies)
-        } else {
-            Vec::new()
-        };
+        let mut replies = std::mem::take(&mut self.session.replies);
         replies.clear();
         replies.reserve(self.session.pending.len());
         while !self.session.pending.front().is_some_and(|request| {

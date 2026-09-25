@@ -75,7 +75,7 @@ impl System for SkinningSystem {
         // that pass. Inserted/replaced Skin values start invalid; preserving a
         // palette transfers the already-invalid runtime. Keep the synchronous
         // barrier, but do not rescan every entity for each subsequent field write.
-        if self.refresh && (!crate::skinning_invalidation_reuse_enabled() || !already_invalid) {
+        if self.refresh && !already_invalid {
             for &(_, binding) in self.state.components.entries() {
                 binding
                     .get_mut(&mut context.world_data.components)

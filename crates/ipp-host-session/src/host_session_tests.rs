@@ -236,8 +236,7 @@ fn recoverable_presentation_failure_publishes_commits_once_and_keeps_peer_world_
 }
 
 #[test]
-fn response_buffers_preserve_exclusivity_and_session_fences_with_optional_reuse() {
-    let reuse = ipp_core::allocation_followup_enabled();
+fn response_buffers_preserve_exclusivity_and_session_fences_with_reuse() {
     let mut host = ready(1);
     host.tick(0.0).unwrap();
     let first = host.test_session().take_response().unwrap();
@@ -248,14 +247,9 @@ fn response_buffers_preserve_exclusivity_and_session_fences_with_optional_reuse(
     assert_ne!(second.as_ptr(), address);
     assert_eq!(first, original);
     host.recycle_response_buffer(first);
-    if !reuse {
-        assert!(host.response_buffers.is_empty());
-    }
     host.tick(0.0).unwrap();
     let third = host.test_session().take_response().unwrap();
-    if reuse {
-        assert_eq!(third.as_ptr(), address);
-    }
+    assert_eq!(third.as_ptr(), address);
     assert_eq!(&third[..8], &1u64.to_le_bytes());
     assert_eq!(&third[8..16], &0u64.to_le_bytes());
     assert_eq!(third[24], 4); // Complete unsolicited frame.
@@ -279,7 +273,6 @@ fn response_buffers_preserve_exclusivity_and_session_fences_with_optional_reuse(
 
 #[test]
 fn returned_external_buffers_do_not_grow_the_free_pool_without_bound() {
-    let reuse = ipp_core::allocation_followup_enabled();
     let mut host = ready(1);
     let capacity = host.response_buffers.capacity();
     for _ in 0..capacity * 3 {
@@ -287,18 +280,10 @@ fn returned_external_buffers_do_not_grow_the_free_pool_without_bound() {
         bytes.extend_from_slice(b"previous response");
         host.recycle_response_buffer(bytes);
     }
-    if reuse {
-        assert_eq!(host.response_buffers.len(), capacity);
-        assert!(host.response_buffers.iter().all(Vec::is_empty));
-    } else {
-        assert!(host.response_buffers.is_empty());
-    }
+    assert_eq!(host.response_buffers.len(), capacity);
+    assert!(host.response_buffers.iter().all(Vec::is_empty));
     assert_eq!(host.response_buffers.capacity(), capacity);
     host.open_session(2).unwrap();
     host.session_mut(2).unwrap();
-    if reuse {
-        assert!(host.response_buffers.capacity() >= 4 * MAX_OUTBOX);
-    } else {
-        assert_eq!(host.response_buffers.capacity(), capacity);
-    }
+    assert!(host.response_buffers.capacity() >= 4 * MAX_OUTBOX);
 }

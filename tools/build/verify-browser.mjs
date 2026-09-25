@@ -109,6 +109,29 @@ const reports = [];
   assert.equal("onRenderStateUpdated" in client.IppClient.prototype, true);
   assert.equal(source.includes("ASSET_TEXTURE"), true);
   assert.equal(source.includes("REQUEST_LOAD_BUILTIN_TEXTURE"), false);
+  // The shipped client carries resolved codec bounds; the descriptive wire
+  // manifest is a separate generated module that only tests and tools import.
+  const manifestSource = await readFile(
+    resolve(directory, "generated-manifest.ts"),
+    "utf8",
+  );
+  assert.equal(manifestSource.includes(`SCHEMA_HASH = ${hash}n;`), true);
+  for (const name of [
+    "WIRE_TAG_LAYOUTS",
+    "WIRE_LAYOUTS",
+    "WIRE_CONVENTIONS",
+    "ASSET_FORMATS",
+  ]) {
+    assert.equal(name in client, false, `${name} leaked into the client`);
+    assert.equal(
+      source.includes(name),
+      false,
+      `${name} leaked into the client`,
+    );
+    assert.equal(manifestSource.includes(`export const ${name} =`), true);
+  }
+  assert.equal(source.includes("generated-manifest"), false);
+  assert.equal(Number.isSafeInteger(client.MAX_MESSAGE_BYTES), true);
   for (const method of [
     "uploadMesh",
     "uploadTexture",
@@ -341,32 +364,41 @@ const reports = [];
     rendering && gui,
     "GUI batch imports differ from selected capability",
   );
-  for (const name of [
-    "ipp_render_glyph_population_failures",
-    "ipp_render_glyph_page_retirements",
-    "ipp_render_set_glyph_atlas_limits",
+  // Statistics, records and testing overrides are diagnostics exports; the
+  // frame summary and viewport limits are always present in render builds.
+  const diagnostics = features.includes("diagnostics");
+  for (const [name, expected] of [
+    ["ipp_render_draw_calls", rendering],
+    ["ipp_render_triangles", rendering],
+    ["ipp_render_failed_draw_calls", rendering],
+    ["ipp_render_invalid_camera", rendering],
+    ["ipp_render_max_viewport_width", rendering],
+    ["ipp_render_max_viewport_height", rendering],
+    ["ipp_render_statistics_ptr", rendering && diagnostics],
+    ["ipp_render_statistics_len", rendering && diagnostics],
+    ["ipp_render_set_exhaustive_draw_checks", rendering && diagnostics],
+    ["ipp_render_set_glyph_atlas_limits", rendering && gui && diagnostics],
+    [
+      "ipp_render_surface_cache_records_ptr",
+      rendering && surfaces && diagnostics,
+    ],
+    [
+      "ipp_render_surface_cache_records_len",
+      rendering && surfaces && diagnostics,
+    ],
+    [
+      "ipp_render_set_surface_cache_budget",
+      rendering && surfaces && diagnostics,
+    ],
+    ["ipp_resource_buffered_bytes", diagnostics],
+    ["ipp_render_uploaded_bytes", false],
+    ["ipp_render_glyph_pages", false],
+    ["ipp_render_surface_cache_repaints", false],
   ])
     assert.equal(
       typeof runtime[name] === "function",
-      rendering && gui,
-      `retained GUI export ${name} differs from selected capability`,
-    );
-  for (const name of [
-    "ipp_render_surface_cache_repaints",
-    "ipp_render_surface_cache_reuses",
-    "ipp_render_surface_cache_direct",
-    "ipp_render_surface_cache_fallbacks",
-    "ipp_render_surface_cache_allocations",
-    "ipp_render_surface_cache_entries",
-    "ipp_render_surface_cache_resident_bytes",
-    "ipp_render_surface_cache_records_ptr",
-    "ipp_render_surface_cache_records_len",
-    "ipp_render_set_surface_cache_budget",
-  ])
-    assert.equal(
-      typeof runtime[name] === "function",
-      rendering && surfaces,
-      `Surface cache export ${name} differs from selected capability`,
+      expected,
+      `render export ${name} differs from the selected capabilities`,
     );
   // The linker keeps the cache bridge imports and the composite shader only
   // once RenderService repaints and composites cached Surfaces (ipp-s1ge.2.3).

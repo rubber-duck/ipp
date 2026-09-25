@@ -41,29 +41,29 @@ pub fn run<D: RenderDevice>(
                     classes: vec![],
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "client://native/scene/mesh#1".into(),
                     variant: 0,
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::UnlitMaterial(UnlitMaterial {
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::UnlitMaterial(UnlitMaterial {
                     r: 0.0,
                     g: 0.0,
                     b: 1.0,
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::CustomMaterial(material),
-            },
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::CustomMaterial(material),
+            ),
         ],
     )?;
     let entity = world
@@ -113,7 +113,7 @@ pub fn run<D: RenderDevice>(
         renderer.custom_material_diagnostics()
     );
     center(&green, [0, 255, 0]);
-    let programs = renderer.cached_program_count();
+    let programs = super::world::resident_programs(world.asset_resources());
     apply(
         &mut world,
         vec![Command::SetDynamicProperty {
@@ -128,7 +128,7 @@ pub fn run<D: RenderDevice>(
     save(output, "custom-red", &red)?;
     center(&red, [255, 0, 0]);
     assert_eq!(
-        renderer.cached_program_count(),
+        super::world::resident_programs(world.asset_resources()),
         programs,
         "uniform values must not create programs"
     );
@@ -167,20 +167,20 @@ pub fn run<D: RenderDevice>(
     apply(
         &mut world,
         vec![
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(camera),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Handle(camera),
+                ComponentValue::Transform(Transform {
                     z: 6.0,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Transform(Transform {
+            ),
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Transform(Transform {
                     z: 0.5,
                     ..Default::default()
                 }),
-            },
+            ),
             Command::SetDynamicProperty {
                 entity: EntityRef::Handle(entity),
                 component: ComponentValue::CUSTOM_MATERIAL,
@@ -199,24 +199,21 @@ pub fn run<D: RenderDevice>(
                 alias: 2,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(2),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Alias(2),
+                ComponentValue::Transform(Transform {
                     z: -0.5,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(2),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            ),
+            Command::insert_value(
+                EntityRef::Alias(2),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "client://native/scene/mesh#1".into(),
                     variant: 0,
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(2),
-                value: ComponentValue::CustomMaterial(back),
-            },
+            ),
+            Command::insert_value(EntityRef::Alias(2), ComponentValue::CustomMaterial(back)),
         ],
     )?;
     let stats = super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
@@ -303,10 +300,10 @@ pub fn run<D: RenderDevice>(
     }
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::CustomMaterial(packed),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::CustomMaterial(packed),
+        )],
     )?;
     for _ in 0..8 {
         super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
@@ -388,15 +385,20 @@ pub fn run<D: RenderDevice>(
     })?;
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::CustomMaterial(limited),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::CustomMaterial(limited),
+        )],
     )?;
     for _ in 0..8 {
         super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
     }
-    assert!(renderer.custom_material_diagnostics()[&entity].contains("limits"));
+    assert!(
+        renderer.custom_material_diagnostics()[&entity]
+            .error
+            .to_string()
+            .contains("limits")
+    );
     let limited = capture()?;
     save(output, "custom-device-limit-fallback", &limited)?;
     center(&limited, [255, 0, 0]);
@@ -422,13 +424,13 @@ pub fn run<D: RenderDevice>(
     })?;
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::CustomMaterial(CustomMaterial {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::CustomMaterial(CustomMaterial {
                 source: "asset://13/996".into(),
                 ..Default::default()
             }),
-        }],
+        )],
     )?;
     for _ in 0..8 {
         super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;

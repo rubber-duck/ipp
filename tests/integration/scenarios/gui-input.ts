@@ -84,6 +84,14 @@ function fenceOf(state: GuiTextFocusState): GuiTextFence {
   };
 }
 
+/** Text submissions published after batch `mark`. */
+function submissionsSince(log: ObservationLog, mark: number) {
+  return log.batches
+    .slice(mark)
+    .flatMap((batch) => batch.effects)
+    .filter((effect) => effect.kind === "submitted");
+}
+
 /** Conflict reasons published after batch `mark`. */
 function conflictsSince(log: ObservationLog, mark: number): string[] {
   return log.batches
@@ -514,6 +522,43 @@ export async function exerciseGuiInput(
   expect(
     field.controlValue.kind === "text" && field.controlValue.value === "Hp世界",
     `An edit stamped against the refreshed text missed: ${JSON.stringify(field.controlValue)}`,
+  );
+
+  // Enter on the focused field submits the committed text exactly once,
+  // with its revision and logical ancestor path; Enter during an open
+  // composition belongs to the IME and submits nothing.
+  field = await inspected(client, entity, 3);
+  mark = log.batches.length;
+  await client.submitGuiInput({ kind: "key", key: "enter", pressed: true });
+  const submitted = await eventually(() => {
+    const found = submissionsSince(log, mark);
+    return found.length > 0 ? found : undefined;
+  }, "Enter on the focused field published no submission");
+  expect(
+    submitted.length === 1 &&
+      submitted[0]!.text === "Hp世界" &&
+      submitted[0]!.revision === field.controlRevision &&
+      JSON.stringify(submitted[0]!.path) === JSON.stringify([1, 3]),
+    `Unexpected submission: ${JSON.stringify(submitted, (_, value) => (typeof value === "bigint" ? value.toString() : value))}`,
+  );
+  await client.submitGuiInput({
+    kind: "composition",
+    text: "zz",
+    caretStart: 2,
+    caretEnd: 2,
+  });
+  mark = log.batches.length;
+  await client.submitGuiInput({ kind: "key", key: "enter", pressed: true });
+  await client.submitGuiInput({ kind: "cancelComposition" });
+  // One more ordered round trip lets any stray submission publish first.
+  await client.submitGuiInput({ kind: "key", key: "enter", pressed: true });
+  const afterComposition = await eventually(() => {
+    const found = submissionsSince(log, mark);
+    return found.length > 0 ? found : undefined;
+  }, "Enter after the cancelled composition published no submission");
+  expect(
+    afterComposition.length === 1,
+    `Enter during composition submitted: ${afterComposition.length} submissions`,
   );
 
   // A delayed native range is fenced to its revision: an equal-length

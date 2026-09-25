@@ -1234,3 +1234,44 @@ test("GuiCommits bridges live client batches on acknowledgement", async () => {
     { delivered: 0, skipped: 1, conflicts: 0, cancelled: 0, unhandled: 0 },
   );
 });
+
+test("text submissions reach onSubmit with the submitted text and path", () => {
+  const subs = new GuiEffectSubscriptions();
+  const seen: string[] = [];
+  const errors: Error[] = [];
+  subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 10, {
+    kind: "container",
+    onAction: () => void seen.push("bubble:10"),
+  });
+  subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 40, {
+    kind: "textInput",
+    onTextCommit: (event) => void seen.push(`commit:${event.value}`),
+    onSubmit: (event) =>
+      void seen.push(`submit:${event.value}@${event.revision}`),
+  });
+  const submitted: GuiCommittedEffect = {
+    kind: "submitted",
+    entity: EFFECT_ENTITY,
+    rootIncarnation: EFFECT_ROOT,
+    node: 40,
+    revision: 3,
+    text: "hello",
+    path: [10, 40],
+    sourceTick: 11n,
+    effectTick: 12n,
+  };
+  assert.equal(isCommittedEffect(submitted), true);
+  assert.equal(isCommittedEffect({ ...submitted, text: 5 }), false);
+  const summary = subs.feed(
+    [submitted],
+    () =>
+      new Map([
+        [40, 10],
+        [10, undefined],
+      ]),
+    (error) => void errors.push(error),
+  );
+  assert.deepEqual(summary, { delivered: 1, skipped: 0 });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(seen, ["submit:hello@3", "bubble:10"]);
+});

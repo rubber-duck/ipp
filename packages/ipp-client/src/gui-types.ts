@@ -524,10 +524,29 @@ export interface GuiControlCommittedEffect {
   readonly effectTick?: bigint | undefined;
 }
 
+/** Enter submitted a focused text input outside composition, mirroring core Submitted. */
+export interface GuiSubmittedEffect {
+  readonly kind: "submitted";
+  readonly entity: bigint;
+  readonly rootIncarnation: bigint;
+  readonly node: number;
+  /** Committed text revision that was submitted. */
+  readonly revision: number;
+  /** Committed text at that revision. */
+  readonly text: string;
+  /** Runtime logical ancestor path, root-first including the target, when pinned. */
+  readonly path?: readonly number[] | undefined;
+  /** Routing frame, when the feeding publication carries ticks. */
+  readonly sourceTick?: bigint | undefined;
+  /** Application frame, when the feeding publication carries ticks. */
+  readonly effectTick?: bigint | undefined;
+}
+
 /** Committed effects only; transient cursors are unrepresentable by design. */
 export type GuiCommittedEffect =
   | GuiButtonPressedEffect
-  | GuiControlCommittedEffect;
+  | GuiControlCommittedEffect
+  | GuiSubmittedEffect;
 
 /** Session-scoped target for conflicts, cancellations and scene fallback. */
 export interface GuiObservationTarget {

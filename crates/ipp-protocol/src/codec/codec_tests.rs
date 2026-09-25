@@ -1860,6 +1860,37 @@ fn gui_observations_encode_committed_state_unsolicited() {
     assert_eq!(&bytes[88..92], &5u32.to_le_bytes());
     assert_eq!(&bytes[92..97], b"hello");
 
+    let submitted = GuiInputEffect {
+        session: 7,
+        source_tick: 11,
+        effect_tick: 12,
+        kind: GuiInputEffectKind::Submitted {
+            entity: EntityId::from_bits(100),
+            root_incarnation: 3,
+            node: GuiNodeId(30),
+            revision: 4,
+            text: "hello".into(),
+            path: Vec::new(),
+        },
+    };
+    let bytes = encode_response(&Response {
+        session: 7,
+        request_id: 0,
+        tick: 12,
+        body: ResponseBody::GuiObservations {
+            effects: vec![submitted],
+            conflicts: Vec::new(),
+            cancellations: Vec::new(),
+            text_focus_updates: Vec::new(),
+        },
+    })
+    .unwrap();
+    assert_eq!(bytes.len(), 108);
+    assert_eq!(bytes[34], 2);
+    assert_eq!(&bytes[83..87], &4u32.to_le_bytes());
+    assert_eq!(&bytes[87..91], &5u32.to_le_bytes());
+    assert_eq!(&bytes[91..96], b"hello");
+
     let unhandled = Response {
         session: 7,
         request_id: 0,

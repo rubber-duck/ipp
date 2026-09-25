@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isComposingKeyEvent,
   attachImeBridge,
   createImeBridge,
   mapCompositionEnd,
@@ -193,4 +194,11 @@ test("attach wires composition events in DOM order and detaches", () => {
   assert.equal(target.listeners.get("compositionstart")?.size ?? 0, 0);
   assert.equal(target.listeners.get("compositionupdate")?.size ?? 0, 0);
   assert.equal(target.listeners.get("compositionend")?.size ?? 0, 0);
+});
+
+test("keys during an open composition belong to the IME", () => {
+  assert.equal(isComposingKeyEvent({ isComposing: true, keyCode: 13 }), true);
+  assert.equal(isComposingKeyEvent({ isComposing: false, keyCode: 229 }), true);
+  assert.equal(isComposingKeyEvent({ isComposing: false, keyCode: 13 }), false);
+  assert.equal(isComposingKeyEvent({}), false);
 });

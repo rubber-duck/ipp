@@ -1120,6 +1120,20 @@ function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
       sourceTick,
       effectTick,
     };
+  if (kind === 2) {
+    const revision = r.u32();
+    return {
+      kind: "submitted",
+      entity,
+      rootIncarnation,
+      node,
+      revision,
+      text: r.string(),
+      path,
+      sourceTick,
+      effectTick,
+    };
+  }
   if (kind !== 1) fail("GUI observation effect kind");
   const revision = r.u32();
   const value = readGuiControlValue(r);

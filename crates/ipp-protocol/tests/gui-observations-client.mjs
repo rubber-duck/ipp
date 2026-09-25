@@ -197,6 +197,54 @@ test("gui observation tags, layouts and capability selection are generated", () 
   assert.equal("subscribeGuiObservations" in codec.IppClient.prototype, true);
 });
 
+test("text submissions and focus conflicts decode with their payloads", () => {
+  const submitted = concatenate([
+    u8(2),
+    u64(7n),
+    u64(11n),
+    u64(12n),
+    u64(100n),
+    u64(3n),
+    u32(40),
+    path([10, 40]),
+    u32(4),
+    text("hello"),
+  ]);
+  const focusConflict = concatenate([
+    u64(7n),
+    u64(11n),
+    u64(12n),
+    target(100n, 3n, 40),
+    u8(3),
+  ]);
+  const payload = concatenate([
+    u8(3),
+    u32(1),
+    submitted,
+    u32(1),
+    focusConflict,
+    u32(0),
+    u32(0),
+  ]);
+  const decoded = codec.decodeResponse(observationsResponse(payload), 7n);
+  assert.deepEqual(decoded.body.observations.effects, [
+    {
+      kind: "submitted",
+      entity: 100n,
+      rootIncarnation: 3n,
+      node: 40,
+      revision: 4,
+      text: "hello",
+      path: [10, 40],
+      sourceTick: 11n,
+      effectTick: 12n,
+    },
+  ]);
+  assert.deepEqual(decoded.body.observations.conflicts[0].reason, {
+    kind: "focusMismatch",
+  });
+});
+
 test("broadcast observations decode to effects, conflicts and cancellations", () => {
   assert.deepEqual(
     codec.decodeResponse(observationsResponse(observationsPayload()), 7n),

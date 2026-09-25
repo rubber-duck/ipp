@@ -87,7 +87,8 @@ pub enum GuiPointerButton {
 pub enum GuiKey {
     /// Advance keyboard focus to the next control, wrapping around.
     Tab,
-    /// Activate the focused button or checkbox.
+    /// Activate the focused button or checkbox, or submit focused text
+    /// outside composition.
     Enter,
     /// Activate the focused button or checkbox, or type a space into text.
     Space,
@@ -378,6 +379,22 @@ pub enum GuiInputEffectKind {
         /// pinned from the live tree at application for listener dispatch.
         path: Vec<GuiNodeId>,
     },
+    /// Enter submitted a focused single-line text input outside composition.
+    Submitted {
+        /// Panel entity.
+        entity: EntityId,
+        /// Root component incarnation fencing replacement.
+        root_incarnation: u64,
+        /// Submitted text input node.
+        node: GuiNodeId,
+        /// Committed text revision that was submitted.
+        revision: u32,
+        /// Committed text at that revision.
+        text: String,
+        /// Runtime logical ancestor path, root-first including the target,
+        /// pinned from the live tree at application for listener dispatch.
+        path: Vec<GuiNodeId>,
+    },
     /// Keyboard focus moved, or cleared when None.
     FocusChanged {
         /// New focus, or None after blur.
@@ -602,6 +619,11 @@ enum EnvelopeKind {
     },
     /// Completed button press.
     PressButton,
+    /// Text input submission of the revision the routing snapshot predicted.
+    Submit {
+        /// Revision the submitted text must still hold at application.
+        expected_revision: u32,
+    },
     /// Focus move, or blur when None.
     Focus {
         /// New focus, or None after blur.
@@ -3823,6 +3845,7 @@ impl GuiInputSystem {
                 ControlKind::TextInput if key == GuiKey::Space => {
                     self.append_text(session, tick, input, &root, &focus.target, " ".into());
                 }
+                ControlKind::TextInput => self.route_submit(session, tick, &root, focus.target),
                 _ => self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable),
             },
             GuiKey::Backspace => {
@@ -4030,6 +4053,37 @@ impl GuiInputSystem {
                 self.store_committed_cursor(&focus.target, outcome.caret, revision, session);
             }
         }
+    }
+
+    /// Queue a submission of the focused text input's predicted text. Enter
+    /// during an active composition belongs to the IME: it is consumed
+    /// without submitting, and the composition stays for the platform to
+    /// commit or cancel.
+    fn route_submit(&mut self, session: u64, tick: u64, root: &GuiRoot, target: GuiInputTarget) {
+        let composing = self
+            .composition
+            .as_ref()
+            .is_some_and(|composed| composed.target == target);
+        if composing {
+            return;
+        }
+
+        let expected_revision = self.base_revision(root, &target);
+        self.push_envelope(
+            tick,
+            PendingEnvelope {
+                session,
+                epoch: self.owner_epoch,
+                source_tick: tick,
+                target: Some(target),
+                pointer: None,
+                press_seq: None,
+                cancel_on_miss: false,
+                kind: EnvelopeKind::Submit {
+                    expected_revision,
+                },
+            },
+        );
     }
 
     /// Insert payload text at the caret, replacing the selection, with
@@ -5317,6 +5371,95 @@ impl GuiInputSystem {
                     },
                 });
             }
+            EnvelopeKind::Submit {
+                expected_revision,
+            } => {
+                let expected_revision = *expected_revision;
+                let Some(target) = envelope.target else {
+                    return;
+                };
+                let status = self
+                    .layout(&*access)
+                    .map_or(GuiTargetStatus::Ineligible, |layout| {
+                        evaluated_status(access.world, layout, &target)
+                    });
+                let root = match status {
+                    GuiTargetStatus::Eligible(root) => root,
+                    GuiTargetStatus::Removed => {
+                        self.cancel_envelope(
+                            tick,
+                            &envelope,
+                            GuiInputCancelReason::TargetRemoved,
+                            remaining,
+                        );
+                        return;
+                    }
+                    GuiTargetStatus::Ineligible => {
+                        self.cancel_envelope(
+                            tick,
+                            &envelope,
+                            GuiInputCancelReason::TargetHidden,
+                            remaining,
+                        );
+                        return;
+                    }
+                };
+
+                // The submitted text is the committed text at the revision
+                // routing predicted: a text input that changed kind or text
+                // since then conflicts instead of submitting other text.
+                let committed = root
+                    .nodes()
+                    .node(target.node)
+                    .filter(|node| ControlKind::of(&node.data) == Some(ControlKind::TextInput))
+                    .and_then(|_| root.control_state(target.node));
+                let Some(state) = committed else {
+                    self.pending_conflicts.push(GuiInputConflict {
+                        session: envelope.session,
+                        source_tick: envelope.source_tick,
+                        effect_tick: tick,
+                        target: Some(target),
+                        reason: GuiInputConflictReason::AdmissionFailed(ErrorReason::InvalidValue),
+                    });
+                    return;
+                };
+                let GuiControlValue::Text(text) = &state.value else {
+                    self.pending_conflicts.push(GuiInputConflict {
+                        session: envelope.session,
+                        source_tick: envelope.source_tick,
+                        effect_tick: tick,
+                        target: Some(target),
+                        reason: GuiInputConflictReason::AdmissionFailed(ErrorReason::InvalidValue),
+                    });
+                    return;
+                };
+                if state.revision != expected_revision {
+                    self.pending_conflicts.push(GuiInputConflict {
+                        session: envelope.session,
+                        source_tick: envelope.source_tick,
+                        effect_tick: tick,
+                        target: Some(target),
+                        reason: GuiInputConflictReason::RevisionMismatch {
+                            expected: expected_revision,
+                            found: state.revision,
+                        },
+                    });
+                    return;
+                }
+                self.pending_effects.push(GuiInputEffect {
+                    session: envelope.session,
+                    source_tick: envelope.source_tick,
+                    effect_tick: tick,
+                    kind: GuiInputEffectKind::Submitted {
+                        entity: target.entity,
+                        root_incarnation: target.root_incarnation,
+                        node: target.node,
+                        revision: state.revision,
+                        text: text.clone(),
+                        path: ancestor_path(&root, target.node),
+                    },
+                });
+            }
             EnvelopeKind::SetValue {
                 expected_revision,
                 value,
@@ -6436,6 +6579,9 @@ mod test_support;
 #[cfg(test)]
 #[path = "text_fence_tests.rs"]
 mod text_fence_tests;
+#[cfg(test)]
+#[path = "text_submit_tests.rs"]
+mod text_submit_tests;
 #[cfg(test)]
 #[path = "text_tests.rs"]
 mod text_tests;

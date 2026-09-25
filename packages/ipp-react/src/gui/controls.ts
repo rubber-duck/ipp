@@ -56,6 +56,7 @@ import type {
   GuiPressListener,
   GuiScalarCommitListener,
   GuiTextCommitListener,
+  GuiTextSubmitListener,
   GuiToggleListener,
 } from "./callbacks.js";
 
@@ -125,6 +126,9 @@ export interface TextInputProps extends GuiControlBaseProps {
   readonly placeholder?: string | undefined;
   /** Text-commit observer; fed by committed effects only. */
   readonly onTextCommit?: GuiTextCommitListener | undefined;
+  /** Enter-submission observer for the committed text; never fires during
+   * IME composition. */
+  readonly onSubmit?: GuiTextSubmitListener | undefined;
 }
 
 function checkListener(kind: string, name: string, value: unknown): void {
@@ -161,6 +165,7 @@ export function validateTextInputProps(props: TextInputProps): void {
   checkControlBase("TextInput", props);
   textInputNode(props);
   checkListener("TextInput", "onTextCommit", props.onTextCommit);
+  checkListener("TextInput", "onSubmit", props.onSubmit);
 }
 
 /** Pure declaration record consumed by the reconciler description pass. */
@@ -179,6 +184,7 @@ export interface GuiControlDeclaration {
   readonly onToggle: GuiToggleListener | undefined;
   readonly onScalarCommit: GuiScalarCommitListener | undefined;
   readonly onTextCommit: GuiTextCommitListener | undefined;
+  readonly onSubmit: GuiTextSubmitListener | undefined;
   readonly theme?: GuiControlTheme | undefined;
 }
 
@@ -202,6 +208,7 @@ const noControlCallback = {
   onToggle: undefined,
   onScalarCommit: undefined,
   onTextCommit: undefined,
+  onSubmit: undefined,
 } as const;
 
 /** Describe one Button without transport. */
@@ -251,6 +258,7 @@ export function describeTextInput(
     ...baseOf(props),
     ...noControlCallback,
     onTextCommit: props.onTextCommit,
+    onSubmit: props.onSubmit,
   };
 }
 

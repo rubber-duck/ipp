@@ -11,6 +11,7 @@ import type {
 import { keyboardKeyToGuiKey } from "./input.js";
 import {
   createImeBridge,
+  isComposingKeyEvent,
   shouldSkipBeforeInput,
   utf8ByteLength,
   type ImeBridge,
@@ -482,6 +483,9 @@ export function attachTextBridge(
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (disposed) return;
+    // Keys during composition belong to the IME: Enter confirming a
+    // candidate must not submit, and arrows move within the candidate.
+    if (isComposingKeyEvent(event) || ime.isComposing()) return;
     const key = keyboardKeyToGuiKey(event.key);
     if (key === null) return;
     // Space, backspace and delete ride through beforeinput on an editable

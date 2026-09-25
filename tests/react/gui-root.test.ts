@@ -1088,7 +1088,7 @@ function describePanel(mock: MockGuiClient, withListeners: boolean) {
   });
   const input = tree.instance("ipp-gui-text-input", {
     text: "a",
-    ...(withListeners ? { onTextCommit: noop } : {}),
+    ...(withListeners ? { onTextCommit: noop, onSubmit: noop } : {}),
   });
   entity.children.push(surface, root);
   root.children.push(row);
@@ -1115,6 +1115,7 @@ test("listeners are retained JS-only without transport", () => {
   assert.equal(callbacks("ipp-gui-checkbox").onToggle, noop);
   assert.equal(callbacks("ipp-gui-slider").onScalarCommit, noop);
   assert.equal(callbacks("ipp-gui-text-input").onTextCommit, noop);
+  assert.equal(callbacks("ipp-gui-text-input").onSubmit, noop);
   // Listeners never reach the commit signature.
   const plain = describePanel(mock, false).description;
   assert.equal(
@@ -1140,5 +1141,6 @@ test("listeners are retained JS-only without transport", () => {
     onToggle: undefined,
     onScalarCommit: undefined,
     onTextCommit: undefined,
+    onSubmit: undefined,
   });
 });

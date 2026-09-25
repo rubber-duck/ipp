@@ -1,8 +1,8 @@
 //! Unsolicited GUI observation publication.
 //!
-//! Committed control effects with their conflicts and cancellations broadcast
-//! as committed state; unhandled inputs go only to their supplying session so
-//! raw input stays private. Messages chunk like Resources: at most 128
+//! Committed control effects and text submissions with their conflicts and
+//! cancellations broadcast as committed state; unhandled inputs go only to
+//! their supplying session so raw input stays private. Messages chunk like Resources: at most 128
 //! records within the transport budget, order preserved, each record in
 //! exactly one message.
 //!
@@ -31,7 +31,7 @@ pub const GUI_OBSERVATIONS_PER_MESSAGE: usize = 128;
 const INNER_BUDGET: usize = MAX_MESSAGE_BYTES - 65536;
 
 /// Split one frame report into that session's unsolicited responses.
-/// Committed button and control effects broadcast with conflicts and
+/// Committed button, control and submission effects broadcast with conflicts and
 /// cancellations; unhandled inputs filter to their supplying session and
 /// transient cursor effects are skipped as unrepresentable.
 pub fn gui_observation_bodies(report: &WorldUpdateReport, session: u64) -> Vec<ResponseBody> {
@@ -44,6 +44,7 @@ pub fn gui_observation_bodies(report: &WorldUpdateReport, session: u64) -> Vec<R
                 effect.kind,
                 GuiInputEffectKind::ButtonPressed { .. }
                     | GuiInputEffectKind::ControlCommitted { .. }
+                    | GuiInputEffectKind::Submitted { .. }
             )
         })
         .cloned()
@@ -135,6 +136,11 @@ fn effect_size(effect: &GuiInputEffect) -> usize {
             value,
             ..
         } => (path, Some(value)),
+        GuiInputEffectKind::Submitted {
+            path,
+            text,
+            ..
+        } => return 128 + 4 * path.len() + text.len(),
         _ => return 0,
     };
     128 + 4 * path.len()
@@ -374,6 +380,28 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
                     return Err(ProtocolError::Malformed("gui effect value"));
                 }
             }
+        }
+        GuiInputEffectKind::Submitted {
+            entity,
+            root_incarnation,
+            node,
+            revision,
+            text,
+            path,
+        } => {
+            w.u8(2)?;
+            write_effect_head(
+                w,
+                effect.session,
+                effect.source_tick,
+                effect.effect_tick,
+                *entity,
+                *root_incarnation,
+                *node,
+                path,
+            )?;
+            w.u32(*revision)?;
+            write_bounded_text(w, text)?;
         }
         _ => return Err(ProtocolError::Malformed("transient gui effect")),
     }

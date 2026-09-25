@@ -23,7 +23,8 @@
 //! Actions originate only from [`GuiInputSystem`] routing followed by
 //! liveness revalidation at the next mutation boundary. Committed outcomes
 //! report as revision-keyed [`GuiInputEffect`] records (`ButtonPressed`,
-//! `ControlCommitted`) with source and effect ticks; removals, hiding and
+//! `ControlCommitted`, and `Submitted` for Enter on a focused text input
+//! outside composition) with source and effect ticks; removals, hiding and
 //! session replacement cancel as [`GuiInputCancellation`], arbitration and
 //! admission losses conflict as [`GuiInputConflict`]. The authored
 //! `SetControlValue` path stays the explicit revision-aware external reset,

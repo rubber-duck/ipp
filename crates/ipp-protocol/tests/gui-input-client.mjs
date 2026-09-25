@@ -345,7 +345,8 @@ test("GUI inspection envelopes decode one legal maximum text value", () => {
     u32(0),
     u8(2),
     text(legalText),
-    // Empty node_data row, no control value.
+    // Empty node_data row (two mask bytes), no control value.
+    u8(0),
     u8(0),
     u8(0),
     // node_style row: enabled, color, opacity, font_size, position, scale,
@@ -411,10 +412,11 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
       },
     ]),
     concatenate([
-      u8(4),
+      u8(5),
       u32(2),
-      // Insert: identity, slider data, then the node_data row (value, min,
-      // max, step) and the node_style row with its required defaults.
+      // Insert: identity, slider data, then the node_data row (a two-byte
+      // presence mask, value, min, max, step) and the node_style row with
+      // its required defaults.
       u8(1),
       u64(42n),
       u64(3n),
@@ -423,6 +425,7 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
       u32(0),
       u8(7),
       u8(0b0011_1100),
+      u8(0),
       f32(0.5),
       f32(0),
       f32(1),
@@ -479,6 +482,83 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
   );
 });
 
+test("VirtualList edits encode the list kind, its items and scroll-to-index", () => {
+  const handle = { session: 7n, entity: 42n, rootIncarnation: 3n, nodeId: 2 };
+  assert.deepEqual(
+    codec.encodeGuiEdits([
+      {
+        action: "insert",
+        entity: 42n,
+        rootIncarnation: 3n,
+        id: 2,
+        index: 0,
+        data: { kind: "container", containerKind: "virtualList" },
+        values: {
+          itemCount: 100000,
+          itemExtent: 1.5,
+          overscan: 3,
+          axis: 1,
+          anchorIndex: 0,
+          anchorOffset: 0,
+        },
+        style: {},
+      },
+      { action: "scrollToIndex", handle, index: 5000, offset: 0.25 },
+    ]),
+    concatenate([
+      u8(5),
+      u32(2),
+      // Insert: container kind 7, then the node_data row with the six
+      // VirtualList properties (bits 6..11) and the default style row.
+      u8(1),
+      u64(42n),
+      u64(3n),
+      u32(2),
+      u8(0),
+      u32(0),
+      u8(1),
+      u8(7),
+      u8(0b1100_0000),
+      u8(0b0000_1111),
+      u32(100000),
+      f32(1.5),
+      u32(3),
+      u32(1),
+      u32(0),
+      f32(0),
+      u8(0b0000_0001),
+      u8(0b1011_0100),
+      u8(0b0001_0001),
+      u32(1),
+      f32(1),
+      f32(1),
+      f32(1),
+      f32(1),
+      f32(1),
+      f32(0.1),
+      f32(0),
+      f32(0),
+      f32(1),
+      f32(1),
+      u32(0),
+      // Scroll-to-index: handle, item index, offset.
+      u8(9),
+      u64(7n),
+      u64(42n),
+      u64(3n),
+      u32(2),
+      u32(5000),
+      f32(0.25),
+    ]),
+  );
+  for (const edit of [
+    { action: "scrollToIndex", handle, index: -1, offset: 0 },
+    { action: "scrollToIndex", handle, index: 1, offset: -0.5 },
+    { action: "scrollToIndex", handle, index: 1, offset: Number.NaN },
+  ])
+    assert.throws(() => codec.encodeGuiEdits([edit]), Error);
+});
+
 test("GUI theme and part edits encode part identities and part patches", () => {
   const handle = { session: 7n, entity: 42n, rootIncarnation: 3n, nodeId: 1 };
   assert.deepEqual(
@@ -500,7 +580,7 @@ test("GUI theme and part edits encode part identities and part patches", () => {
       },
     ]),
     concatenate([
-      u8(4),
+      u8(5),
       u32(3),
       // Theme: identity, background (0) hovered (1 + 1 * 3), then changed
       // and set masks over the 23 part properties and the set values.

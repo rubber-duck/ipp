@@ -105,7 +105,7 @@ const cancelRecord = () =>
 
 const observationsPayload = () =>
   concatenate([
-    u8(3),
+    u8(4),
     u32(2),
     buttonEffect(),
     controlEffect(),
@@ -118,7 +118,7 @@ const observationsPayload = () =>
 
 const textFocusPayload = () =>
   concatenate([
-    u8(3),
+    u8(4),
     u32(0),
     u32(0),
     u32(0),
@@ -219,7 +219,7 @@ test("text submissions and focus conflicts decode with their payloads", () => {
     u8(3),
   ]);
   const payload = concatenate([
-    u8(3),
+    u8(4),
     u32(1),
     submitted,
     u32(1),
@@ -244,6 +244,67 @@ test("text submissions and focus conflicts decode with their payloads", () => {
   assert.deepEqual(decoded.body.observations.conflicts[0].reason, {
     kind: "focusMismatch",
   });
+});
+
+test("virtual ranges decode beside committed effects without a session", () => {
+  const range = concatenate([
+    u8(3),
+    u64(11n),
+    u64(11n),
+    u64(100n),
+    u32(31),
+    u32(40),
+    u32(58),
+    u32(6),
+  ]);
+  const payload = concatenate([
+    u8(4),
+    u32(2),
+    range,
+    buttonEffect(),
+    u32(0),
+    u32(0),
+    u32(0),
+  ]);
+  const { observations } = codec.decodeResponse(
+    observationsResponse(payload),
+    7n,
+  ).body;
+  assert.deepEqual(observations.virtualRanges, [
+    {
+      kind: "virtualRangeChanged",
+      entity: 100n,
+      node: 31,
+      first: 40,
+      last: 58,
+      revision: 6,
+      sourceTick: 11n,
+      effectTick: 11n,
+    },
+  ]);
+  assert.deepEqual(
+    observations.effects.map((effect) => effect.kind),
+    ["buttonPressed"],
+  );
+  const reversed = concatenate([
+    u8(4),
+    u32(1),
+    u8(3),
+    u64(11n),
+    u64(11n),
+    u64(100n),
+    u32(31),
+    u32(9),
+    u32(8),
+    u32(1),
+    u32(0),
+    u32(0),
+    u32(0),
+  ]);
+  assert.throws(
+    () => codec.decodeResponse(observationsResponse(reversed), 7n),
+    Error,
+  );
 });
 
 test("broadcast observations decode to effects, conflicts and cancellations", () => {
@@ -348,9 +409,9 @@ test("unhandled inputs decode with their verbatim input echo", () => {
 test("observation payloads reject empty, oversized and mistagged content", () => {
   for (const inner of [
     concatenate([u8(1), u32(0), u32(0), u32(0)]),
-    concatenate([u8(3), u32(0), u32(0), u32(0), u32(0)]),
-    concatenate([u8(3), u32(129), u32(0), u32(0), u32(0)]),
-    concatenate([u8(3), u32(1), buttonEffect(), u32(0), u32(0), u32(0), u8(0)]),
+    concatenate([u8(4), u32(0), u32(0), u32(0), u32(0)]),
+    concatenate([u8(4), u32(129), u32(0), u32(0), u32(0)]),
+    concatenate([u8(4), u32(1), buttonEffect(), u32(0), u32(0), u32(0), u8(0)]),
   ]) {
     assert.throws(
       () => codec.decodeResponse(observationsResponse(inner), 7n),

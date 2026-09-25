@@ -28,10 +28,12 @@ import type {
   GuiSemanticNode,
   GuiSemanticScroll,
   GuiSemanticSnapshotQuery,
+  GuiSemanticVirtualList,
   GuiSemanticTree,
   GuiTextFence,
   GuiTextFocusState,
   GuiUnhandledObservation,
+  GuiVirtualRangeChangedEffect,
 } from "./gui-types.js";
 import type { RowPropertyDescriptor } from "./types.js";
 import { GUI_BASE_PARTS, guiPartIndex } from "./gui-types.js";
@@ -66,6 +68,7 @@ const CONTAINER_KINDS: readonly GuiContainerKind[] = [
   "align",
   "sizedBox",
   "scrollView",
+  "virtualList",
 ];
 
 function writeGuiNodeData(w: Writer, data: GuiNodeData): void {
@@ -450,6 +453,7 @@ function encodeGuiEditBody(edit: GuiEdit): Uint8Array<ArrayBuffer> {
     updateTheme: 6,
     removeTheme: 7,
     updatePart: 8,
+    scrollToIndex: 9,
   };
   if (!Object.hasOwn(actions, edit.action)) fail("GUI edit action");
   w.u8(actions[edit.action]);
@@ -559,6 +563,20 @@ function encodeGuiEditBody(edit: GuiEdit): Uint8Array<ArrayBuffer> {
       writeGuiPartPatch(w, edit.patch);
       break;
     }
+    case "scrollToIndex":
+      exactFields(edit, ["action", "handle", "index", "offset"]);
+      writeGuiNodeHandle(w, edit.handle);
+      if (
+        !Number.isInteger(edit.index) ||
+        edit.index < 0 ||
+        edit.index > 0xffffffff
+      )
+        fail("GUI item index");
+      if (!Number.isFinite(edit.offset) || edit.offset < 0)
+        fail("GUI scroll offset");
+      w.u32(edit.index);
+      w.f32(edit.offset);
+      break;
   }
   return w.finish();
 }
@@ -609,7 +627,7 @@ export function encodeGuiEdits(
 ): Uint8Array<ArrayBuffer> {
   const bodies = edits.map(encodeGuiEditBody);
   const w = new Writer(MAX_DIRECT_GUI_BATCH_BYTES);
-  w.u8(4);
+  w.u8(5);
   w.count(bodies.length, 0xffffffff);
   for (const body of bodies) w.raw(body);
   return w.finish();
@@ -1052,9 +1070,33 @@ function readGuiObservationPath(r: Reader): number[] {
 
 const GUI_COMMIT_SOURCES = ["user", "semantic", "external"] as const;
 
-/** Decode one committed control outcome; transient cursors never arrive here. */
-function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
+/** Decode one committed control outcome or VirtualList wanted range;
+ * transient cursors never arrive here. */
+function readGuiObservationEffect(
+  r: Reader,
+): GuiCommittedEffect | GuiVirtualRangeChangedEffect {
   const kind = r.u8();
+  if (kind === 3) {
+    const sourceTick = r.u64();
+    const effectTick = r.u64();
+    const entity = r.u64();
+    if (entity === 0n) fail("GUI observation entity");
+    const node = r.u32();
+    if (node === 0) fail("GUI observation node");
+    const first = r.u32();
+    const last = r.u32();
+    if (first > last) fail("GUI virtual range");
+    return {
+      kind: "virtualRangeChanged",
+      entity,
+      node,
+      first,
+      last,
+      revision: r.u32(),
+      sourceTick,
+      effectTick,
+    };
+  }
   const session = r.u64();
   if (session === 0n) fail("GUI observation session");
   const sourceTick = r.u64();
@@ -1219,16 +1261,21 @@ function readGuiUnhandledObservation(r: Reader): GuiUnhandledObservation {
 /** Decode one broadcast observation payload into its three record lists. */
 function readGuiObservations(bytes: Uint8Array): {
   effects: GuiCommittedEffect[];
+  virtualRanges?: GuiVirtualRangeChangedEffect[];
   conflicts: GuiConflictObservation[];
   cancellations: GuiCancelObservation[];
   textFocus?: GuiTextFocusState | null;
 } {
   const r = new Reader(bytes);
-  if (r.u8() !== 3) fail("GUI observations version");
+  if (r.u8() !== 4) fail("GUI observations version");
   const effectCount = r.count(128);
   const effects: GuiCommittedEffect[] = [];
-  for (let i = 0; i < effectCount; i++)
-    effects.push(readGuiObservationEffect(r));
+  const virtualRanges: GuiVirtualRangeChangedEffect[] = [];
+  for (let i = 0; i < effectCount; i++) {
+    const effect = readGuiObservationEffect(r);
+    if (effect.kind === "virtualRangeChanged") virtualRanges.push(effect);
+    else effects.push(effect);
+  }
   const conflictCount = r.count(128);
   const conflicts: GuiConflictObservation[] = [];
   for (let i = 0; i < conflictCount; i++)
@@ -1276,18 +1323,16 @@ function readGuiObservations(bytes: Uint8Array): {
     } else fail("GUI text focus update");
   }
   if (
-    effects.length +
-      conflicts.length +
-      cancellations.length +
-      textFocusCount ===
+    effectCount + conflicts.length + cancellations.length + textFocusCount ===
     0
   )
     fail("empty GUI observations");
-  if (effects.length + conflicts.length + cancellations.length > 128)
+  if (effectCount + conflicts.length + cancellations.length > 128)
     fail("GUI observation count");
   r.done();
   return {
     effects,
+    ...(virtualRanges.length === 0 ? {} : { virtualRanges }),
     conflicts,
     cancellations,
     ...(textFocus === undefined ? {} : { textFocus }),
@@ -1386,6 +1431,7 @@ const GUI_SEMANTIC_ROLES = [
   "slider",
   "textInput",
   "scrollView",
+  "virtualList",
 ] as const;
 
 const GUI_SEMANTIC_ACTION_KINDS = [
@@ -1442,6 +1488,17 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
       maxOffset: [r.f32(), r.f32()],
     };
   else if (scrollTag !== 0) fail("GUI semantic scroll option");
+  const listTag = r.u8();
+  let virtualList: GuiSemanticVirtualList | undefined;
+  if (listTag === 1)
+    virtualList = {
+      itemCount: r.u32(),
+      loadedFirst: r.u32(),
+      loadedLast: r.u32(),
+      anchorIndex: r.u32(),
+      anchorOffset: r.f32(),
+    };
+  else if (listTag !== 0) fail("GUI semantic virtual list option");
   return {
     id,
     ...(parentTag === 0 ? {} : { parent: parentTag }),
@@ -1456,13 +1513,14 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
     focusScope,
     actions,
     ...(scroll === undefined ? {} : { scroll }),
+    ...(virtualList === undefined ? {} : { virtualList }),
   };
 }
 
 /** Decode one bounded semantic snapshot with its observed focus. */
 export function decodeGuiSemanticSnapshot(bytes: Uint8Array): GuiSemanticTree {
   const r = new Reader(bytes);
-  if (r.u8() !== 2) fail("GUI semantic snapshot version");
+  if (r.u8() !== 3) fail("GUI semantic snapshot version");
   const entity = r.u64();
   if (entity === 0n) fail("GUI semantic snapshot entity");
   const rootIncarnation = r.u64();

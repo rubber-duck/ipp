@@ -42,7 +42,8 @@ export type GuiContainerKind =
   | "padding"
   | "align"
   | "sizedBox"
-  | "scrollView";
+  | "scrollView"
+  | "virtualList";
 
 /**
  * Node kind with its authored strings. Kind-specific scalars travel as
@@ -60,9 +61,10 @@ export type GuiNodeData =
 
 /**
  * Kind-specific scalars of one node, the `GuiRoot.node_data` row: image size
- * for images, the committed checkbox state, and slider value and range.
- * Presence must match the node kind. The encoding follows the contract's row
- * layout; keys are its property names in camelCase.
+ * for images, the committed checkbox state, slider value and range, and a
+ * VirtualList's items and anchor. Presence must match the node kind. The
+ * encoding follows the contract's row layout; keys are its property names in
+ * camelCase.
  */
 export interface GuiNodeValues {
   imageSize?: readonly [number, number];
@@ -71,6 +73,19 @@ export interface GuiNodeValues {
   min?: number;
   max?: number;
   step?: number;
+  /** VirtualList item count. */
+  itemCount?: number;
+  /** VirtualList per-item main-axis extent estimate, logical units. */
+  itemExtent?: number;
+  /** VirtualList items wanted beyond each end of the visible range. */
+  overscan?: number;
+  /** VirtualList main axis: 0 horizontal, 1 vertical. */
+  axis?: number;
+  /** VirtualList anchor item; kept across ordinary edits like a committed
+   * value, moved by scrolling and `scrollToIndex`. */
+  anchorIndex?: number;
+  /** VirtualList offset into the anchor item, logical units. */
+  anchorOffset?: number;
 }
 
 export type GuiControlValue =
@@ -321,6 +336,14 @@ export type GuiEdit =
       handle: GuiNodeHandle;
       part: GuiBasePart;
       patch: GuiPartPatch;
+    }
+  | {
+      /** Anchor a VirtualList at one item (clamped to the last), `offset`
+       * logical units into it; the wanted range follows. */
+      action: "scrollToIndex";
+      handle: GuiNodeHandle;
+      index: number;
+      offset: number;
     };
 
 /** Ordered GUI edit acknowledgement. A failed operation may retain partial effects. */
@@ -531,6 +554,25 @@ export interface GuiSubmittedEffect {
   readonly effectTick?: bigint | undefined;
 }
 
+/**
+ * The item range a VirtualList wants declared changed, mirroring core
+ * VirtualRangeChanged: its visible items widened by the overscan, as
+ * `[first, last)`. Runtime-originated and broadcast to every session, it
+ * travels beside committed effects in {@link GuiObservationBatch.virtualRanges}.
+ */
+export interface GuiVirtualRangeChangedEffect {
+  readonly kind: "virtualRangeChanged";
+  readonly entity: bigint;
+  readonly node: number;
+  readonly first: number;
+  /** One past the last wanted item index. */
+  readonly last: number;
+  /** Publication revision per list, monotonic within a root incarnation. */
+  readonly revision: number;
+  readonly sourceTick?: bigint | undefined;
+  readonly effectTick?: bigint | undefined;
+}
+
 /** Committed effects only; transient cursors are unrepresentable by design. */
 export type GuiCommittedEffect =
   | GuiButtonPressedEffect
@@ -611,6 +653,8 @@ export interface GuiUnhandledObservation {
  * never accompany one. `@ipp/react/gui` consumes these batches directly. */
 export interface GuiObservationBatch {
   readonly effects: readonly GuiCommittedEffect[];
+  /** VirtualList wanted ranges, in publication order. */
+  readonly virtualRanges?: readonly GuiVirtualRangeChangedEffect[] | undefined;
   readonly conflicts?: readonly GuiConflictObservation[] | undefined;
   readonly cancellations?: readonly GuiCancelObservation[] | undefined;
   readonly unhandled?: readonly GuiUnhandledObservation[] | undefined;
@@ -744,7 +788,8 @@ export type GuiSemanticRole =
   | "checkbox"
   | "slider"
   | "textInput"
-  | "scrollView";
+  | "scrollView"
+  | "virtualList";
 
 /** Machine-actionable capability advertised by one snapshot node. */
 export type GuiSemanticActionKind =
@@ -769,9 +814,21 @@ export interface GuiSemanticNode {
   /** Keyboard traversal from a focused descendant stays in this subtree. */
   focusScope: boolean;
   actions: GuiSemanticActionKind[];
-  /** Committed scroll position of an evaluated ScrollView, in its local
-   * logical units. */
+  /** Committed scroll position of an evaluated ScrollView or VirtualList,
+   * in its local logical units. */
   scroll?: GuiSemanticScroll;
+  /** Item count, loaded range and anchor of a VirtualList. */
+  virtualList?: GuiSemanticVirtualList;
+}
+
+/** Items of one VirtualList: count, declared range `[loadedFirst,
+ * loadedLast)` and persisted anchor. */
+export interface GuiSemanticVirtualList {
+  itemCount: number;
+  loadedFirst: number;
+  loadedLast: number;
+  anchorIndex: number;
+  anchorOffset: number;
 }
 
 /** Committed offset and largest offset of one ScrollView per axis. */

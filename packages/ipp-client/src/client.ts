@@ -319,6 +319,7 @@ export abstract class ClientBase implements Client {
       try {
         listener({
           effects: [...batch.effects],
+          virtualRanges: [...(batch.virtualRanges ?? [])],
           conflicts: [...(batch.conflicts ?? [])],
           cancellations: [...(batch.cancellations ?? [])],
           unhandled: [...(batch.unhandled ?? [])],
@@ -683,6 +684,7 @@ export abstract class ClientBase implements Client {
       if (response.body.kind === "guiObservations") {
         this.publishGuiObservations({
           effects: [...response.body.observations.effects],
+          virtualRanges: [...(response.body.observations.virtualRanges ?? [])],
           conflicts: [...(response.body.observations.conflicts ?? [])],
           cancellations: [...(response.body.observations.cancellations ?? [])],
           unhandled: [],

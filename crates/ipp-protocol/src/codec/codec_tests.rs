@@ -1716,6 +1716,7 @@ fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
                 ipp_core::GuiSemanticActionKind::Focus,
             ],
             scroll: None,
+            virtual_list: None,
         }],
         focused: Some(GuiSemanticFocus {
             id: ipp_core::GuiNodeId(5),
@@ -1808,7 +1809,7 @@ fn gui_observations_encode_committed_state_unsolicited() {
     assert_eq!(bytes.len(), 183);
     assert_eq!(bytes[24], RESPONSE_GUI_OBSERVATIONS);
     assert_eq!(&bytes[25..29], &154u32.to_le_bytes());
-    assert_eq!(bytes[29], 3);
+    assert_eq!(bytes[29], 4);
     assert_eq!(&bytes[30..34], &1u32.to_le_bytes());
     assert_eq!(bytes[34], 0);
     assert_eq!(&bytes[35..43], &7u64.to_le_bytes());
@@ -1902,6 +1903,46 @@ fn gui_observations_encode_committed_state_unsolicited() {
     assert_eq!(&bytes[87..91], &5u32.to_le_bytes());
     assert_eq!(&bytes[91..96], b"hello");
 
+    // A wanted range is runtime-originated: no session, then ticks, list
+    // identity, the half-open range and its revision; a reversed range is
+    // malformed.
+    let range = |first: u32, last: u32| GuiInputEffect {
+        session: 0,
+        source_tick: 11,
+        effect_tick: 11,
+        kind: GuiInputEffectKind::VirtualRangeChanged {
+            entity: EntityId::from_bits(100),
+            node: GuiNodeId(31),
+            first,
+            last,
+            revision: 6,
+        },
+    };
+    let observations = |effect: GuiInputEffect| Response {
+        session: 7,
+        request_id: 0,
+        tick: 12,
+        body: ResponseBody::GuiObservations {
+            effects: vec![effect],
+            conflicts: Vec::new(),
+            cancellations: Vec::new(),
+            text_focus_updates: Vec::new(),
+        },
+    };
+    let bytes = encode_response(&observations(range(40, 58))).unwrap();
+    assert_eq!(bytes.len(), 87);
+    assert_eq!(bytes[34], 3);
+    assert_eq!(&bytes[35..43], &11u64.to_le_bytes());
+    assert_eq!(&bytes[51..59], &100u64.to_le_bytes());
+    assert_eq!(&bytes[59..63], &31u32.to_le_bytes());
+    assert_eq!(&bytes[63..67], &40u32.to_le_bytes());
+    assert_eq!(&bytes[67..71], &58u32.to_le_bytes());
+    assert_eq!(&bytes[71..75], &6u32.to_le_bytes());
+    assert_eq!(
+        encode_response(&observations(range(9, 8))),
+        Err(ProtocolError::Malformed("gui virtual range"))
+    );
+
     let unhandled = Response {
         session: 7,
         request_id: 0,
@@ -1990,6 +2031,57 @@ fn gui_observation_text_encodes_whole_or_rejects() {
         }),
         Err(ProtocolError::Limit("count"))
     );
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn gui_observation_bodies_broadcast_virtual_ranges_and_skip_scroll_cursors() {
+    use crate::gui_observation_bodies;
+    use ipp_core::{GuiInputEffect, GuiInputEffectKind, GuiNodeId, WorldUpdateReport};
+    let report = WorldUpdateReport {
+        gui_input_effects: vec![
+            GuiInputEffect {
+                session: 0,
+                source_tick: 4,
+                effect_tick: 4,
+                kind: GuiInputEffectKind::VirtualRangeChanged {
+                    entity: EntityId::from_bits(100),
+                    node: GuiNodeId(31),
+                    first: 0,
+                    last: 8,
+                    revision: 1,
+                },
+            },
+            GuiInputEffect {
+                session: 7,
+                source_tick: 4,
+                effect_tick: 4,
+                kind: GuiInputEffectKind::ScrollChanged {
+                    entity: EntityId::from_bits(100),
+                    node: GuiNodeId(31),
+                    offset: [0.0, 3.0],
+                },
+            },
+        ],
+        ..WorldUpdateReport::default()
+    };
+    for session in [7, 8] {
+        let bodies = gui_observation_bodies(&report, session);
+        assert_eq!(bodies.len(), 1);
+        match &bodies[0] {
+            ResponseBody::GuiObservations {
+                effects,
+                ..
+            } => {
+                assert_eq!(effects.len(), 1);
+                assert!(matches!(
+                    effects[0].kind,
+                    GuiInputEffectKind::VirtualRangeChanged { .. }
+                ));
+            }
+            other => panic!("expected observations, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(feature = "gui")]
@@ -2155,7 +2247,7 @@ fn gui_edit_style_and_values_follow_the_row_layouts() {
         bytes
     };
     let batch = |command: Vec<u8>| {
-        let mut payload = vec![4];
+        let mut payload = vec![5];
         payload.extend_from_slice(&1u32.to_le_bytes());
         payload.extend_from_slice(&command);
         payload
@@ -2295,6 +2387,48 @@ fn gui_edit_style_and_values_follow_the_row_layouts() {
     part_index_out_of_range.push(117);
     part_index_out_of_range.extend(part_patch([0; 3], [0; 3], &[]));
     assert!(decode(part_index_out_of_range).is_err());
+
+    // A VirtualList is container kind 7 with its item and anchor properties
+    // in the data row; scroll-to-index is action 9 over a node handle.
+    let mut list = vec![1];
+    list.extend_from_slice(&42u64.to_le_bytes());
+    list.extend_from_slice(&3u64.to_le_bytes());
+    list.extend_from_slice(&2u32.to_le_bytes());
+    list.push(0);
+    list.extend_from_slice(&0u32.to_le_bytes());
+    list.extend_from_slice(&[1, 7]);
+    encode_row(&GuiNodeDataRow::virtual_list(100_000, 1.5, 3, 1), &mut list);
+    encode_row(&GuiNodeStyleRow::default(), &mut list);
+    assert_eq!(
+        decode(list),
+        Ok(GuiCommand::InsertNode {
+            entity: EntityId::from_bits(42),
+            root_incarnation: 3,
+            id: GuiNodeId(2),
+            parent: None,
+            index: 0,
+            data: GuiNodeData::Container(ipp_core::GuiContainerKind::VirtualList),
+            values: GuiNodeDataRow::virtual_list(100_000, 1.5, 3, 1),
+            style: GuiNodeStyle::default(),
+        })
+    );
+    let mut scroll = vec![9];
+    scroll.extend_from_slice(&1u64.to_le_bytes());
+    scroll.extend_from_slice(&42u64.to_le_bytes());
+    scroll.extend_from_slice(&3u64.to_le_bytes());
+    scroll.extend_from_slice(&2u32.to_le_bytes());
+    scroll.extend_from_slice(&5_000u32.to_le_bytes());
+    scroll.extend_from_slice(&0.25f32.to_le_bytes());
+    assert_eq!(
+        decode(scroll.clone()),
+        Ok(GuiCommand::ScrollToIndex {
+            node: GuiNodeHandle::new(1, EntityId::from_bits(42), 3, GuiNodeId(2)),
+            index: 5_000,
+            offset: 0.25,
+        })
+    );
+    scroll.pop();
+    assert!(decode(scroll).is_err());
 
     let mut remove = vec![7];
     remove.extend_from_slice(&42u64.to_le_bytes());

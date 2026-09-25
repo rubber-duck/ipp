@@ -65,17 +65,17 @@ const actionBytes = (kind, payload = new Uint8Array()) =>
 
 const snapshotBytes = () =>
   concatenate([
-    u8(2),
+    u8(3),
     u64(42n),
     u64(3n),
     u64(12n),
     u32(2),
-    // ScrollView root: id, no parent, role, no name, no value, revision,
+    // VirtualList root: id, no parent, role, no name, no value, revision,
     // bounds, enabled, visible, available, focus scope, no actions, scroll
-    // position.
+    // position, then count, loaded range and anchor.
     u32(1),
     u32(0),
-    u8(8),
+    u8(9),
     u8(0),
     u8(0),
     u32(0),
@@ -93,6 +93,12 @@ const snapshotBytes = () =>
     f32(2),
     f32(0),
     f32(4),
+    u8(1),
+    u32(100),
+    u32(2),
+    u32(5),
+    u32(3),
+    f32(0.5),
     // Button: parent, role, name, revision, bounds, flags, one action.
     u32(2),
     u32(1),
@@ -111,7 +117,8 @@ const snapshotBytes = () =>
     u8(0),
     u8(1),
     u8(0),
-    // No scroll position.
+    // No scroll position and no items.
+    u8(0),
     u8(0),
     // Observed focus.
     u8(1),
@@ -125,7 +132,7 @@ const snapshotTree = {
   nodes: [
     {
       id: 1,
-      role: "scrollView",
+      role: "virtualList",
       value: { kind: "none" },
       revision: 0,
       bounds: [0, 0, 10, 10],
@@ -135,6 +142,13 @@ const snapshotTree = {
       focusScope: true,
       actions: [],
       scroll: { offset: [0, 2], maxOffset: [0, 4] },
+      virtualList: {
+        itemCount: 100,
+        loadedFirst: 2,
+        loadedLast: 5,
+        anchorIndex: 3,
+        anchorOffset: 0.5,
+      },
     },
     {
       id: 2,
@@ -346,7 +360,7 @@ test("semantic snapshots decode to bounded trees with focus", () => {
   const trailing = concatenate([snapshotResponse(), u8(0)]);
   assert.throws(() => codec.decodeResponse(trailing, 7n), /trailing bytes/);
   const badRole = snapshotBytes().slice();
-  badRole[1 + 8 + 8 + 8 + 4 + 4 + 4] = 9;
+  badRole[1 + 8 + 8 + 8 + 4 + 4 + 4] = 10;
   const bad = layout("response-gui-semantic-snapshot", {
     session: 7n,
     request_id: 3n,

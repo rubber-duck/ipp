@@ -23,10 +23,25 @@ export type GuiTestClient = GuiWorldClient &
 
 /** Property addressing exported by the generated contract under test. */
 export interface GuiContractNames {
-  /** Generated GuiRoot row helpers: node style properties by offset. */
+  /** Generated GuiRoot row helpers: node style and tree properties by offset. */
   GuiRoot: {
     node_styleOffset(slot: number, property: "opacity"): number;
+    node_treeOffset(slot: number, property: "parent"): number;
   };
+  /** Generated child order of decoded `node_tree` rows. */
+  guiTreeChildren(
+    rows: ReadonlyMap<
+      number,
+      { readonly parent: number; readonly order: number }
+    >,
+  ): Map<number, number[]>;
+}
+
+/** One decoded `GuiRoot.node_tree` row as inspection reports it. */
+interface NodeTreeRow {
+  readonly parent: number;
+  readonly order: number;
+  readonly kind: number;
 }
 
 /** One decoded `GuiRoot.node_style` row as inspection reports it. */
@@ -79,7 +94,7 @@ async function guiStyleRows(
  */
 export async function exerciseGuiLifecycle(
   host: WorldPersistenceHostClient<GuiTestClient>,
-  { GuiRoot }: GuiContractNames,
+  { GuiRoot, guiTreeChildren }: GuiContractNames,
 ) {
   const client = await host.createWorld({ symbolicId: "gui-lifecycle" });
   const batchRef = { kind: "alias", alias: 80 } as const;
@@ -652,21 +667,29 @@ export async function exerciseGuiLifecycle(
     `Style patch replaced omitted properties: ${JSON.stringify(checkbox.style)}`,
   );
 
-  // Clearing the tree through a generic write or adding raw Surface items is rejected.
-  const tree = (await guiProperties(client, entity)).fields.nodes;
-  expect(tree instanceof Uint8Array, "GuiRoot inspection omitted its tree");
+  // The tree is a rows table whose derived child order matches inspection;
+  // reparenting through a generic write or adding raw Surface items is
+  // rejected.
+  const tree = (await guiProperties(client, entity)).fields.node_tree as
+    | { rows: ReadonlyMap<number, NodeTreeRow> }
+    | undefined;
+  expect(tree?.rows instanceof Map, "GuiRoot inspection omitted node_tree");
+  expect(tree.rows.size === 3, "Inspected GuiRoot tree rows do not decode");
+  const derived = guiTreeChildren(tree.rows);
   expect(
-    client.decodeGuiTree(tree).nodes.length === 3,
-    "Inspected GuiRoot tree does not decode",
+    [1, ...(derived.get(1) ?? [])].join(",") ===
+      ids(await client.inspectGui({ entity })),
+    `Tree rows derive child order ${JSON.stringify([...derived])}`,
   );
   const structural = await client.batch([
     {
       kind: "setField",
       entity: { kind: "handle", id: entity },
       component: client.components.GuiRoot!.id,
-      field: componentFields(client, "GuiRoot", {
-        nodes: client.encodeGuiTree({ nextId: 1, nodes: [] }),
-      })[0]!,
+      field: {
+        offset: GuiRoot.node_treeOffset(2, "parent"),
+        value: { kind: "dynamic", value: { kind: "u32", value: 3 } },
+      },
     },
   ]);
   expect(!structural.ok, "A live GUI tree accepted a generic field write");

@@ -50,7 +50,7 @@
 //! viewport toward the pressed side, and both scroll through the same
 //! consumption; bars take hover and press state per part.
 
-use super::super::system::{commit_control_value, resolve_control_effective};
+use super::super::system::{check_control_value, commit_control_value, resolve_control_effective};
 use super::super::tree::GuiNodeDataRow;
 use super::super::tree::nodes::{
     GuiContainerKind, GuiControlValue, GuiNodeData, GuiNodeHandle, GuiNodeId,
@@ -595,7 +595,7 @@ enum ControlKind {
 }
 
 impl ControlKind {
-    fn of(data: &GuiNodeData) -> Option<Self> {
+    fn of<S>(data: &GuiNodeData<S>) -> Option<Self> {
         match data {
             GuiNodeData::Button {
                 ..
@@ -5712,7 +5712,6 @@ fn stage_producer_root(
     entity: EntityId,
     root: GuiRoot,
 ) -> Result<(), ErrorReason> {
-    root.validate_tree()?;
     let sim = &mut *access.world;
     let incarnation = sim
         .state
@@ -5864,15 +5863,14 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::SetScalar(value) if kind == ControlKind::Slider => {
                 let value = GuiControlValue::Scalar(*value);
-                let mut check = root.edit_scope(Some(command.target.node))?;
                 let handle = GuiNodeHandle::new(
                     session,
                     command.target.entity,
                     command.target.root_incarnation,
                     command.target.node,
                 );
-                commit_control_value(
-                    &mut check,
+                check_control_value(
+                    &root,
                     command.target.root_incarnation,
                     session,
                     &handle,
@@ -5887,15 +5885,14 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::SetText(value) if kind == ControlKind::TextInput => {
                 let value = GuiControlValue::Text(value.clone());
-                let mut check = root.edit_scope(Some(command.target.node))?;
                 let handle = GuiNodeHandle::new(
                     session,
                     command.target.entity,
                     command.target.root_incarnation,
                     command.target.node,
                 );
-                commit_control_value(
-                    &mut check,
+                check_control_value(
+                    &root,
                     command.target.root_incarnation,
                     session,
                     &handle,

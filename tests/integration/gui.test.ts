@@ -21,12 +21,19 @@ test("GUI roots, node identity and committed values cross a real native connecti
     pathToFileURL(resolve(profile, "generated.js")).href
   );
   assert.equal(contract.CAPABILITIES.gui, true);
-  assert.throws(() =>
-    contract.encodeGuiTree({
-      nextId: 2,
-      nodes: [],
-      controls: [{ id: 1, revision: 0 }],
-    }),
+  assert.deepEqual(
+    contract.guiTreeChildren(
+      new Map([
+        [1, { parent: 0, order: 0 }],
+        [2, { parent: 1, order: 9 }],
+        [3, { parent: 1, order: 4 }],
+        [4, { parent: 1, order: 9 }],
+      ]),
+    ),
+    new Map([
+      [0, [1]],
+      [1, [3, 2, 4]],
+    ]),
   );
   await runNativeEnvironment(
     "gui",

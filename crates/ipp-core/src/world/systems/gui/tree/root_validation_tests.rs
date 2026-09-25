@@ -10,6 +10,7 @@ use crate::components::registry;
 use crate::components::schema::FieldValue as SchemaValue;
 use crate::services::asset_management::AssetSource;
 use crate::systems::animation::ANIMATION_TYPE;
+use crate::systems::gui::MAX_LAYOUT_DEPTH;
 use crate::systems::gui::test_support::{set_node_theme, set_theme_part};
 use crate::systems::gui::tree::nodes::GuiContainerKind;
 
@@ -92,6 +93,7 @@ fn fixture() -> GuiRoot {
 fn schema_value(value: &FieldValue) -> SchemaValue {
     match value {
         FieldValue::Dynamic(value) => SchemaValue::Dynamic(value.clone()),
+        FieldValue::String(text) => SchemaValue::String(text.clone()),
         FieldValue::Bytes(bytes) => SchemaValue::Bytes(bytes.clone()),
         FieldValue::Rows(bytes) => SchemaValue::Rows(bytes.clone()),
         FieldValue::Unset => SchemaValue::Unset,
@@ -131,8 +133,12 @@ fn write(root: &GuiRoot, offset: u32, value: FieldValue) -> Result<(), ErrorReas
     per_field
 }
 
-fn tree_write(nodes: &GuiNodes) -> FieldValue {
-    FieldValue::Bytes(nodes.encode())
+fn tree_table(tree: &Rows<GuiNodeTreeRow>) -> FieldValue {
+    FieldValue::Rows(tree.encode())
+}
+
+fn tree_offset(node: u32, property: GuiNodeTreeProperty) -> u32 {
+    GuiRoot::node_tree_offset(GuiNodeId(node), property).unwrap()
 }
 
 #[test]
@@ -141,58 +147,173 @@ fn operations_rely_on_per_field_checks() {
 }
 
 #[test]
-fn tree_writes_reject_bad_links_and_nodes_without_rows() {
+fn tree_table_writes_reject_bad_links_and_nodes_without_rows() {
     let root = fixture();
+    let rows = root.node_tree().rows();
 
-    let mut dangling = root.nodes().clone();
-    dangling.node_mut(GuiNodeId(3)).unwrap().parent = Some(GuiNodeId(99));
-    assert!(write(&root, GuiRoot::nodes_field(), tree_write(&dangling)).is_err());
+    let mut dangling = Rows::clone(rows);
+    dangling.get_mut(3).unwrap().parent = 99;
+    assert!(write(&root, GuiRoot::node_tree_field(), tree_table(&dangling)).is_err());
 
-    let mut cycle = root.nodes().clone();
-    cycle
-        .node_mut(GuiNodeId(1))
-        .unwrap()
-        .children
-        .push(GuiNodeId(1));
-    assert!(write(&root, GuiRoot::nodes_field(), tree_write(&cycle)).is_err());
+    let mut cycle = Rows::clone(rows);
+    cycle.get_mut(1).unwrap().parent = 5;
+    assert!(write(&root, GuiRoot::node_tree_field(), tree_table(&cycle)).is_err());
+
+    let mut unshaped = Rows::clone(rows);
+    unshaped.get_mut(4).unwrap().text = None;
+    assert!(write(&root, GuiRoot::node_tree_field(), tree_table(&unshaped)).is_err());
 
     // Restoring a removed node's identity finds its row slots dead.
-    let before = root.nodes().clone();
     let mut removed = root.clone();
     removed.remove_node(GuiNodeId(5)).unwrap();
     assert_eq!(
-        write(&removed, GuiRoot::nodes_field(), tree_write(&before)),
+        write(&removed, GuiRoot::node_tree_field(), tree_table(rows)),
         Err(ErrorReason::InvalidField)
     );
 
     // A valid move, kind change and removal are accepted.
-    let mut moved = root.nodes().clone();
-    moved
-        .move_node(GuiNodeId(3), Some(GuiNodeId(5)), 0)
-        .unwrap();
+    let mut moved = Rows::clone(rows);
+    moved.get_mut(3).unwrap().parent = 5;
     assert_eq!(
-        write(&root, GuiRoot::nodes_field(), tree_write(&moved)),
+        write(&root, GuiRoot::node_tree_field(), tree_table(&moved)),
         Ok(())
     );
-    let mut retyped = root.nodes().clone();
-    retyped
-        .replace_data(GuiNodeId(2), GuiNodeData::Checkbox)
-        .unwrap();
-    retyped
-        .controls
-        .restart(GuiNodeId(2), &GuiNodeData::Checkbox)
-        .unwrap();
+    let mut retyped = Rows::clone(rows);
+    let row = retyped.get_mut(2).unwrap();
+    row.conform(GuiNodeKind::Checkbox);
+    row.revision += 1;
     assert_eq!(
-        write(&root, GuiRoot::nodes_field(), tree_write(&retyped)),
+        write(&root, GuiRoot::node_tree_field(), tree_table(&retyped)),
         Ok(())
     );
-    let mut pruned = root.nodes().clone();
-    pruned.remove_node(GuiNodeId(2)).unwrap();
-    pruned.controls.remove(GuiNodeId(2));
+    let mut pruned = Rows::clone(rows);
+    pruned.remove(2);
     assert_eq!(
-        write(&root, GuiRoot::nodes_field(), tree_write(&pruned)),
+        write(&root, GuiRoot::node_tree_field(), tree_table(&pruned)),
         Ok(())
     );
+}
+
+#[test]
+fn tree_property_writes_agree_with_the_whole_check() {
+    let root = fixture();
+    let values = [
+        FieldValue::Unset,
+        FieldValue::Dynamic(DynamicValue::U32(0)),
+        FieldValue::Dynamic(DynamicValue::U32(1)),
+        FieldValue::Dynamic(DynamicValue::U32(2)),
+        FieldValue::Dynamic(DynamicValue::U32(5)),
+        FieldValue::Dynamic(DynamicValue::U32(7)),
+        FieldValue::Dynamic(DynamicValue::U32(13)),
+        FieldValue::Dynamic(DynamicValue::U32(14)),
+        FieldValue::Dynamic(DynamicValue::U32(99)),
+        FieldValue::Dynamic(DynamicValue::F32(1.0)),
+        FieldValue::String(String::new()),
+        FieldValue::String("typed".into()),
+        FieldValue::String("a".repeat(MAX_TEXT_BYTES + 1)),
+    ];
+
+    // Every property of every live node and of the next, absent node.
+    let mut rejected = 0;
+    let mut accepted = 0;
+    for node in 1..=root.next_node_id() {
+        for property in GuiNodeTreeProperty::ALL {
+            for value in &values {
+                match write(&root, tree_offset(node, property), value.clone()) {
+                    Ok(()) => accepted += 1,
+                    Err(_) => rejected += 1,
+                }
+            }
+        }
+    }
+    assert!(accepted > 0 && rejected > 0);
+
+    // Named cases.
+    let parent = |node| tree_offset(node, GuiNodeTreeProperty::Parent);
+    let u32_value = |value| FieldValue::Dynamic(DynamicValue::U32(value));
+    assert!(
+        write(&root, parent(3), u32_value(3)).is_err(),
+        "self parent"
+    );
+    assert!(write(&root, parent(1), u32_value(5)).is_err(), "cycle");
+    assert!(
+        write(&root, parent(3), u32_value(99)).is_err(),
+        "missing parent"
+    );
+    assert!(
+        write(&root, parent(3), u32_value(0)).is_err(),
+        "second root"
+    );
+    assert_eq!(write(&root, parent(3), u32_value(5)), Ok(()));
+    assert_eq!(write(&root, parent(6), u32_value(5)), Ok(()), "allocation");
+    assert_eq!(
+        write(&root, parent(5), FieldValue::Unset),
+        Ok(()),
+        "retirement"
+    );
+    let kind = tree_offset(4, GuiNodeTreeProperty::Kind);
+    assert!(write(&root, kind, u32_value(GuiNodeKind::COUNT)).is_err());
+    assert_eq!(
+        write(&root, kind, u32_value(GuiNodeKind::Slider.code())),
+        Ok(())
+    );
+    let text = tree_offset(4, GuiNodeTreeProperty::Text);
+    assert!(
+        write(&root, text, FieldValue::Unset).is_err(),
+        "text leaves keep text"
+    );
+    assert!(
+        write(
+            &root,
+            tree_offset(3, GuiNodeTreeProperty::Text),
+            FieldValue::String("x".into())
+        )
+        .is_err(),
+        "checkboxes carry no text"
+    );
+    let revision = tree_offset(3, GuiNodeTreeProperty::Revision);
+    assert!(
+        write(&root, revision, u32_value(0)).is_err(),
+        "controls keep a revision"
+    );
+}
+
+#[test]
+fn parent_writes_are_stricter_than_the_whole_check_only_beyond_layout_depth() {
+    let mut root = GuiRoot::default();
+    let column = || GuiNodeData::Container(GuiContainerKind::Column);
+    root.insert_node(
+        GuiNodeId(1),
+        None,
+        0,
+        column(),
+        Default::default(),
+        &GuiNodeStyle::default(),
+    )
+    .unwrap();
+    for id in 2..=MAX_LAYOUT_DEPTH as u32 + 1 {
+        root.insert_node(
+            GuiNodeId(id),
+            Some(GuiNodeId(id - 1)),
+            0,
+            column(),
+            Default::default(),
+            &GuiNodeStyle::default(),
+        )
+        .unwrap();
+    }
+    let deepest = MAX_LAYOUT_DEPTH as u32 + 1;
+    let placement = FieldWrite {
+        offset: tree_offset(deepest + 1, GuiNodeTreeProperty::Parent),
+        value: FieldValue::Dynamic(DynamicValue::U32(deepest)),
+    };
+    let mut staged = ComponentValue::GuiRoot(root.clone());
+    assert!(registry::write(&mut staged, &placement).is_err());
+    let mut unchecked = ComponentValue::GuiRoot(root);
+    unchecked
+        .set_field(placement.offset, schema_value(&placement.value))
+        .unwrap();
+    assert_eq!(unchecked.validate_lifecycle(), Ok(()));
 }
 
 #[test]
@@ -218,7 +339,7 @@ fn row_property_writes_follow_every_row_rule() {
         |value: &Option<DynamicValue>| value.clone().map_or(FieldValue::Unset, FieldValue::Dynamic);
 
     let mut offsets = Vec::new();
-    for node in root.nodes().as_slice() {
+    for node in root.nodes().iter() {
         offsets.extend(
             GuiNodeStyleProperty::ALL
                 .into_iter()

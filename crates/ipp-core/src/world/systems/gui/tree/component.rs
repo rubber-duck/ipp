@@ -1,10 +1,20 @@
-use super::controls::{GuiControlState, GuiControls};
+use super::controls::GuiControlState;
 use super::node_rows::{
     GuiNodeDataProperty, GuiNodeDataRow, GuiNodePropertyRef, GuiNodeRowProperty,
     GuiNodeStyleProperty, GuiNodeStyleRow, validate_node_data_property,
     validate_node_style_property,
 };
-use super::nodes::{GuiControlValue, GuiNodeData, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodes};
+#[cfg(test)]
+use super::node_tree::place_among;
+use super::node_tree::{
+    GuiNodeTree, GuiNodeTreeProperty, GuiNodeTreeRow, GuiNodes, validate_node_tree_property,
+};
+#[cfg(test)]
+use super::nodes::GuiNodeData;
+use super::nodes::{
+    GuiControlValue, GuiNodeId, GuiNodeKind, GuiNodePatch, GuiNodeStyle, MAX_NODE_ID, MAX_NODES,
+    MAX_TEXT_BYTES, valid_node_data,
+};
 use super::part_rows::{
     GUI_BASE_PARTS, GuiPartId, GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty,
     GuiThemePartRow, base_part_index, validate_part_property, validate_part_row_property,
@@ -19,14 +29,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Root GUI component owning the content of its entity's Surface.
 ///
-/// The node tree and control records change only through GuiCommand while a
-/// root incarnation is live; a new incarnation may supply them. Each node owns
-/// one `node_style` row and one `node_data` row at slot = node id. Writing
-/// the tree inserts default rows for new nodes and removes the rows of
-/// removed nodes, so row properties are addressed by offset only while their
-/// node lives. The committed checkbox and slider values and the slider range
-/// are `node_data` properties that only GuiCommand changes; style properties
-/// and `image_size` are ordinary numeric properties.
+/// The tree is the `node_tree` rows table: each live node owns one
+/// `node_tree` row (parent, sparse sibling order, kind, bounded authored
+/// strings, committed text and control revision), one `node_style` row and
+/// one `node_data` row, all at slot = node id. Child order is derived from
+/// `(order, id)` by the GUI System. While a root incarnation is live only
+/// GuiCommand writes the tree, the committed checkbox and slider values and
+/// the slider range; a new incarnation may supply them whole. Allocating a
+/// node's tree row inserts its default style and data rows, retiring it
+/// removes its subtree's rows from every table in one batch per table, and
+/// writing its kind conforms its strings and data row, so row properties are
+/// addressed by offset only while their node lives. Style properties and
+/// `image_size` are ordinary numeric properties.
 ///
 /// Skins are root-owned themes in `theme_parts`, referenced by each node's
 /// `theme` style property, and per-node `part_state` rows holding appearance
@@ -41,8 +55,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, SchemaComponent)]
 pub struct GuiRoot {
-    /// Authoritative root-local node tree and control records.
-    nodes: GuiNodes,
     /// Node style rows at slot = node id; rows field 0.
     #[schema(rows)]
     node_style: Rows<GuiNodeStyleRow>,
@@ -57,6 +69,9 @@ pub struct GuiRoot {
     /// monotonically allocated slots; rows field 3.
     #[schema(rows)]
     part_state: Rows<GuiPartRow>,
+    /// Node structure, kind and strings at slot = node id; rows field 4.
+    #[schema(rows)]
+    node_tree: GuiNodeTree,
     /// Logical GUI units per Surface metre; finite and positive, default
     /// [`DEFAULT_UNITS_PER_METRE`].
     pub units_per_metre: f32,
@@ -71,11 +86,11 @@ pub struct GuiRoot {
 impl Default for GuiRoot {
     fn default() -> Self {
         Self {
-            nodes: Default::default(),
             node_style: Default::default(),
             node_data: Default::default(),
             theme_parts: Default::default(),
             part_state: Default::default(),
+            node_tree: Default::default(),
             units_per_metre: DEFAULT_UNITS_PER_METRE,
             properties: Default::default(),
             skin_index: Default::default(),
@@ -96,7 +111,7 @@ struct GuiSkinIndex {
 /// A GuiRoot row property addressed by a field offset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GuiRootRowProperty {
-    /// A `node_style` or `node_data` property of one node.
+    /// A `node_style`, `node_data` or `node_tree` property of one node.
     Node(GuiNodePropertyRef),
     /// A `theme_parts` property; None is the `theme` key.
     Theme {
@@ -127,6 +142,9 @@ impl GuiRoot {
     /// Rows field index of `part_state`; its region starts at `0x4000_0000`.
     pub const PART_STATE_FIELD: usize = 3;
 
+    /// Rows field index of `node_tree`; its region starts at `0x5000_0000`.
+    pub const NODE_TREE_FIELD: usize = 4;
+
     /// Field offset of one node style property, or None for a node id the
     /// region cannot address.
     pub const fn node_style_offset(node: GuiNodeId, property: GuiNodeStyleProperty) -> Option<u32> {
@@ -137,6 +155,12 @@ impl GuiRoot {
     /// region cannot address.
     pub const fn node_data_offset(node: GuiNodeId, property: GuiNodeDataProperty) -> Option<u32> {
         Rows::<GuiNodeDataRow>::offset(Self::NODE_DATA_FIELD, node.0, property.index())
+    }
+
+    /// Field offset of one node tree property, or None for a node id the
+    /// region cannot address.
+    pub const fn node_tree_offset(node: GuiNodeId, property: GuiNodeTreeProperty) -> Option<u32> {
+        Rows::<GuiNodeTreeRow>::offset(Self::NODE_TREE_FIELD, node.0, property.index())
     }
 
     /// Row slot of one part of a theme slot.
@@ -161,7 +185,7 @@ impl GuiRoot {
     }
 
     /// Node and row property addressed by a field offset; None outside the
-    /// two node regions and for node id zero, which is never valid.
+    /// three node regions and for node id zero, which is never valid.
     pub const fn node_property(offset: u32) -> Option<GuiNodePropertyRef> {
         let (slot, property) =
             if let Some(relative) = row_region_relative(offset, Self::NODE_STYLE_FIELD) {
@@ -188,6 +212,18 @@ impl GuiRoot {
                     return None;
                 };
                 (slot, GuiNodeRowProperty::Data(property))
+            } else if let Some(relative) = row_region_relative(offset, Self::NODE_TREE_FIELD) {
+                let Some(RowAddress {
+                    slot,
+                    property,
+                }) = row_address(relative, GuiNodeTreeProperty::COUNT)
+                else {
+                    return None;
+                };
+                let Some(property) = GuiNodeTreeProperty::from_index(property) else {
+                    return None;
+                };
+                (slot, GuiNodeRowProperty::Tree(property))
             } else {
                 return None;
             };
@@ -242,8 +278,8 @@ impl GuiRoot {
     /// Whether numeric animation and overlays may target an offset: numeric
     /// node style properties, `image_size`, numeric theme part properties and
     /// numeric part overrides and channels. False for `enabled`, `asset`,
-    /// `theme`, the command-owned control values, slider range and row keys,
-    /// asset references and any other offset.
+    /// `theme`, the command-owned control values, slider range, tree rows and
+    /// row keys, asset references and any other offset.
     pub const fn numeric_animatable(offset: u32) -> bool {
         match Self::row_property(offset) {
             Some(GuiRootRowProperty::Node(reference)) => reference.property.numeric_animatable(),
@@ -265,7 +301,7 @@ impl GuiRoot {
 
     /// Accept a value for the node property at `offset`: exact type, finite
     /// and the property's own range. Row-wide rules (presence by node kind,
-    /// slider `min <= value <= max`) are checked on the row.
+    /// slider `min <= value <= max`, tree placement) are checked on the row.
     pub fn validate_node_property(offset: u32, value: &DynamicValue) -> Result<(), ErrorReason> {
         match Self::node_property(offset)
             .ok_or(ErrorReason::InvalidField)?
@@ -273,6 +309,7 @@ impl GuiRoot {
         {
             GuiNodeRowProperty::Style(property) => validate_node_style_property(property, value),
             GuiNodeRowProperty::Data(property) => validate_node_data_property(property, value),
+            GuiNodeRowProperty::Tree(property) => validate_node_tree_property(property, value),
         }
     }
 
@@ -313,6 +350,11 @@ impl GuiRoot {
     /// and slider values.
     pub fn node_data(&self) -> &Rows<GuiNodeDataRow> {
         &self.node_data
+    }
+
+    /// Node structure, kind, strings and control revisions keyed by node id.
+    pub fn node_tree(&self) -> &GuiNodeTree {
+        &self.node_tree
     }
 
     /// Theme part rows keyed by theme slot and part.
@@ -370,8 +412,9 @@ impl GuiRoot {
         units.is_finite() && units > 0.0
     }
 
-    pub(in crate::world::systems::gui) const fn nodes_field() -> u32 {
-        std::mem::offset_of!(Self, nodes) as u32
+    /// Real offset of the whole `node_tree` table.
+    pub(in crate::world::systems::gui) const fn node_tree_field() -> u32 {
+        std::mem::offset_of!(Self, node_tree) as u32
     }
 
     /// Real offset of the whole `node_style` table.
@@ -394,11 +437,11 @@ impl GuiRoot {
         std::mem::offset_of!(Self, part_state) as u32
     }
 
-    /// Whether only GUI commands may write `offset` on a live root: the tree,
-    /// every whole table, committed control values, the slider range, node
-    /// theme references and row keys.
+    /// Whether only GUI commands may write `offset` on a live root: every
+    /// whole table, the tree rows, committed control values, the slider
+    /// range, node theme references and row keys.
     pub fn command_owned_field(offset: u32) -> bool {
-        offset == Self::nodes_field()
+        offset == Self::node_tree_field()
             || offset == Self::node_style_field()
             || offset == Self::node_data_field()
             || offset == Self::theme_parts_field()
@@ -412,6 +455,10 @@ impl GuiRoot {
                     property: GuiNodeRowProperty::Style(property),
                     ..
                 })) => property == GuiNodeStyleProperty::Theme,
+                Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
+                    property: GuiNodeRowProperty::Tree(_),
+                    ..
+                })) => true,
                 Some(GuiRootRowProperty::Theme {
                     property,
                     ..
@@ -424,55 +471,57 @@ impl GuiRoot {
             }
     }
 
-    /// Read-only access to root-local nodes.
-    pub fn nodes(&self) -> &GuiNodes {
-        &self.nodes
+    /// Read-only view of the live nodes.
+    pub fn nodes(&self) -> GuiNodes<'_> {
+        self.node_tree.nodes()
     }
 
-    pub(in crate::world::systems::gui) fn nodes_mut(&mut self) -> &mut GuiNodes {
-        &mut self.nodes
-    }
-
-    /// Control revisions and committed text-input text.
-    pub fn controls(&self) -> &GuiControls {
-        &self.nodes.controls
+    /// Tree row of one live node.
+    pub fn tree_row(&self, id: GuiNodeId) -> Option<&GuiNodeTreeRow> {
+        self.node_tree.get(id)
     }
 
     /// Identity a caller must use for the next node insertion.
     pub fn next_node_id(&self) -> u32 {
-        self.nodes.next_node_id()
+        self.node_tree.next_node_id()
     }
 
     /// Committed control value and revision of one node; None for nodes that
     /// were never controls.
     pub fn control_state(&self, id: GuiNodeId) -> Option<GuiControlState> {
-        let entry = self.nodes.controls.get(id)?;
-        Some(GuiControlState {
+        let revision = self.control_revision(id);
+        (revision > 0).then(|| GuiControlState {
             value: self.control_value(id),
-            revision: entry.revision,
+            revision,
         })
+    }
+
+    /// Control revision of one node; zero for nodes that were never controls.
+    pub fn control_revision(&self, id: GuiNodeId) -> u32 {
+        self.node_tree.get(id).map_or(0, |row| row.revision)
+    }
+
+    /// Committed text of a text input.
+    pub fn committed_text(&self, id: GuiNodeId) -> Option<&str> {
+        self.node_tree.get(id)?.committed_text.as_deref()
     }
 
     /// Committed control value of one node; None for non-control nodes.
     pub fn control_value(&self, id: GuiNodeId) -> GuiControlValue {
-        let Some(node) = self.nodes.node(id) else {
+        let Some(row) = self.node_tree.get(id) else {
             return GuiControlValue::None;
         };
         let data = self.node_data.get(id.0);
-        match &node.data {
-            GuiNodeData::Checkbox => data
+        match row.node_kind() {
+            Some(GuiNodeKind::Checkbox) => data
                 .and_then(|row| row.checked)
                 .map_or(GuiControlValue::None, GuiControlValue::Bool),
-            GuiNodeData::Slider => data
+            Some(GuiNodeKind::Slider) => data
                 .and_then(|row| row.value)
                 .map_or(GuiControlValue::None, GuiControlValue::Scalar),
-            GuiNodeData::TextInput {
-                ..
-            } => self
-                .nodes
-                .controls
-                .get(id)
-                .and_then(|entry| entry.text.clone())
+            Some(GuiNodeKind::TextInput) => row
+                .committed_text
+                .clone()
                 .map_or(GuiControlValue::None, GuiControlValue::Text),
             _ => GuiControlValue::None,
         }
@@ -500,7 +549,9 @@ impl GuiRoot {
 
     /// Copy the authoritative style of one live node.
     pub fn style(&self, id: GuiNodeId) -> Option<GuiNodeStyle> {
-        self.nodes.node(id)?;
+        if !self.node_tree.is_live(id) {
+            return None;
+        }
         Some(
             self.node_style
                 .get(id.0)
@@ -509,40 +560,46 @@ impl GuiRoot {
         )
     }
 
-    /// Copy of this root for editing at most one node: the complete tree and
-    /// control records with only `node`'s style and data rows. Validating
-    /// and diffing the copy covers exactly what one node command can change;
-    /// part rows follow from the written tree and theme reference.
-    pub(in crate::world::systems::gui) fn edit_scope(
-        &self,
-        node: Option<GuiNodeId>,
-    ) -> Result<Self, ErrorReason> {
-        let mut scope = Self {
-            nodes: self.nodes.clone(),
-            ..Self::default()
-        };
-        if let Some(id) = node {
-            if let Some(row) = self.node_style.get(id.0) {
-                scope
-                    .node_style
-                    .insert(id.0, row.clone())
-                    .map_err(field_error)?;
-            }
-            if let Some(row) = self.node_data.get(id.0) {
-                scope
-                    .node_data
-                    .insert(id.0, row.clone())
-                    .map_err(field_error)?;
+    /// Ordered `(id, order)` of the live children of `parent` (0 for the
+    /// root position), excluding `except`, from one pass over the tree rows.
+    /// Direct edits use it; GUI commands read the System's derived index.
+    #[cfg(test)]
+    fn scanned_siblings(&self, parent: u32, except: Option<GuiNodeId>) -> Vec<(GuiNodeId, u32)> {
+        let mut siblings: Vec<(u32, GuiNodeId)> = self
+            .node_tree
+            .rows()
+            .iter()
+            .filter(|(slot, row)| row.parent == parent && Some(GuiNodeId(*slot)) != except)
+            .map(|(slot, row)| (row.order, GuiNodeId(slot)))
+            .collect();
+        siblings.sort_unstable();
+        siblings
+            .into_iter()
+            .map(|(order, id)| (id, order))
+            .collect()
+    }
+
+    /// Place `id` at `index` among the scanned children of `parent`,
+    /// renumbering them when their keys leave no gap, and return its key.
+    #[cfg(test)]
+    fn place_directly(&mut self, id: GuiNodeId, parent: u32, index: usize) -> u32 {
+        let siblings = self.scanned_siblings(parent, Some(id));
+        let (key, renumbered) = place_among(&siblings, index.min(siblings.len()));
+        for (sibling, order) in renumbered {
+            if let Some(row) = self.node_tree.rows_mut().get_mut(sibling.0) {
+                row.order = order;
             }
         }
-        Ok(scope)
+        key
     }
 
     /// Insert one node with its complete style and kind-specific data, and
-    /// the live channels its theme reference needs. Control nodes start at
-    /// revision 1 with the authored value committed.
+    /// the live channels its theme reference needs, directly into the rows.
+    /// Control nodes start at revision 1 with the authored value committed.
     /// Identities at or past [`MAX_GUI_NODE_ID`](super::nodes::MAX_GUI_NODE_ID)
     /// fail with `Capacity`; a new root incarnation starts identities anew.
+    /// GUI commands reach the same result through row writes.
+    #[cfg(test)]
     pub(in crate::world::systems::gui) fn insert_node(
         &mut self,
         id: GuiNodeId,
@@ -552,71 +609,122 @@ impl GuiRoot {
         values: GuiNodeDataRow,
         style: &GuiNodeStyle,
     ) -> Result<(), ErrorReason> {
-        if id.0 >= super::nodes::MAX_NODE_ID {
+        if id.0 >= MAX_NODE_ID {
             return Err(ErrorReason::Capacity);
+        }
+        if self.node_tree.len() >= MAX_NODES
+            || id.0 != self.next_node_id()
+            || !valid_node_data(&data)
+        {
+            return Err(ErrorReason::InvalidValue);
         }
         let style = GuiNodeStyleRow::from(style);
         style.validate()?;
-        values.validate_for(&data)?;
-        self.nodes
-            .insert_node(id, parent, index, data.clone())
+        values.validate_for(data.kind())?;
+        match parent {
+            None if !self.node_tree.is_empty() => return Err(ErrorReason::InvalidValue),
+            None => {}
+            Some(parent) => self.node_tree.validate_placement(id, parent.0)?,
+        }
+
+        let parent_slot = parent.map_or(0, |parent| parent.0);
+        let order = match parent {
+            Some(_) => self.place_directly(id, parent_slot, index),
+            None => 0,
+        };
+        self.node_tree
+            .rows_mut()
+            .insert(id.0, GuiNodeTreeRow::authored(parent, order, &data))
             .map_err(field_error)?;
-        self.nodes.controls.insert_initial(id, &data);
         self.node_style.insert(id.0, style).map_err(field_error)?;
         self.node_data.insert(id.0, values).map_err(field_error)?;
         self.sync_node_channels(id.0);
         Ok(())
     }
 
-    /// Apply a node patch. Style members replace row properties; a data or
-    /// values change keeps a compatible committed value, rejects a same-kind
-    /// edit that would invalidate it, and establishes the new kind's initial
-    /// state at the next revision when the kind changes to or from a control.
+    /// Insert one node at an explicit sibling order key, without scanning
+    /// its siblings, so fixtures build large trees in linear time.
+    #[cfg(test)]
+    pub(in crate::world::systems::gui) fn insert_node_at(
+        &mut self,
+        id: GuiNodeId,
+        parent: Option<GuiNodeId>,
+        order: u32,
+        data: GuiNodeData,
+        values: GuiNodeDataRow,
+        style: &GuiNodeStyle,
+    ) -> Result<(), ErrorReason> {
+        self.node_tree
+            .rows_mut()
+            .insert(id.0, GuiNodeTreeRow::authored(parent, order, &data))
+            .map_err(field_error)?;
+        self.node_style
+            .insert(id.0, GuiNodeStyleRow::from(style))
+            .map_err(field_error)?;
+        self.node_data.insert(id.0, values).map_err(field_error)?;
+        self.sync_node_channels(id.0);
+        Ok(())
+    }
+
+    /// Move a node to a new parent or reorder it among its siblings,
+    /// directly in the rows, without changing identity. The root may only
+    /// stay the root.
+    #[cfg(test)]
+    pub(in crate::world::systems::gui) fn move_node(
+        &mut self,
+        id: GuiNodeId,
+        parent: Option<GuiNodeId>,
+        index: usize,
+    ) -> Result<(), ErrorReason> {
+        let row = self.node_tree.get(id).ok_or(ErrorReason::InvalidValue)?;
+        let Some(parent) = parent else {
+            return if row.parent == 0 {
+                Ok(())
+            } else {
+                Err(ErrorReason::InvalidValue)
+            };
+        };
+        self.node_tree.validate_placement(id, parent.0)?;
+
+        let order = self.place_directly(id, parent.0, index);
+        let row = self
+            .node_tree
+            .rows_mut()
+            .get_mut(id.0)
+            .ok_or(ErrorReason::InvalidValue)?;
+        row.parent = parent.0;
+        row.order = order;
+        Ok(())
+    }
+
+    /// Apply a node patch directly to the rows. Style members replace row
+    /// properties; a data or values change keeps a compatible committed
+    /// value, rejects a same-kind edit that would invalidate it, and
+    /// establishes the new kind's initial state at the next revision when the
+    /// kind changes to or from a control.
+    #[cfg(test)]
     pub(in crate::world::systems::gui) fn update_node(
         &mut self,
         id: GuiNodeId,
         patch: &GuiNodePatch,
     ) -> Result<(), ErrorReason> {
         let previous = self
-            .nodes
-            .node(id)
+            .node_tree
+            .get(id)
             .ok_or(ErrorReason::InvalidValue)?
-            .data
             .clone();
         if patch.data.is_some() || patch.values.is_some() {
-            let data = patch.data.clone().unwrap_or_else(|| previous.clone());
             let current = self.node_data.get(id.0).cloned().unwrap_or_default();
-            let same_kind = data.same_kind(&previous);
-            let mut values = match &patch.values {
-                Some(values) => values.clone(),
-                None if same_kind => current.clone(),
-                None => {
-                    let mut placeholders = GuiNodeDataRow::default();
-                    placeholders.conform(&data);
-                    placeholders
-                }
-            };
-            if same_kind {
-                // Ordinary commits never replay authored values over newer
-                // committed ones.
-                values.checked = current.checked.or(values.checked);
-                values.value = current.value.or(values.value);
-            }
-            values.validate_for(&data)?;
-
-            self.nodes
-                .replace_data(id, data.clone())
-                .map_err(field_error)?;
-            if !same_kind && (data.is_control() || previous.is_control()) {
-                self.nodes
-                    .controls
-                    .restart(id, &data)
-                    .map_err(field_error)?;
-            }
+            let edit = GuiNodeDataEdit::new(&previous, &current, patch)?;
+            *self
+                .node_tree
+                .rows_mut()
+                .get_mut(id.0)
+                .ok_or(ErrorReason::InvalidValue)? = edit.row;
             *self
                 .node_data
                 .get_mut(id.0)
-                .ok_or(ErrorReason::InvalidValue)? = values;
+                .ok_or(ErrorReason::InvalidValue)? = edit.values;
         }
 
         let row = self
@@ -631,83 +739,115 @@ impl GuiRoot {
         Ok(())
     }
 
-    /// Remove a node and its subtree with their node and part rows and
-    /// control records, returning the removed identities.
+    /// Remove a node and its subtree with their node and part rows directly,
+    /// one batch removal per table, returning the removed identities with
+    /// `id` first.
+    #[cfg(test)]
     pub(in crate::world::systems::gui) fn remove_node(
         &mut self,
         id: GuiNodeId,
     ) -> Result<Vec<GuiNodeId>, ErrorReason> {
-        let removed = self.nodes.remove_node(id).map_err(field_error)?;
-        for &id in &removed {
-            self.nodes.controls.remove(id);
-            self.node_style.remove(id.0);
-            self.node_data.remove(id.0);
+        if !self.node_tree.is_live(id) {
+            return Err(ErrorReason::InvalidValue);
         }
-        self.prune_part_rows();
-        Ok(removed)
+        let mut removed = vec![id.0];
+        removed.extend(self.node_tree.descendants(id));
+        self.retire_rows(&removed);
+        Ok(removed.into_iter().map(GuiNodeId).collect())
     }
 
-    /// Commit a control value when the caller observed the current revision.
+    /// Remove the rows of `nodes` from every node table and their part rows,
+    /// one batch removal per table.
+    fn retire_rows(&mut self, nodes: &[u32]) {
+        self.node_tree.rows_mut().remove_slots(nodes);
+        self.node_style.remove_slots(nodes);
+        self.node_data.remove_slots(nodes);
+        self.prune_node_part_rows(nodes);
+    }
+
+    /// Commit a control value directly when the caller observed the current
+    /// revision.
     pub(in crate::world::systems::gui) fn set_control_value(
         &mut self,
         id: GuiNodeId,
         expected_revision: u32,
         value: &GuiControlValue,
     ) -> Result<(), ErrorReason> {
-        let data = &self.nodes.node(id).ok_or(ErrorReason::InvalidValue)?.data;
-        let row = self.node_data.get(id.0).ok_or(ErrorReason::InvalidValue)?;
-        let mut next = row.clone();
-        let mut text = None;
-        match (data, value) {
-            (GuiNodeData::Checkbox, GuiControlValue::Bool(checked)) => {
-                next.checked = Some(*checked)
-            }
-            (GuiNodeData::Slider, GuiControlValue::Scalar(scalar)) => next.value = Some(*scalar),
-            (
-                GuiNodeData::TextInput {
-                    ..
-                },
-                GuiControlValue::Text(value),
-            ) if value.len() <= super::nodes::MAX_TEXT_BYTES => text = Some(value.clone()),
-            _ => return Err(ErrorReason::InvalidValue),
+        let commit = GuiControlCommit::new(self, id, expected_revision, value)?;
+        let row = self
+            .node_tree
+            .rows_mut()
+            .get_mut(id.0)
+            .ok_or(ErrorReason::InvalidValue)?;
+        row.revision = commit.revision;
+        if let GuiControlCommitValue::Text(text) = &commit.value {
+            row.committed_text = Some(text.clone());
         }
-        next.validate_for(data)
-            .map_err(|_| ErrorReason::InvalidValue)?;
-
-        let entry = self
-            .nodes
-            .controls
-            .advance(id, expected_revision)
-            .map_err(|_| ErrorReason::InvalidValue)?;
-        if text.is_some() {
-            entry.text = text;
-        }
-        *self
+        let data = self
             .node_data
             .get_mut(id.0)
-            .ok_or(ErrorReason::InvalidValue)? = next;
+            .ok_or(ErrorReason::InvalidValue)?;
+        match commit.value {
+            GuiControlCommitValue::Checked(checked) => data.checked = Some(checked),
+            GuiControlCommitValue::Value(value) => data.value = Some(value),
+            GuiControlCommitValue::Text(_) => {}
+        }
         Ok(())
     }
 
     /// Give every node its rows, drop the rows of nodes no longer in the tree
-    /// and conform each data row to its node's kind, after the tree field was
-    /// replaced. New rows start from the default style; data rows keep their
-    /// values for properties the kind still uses, gain placeholders for newly
-    /// used ones and drop the rest, so every tree write leaves a valid root
-    /// that the row writes following it complete. A slot that died earlier in
-    /// this incarnation stays without a row, which readers treat as defaults.
-    /// Part rows of removed nodes go with them.
+    /// and conform each data row to its node's kind, after the whole tree
+    /// table was replaced. New rows start from the default style; data rows
+    /// keep their values for properties the kind still uses, gain
+    /// placeholders for newly used ones and drop the rest. A slot that died
+    /// earlier in this incarnation stays without a row, which validation
+    /// rejects. Part rows of removed nodes go with them.
     fn sync_rows(&mut self) {
-        let mut live: Vec<u32> = self.nodes.as_slice().iter().map(|node| node.id.0).collect();
-        live.sort_unstable();
+        let live: Vec<u32> = self.node_tree.rows().iter().map(|(slot, _)| slot).collect();
         sync_table(&mut self.node_style, &live);
         sync_table(&mut self.node_data, &live);
-        for node in self.nodes.as_slice() {
-            if let Some(row) = self.node_data.get_mut(node.id.0) {
-                row.conform(&node.data);
+        for (slot, row) in self.node_tree.rows().iter() {
+            if let (Some(kind), Some(data)) = (row.node_kind(), self.node_data.get_mut(slot)) {
+                data.conform(kind);
             }
         }
         self.prune_part_rows();
+    }
+
+    /// Derive what one node's `parent` write implies: a newly allocated node
+    /// gains default style and data rows; a retired node takes its subtree's
+    /// rows from every table with it.
+    fn sync_node_rows(&mut self, node: GuiNodeId) {
+        if !self.node_tree.is_live(node) {
+            let mut retired = vec![node.0];
+            retired.extend(self.node_tree.descendants(node));
+            self.retire_rows(&retired);
+            return;
+        }
+
+        if !self.node_style.is_live(node.0) && !self.node_data.is_live(node.0) {
+            // A dead slot rejects the insert; validation then rejects the node.
+            let _ = self.node_style.insert(node.0, GuiNodeStyleRow::default());
+            let mut data = GuiNodeDataRow::default();
+            if let Some(kind) = self.node_tree.get(node).and_then(GuiNodeTreeRow::node_kind) {
+                data.conform(kind);
+            }
+            let _ = self.node_data.insert(node.0, data);
+        }
+    }
+
+    /// Conform one node's strings, revision and data row to its written kind.
+    fn conform_node(&mut self, node: GuiNodeId) {
+        let Some(row) = self.node_tree.rows_mut().get_mut(node.0) else {
+            return;
+        };
+        let Some(kind) = row.node_kind() else {
+            return;
+        };
+        row.conform(kind);
+        if let Some(data) = self.node_data.get_mut(node.0) {
+            data.conform(kind);
+        }
     }
 
     /// Writes applying one theme part patch. An existing row changes property
@@ -789,7 +929,9 @@ impl GuiRoot {
         if patch.changes.keys().any(|property| !property.appearance()) {
             return Err(ErrorReason::InvalidField);
         }
-        self.nodes.node(node).ok_or(ErrorReason::InvalidValue)?;
+        if !self.node_tree.is_live(node) {
+            return Err(ErrorReason::InvalidValue);
+        }
 
         let table_write = |table: Rows<GuiPartRow>| FieldWrite {
             offset: Self::part_state_field(),
@@ -917,7 +1059,7 @@ impl GuiRoot {
             }
         }
         for node in nodes {
-            if self.nodes.node(GuiNodeId(node)).is_none() {
+            if !self.node_tree.is_live(GuiNodeId(node)) {
                 continue;
             }
             let theme_slot = self.node_theme_slot(GuiNodeId(node));
@@ -957,19 +1099,39 @@ impl GuiRoot {
         self.skin_index.parts = Self::part_index(&self.part_state);
     }
 
-    /// Drop the part rows of nodes no longer in the tree.
+    /// Drop the part rows of nodes no longer in the tree, in one pass.
     fn prune_part_rows(&mut self) {
-        let stale: Vec<((u32, u32), u32)> = self
+        let stale: Vec<(u32, u32)> = self
             .skin_index
             .parts
-            .iter()
-            .filter(|((node, _), _)| self.nodes.node(GuiNodeId(*node)).is_none())
-            .map(|(key, slot)| (*key, *slot))
+            .keys()
+            .filter(|(node, _)| !self.node_tree.is_live(GuiNodeId(*node)))
+            .copied()
             .collect();
-        for (key, slot) in stale {
-            self.part_state.remove(slot);
-            self.skin_index.parts.remove(&key);
-        }
+        self.remove_part_rows(stale);
+    }
+
+    /// Drop the part rows of removed nodes, looked up by their keys.
+    fn prune_node_part_rows(&mut self, nodes: &[u32]) {
+        let stale: Vec<(u32, u32)> = nodes
+            .iter()
+            .flat_map(|&node| {
+                self.skin_index
+                    .parts
+                    .range((node, 0)..=(node, u32::MAX))
+                    .map(|(key, _)| *key)
+            })
+            .collect();
+        self.remove_part_rows(stale);
+    }
+
+    /// Remove the part rows at `keys` with one batch removal.
+    fn remove_part_rows(&mut self, keys: Vec<(u32, u32)>) {
+        let slots: Vec<u32> = keys
+            .iter()
+            .filter_map(|key| self.skin_index.parts.remove(key))
+            .collect();
+        self.part_state.remove_slots(&slots);
     }
 
     /// Every theme slot holds rows of one theme and every theme one slot.
@@ -1088,17 +1250,31 @@ impl GuiRoot {
         }
     }
 
-    /// Validate the node tree and control records, which are all a control
-    /// commit changes besides the committed value's row.
-    pub(in crate::world::systems::gui) fn validate_tree(&self) -> Result<(), ErrorReason> {
-        self.nodes.validate().map_err(field_error)
+    /// Check one node's rows: its tree row's own rules, and style and data
+    /// rows present with the data row matching its kind.
+    pub(in crate::world::systems::gui) fn validate_node(
+        &self,
+        id: GuiNodeId,
+    ) -> Result<GuiNodeKind, ErrorReason> {
+        let kind = self
+            .node_tree
+            .get(id)
+            .ok_or(ErrorReason::InvalidField)?
+            .validate()?;
+        self.node_style.get(id.0).ok_or(ErrorReason::InvalidField)?;
+        self.node_data
+            .get(id.0)
+            .ok_or(ErrorReason::InvalidField)?
+            .validate_for(kind)?;
+        Ok(kind)
     }
 
     /// Whether each node table holds one row per live node. Tables only ever
     /// hold rows of live nodes after a tree write, so equal counts mean every
     /// live node has its rows.
     fn rows_cover_nodes(&self) -> bool {
-        self.node_style.len() == self.nodes.len() && self.node_data.len() == self.nodes.len()
+        self.node_style.len() == self.node_tree.len()
+            && self.node_data.len() == self.node_tree.len()
     }
 
     /// Every live node has exactly its rows, and every row matches its node.
@@ -1112,9 +1288,9 @@ impl GuiRoot {
         if !self.rows_cover_nodes() {
             return Err(ErrorReason::InvalidField);
         }
-        for node in self.nodes.as_slice() {
+        for (slot, _) in self.node_tree.rows().iter() {
             self.node_style
-                .get(node.id.0)
+                .get(slot)
                 .ok_or(ErrorReason::InvalidField)?
                 .validate()?;
         }
@@ -1126,22 +1302,20 @@ impl GuiRoot {
         if !self.rows_cover_nodes() {
             return Err(ErrorReason::InvalidField);
         }
-        for node in self.nodes.as_slice() {
+        for (slot, row) in self.node_tree.rows().iter() {
+            let kind = row.node_kind().ok_or(ErrorReason::InvalidValue)?;
             self.node_data
-                .get(node.id.0)
+                .get(slot)
                 .ok_or(ErrorReason::InvalidField)?
-                .validate_for(&node.data)?;
+                .validate_for(kind)?;
         }
         Ok(())
     }
 
-    /// The node rows after a tree write re-derived them: the decoder already
-    /// validated the tree and control records, and the write inserted,
-    /// removed or conformed rows only for nodes it added, removed or changed
-    /// in kind. Style rows it inserts are defaults; every data row is checked
-    /// against its node's kind, a per-node check bounded by the tree write
-    /// itself. Pruned part rows leave their index entries with them.
-    fn validate_tree_rows(&self) -> Result<(), ErrorReason> {
+    /// Everything a whole tree table write can break: the table itself, the
+    /// node rows it re-derived and the part rows it pruned.
+    fn validate_tree_table(&self) -> Result<(), ErrorReason> {
+        self.node_tree.validate()?;
         if self.skin_index.parts.len() != self.part_state.len() {
             return Err(ErrorReason::InvalidField);
         }
@@ -1164,7 +1338,8 @@ impl GuiRoot {
     }
 
     /// Check one written row property against its range, its node's kind and
-    /// the row-wide slider rule.
+    /// the row-wide slider rule; a tree property also checks its node's rows
+    /// and, for `parent`, the node's placement.
     fn validate_row_property(&self, reference: GuiNodePropertyRef) -> Result<(), ErrorReason> {
         let slot = reference.node.0;
         match reference.property {
@@ -1180,14 +1355,29 @@ impl GuiRoot {
             }
             GuiNodeRowProperty::Data(property) => {
                 let row = self.node_data.get(slot).ok_or(ErrorReason::InvalidField)?;
-                let node = self
-                    .nodes
-                    .node(reference.node)
+                let kind = self
+                    .node_tree
+                    .get(reference.node)
+                    .and_then(GuiNodeTreeRow::node_kind)
                     .ok_or(ErrorReason::InvalidField)?;
-                if row.present(property) != property.used_by(&node.data) {
+                if row.present(property) != property.used_by(kind) {
                     return Err(ErrorReason::InvalidField);
                 }
                 row.validate_values()
+            }
+            GuiNodeRowProperty::Tree(property) => {
+                // A retiring write leaves no row; its subtree left with it.
+                if !self.node_tree.is_live(reference.node) {
+                    return Ok(());
+                }
+                self.validate_node(reference.node)?;
+                if property == GuiNodeTreeProperty::Parent {
+                    if self.node_tree.len() > MAX_NODES || slot >= MAX_NODE_ID {
+                        return Err(ErrorReason::Capacity);
+                    }
+                    self.node_tree.validate_parent(reference.node)?;
+                }
+                Ok(())
             }
         }
     }
@@ -1199,9 +1389,143 @@ impl GuiRoot {
     }
 }
 
+/// How a node's data or values patch changes its tree and data rows: kind,
+/// strings, committed text and revision, and kind-specific scalars. Direct
+/// edits install the rows; GUI commands write the properties that differ.
+pub(in crate::world::systems::gui) struct GuiNodeDataEdit {
+    /// Tree row after the edit.
+    pub row: GuiNodeTreeRow,
+    /// Data row after the edit.
+    pub values: GuiNodeDataRow,
+}
+
+impl GuiNodeDataEdit {
+    /// Resolve a patch against a node's current tree and data rows.
+    pub(in crate::world::systems::gui) fn new(
+        previous: &GuiNodeTreeRow,
+        current: &GuiNodeDataRow,
+        patch: &GuiNodePatch,
+    ) -> Result<Self, ErrorReason> {
+        let previous_kind = previous.node_kind().ok_or(ErrorReason::InvalidValue)?;
+        let data = match &patch.data {
+            Some(data) => data.clone(),
+            None => previous
+                .data()
+                .ok_or(ErrorReason::InvalidValue)?
+                .to_owned_data(),
+        };
+        if !valid_node_data(&data) {
+            return Err(ErrorReason::InvalidValue);
+        }
+
+        let kind = data.kind();
+        let same_kind = kind == previous_kind;
+        let mut values = match &patch.values {
+            Some(values) => values.clone(),
+            None if same_kind => current.clone(),
+            None => {
+                let mut placeholders = GuiNodeDataRow::default();
+                placeholders.conform(kind);
+                placeholders
+            }
+        };
+        if same_kind {
+            // Ordinary commits never replay authored values over newer
+            // committed ones.
+            values.checked = current.checked.or(values.checked);
+            values.value = current.value.or(values.value);
+        }
+        values.validate_for(kind)?;
+
+        let mut row = previous.clone();
+        row.conform(kind);
+        row.text = data.text().map(str::to_owned);
+        row.placeholder = data.placeholder().map(str::to_owned);
+        if !same_kind && (kind.is_control() || previous_kind.is_control()) {
+            // The kind's initial state starts at the next revision; a node
+            // becoming a control for the first time starts at 1.
+            if previous.revision > 0 {
+                row.revision = previous
+                    .revision
+                    .checked_add(1)
+                    .ok_or(ErrorReason::InvalidValue)?;
+            }
+            row.committed_text = kind.is_text_input().then(|| row.text.clone()).flatten();
+        }
+
+        Ok(Self {
+            row,
+            values,
+        })
+    }
+}
+
+/// Committed value of one accepted control commit.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::world::systems::gui) enum GuiControlCommitValue {
+    /// Checkbox `checked`.
+    Checked(bool),
+    /// Slider `value`.
+    Value(f32),
+    /// Text-input `committed_text`.
+    Text(String),
+}
+
+/// One revision-gated control commit, checked against the current rows.
+pub(in crate::world::systems::gui) struct GuiControlCommit {
+    /// Revision the commit produces.
+    pub revision: u32,
+    /// Committed value.
+    pub value: GuiControlCommitValue,
+}
+
+impl GuiControlCommit {
+    /// Accept `value` for a live control when the caller observed its
+    /// current revision: the value's type matches the kind and a slider value
+    /// stays within its range.
+    pub(in crate::world::systems::gui) fn new(
+        root: &GuiRoot,
+        id: GuiNodeId,
+        expected_revision: u32,
+        value: &GuiControlValue,
+    ) -> Result<Self, ErrorReason> {
+        let row = root.node_tree.get(id).ok_or(ErrorReason::InvalidValue)?;
+        let data = root.node_data.get(id.0).ok_or(ErrorReason::InvalidValue)?;
+        let value = match (row.node_kind(), value) {
+            (Some(GuiNodeKind::Checkbox), GuiControlValue::Bool(checked)) => {
+                GuiControlCommitValue::Checked(*checked)
+            }
+            (Some(kind @ GuiNodeKind::Slider), GuiControlValue::Scalar(scalar)) => {
+                let mut next = data.clone();
+                next.value = Some(*scalar);
+                next.validate_for(kind)
+                    .map_err(|_| ErrorReason::InvalidValue)?;
+                GuiControlCommitValue::Value(*scalar)
+            }
+            (Some(GuiNodeKind::TextInput), GuiControlValue::Text(text))
+                if text.len() <= MAX_TEXT_BYTES =>
+            {
+                GuiControlCommitValue::Text(text.clone())
+            }
+            _ => return Err(ErrorReason::InvalidValue),
+        };
+        if row.revision != expected_revision {
+            return Err(ErrorReason::InvalidValue);
+        }
+
+        Ok(Self {
+            revision: row
+                .revision
+                .checked_add(1)
+                .ok_or(ErrorReason::InvalidValue)?,
+            value,
+        })
+    }
+}
+
 /// Make a table's live slots equal `live` (sorted ascending), inserting
-/// default rows and removing rows of absent slots.
-fn sync_table<R: crate::components::rows::SchemaRow>(table: &mut Rows<R>, live: &[u32]) {
+/// default rows and removing rows of absent slots in one batch.
+fn sync_table<R: SchemaRow>(table: &mut Rows<R>, live: &[u32]) {
     if table.len() == live.len() && table.iter().map(|(slot, _)| slot).eq(live.iter().copied()) {
         return;
     }
@@ -1210,12 +1534,10 @@ fn sync_table<R: crate::components::rows::SchemaRow>(table: &mut Rows<R>, live: 
         .map(|(slot, _)| slot)
         .filter(|slot| live.binary_search(slot).is_err())
         .collect();
-    for slot in stale {
-        table.remove(slot);
-    }
+    table.remove_slots(&stale);
     for &slot in live {
         if !table.is_live(slot) {
-            // A dead slot rejects the insert; the node then reads defaults.
+            // A dead slot rejects the insert; validation then rejects the node.
             let _ = table.insert(slot, R::default());
         }
     }
@@ -1280,9 +1602,9 @@ impl ComponentLifecycle for GuiRoot {
 
     /// A root is validated whole only on insertion, restoration and evaluated
     /// replacement. Walking every node, row and skin entry after each GUI
-    /// command costs O(nodes + part rows) per written field, roughly half a
-    /// millisecond on a thousand-node root; [`Self::validate_field`] instead
-    /// checks the same rules for exactly what each write changed.
+    /// command costs O(nodes + part rows) per written field;
+    /// [`Self::validate_field`] instead checks the same rules for exactly
+    /// what each write changed.
     fn validates_after_operation() -> bool {
         false
     }
@@ -1291,7 +1613,7 @@ impl ComponentLifecycle for GuiRoot {
         if !Self::valid_units_per_metre(self.units_per_metre) {
             return Err(ErrorReason::InvalidValue);
         }
-        self.nodes.validate().map_err(field_error)?;
+        self.node_tree.validate()?;
         self.validate_rows()?;
         self.validate_skin_tables()
     }
@@ -1301,8 +1623,13 @@ impl ComponentLifecycle for GuiRoot {
     /// together the checks cover every rule of [`Self::validate`] for what
     /// the write changed:
     ///
-    /// - the tree: its decoder validates the tree and control records, then
-    ///   the node rows it re-derived are checked against the nodes;
+    /// - the whole tree table: the table in one pass, then the node rows it
+    ///   re-derived against their nodes;
+    /// - a tree property: the node's tree row, style and data rows; a
+    ///   `parent` write also the node's placement (a live parent reached
+    ///   from the root within the layout depth without a cycle, or the single
+    ///   root) and the identity bounds; a retiring write took its subtree's
+    ///   rows with it;
     /// - a whole node table: each of its rows against its node;
     /// - a whole theme table: both skin tables and their index, since the
     ///   write re-derives every themed node's channels;
@@ -1320,8 +1647,8 @@ impl ComponentLifecycle for GuiRoot {
                 .then_some(())
                 .ok_or(ErrorReason::InvalidValue);
         }
-        if offset == Self::nodes_field() {
-            return self.validate_tree_rows();
+        if offset == Self::node_tree_field() {
+            return self.validate_tree_table();
         }
         if offset == Self::node_style_field() {
             return self.validate_style_rows();
@@ -1361,10 +1688,12 @@ impl ComponentLifecycle for GuiRoot {
     }
 
     /// Rows follow the tree and skins follow theme references: replacing the
-    /// tree inserts and removes node rows, and writing a theme reference, a
-    /// theme's motion or either skin table re-derives live channels.
+    /// tree table re-derives the node rows; allocating or retiring a node
+    /// inserts or removes its rows; writing a kind conforms the node's
+    /// strings and data row; and writing a theme reference, a theme's motion
+    /// or either skin table re-derives live channels.
     fn after_field_write(&mut self, offset: u32) {
-        if offset == Self::nodes_field() {
+        if offset == Self::node_tree_field() {
             self.sync_rows();
             return;
         }
@@ -1379,6 +1708,14 @@ impl ComponentLifecycle for GuiRoot {
             return;
         }
         match Self::row_property(offset) {
+            Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
+                node,
+                property: GuiNodeRowProperty::Tree(GuiNodeTreeProperty::Parent),
+            })) => self.sync_node_rows(node),
+            Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
+                node,
+                property: GuiNodeRowProperty::Tree(GuiNodeTreeProperty::Kind),
+            })) => self.conform_node(node),
             Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
                 node,
                 property: GuiNodeRowProperty::Style(GuiNodeStyleProperty::Theme),

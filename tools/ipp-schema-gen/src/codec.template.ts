@@ -1913,14 +1913,6 @@ export class IppClient extends ClientBase {
   async semanticAction(action: GuiSemanticActionRequest): Promise<void> {
     await this.submitGuiSemanticAction(action);
   }
-
-  encodeGuiTree(tree: GuiTree): Uint8Array<ArrayBuffer> {
-    return encodeGuiTree(tree);
-  }
-
-  decodeGuiTree(bytes: Uint8Array): GuiTree {
-    return decodeGuiTree(bytes);
-  }
   // #endif
 
   async createAnimationController(

@@ -40,12 +40,7 @@ export type ReactWorldClient = Pick<
   Partial<
     Pick<
       GuiWorldClient,
-      | "editGui"
-      | "editGuiBatch"
-      | "inspectGui"
-      | "encodeGuiTree"
-      | "decodeGuiTree"
-      | "createGuiNodeHandle"
+      "editGui" | "editGuiBatch" | "inspectGui" | "createGuiNodeHandle"
     >
   >;
 

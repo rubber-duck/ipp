@@ -745,8 +745,10 @@ fn scheduled_pass_recovers_identical_valid_input_after_invalid_cache_entry() {
     let unavailable = {
         let mut context = host.world_mut(world).unwrap();
         let root = context.gui_root(panel).unwrap().clone();
+        let tree = crate::systems::gui::GuiTreeIndex::new(&root, incarnation);
         let request = GuiLayoutRequest {
             root: &root,
+            tree: &tree,
             root_incarnation: incarnation,
             surface_size: [0.0, 3.0],
             units_per_metre: DEFAULT_UNITS_PER_METRE,

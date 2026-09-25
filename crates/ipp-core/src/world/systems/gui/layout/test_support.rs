@@ -110,10 +110,8 @@ impl TreeBuilder {
     ) -> GuiNodeId {
         let node = node.into();
         let id = GuiNodeId(self.root.nodes().next_node_id());
-        let index = parent
-            .and_then(|parent| self.root.nodes().node(parent))
-            .map(|node| node.children.len())
-            .unwrap_or(0);
+        // Appending after every existing child.
+        let index = usize::MAX;
         // The production insert path: a new control node commits its
         // initial value at revision 1, so evaluation observes effective
         // values exactly like world-driven trees.
@@ -154,9 +152,12 @@ pub(super) fn sized(w: f32, h: f32) -> GuiNodeStyle {
         ..Default::default()
     }
 }
+/// Request evaluating `root` with its derived child order, which the
+/// request keeps for the rest of the test.
 pub(super) fn request<'a>(root: &'a GuiRoot, tick: u64) -> GuiLayoutRequest<'a> {
     GuiLayoutRequest {
         root,
+        tree: Box::leak(Box::new(crate::systems::gui::GuiTreeIndex::new(root, 7))),
         root_incarnation: 7,
         surface_size: [4.0, 2.0],
         units_per_metre: DEFAULT_UNITS_PER_METRE,

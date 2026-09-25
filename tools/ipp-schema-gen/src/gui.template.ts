@@ -4,9 +4,7 @@ import type {
   GuiCommittedEffect,
   GuiConflictObservation,
   GuiContainerKind,
-  GuiControlRecord,
   GuiControlValue,
-  GuiControls,
   GuiEdit,
   GuiEditBatchOutcome,
   GuiInputBlocker,
@@ -16,7 +14,6 @@ import type {
   GuiInspectResponse,
   GuiInspectedNode,
   GuiKey,
-  GuiNode,
   GuiNodeData,
   GuiNodeHandle,
   GuiNodePatchStyle,
@@ -32,7 +29,6 @@ import type {
   GuiSemanticScroll,
   GuiSemanticSnapshotQuery,
   GuiSemanticTree,
-  GuiTree,
   GuiTextFence,
   GuiTextFocusState,
   GuiUnhandledObservation,
@@ -248,6 +244,10 @@ function writeGuiRowValue(
       w.string(asset.source);
       break;
     }
+    case "text":
+      if (typeof value !== "string") fail(`GUI ${key} must be text`);
+      w.string(value, property.maxBytes ?? 0);
+      break;
     default: {
       const length = GUI_ROW_VECTOR_LENGTHS[property.kind];
       if (length === undefined) fail(`GUI ${key} row kind`);
@@ -279,6 +279,8 @@ function readGuiRowValue(
       const source = r.string();
       return { kind, variant, source };
     }
+    case "text":
+      return r.string(property.maxBytes ?? 0);
     default: {
       const length = GUI_ROW_VECTOR_LENGTHS[property.kind];
       if (length === undefined) fail("GUI row kind");
@@ -401,80 +403,28 @@ function writeGuiPartPatch(w: Writer, patch: GuiPartPatch): void {
   writeGuiPatch(w, properties.slice(0, key), patch);
 }
 
-/** Encode a complete GUI tree and its control records for a new GuiRoot incarnation. */
-export function encodeGuiTree(tree: GuiTree): Uint8Array<ArrayBuffer> {
-  const w = new Writer(65536);
-  w.u8(2);
-  w.u32(tree.nextId);
-  w.u32(tree.rootNode ?? 0);
-  w.count(tree.nodes.length, 65536);
-  for (const node of tree.nodes) {
-    w.u32(node.id);
-    w.u32(node.parent ?? 0);
-    w.count(node.children.length, 65536);
-    for (const child of node.children) {
-      w.u32(child);
-    }
-    writeGuiNodeData(w, node.data);
+/**
+ * Ordered children of every node of a decoded `GuiRoot.node_tree` table:
+ * siblings order by `(order, id)`, as the runtime derives them. The root,
+ * whose parent is 0, is listed under 0.
+ */
+export function guiTreeChildren(
+  rows: ReadonlyMap<
+    number,
+    { readonly parent: number; readonly order: number }
+  >,
+): Map<number, number[]> {
+  const children = new Map<number, number[]>();
+  const sorted = [...rows].sort(
+    ([a, left], [b, right]) =>
+      left.parent - right.parent || left.order - right.order || a - b,
+  );
+  for (const [id, row] of sorted) {
+    const siblings = children.get(row.parent);
+    if (siblings === undefined) children.set(row.parent, [id]);
+    else siblings.push(id);
   }
-  writeGuiControls(w, tree.controls ?? []);
-  return w.finish();
-}
-
-/** Decode full GUI node tree from binary representation. */
-export function decodeGuiTree(bytes: Uint8Array): GuiTree {
-  const r = new Reader(bytes);
-  if (r.u8() !== 2) fail("GUI tree version");
-  const nextId = r.u32();
-  const rootIdVal = r.u32();
-  const rootNode = rootIdVal === 0 ? undefined : rootIdVal;
-  const count = r.count(65536);
-  const nodes: GuiNode[] = [];
-  for (let i = 0; i < count; i++) {
-    const id = r.u32();
-    const parentVal = r.u32();
-    const parent = parentVal === 0 ? undefined : parentVal;
-    const childrenCount = r.count(65536);
-    const children: number[] = [];
-    for (let c = 0; c < childrenCount; c++) {
-      children.push(r.u32());
-    }
-    nodes.push({
-      id,
-      parent,
-      children,
-      data: readGuiNodeData(r),
-    });
-  }
-  const controls = readGuiControls(r);
-  r.done();
-  return { nextId, rootNode, nodes, controls };
-}
-
-function writeGuiControls(w: Writer, controls: GuiControls): void {
-  w.count(controls.length, 65536);
-  let previous = 0;
-  for (const record of controls) {
-    if (record.id <= previous) fail("GUI controls must be in identity order");
-    if (record.revision <= 0) fail("GUI control revision");
-    previous = record.id;
-    w.u32(record.id);
-    w.u32(record.revision);
-    w.boolean(record.text !== undefined);
-    if (record.text !== undefined) w.string(record.text);
-  }
-}
-
-function readGuiControls(r: Reader): GuiControls {
-  const count = r.count(65536);
-  const controls: GuiControlRecord[] = [];
-  for (let i = 0; i < count; i++) {
-    const id = r.u32();
-    const revision = r.u32();
-    const text = r.boolean() ? r.string() : undefined;
-    controls.push({ id, revision, ...(text === undefined ? {} : { text }) });
-  }
-  return controls;
+  return children;
 }
 
 function writeGuiNodeHandle(w: Writer, handle: GuiNodeHandle): void {

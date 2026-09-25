@@ -352,6 +352,97 @@ class PlanningTests(unittest.TestCase):
                 ids, _ = affected([source], [])
                 self.assertTrue(set(suite_ids(["gallery-gui"])).issubset(ids))
 
+    def test_gui_surface_and_schema_row_sources_select_their_suites(self):
+        # Test targets, shared scenarios and schema-row participants each select
+        # the suites whose commands or scenarios exercise them.
+        owners = {
+            "crates/ipp-core/tests/gui.rs": ["gui"],
+            "crates/ipp-core/tests/gui_layout.rs": ["gui"],
+            "crates/ipp-core/tests/schema_rows.rs": ["gui"],
+            "crates/ipp-core/src/commands.rs": ["gui"],
+            "crates/ipp-core/src/components/mod.rs": ["gui"],
+            "crates/ipp-core/src/components/registry.rs": ["gui"],
+            "crates/ipp-core/src/components/lifecycle.rs": ["gui"],
+            "crates/ipp-core/src/components/rows.rs": ["gui"],
+            "crates/ipp-core/src/components/rows_fixture.rs": ["gui"],
+            "crates/ipp-core/src/components/rows_tests.rs": ["gui"],
+            "crates/ipp-core/src/components/schema.rs": ["gui"],
+            "crates/ipp-core/src/components/dynamic_properties/storage.rs": ["gui"],
+            "crates/ipp-core/src/world/component_state/staging_tests.rs": ["gui"],
+            "tools/ipp-schema-derive/src/lib.rs": ["gui", "contracts"],
+            "tools/ipp-schema-derive/src/component_derive.rs": ["gui", "contracts"],
+            "tools/ipp-schema-derive/src/registry_codegen.rs": ["gui", "contracts"],
+            "tools/ipp-schema-derive/src/row_derive.rs": ["gui", "contracts"],
+            "tools/ipp-schema-gen/tests/target-contract.mjs": ["contracts"],
+            "crates/ipp-protocol/tests/generated-client.mjs": ["client", "gui"],
+            "tests/integration/surface-scenario.ts": [
+                "gui",
+                "surfaces",
+                "surface-cache",
+                "retained-gui",
+            ],
+            "crates/ipp-core/tests/surfaces.rs": ["surfaces"],
+            "crates/ipp-core/src/world/systems/skeleton/mod.rs": ["skinning"],
+            "crates/ipp-core/src/world/systems/skeleton/component.rs": ["skinning"],
+            "crates/ipp-core/src/world/systems/skeleton/update.rs": ["skinning"],
+            "crates/ipp-core/tests/skeleton.rs": ["skinning"],
+            "crates/ipp-core/tests/skeleton_animation.rs": ["skinning"],
+            "tests/render/skinning-fixture.ts": ["skinning", "geometry"],
+            "tests/render/mesh-poses-fixture.ts": ["mesh-poses"],
+            "tests/render/custom-materials-fixture.ts": ["custom-materials"],
+            "tests/render/blender-fixture.tsx": ["blender", "particles-blender"],
+            "crates/ipp-core/src/world/systems/state_overlay/lifecycle.rs": [
+                "command-streaming"
+            ],
+            "crates/ipp-core/tests/state_overlays.rs": ["command-streaming"],
+            "crates/ipp-core/src/services/world_serialization/assets.rs": ["snapshots"],
+            "crates/ipp-core/src/services/world_serialization/container.rs": [
+                "snapshots"
+            ],
+            "crates/ipp-render-gl/Cargo.toml": ["surface-cache", "render-residency"],
+        }
+        for source, suites in owners.items():
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(set(suite_ids(suites)).issubset(ids))
+
+        # The renderer manifest and the shared smoke module back every native
+        # GLES example.
+        checks = {record["id"] for record in GLES_CHECKS}
+        for source in (
+            "crates/ipp-render-gl/Cargo.toml",
+            "crates/ipp-render-gl/examples/smoke/mod.rs",
+        ):
+            with self.subTest(source=source):
+                ids, _ = affected([source], [])
+                self.assertTrue(checks.issubset(ids))
+
+    def test_mapped_rust_test_targets_run_in_their_suites(self):
+        # Selecting a suite for a Cargo test target is only useful when one of
+        # its commands runs that target.
+        targets = {
+            "gui": ["gui", "gui_layout", "schema_rows"],
+            "surfaces": ["surfaces"],
+            "skinning": ["skeleton", "skeleton_animation"],
+            "command-streaming": ["state_overlays"],
+            "snapshots": ["world_persistence"],
+        }
+        for suite, names in targets.items():
+            commands = [entry["command"] for entry in SUITES[suite]["commands"]]
+            for name in names:
+                with self.subTest(suite=suite, target=name):
+                    self.assertTrue(
+                        any(
+                            command[:3] == ["cargo", "test", "-p"]
+                            and "ipp-core" in command
+                            and any(
+                                command[i : i + 2] == ["--test", name]
+                                for i in range(len(command) - 1)
+                            )
+                            for command in commands
+                        )
+                    )
+
     def test_wasm_services_select_the_browser_render_suites(self):
         host, _ = affected(["crates/ipp-wasm/src/services/host.rs"], [])
         self.assertTrue(set(suite_ids(["browser", "render"])).issubset(host))

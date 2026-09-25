@@ -1,4 +1,5 @@
 import type {
+  ComponentDescriptor,
   EntitySnapshot,
   FrameCapture,
   AnimationWorldClient,
@@ -151,6 +152,13 @@ export async function galleryEntityId(
   symbol: string,
 ): Promise<bigint | undefined> {
   return (await galleryEntities([symbol]))[0]?.id;
+}
+
+/** The connected contract's GuiRoot descriptor, which owns the row layouts. */
+export function galleryGuiRootDescriptor(): ComponentDescriptor {
+  const descriptor = requireCanvas().client.components.GuiRoot;
+  if (!descriptor) throw new Error("The gallery contract has no GuiRoot");
+  return descriptor;
 }
 
 /** The GUI demo entity and its effective Surface through a targeted read. */

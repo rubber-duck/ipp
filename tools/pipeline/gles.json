@@ -17,7 +17,11 @@
       "target/integration-artifacts/particles/gles"
     ],
     "dependencies": [],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_particles.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_particles.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-spatial",
@@ -38,7 +42,11 @@
       "target/integration-artifacts/render/native"
     ],
     "dependencies": ["build:gallery"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_smoke.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_smoke.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-textures",
@@ -61,7 +69,11 @@
       "target/shapes-build"
     ],
     "dependencies": ["build:textures", "build:shapes"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_smoke.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_smoke.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-lighting",
@@ -84,7 +96,11 @@
       "target/shapes-build"
     ],
     "dependencies": ["build:textures", "build:shapes"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_smoke.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_smoke.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-custom-materials",
@@ -105,7 +121,11 @@
       "target/integration-artifacts/custom-materials/native"
     ],
     "dependencies": ["build:gallery"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_custom_materials.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_custom_materials.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-lit-skinning",
@@ -126,7 +146,11 @@
       "target/integration-artifacts/skinning-lighting-gles"
     ],
     "dependencies": ["build:skinning-fixtures"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_skinning.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_skinning.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-skinning",
@@ -147,7 +171,11 @@
       "target/integration-artifacts/skinning-gles"
     ],
     "dependencies": ["build:skinning-fixtures"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_skinning.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_skinning.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-mesh-poses",
@@ -168,7 +196,11 @@
       "target/integration-artifacts/mesh-poses-gles"
     ],
     "dependencies": ["build:mesh-pose-fixtures"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_mesh_poses.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_mesh_poses.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-lit-mesh-poses",
@@ -189,7 +221,11 @@
       "target/integration-artifacts/mesh-poses-lighting-gles"
     ],
     "dependencies": ["build:mesh-pose-fixtures"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_mesh_poses.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_mesh_poses.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-surfaces",
@@ -211,7 +247,11 @@
       "target/integration-artifacts/surfaces/gles"
     ],
     "dependencies": ["build:surface-assets"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_surfaces.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_surfaces.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-gui-clips",
@@ -231,7 +271,11 @@
       "target/integration-artifacts/gui-clips/gles"
     ],
     "dependencies": [],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_gui_clips.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_gui_clips.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-gui-layout",
@@ -253,7 +297,11 @@
       "target/integration-artifacts/gui-layout/gles"
     ],
     "dependencies": ["build:surface-assets"],
-    "sourceRoots": ["crates/ipp-render-gl/examples/egl_gui_layout.rs"]
+    "sourceRoots": [
+      "crates/ipp-render-gl/examples/egl_gui_layout.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
+    ]
   },
   {
     "id": "check:gles-surface-cache",
@@ -277,7 +325,9 @@
     "dependencies": ["build:surface-assets"],
     "sourceRoots": [
       "crates/ipp-render-gl/examples/egl_surface_cache.rs",
-      "crates/ipp-render-gl/examples/smoke/surface_cache_target.rs"
+      "crates/ipp-render-gl/examples/smoke/surface_cache_target.rs",
+      "crates/ipp-render-gl/examples/smoke/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
     ]
   }
 ]

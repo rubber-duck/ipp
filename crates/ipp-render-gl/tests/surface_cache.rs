@@ -1230,7 +1230,7 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
 
 #[cfg(feature = "gui")]
 #[test]
-fn text_drawn_analytically_under_the_population_bound_is_refined_next_frame() {
+fn text_drawn_analytically_under_the_population_bound_refines_at_the_refresh_cap() {
     let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
     let ids: Vec<u32> = (0..budget + 8).collect();
     let mut host = ipp_core::HostRuntime::new();
@@ -1248,15 +1248,131 @@ fn text_drawn_analytically_under_the_population_bound_is_refined_next_frame() {
     assert_eq!(cold.glyph_populates, budget);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
-    // The next frame repaints with a frozen clock, populating the rest, and the
-    // run now samples the atlas as direct presentation would.
-    let refined = frame(&mut renderer, &mut world, 0.0);
+    // The reused image keeps queueing its missing entries, which the next frame
+    // populates without repainting.
+    let populated = frame(&mut renderer, &mut world, 0.0);
+    assert_eq!(work(&populated), [0, 1, 0, 0, 0], "{populated:?}");
+    assert_eq!(populated.glyph_populates, 8);
+
+    // With a frozen clock the refresh interval has not elapsed, so the image stays.
+    let frozen = frame(&mut renderer, &mut world, 0.0);
+    assert_eq!(work(&frozen), [0, 1, 0, 0, 0], "{frozen:?}");
+
+    // At the refresh interval the run samples the atlas as direct presentation would.
+    let refined = frame(&mut renderer, &mut world, 0.1);
     assert_eq!(work(&refined), [1, 0, 0, 0, 0], "{refined:?}");
-    assert_eq!(refined.glyph_populates, 8);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
     assert_eq!(state.glyph_batch_draws.get(), 1);
 
-    let warm = frame(&mut renderer, &mut world, 0.0);
+    let warm = frame(&mut renderer, &mut world, 0.1);
     assert_eq!(work(&warm), [0, 1, 0, 0, 0], "{warm:?}");
     assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
+}
+
+/// A Surface of glyph runs, one row per item, in the scene font.
+#[cfg(feature = "gui")]
+fn glyph_rows(rows: impl IntoIterator<Item = std::ops::Range<u32>>) -> Surface {
+    use ipp_core::PositionedGlyph;
+    use ipp_core::services::asset_management::font::FONT_TYPE;
+
+    let mut surface = Surface::default();
+    for (row, ids) in rows.into_iter().enumerate() {
+        let glyphs = ids
+            .enumerate()
+            .map(|(index, glyph_id)| PositionedGlyph {
+                glyph_id,
+                position: [0.01 * index as f32, 0.0],
+                color: None,
+            })
+            .collect();
+        surface
+            .insert_item(
+                row,
+                SurfaceItemContent::GlyphRun(glyphs),
+                SurfaceItemStyle {
+                    position: [0.1, 0.1 + 0.2 * row as f32],
+                    font_size: 1.0,
+                    asset: Some(AssetSource {
+                        kind: FONT_TYPE,
+                        uri: "fixture:///font.ippf".into(),
+                        variant: 0,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    surface
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
+    const ROWS: u32 = 4;
+    const PER_ROW: u32 = 40;
+    const DT: f64 = 1.0 / 60.0;
+    let busy_glyphs = ROWS * PER_ROW;
+    let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, busy) =
+        text_run_scene(&mut host, glyph_font(busy_glyphs + 8, 1000, 1.0), &[0]);
+    renderer.set_glyph_population_budget_ms(0.0);
+    state.cache_limit.set(4096);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    // A direct Surface published first keeps the population queue full for several
+    // frames; the cached Surface's own glyphs wait behind it.
+    world
+        .enqueue(Batch {
+            id: world.tick() + 1,
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(busy),
+                ComponentValue::Surface(glyph_rows(
+                    (0..ROWS).map(|row| row * PER_ROW..(row + 1) * PER_ROW),
+                )),
+            )],
+        })
+        .unwrap();
+    update(&mut world).unwrap();
+    let cached = create(
+        &mut world,
+        vec![
+            ComponentValue::Transform(Transform {
+                z: 1.0,
+                ..Transform::default()
+            }),
+            ComponentValue::Surface(glyph_rows(std::iter::once(busy_glyphs..busy_glyphs + 8))),
+            ComponentValue::BoundingGeometry(Default::default()),
+        ],
+    );
+    set_policy(&mut world, cached, Some(ALWAYS));
+    assert!(busy < cached, "the busy Surface publishes its demand first");
+
+    // The first repaint draws the cached text analytically behind a full queue.
+    let cold = frame(&mut renderer, &mut world, DT);
+    assert_eq!(work(&cold)[0], 1, "{cold:?}");
+    assert_eq!(cold.glyph_populates, budget);
+    assert!(take_events(&state).starts_with("BGE"));
+
+    // While the queue stays saturated the image is reused, whatever other Surfaces
+    // populate, until its own glyphs are populated and its refresh interval ends.
+    let mut frames = 1;
+    let refined = loop {
+        let stats = frame(&mut renderer, &mut world, DT);
+        frames += 1;
+        assert!(stats.glyph_populates <= budget, "{stats:?}");
+        let events = take_events(&state);
+        if stats.surface_cache_repaints == 1 {
+            break events;
+        }
+
+        assert_eq!(work(&stats), [0, 1, 0, 0, 0], "frame {frames}: {stats:?}");
+        assert!(frames < 30, "cached text never refined");
+    };
+    assert_eq!(
+        frames,
+        busy_glyphs.div_ceil(budget) + 2,
+        "one frame after the queue reaches its glyphs, at the 10 Hz cap"
+    );
+    assert!(refined.starts_with("BTE"), "{refined}");
 }

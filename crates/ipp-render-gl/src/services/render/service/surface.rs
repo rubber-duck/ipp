@@ -520,8 +520,9 @@ impl<D: RenderDevice> RenderService<D> {
     /// Runs drawn this frame update their bands and demand and queue missing entries;
     /// a repainted cache image selects bands from its own projection and size, so
     /// camera movement within one cache resolution never changes glyph quality.
-    /// Culled Surfaces and reused images keep theirs. Unchanged runs only hash their
-    /// inputs.
+    /// Culled Surfaces and reused images keep theirs; a reused image whose text still
+    /// waits for atlas population queues its missing entries, so it can refine.
+    /// Unchanged runs only hash their inputs.
     #[cfg(feature = "gui")]
     pub(super) fn prepare_glyph_demand(
         &mut self,
@@ -552,7 +553,13 @@ impl<D: RenderDevice> RenderService<D> {
                 &frustum,
             ) {
                 super::surface_cache::SurfaceRaster::Skip => {
-                    cache.keep_surface(item.entity);
+                    let reused = self.surface_cache.action(world.id(), item.entity)
+                        == Some(super::super::surface_cache::SurfaceCacheAction::Reuse);
+                    if reused && self.surface_cache.unpopulated(world.id(), item.entity) > 0 {
+                        cache.keep_waiting_surface(item.entity, atlas, work);
+                    } else {
+                        cache.keep_surface(item.entity);
+                    }
                     continue;
                 }
                 super::surface_cache::SurfaceRaster::Draw(mvp, viewport) => (mvp, viewport),

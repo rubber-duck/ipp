@@ -786,8 +786,8 @@ impl GlesRenderDevice {
     ) -> Result<(), RenderError> {
         self.submission.invalidate();
 
-        // Switching between pages keeps the target saved by the first begin: the
-        // host target, or a Surface cache target when population nests in a repaint.
+        // Switching between pages keeps the target saved by the first begin: the host
+        // target, since population runs before any cache repaint and never inside one.
         if self.glyph_atlas_target.is_none() {
             self.glyph_atlas_target = Some((self.current_target(), self.surface_viewport));
         }

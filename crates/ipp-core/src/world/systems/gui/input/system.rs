@@ -34,8 +34,9 @@
 //! most once. Scroll offsets stay owned by this system so scrolled content
 //! never reflows layout; scroll routing consumes deltas innermost-first
 //! against evaluated ScrollView extents with edge clamping and outward
-//! propagation, while hit testing observes the retained snapshot translated
-//! by ancestor offsets. Button and checkbox presses stay provisional until
+//! propagation, chaining same-tick scrolls against routed offsets that
+//! include the deltas already queued, while hit testing observes the
+//! retained snapshot translated by committed ancestor offsets. Button and checkbox presses stay provisional until
 //! an eligible tap completes on release; drags leaving the press-time
 //! rectangle hand the gesture to scrolling.
 
@@ -732,6 +733,10 @@ pub struct GuiInputSystem {
     predicted: BTreeMap<GuiInputTarget, PredictedControl>,
     /// Input-owned scroll offsets in logical units, never reflowed.
     scroll_offsets: BTreeMap<GuiInputTarget, ScrollCursor>,
+    /// Routed scroll offsets chaining same-tick scroll envelopes: each
+    /// ScrollView's committed offset plus the deltas already queued for it.
+    /// Dropped when those envelopes apply or cancel.
+    scroll_predicted: BTreeMap<GuiInputTarget, [f32; 2]>,
     /// Revision of input-owned scroll offsets. Bumped only when an applied
     /// scroll actually moves an offset, so paint can refresh on scroll
     /// without reflowing layout.
@@ -821,6 +826,7 @@ impl SystemFactory for GuiInputSystemFactory {
             envelopes: Vec::new(),
             predicted: BTreeMap::new(),
             scroll_offsets: BTreeMap::new(),
+            scroll_predicted: BTreeMap::new(),
             scroll_revision: 0,
             text_carets: BTreeMap::new(),
             composition: None,
@@ -3564,26 +3570,59 @@ impl GuiInputSystem {
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
             return;
         };
+        let consumed = self.consume_scroll(view, entity, &chain, delta, session, tick);
+        // Leftover remainder drops at the outer edge: movement clamps.
+        if consumed {
+            self.cancel_held_taps_for_scroll(sim, session, tick, entity);
+        }
+    }
+
+    /// Routed offset of one ScrollView: its committed offset plus every
+    /// delta already queued for it this tick, so same-tick scrolls chain
+    /// against the movement their predecessors consumed.
+    fn routed_scroll_offset(&self, target: &GuiInputTarget) -> [f32; 2] {
+        self.scroll_predicted
+            .get(target)
+            .copied()
+            .unwrap_or_else(|| {
+                self.scroll_offsets
+                    .get(target)
+                    .map(|cursor| cursor.offset)
+                    .unwrap_or([0.0, 0.0])
+            })
+    }
+
+    /// Consume one delta innermost-first along a ScrollView chain against
+    /// evaluated extents and routed offsets, passing each remainder outward
+    /// and queueing one envelope per ScrollView that consumed movement.
+    /// Returns whether any ScrollView consumed movement; a leftover
+    /// remainder at the outermost edge drops.
+    fn consume_scroll(
+        &mut self,
+        view: &GuiEvaluatedView,
+        entity: EntityId,
+        chain: &[GuiNodeId],
+        delta: [f32; 2],
+        session: u64,
+        tick: u64,
+    ) -> bool {
         let mut remainder = delta;
         let mut consumed_any = false;
-        for scroll in chain {
+        for &scroll in chain {
             if remainder == [0.0, 0.0] {
                 break;
             }
             if !view.nodes.iter().any(|record| record.node == scroll) {
                 continue;
             }
+
             let target = GuiInputTarget {
                 entity,
-                root_incarnation,
+                root_incarnation: view.root_incarnation,
                 node: scroll,
             };
             let max = Self::scroll_max(view, scroll);
-            let current = self
-                .scroll_offsets
-                .get(&target)
-                .map(|cursor| cursor.offset)
-                .unwrap_or([0.0, 0.0]);
+            let current = self.routed_scroll_offset(&target);
             let next = [
                 (current[0] + remainder[0]).clamp(0.0, max[0]),
                 (current[1] + remainder[1]).clamp(0.0, max[1]),
@@ -3591,6 +3630,7 @@ impl GuiInputSystem {
             let consumed = [next[0] - current[0], next[1] - current[1]];
             if consumed != [0.0, 0.0] {
                 consumed_any = true;
+                self.scroll_predicted.insert(target, next);
                 self.push_envelope(
                     tick,
                     PendingEnvelope {
@@ -3609,10 +3649,7 @@ impl GuiInputSystem {
             }
             remainder = [remainder[0] - consumed[0], remainder[1] - consumed[1]];
         }
-        // Leftover remainder drops at the outer edge: movement clamps.
-        if consumed_any {
-            self.cancel_held_taps_for_scroll(sim, session, tick, entity);
-        }
+        consumed_any
     }
 
     /// Disarm held button/checkbox taps on one panel after a scroll moved
@@ -4717,6 +4754,7 @@ impl GuiInputSystem {
         }
         self.envelopes = kept;
         self.predicted.remove(&target);
+        self.scroll_predicted.remove(&target);
 
         if let Some(focus) = self.focus.filter(|focus| focus.target == target) {
             self.focus = None;
@@ -4838,6 +4876,9 @@ impl GuiInputSystem {
     /// Apply every queued envelope in order with liveness revalidation.
     fn apply_envelopes(&mut self, access: &mut SystemRuntimeAccess<'_>, tick: u64) {
         let envelopes = std::mem::take(&mut self.envelopes);
+        // Every queued scroll resolves below, so routed offsets resync from
+        // the committed ones on the next routing pass.
+        self.scroll_predicted.clear();
         if envelopes.is_empty() {
             return;
         }
@@ -5598,6 +5639,7 @@ impl System for GuiInputSystem {
         }
         // Predictions resync from committed values on next routing.
         self.predicted.clear();
+        self.scroll_predicted.clear();
         let carets_before = self.text_carets.len();
         self.text_carets
             .retain(|_, cursor| cursor.session != session);

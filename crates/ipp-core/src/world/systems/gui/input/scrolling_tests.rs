@@ -783,3 +783,45 @@ fn pure_scroll_refreshes_scrolled_paint_without_reflow() {
         (model_after + 1, primitive_after + 1)
     );
 }
+
+#[test]
+fn same_tick_scrolls_chain_outward_like_separate_ticks() {
+    let mut fixture = setup();
+    insert_nested_scroll(&mut fixture);
+    let panel = fixture.panel;
+    // Two wheel events routed in one Host tick, each exactly the inner
+    // capacity: the second chains against the first's queued movement and
+    // passes outward instead of re-consuming the inner capacity.
+    {
+        let mut context = world(&mut fixture);
+        for _ in 0..2 {
+            context
+                .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, 4.0]))
+                .unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    let report = world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        scroll_offsets_of(&report),
+        vec![(GuiNodeId(2), [0.0, 4.0]), (GuiNodeId(4), [0.0, 4.0])]
+    );
+    let inner = world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4));
+    let outer = world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2));
+    assert_eq!((inner, outer), ([0.0, 4.0], [0.0, 4.0]));
+
+    // Routing the same pair in separate ticks lands identically.
+    let mut separate = setup();
+    insert_nested_scroll(&mut separate);
+    scroll_and_apply(&mut separate, [5.0, 1.0], [0.0, 4.0]);
+    scroll_and_apply(&mut separate, [5.0, 1.0], [0.0, 4.0]);
+    let panel = separate.panel;
+    let separate_inner = world(&mut separate).gui_input_scroll(panel, GuiNodeId(4));
+    let separate_outer = world(&mut separate).gui_input_scroll(panel, GuiNodeId(2));
+    assert_eq!((separate_inner, separate_outer), (inner, outer));
+
+    // Predictions drop with their applied envelopes: a later reversal over
+    // the outer content consumes against the committed offsets.
+    let report = scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, -1.0]);
+    assert_eq!(scroll_offsets_of(&report), vec![(GuiNodeId(2), [0.0, 3.0])]);
+}

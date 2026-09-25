@@ -385,4 +385,137 @@ export async function exerciseGuiInput(
     position: at,
     delta: [0, -4],
   });
+
+  await host.detachWorld();
+  await exerciseGuiScrolling(host);
+}
+
+type GuiEditNode = Parameters<GuiTestClient["editGui"]>[0] & {
+  action: "insert";
+};
+
+/**
+ * Nested ScrollViews in their own World, observed through committed control
+ * values: a tap at a fixed logical point toggles whichever checkbox the
+ * committed scroll offsets moved under it.
+ *
+ * The 4x3 panel holds an outer ScrollView (4x3 viewport over 5 units of
+ * content) whose content starts with an inner ScrollView (4x2 viewport over
+ * 3 units). The inner checkbox rides inner content at y 2..3 and the outer
+ * checkbox rides outer content at y 4..5, so the inner view can scroll by 1
+ * and the outer view by 2.
+ */
+async function exerciseGuiScrolling(
+  host: WorldPersistenceHostClient<GuiTestClient>,
+) {
+  const client = await host.createWorld({ symbolicId: "gui-scrolling" });
+  const ref = { kind: "alias", alias: 1 } as const;
+  const entity = aliasId(
+    await client.batch([
+      createEntity(1, "gui-scrolling-panel"),
+      insertComponent(client, "Transform", ref),
+      insertComponent(client, "Surface", ref, { width: 4, height: 3 }),
+      insertComponent(client, "GuiRoot", ref),
+    ]),
+    1,
+  );
+  const { rootIncarnation } = await client.inspectGui({ entity });
+  const column = { kind: "container", containerKind: "column" } as const;
+  const scrollView = {
+    kind: "container",
+    containerKind: "scrollView",
+  } as const;
+  const sizedBox = { kind: "container", containerKind: "sizedBox" } as const;
+  const nodes: Omit<GuiEditNode, "action" | "entity" | "rootIncarnation">[] = [
+    { id: 1, index: 0, data: column, style: { width: 4, height: 3 } },
+    {
+      id: 2,
+      parent: 1,
+      index: 0,
+      data: scrollView,
+      style: { width: 4, height: 3 },
+    },
+    { id: 3, parent: 2, index: 0, data: column },
+    {
+      id: 4,
+      parent: 3,
+      index: 0,
+      data: scrollView,
+      style: { width: 4, height: 2 },
+    },
+    { id: 5, parent: 4, index: 0, data: column },
+    {
+      id: 6,
+      parent: 5,
+      index: 0,
+      data: sizedBox,
+      style: { width: 4, height: 2 },
+    },
+    {
+      id: 7,
+      parent: 5,
+      index: 1,
+      data: { kind: "checkbox" },
+      values: { checked: false },
+      style: { width: 4, height: 1 },
+    },
+    {
+      id: 8,
+      parent: 3,
+      index: 1,
+      data: sizedBox,
+      style: { width: 4, height: 2 },
+    },
+    {
+      id: 9,
+      parent: 3,
+      index: 2,
+      data: { kind: "checkbox" },
+      values: { checked: false },
+      style: { width: 4, height: 1 },
+    },
+  ];
+  for (const node of nodes) {
+    await client.editGui({
+      action: "insert",
+      entity,
+      rootIncarnation,
+      ...node,
+    } as GuiEditNode);
+  }
+  const checked = async (id: number) => {
+    const node = await inspected(client, entity, id);
+    return node.controlValue.kind === "bool" && node.controlValue.value;
+  };
+  const tap = async (pointer: number, position: [number, number]) => {
+    await client.submitGuiInput({
+      kind: "pointerDown",
+      pointer,
+      position,
+      button: "primary",
+    });
+    await client.submitGuiInput({
+      kind: "pointerUp",
+      pointer,
+      position,
+      button: "primary",
+    });
+  };
+
+  // Two wheel samples over the inner view, pipelined so they may route in
+  // one Host tick: the inner view takes its 1 unit and the rest passes
+  // outward in both orders, exactly as if they routed in separate ticks.
+  // The outer view then holds 2, lifting its checkbox to y 2..3.
+  const wheel = (delta: [number, number]) =>
+    client.submitGuiInput({ kind: "scroll", position: [2, 1], delta });
+  const replies = await Promise.all([wheel([0, 1.5]), wheel([0, 1.5])]);
+  expect(
+    replies.every((reply) => reply.unhandled === undefined),
+    `Nested wheel scrolling was unhandled: ${JSON.stringify(replies, (_, value) => (typeof value === "bigint" ? `${value}` : value))}`,
+  );
+  await tap(1, [2, 2.5]);
+  expect(
+    (await checked(9)) && !(await checked(7)),
+    "Same-tick wheel chaining lost movement before the outer ScrollView",
+  );
 }

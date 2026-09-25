@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use ipp_core::HostRuntime;
 use ipp_host_session::HostServices;
 
-pub(crate) struct NativeHostServices {
+/// Identity namespace and built-in resource provider of the native Host.
+pub struct NativeHostServices {
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
 }
 

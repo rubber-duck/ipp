@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { arch, cpus, hostname, platform, release, totalmem } from "node:os";
 import { resolve } from "node:path";
-import { runBrowserEnvironment } from "../browser/environment.js";
+import {
+  runBrowserEnvironment,
+  type BrowserBuildConfiguration,
+  type BrowserEnvironmentContext,
+} from "../browser/environment.js";
+import { runNativeEnvironment } from "../integration/environment.js";
 import { invoke } from "./evidence.js";
 import {
   differenceImage,
@@ -21,11 +26,30 @@ import {
   type WorkloadFrame,
 } from "./retained-gui-scenario.js";
 
-/** Both builds render; only the GUI build presents text through retained batches. */
-const BUILDS = [
-  { name: "render-surfaces", retained: false },
-  { name: "headless-gui", retained: true },
-] as const;
+/**
+ * Where the runtime renders: a browser worker on WebGL, or the `gles_host`
+ * testing example of `ipp-server` on native GLES, whose unchanged surface
+ * fixture runs in a page as the generated client's JavaScript runtime. Only
+ * this environment knows the arrangement; the scenario assertions do not.
+ */
+export type RetainedGuiArrangement =
+  | { readonly kind: "worker" }
+  | { readonly kind: "native-gles"; readonly eglDirectory: string };
+
+/**
+ * Both builds of an arrangement render; only the GUI build presents text
+ * through retained batches.
+ */
+const BUILDS = {
+  worker: [
+    { name: "render-surfaces", retained: false },
+    { name: "headless-gui", retained: true },
+  ],
+  "native-gles": [
+    { name: "gles-surfaces", retained: false },
+    { name: "gles-gui", retained: true },
+  ],
+} as const;
 
 /** Source, machine and pipeline identity that make retained evidence comparable. */
 function runIdentity(workspace: string, iterations: number) {
@@ -68,126 +92,174 @@ export async function runRetainedGui(
   iterations: number,
   output: string,
   options: RetainedGuiOptions = {},
+  arrangement: RetainedGuiArrangement = { kind: "worker" },
 ) {
   const workspace = process.cwd();
   const identity = runIdentity(workspace, iterations);
+  const builds = BUILDS[arrangement.kind];
   const reports: Array<
     {
       build: string;
       evidence: string;
+      hostEvidence: string | null;
       browser: string | null;
       device: Record<string, unknown>;
     } & RetainedGuiReport
   > = [];
   const frames = new Map<string, Map<string, RgbaFrame>>();
-  for (const { name, retained } of BUILDS) {
-    const directory = resolve("target/browser-build", name);
+  for (const { name, retained } of builds) {
+    const captured = new Map<string, RgbaFrame>();
+    frames.set(name, captured);
+    const exercise = async (
+      env: BrowserEnvironmentContext,
+      connection: Record<string, unknown>,
+    ) => {
+      const module = `${env.urls.origin}/target/surface-build/fixture.js`;
+      const call = <T>(name: string, args: readonly unknown[] = []) =>
+        env.execute(name, args, () => invoke<T>(env.page, module, name, args));
+      try {
+        await call("initialize", [
+          { generatedModuleUrl: env.urls.generated, ...connection },
+        ]);
+        const report = await exerciseRetainedGui(
+          {
+            call,
+            capture: async (label, next = false) => {
+              const result = await call<WorkloadFrame>("capture", [
+                label,
+                { next },
+              ]);
+              // Keep pixels for cross-build comparison and record the artifact path;
+              // PNG data would exhaust the event log.
+              await env.execute(`write ${label}.png`, [label], async () => {
+                const { width, height, pixels } = await invoke<{
+                  width: number;
+                  height: number;
+                  pixels: string;
+                }>(env.page, module, "capturePixels", [label]);
+                const frame = {
+                  width,
+                  height,
+                  pixels: new Uint8Array(Buffer.from(pixels, "base64")),
+                };
+                captured.set(label, frame);
+                const path = resolve(env.evidence.directory, `${label}.png`);
+                await writeFile(path, encodePng(frame));
+                return path;
+              });
+              return result;
+            },
+            pixels: (label) => {
+              const frame = captured.get(label);
+              if (!frame) throw new Error(`No capture labelled ${label}`);
+              return frame;
+            },
+          },
+          retained,
+          iterations,
+          options,
+        );
+        reports.push({
+          build: name,
+          evidence: env.evidence.directory,
+          hostEvidence: null,
+          browser: env.page.context().browser()?.version() ?? null,
+          device: Object.fromEntries(
+            Object.entries(report.warm.statistics?.device ?? {}).filter(
+              ([, value]) => typeof value === "string",
+            ),
+          ),
+          ...report,
+        });
+        await writeFile(
+          resolve(env.evidence.directory, "workload.json"),
+          JSON.stringify(report, null, 2),
+        );
+      } finally {
+        await call("close");
+      }
+    };
+    const browser = (build: BrowserBuildConfiguration, rendering: boolean) => ({
+      workspace,
+      build,
+      mismatchBuild: build,
+      rendering,
+      deviceScaleFactor: 1,
+      operationTimeoutMs: 30000,
+      evidenceParent: output,
+    });
+    if (arrangement.kind === "worker") {
+      const directory = resolve("target/browser-build", name);
+      const build = {
+        name,
+        generatedModule: resolve(directory, "generated.js"),
+        runtimeWasm: resolve(directory, "runtime.wasm"),
+        exportWasm: resolve(directory, "export.wasm"),
+        contractArtifact: resolve(directory, "contract.bin"),
+      };
+      await runBrowserEnvironment(
+        `retained-gui-${name}`,
+        browser(build, true),
+        signal,
+        (env) =>
+          exercise(env, {
+            workerScriptUrl: env.urls.workerScript,
+            wasmUrl: env.urls.wasm,
+          }),
+      );
+      continue;
+    }
+
+    // The page only runs the fixture; the native host renders and captures.
+    const directory = resolve("target/gles-host", name);
+    const executable = resolve(directory, "gles_host");
     const build = {
       name,
       generatedModule: resolve(directory, "generated.js"),
-      runtimeWasm: resolve(directory, "runtime.wasm"),
-      exportWasm: resolve(directory, "export.wasm"),
+      runtimeWasm: executable,
+      exportWasm: resolve(directory, "contract.bin"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
-    const captured = new Map<string, RgbaFrame>();
-    frames.set(name, captured);
-    await runBrowserEnvironment(
+    const result = await runNativeEnvironment(
       `retained-gui-${name}`,
       {
-        workspace,
-        build,
-        mismatchBuild: build,
-        rendering: true,
-        deviceScaleFactor: 1,
+        executable,
+        schemaArtifact: build.contractArtifact,
+        workingDirectory: workspace,
+        extraArguments: ["--egl-dir", arrangement.eglDirectory],
+        readinessTimeoutMs: 30000,
         operationTimeoutMs: 30000,
         evidenceParent: output,
       },
       signal,
-      async (env) => {
-        const module = `${env.urls.origin}/target/surface-build/fixture.js`;
-        const call = <T>(name: string, args: readonly unknown[] = []) =>
-          env.execute(name, args, () =>
-            invoke<T>(env.page, module, name, args),
-          );
-        try {
-          await call("initialize", [
-            {
-              generatedModuleUrl: env.urls.generated,
-              workerScriptUrl: env.urls.workerScript,
-              wasmUrl: env.urls.wasm,
-            },
-          ]);
-          const report = await exerciseRetainedGui(
-            {
-              call,
-              capture: async (label, next = false) => {
-                const result = await call<WorkloadFrame>("capture", [
-                  label,
-                  { next },
-                ]);
-                // Keep pixels for cross-build comparison and record the artifact path;
-                // PNG data would exhaust the event log.
-                await env.execute(`write ${label}.png`, [label], async () => {
-                  const { width, height, pixels } = await invoke<{
-                    width: number;
-                    height: number;
-                    pixels: string;
-                  }>(env.page, module, "capturePixels", [label]);
-                  const frame = {
-                    width,
-                    height,
-                    pixels: new Uint8Array(Buffer.from(pixels, "base64")),
-                  };
-                  captured.set(label, frame);
-                  const path = resolve(env.evidence.directory, `${label}.png`);
-                  await writeFile(path, encodePng(frame));
-                  return path;
-                });
-                return result;
-              },
-              pixels: (label) => {
-                const frame = captured.get(label);
-                if (!frame) throw new Error(`No capture labelled ${label}`);
-                return frame;
-              },
-            },
-            retained,
-            iterations,
-            options,
-          );
-          reports.push({
-            build: name,
-            evidence: env.evidence.directory,
-            browser: env.page.context().browser()?.version() ?? null,
-            device: Object.fromEntries(
-              Object.entries(report.warm.statistics?.device ?? {}).filter(
-                ([, value]) => typeof value === "string",
-              ),
-            ),
-            ...report,
-          });
-          await writeFile(
-            resolve(env.evidence.directory, "workload.json"),
-            JSON.stringify(report, null, 2),
-          );
-        } finally {
-          await call("close");
-        }
+      async (native) => {
+        const presentationUrl = native.presentationUrl;
+        if (!presentationUrl)
+          throw new Error("The GLES host named no presentation channel");
+        await runBrowserEnvironment(
+          `retained-gui-${name}-client`,
+          browser(build, false),
+          native.signal,
+          (env) =>
+            exercise(env, { nativeHost: { url: native.url, presentationUrl } }),
+        );
       },
     );
+    reports.at(-1)!.hostEvidence = result.evidenceDirectory;
   }
 
+  const [analyticBuild, retainedBuild] = builds.map(({ name }) => name);
   // Every label both builds captured is compared, with review artifacts kept
   // for passing and failing labels alike.
   const comparisons = compareBuildFrames(
-    frames.get("render-surfaces")!,
-    frames.get("headless-gui")!,
+    frames.get(analyticBuild!)!,
+    frames.get(retainedBuild!)!,
   );
   const directory = resolve(output, "comparisons");
   await mkdir(directory, { recursive: true });
   for (const { label } of comparisons) {
-    const expected = frames.get("render-surfaces")!.get(label)!;
-    const actual = frames.get("headless-gui")!.get(label)!;
+    const expected = frames.get(analyticBuild!)!.get(label)!;
+    const actual = frames.get(retainedBuild!)!.get(label)!;
     await Promise.all([
       writeFile(
         resolve(directory, `${label}-expected.png`),
@@ -211,7 +283,7 @@ export async function runRetainedGui(
     resolve(output, "comparison.json"),
     JSON.stringify(
       {
-        identity,
+        identity: { ...identity, arrangement: arrangement.kind },
         quality: {
           devicePixelRatio: retained!.devicePixelRatio,
           viewports: retained!.viewports,

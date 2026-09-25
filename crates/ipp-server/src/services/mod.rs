@@ -8,4 +8,4 @@ pub mod data_source;
 mod host;
 
 #[cfg(feature = "websocket")]
-pub(crate) use host::NativeHostServices;
+pub use host::NativeHostServices;

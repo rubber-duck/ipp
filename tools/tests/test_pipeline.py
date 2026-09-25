@@ -441,6 +441,22 @@ class PlanningTests(unittest.TestCase):
             {"check:gles-spatial", "check:gles-textures", "check:gles-lighting"},
         )
 
+    def test_native_retained_gui_check_drives_its_client_on_the_selected_egl(self):
+        task = catalog("/validation/egl")["check:gles-retained-gui"]
+        self.assertEqual(
+            task.command[1:],
+            ("dist/tests/render/retained-gui-native.js", "/validation/egl"),
+        )
+        self.assertTrue({"rust", "gles", "node", "browser"}.issubset(task.requirements))
+        self.assertIn("build:gles-hosts", task.dependencies)
+        ids, _ = affected(
+            ["crates/ipp-server/examples/gles_presentation/channel.rs"], []
+        )
+        self.assertEqual(
+            [id_ for id_ in ids if id_.startswith("check:gles-")],
+            ["check:gles-retained-gui"],
+        )
+
     def test_catalog_rejects_invalid_gles_source_roots(self):
         for root in ("../outside.rs", "crates/ipp-render-gl/examples/missing.rs"):
             with (

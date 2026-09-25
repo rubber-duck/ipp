@@ -1,10 +1,13 @@
 /**
- * Fault injection and renderer budget overrides for integration tests.
+ * Fault injection, renderer budget overrides and native GLES presentation for
+ * integration tests.
  *
  * Production presentation has no such controls: the renderer owns its GPU
  * budgets and real context loss comes from the browser. These helpers send
  * worker control messages that only `diagnostics` runtime builds honour; any
- * other build fails the connection with an explanatory error. Import them from
+ * other build fails the connection with an explanatory error. The native GLES
+ * testing host of `ipp-server` presents through `nativePresentationTransport`
+ * and honours the same controls. Import them from
  * `@ipp/client/testing`, never from application code.
  */
 import {
@@ -16,6 +19,7 @@ import {
 } from "./presentation.js";
 
 export type { GlyphAtlasLimits } from "./presentation.js";
+export { nativePresentationTransport } from "./native-presentation.js";
 
 export interface PresentationTesting {
   /** Lose the worker's WebGL context through `WEBGL_lose_context`. */

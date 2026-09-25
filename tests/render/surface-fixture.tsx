@@ -1,5 +1,6 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
 import {
+  nativePresentationTransport,
   presentationTesting,
   type GlyphAtlasLimits,
 } from "../../packages/ipp-client/src/testing.js";
@@ -101,21 +102,36 @@ function cacheDeclaration(symbolicId: string) {
   return policy ? <SurfaceCache bound={false} {...policy} /> : null;
 }
 
-export async function initialize(config: {
-  generatedModuleUrl: string;
-  workerScriptUrl: string;
-  wasmUrl: string;
-}) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 320;
-  canvas.height = 240;
-  document.body.replaceChildren(canvas);
+/**
+ * Connect through a worker presenting on a page canvas, or with `nativeHost`
+ * to a native GLES testing host and its presentation channel.
+ */
+export async function initialize(
+  config: { generatedModuleUrl: string } & (
+    | { workerScriptUrl: string; wasmUrl: string }
+    | { nativeHost: { url: string; presentationUrl: string } }
+  ),
+) {
   const contract = await import(config.generatedModuleUrl);
-  host = await contract.IppHostClient.connectWorker(
-    config.workerScriptUrl,
-    config.wasmUrl,
-    { canvas: canvas.transferControlToOffscreen(), timeoutMs: 20000 },
-  );
+  if ("nativeHost" in config) {
+    host = await contract.IppHostClient.connectTransport(
+      nativePresentationTransport(
+        config.nativeHost.url,
+        config.nativeHost.presentationUrl,
+      ),
+      { timeoutMs: 20000 },
+    );
+  } else {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 240;
+    document.body.replaceChildren(canvas);
+    host = await contract.IppHostClient.connectWorker(
+      config.workerScriptUrl,
+      config.wasmUrl,
+      { canvas: canvas.transferControlToOffscreen(), timeoutMs: 20000 },
+    );
+  }
   client = await host.createWorld({ symbolicId: "surface-rendering" });
   client.onRuntimeFailure((failure) => {
     failures.push(failure);

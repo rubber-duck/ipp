@@ -34,7 +34,7 @@ impl Peers {
                     })
                 })
                 .collect();
-            let mut host = NativeConnectionHost::new().unwrap();
+            let mut host = NativeConnectionHost::<NativeHostServices>::new().unwrap();
             let mut last = Instant::now();
             while !stopping.load(Ordering::Acquire) {
                 for event in incoming.try_iter().take(MAX_CONNECTIONS * 64) {

@@ -1753,6 +1753,41 @@ test("Gallery runs a real GUI demo and cleans it up", {
         knobOff.centroid < knobOff.centre - 0.1,
         `SCAN knob is not at the left end while off: ${JSON.stringify(knobOff)}`,
       );
+      // Pointer clicks take toggle focus without the focus ring: the
+      // toggle's top border row after the click carries the blue track
+      // border and no amber ring pixel (the pre-fix build stroked the
+      // whole border with palette.focus here).
+      const [toggleX, toggleY, toggleWidth] = semanticNode(
+        current.semantic,
+        "checkbox",
+      ).bounds;
+      const borderRow = Array.from(
+        { length: 12 },
+        (_, column) =>
+          [
+            toggleX + toggleWidth * (0.2 + (0.6 * column) / 11),
+            toggleY + 0.008,
+          ] as const,
+      );
+      const borderSamples = await g.call<readonly (readonly number[])[]>(
+        "sampleGalleryGuiCapture",
+        "gui-demo-controls-active",
+        borderRow,
+      );
+      const ringPixels = borderSamples.filter(
+        ([red, , blue]) => red! > 150 && red! > blue! + 30,
+      );
+      assert.equal(
+        ringPixels.length,
+        0,
+        `pointer-clicked SCAN toggle shows focus ring pixels: ${JSON.stringify(borderSamples)}`,
+      );
+      assert.ok(
+        borderSamples.filter(
+          ([, , blue], index) => blue! > borderSamples[index]![0]! + 30,
+        ).length >= 6,
+        `SCAN border row missed the track border: ${JSON.stringify(borderSamples)}`,
+      );
       const sliderPaint = await g.call<{ changedPixels: number }>(
         "compareViewerCaptureRegion",
         "gui-demo-overview",
@@ -1763,6 +1798,30 @@ test("Gallery runs a real GUI demo and cleans it up", {
         sliderPaint.changedPixels > 80,
         `slider thumb did not visibly move: ${JSON.stringify(sliderPaint)}`,
       );
+      // The gain fill stays flush with the track: it is not inset by the
+      // track border (ipp-jtst.7). Samples just inside the track's left
+      // edge, across the track band, carry the bright cyan fill for any
+      // committed value. Thresholds read the rendered frame, which tone
+      // maps brighter than authored values: the muted border (b 158) and
+      // the dark panel stay well below the green/blue floors.
+      const [sliderX, sliderY, , sliderHeight] = semanticNode(
+        current.semantic,
+        "slider",
+      ).bounds;
+      const fillColumn = [-0.01, 0, 0.01].map(
+        (dy) => [sliderX + 0.05, sliderY + sliderHeight / 2 + dy] as const,
+      );
+      const fillSamples = await g.call<readonly (readonly number[])[]>(
+        "sampleGalleryGuiCapture",
+        "gui-demo-controls-active",
+        fillColumn,
+      );
+      for (const [, green, blue] of fillSamples) {
+        assert.ok(
+          green! > 180 && blue! > 200,
+          `gain fill is not flush with the track start: ${JSON.stringify(fillSamples)}`,
+        );
+      }
       assert.ok(
         (await g.difference("gui-demo-overview", "gui-demo-controls-active"))
           .changedPixels > 500,
@@ -1904,6 +1963,53 @@ test("Gallery runs a real GUI demo and cleans it up", {
         const [px, py, pw, ph] = pulseButton.bounds;
         const title = textBounds(detail, "GUI DEMO");
         const spanButton = semanticNode(detail.semantic, "button", "SPAN");
+        // SPAN and UPLINK labels sit centred in their buttons (ipp-jtst.8).
+        // Button labels lay out left-aligned and are not separate text
+        // leaves, so the specimen tunes each button's left padding and the
+        // check weighs each sample by its contrast with the row median
+        // (the button fill), comparing the ink centroid to the centre.
+        for (const name of ["SPAN", "UPLINK"] as const) {
+          const [bx, by, bw, bh] = semanticNode(
+            detail.semantic,
+            "button",
+            name,
+          ).bounds;
+          const columns = 48;
+          const labelXs = Array.from(
+            { length: columns },
+            (_, column) => bx + 0.05 + ((bw - 0.1) * column) / (columns - 1),
+          );
+          const labelSamples = await g.call<readonly (readonly number[])[]>(
+            "sampleGalleryGuiCapture",
+            "gui-detail-neon",
+            [0.4, 0.5, 0.6].flatMap((row) =>
+              labelXs.map((sampleX) => [sampleX, by + bh * row] as const),
+            ),
+          );
+          let weight = 0;
+          let moment = 0;
+          for (const [row, pixel] of labelSamples.entries()) {
+            const line = Math.floor(row / columns);
+            const median = [0, 1, 2].map((channel) => {
+              const values = labelSamples
+                .slice(line * columns, (line + 1) * columns)
+                .map((sample) => sample[channel]!)
+                .sort((a, b) => a - b);
+              return values[values.length >> 1]!;
+            });
+            const contrast = Math.max(
+              ...median.map((value, channel) =>
+                Math.abs(pixel[channel]! - value),
+              ),
+            );
+            const ink = Math.max(0, contrast - 24);
+            weight += ink;
+            moment += ink * labelXs[row % columns]!;
+          }
+          assert.ok(weight > 0, `${name} button shows no label ink`);
+          const offset = Math.abs(moment / weight - (bx + bw / 2));
+          assert.ok(offset < 0.015, `${name} label is off-centre by ${offset}`);
+        }
         const pulseIcon = textBounds(detail, ICON_CODE_POINTS.pulse);
         near(pulseIcon[0] + pulseIcon[2] / 2, px + 0.45, "PULSE icon x");
         near(pulseIcon[1] + pulseIcon[3] / 2, py + ph / 2, "PULSE icon y");

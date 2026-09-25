@@ -270,9 +270,9 @@ impl System for GuiSystem {
                 value,
             } => {
                 let entity = staged.resolve(*entity, context.aliases)?;
+                // Mutation validates the complete inserted value in every build.
                 match &**value {
                     Value::GuiRoot(_) if raw_items(entity) => Err(ErrorReason::InvalidValue),
-                    Value::GuiRoot(root) => root.validate_complete(),
                     Value::Surface(surface)
                         if !surface.items().is_empty() && has(entity, Value::GUI_ROOT) =>
                     {
@@ -297,15 +297,13 @@ impl System for GuiSystem {
                     }
                     _ => false,
                 };
+                // A new incarnation may supply its tree and rows together;
+                // mutation validates the assembled value once.
                 if conflict {
-                    return Err(ErrorReason::InvalidValue);
+                    Err(ErrorReason::InvalidValue)
+                } else {
+                    Ok(())
                 }
-                if *component == Value::GUI_ROOT {
-                    // A new incarnation may supply its tree and rows together;
-                    // validate the assembled root once rather than per field.
-                    validate_inserted_root(fields)?;
-                }
-                Ok(())
             }
             Command::SetField {
                 entity,
@@ -734,28 +732,6 @@ fn skin_writes(
         }
         _ => return Ok(None),
     }))
-}
-
-/// Validate a GuiRoot assembled from `InsertComponent` fields as a whole.
-fn validate_inserted_root(fields: &[FieldWrite]) -> Result<(), ErrorReason> {
-    use crate::components::schema::FieldValue as Value;
-
-    let mut root = crate::ComponentValue::GuiRoot(GuiRoot::default());
-    for field in fields {
-        let value = match &field.value {
-            FieldValue::Bytes(bytes) => Value::Bytes(bytes.clone()),
-            FieldValue::Rows(bytes) => Value::Rows(bytes.clone()),
-            FieldValue::Dynamic(value) => Value::Dynamic(value.clone()),
-            FieldValue::Unset => Value::Unset,
-            _ => return Err(ErrorReason::InvalidField),
-        };
-        root.set_field(field.offset, value)
-            .map_err(|_| ErrorReason::InvalidField)?;
-    }
-    let crate::ComponentValue::GuiRoot(root) = root else {
-        unreachable!("assembled GUI root remains a GUI root")
-    };
-    root.validate_complete()
 }
 
 /// Whether any live restorable Surface content exists for `entity` outside

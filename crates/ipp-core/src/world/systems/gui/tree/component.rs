@@ -960,13 +960,48 @@ impl GuiRoot {
     }
 
     /// Every part row is valid, belongs to a live node and has a unique key.
+    /// Node liveness reads the style table, whose slots are exactly the live
+    /// nodes once [`Self::validate_rows`] holds.
     fn validate_part_rows(&self) -> Result<(), ErrorReason> {
         let mut keys = BTreeSet::new();
         for (_, row) in self.part_state.iter() {
             row.validate()?;
-            if self.nodes.node(GuiNodeId(row.node)).is_none() || !keys.insert((row.node, row.part))
-            {
+            if !self.node_style.is_live(row.node) || !keys.insert((row.node, row.part)) {
                 return Err(ErrorReason::InvalidField);
+            }
+        }
+        Ok(())
+    }
+
+    /// The part rows and index entries of one node, after a write re-derived
+    /// its live channels: each indexed row is valid and carries its key, and
+    /// the index still covers every row. Other nodes' rows are unchanged.
+    fn validate_node_parts(&self, node: u32) -> Result<(), ErrorReason> {
+        for part in GUI_BASE_PARTS {
+            let key = (node, base_part_index(part));
+            let Some(&slot) = self.skin_index.parts.get(&key) else {
+                continue;
+            };
+            let row = self.part_state.get(slot).ok_or(ErrorReason::InvalidField)?;
+            if (row.node, row.part) != key {
+                return Err(ErrorReason::InvalidField);
+            }
+            row.validate()?;
+        }
+
+        if self.skin_index.parts.len() == self.part_state.len() {
+            Ok(())
+        } else {
+            Err(ErrorReason::InvalidField)
+        }
+    }
+
+    /// [`Self::validate_node_parts`] for every node referencing `theme`,
+    /// after a motion write re-derived their channels.
+    fn validate_theme_node_parts(&self, theme: u32) -> Result<(), ErrorReason> {
+        for (node, row) in self.node_style.iter() {
+            if row.theme == Some(theme) {
+                self.validate_node_parts(node)?;
             }
         }
         Ok(())
@@ -1026,9 +1061,22 @@ impl GuiRoot {
         self.nodes.validate().map_err(field_error)
     }
 
+    /// Whether each node table holds one row per live node. Tables only ever
+    /// hold rows of live nodes after a tree write, so equal counts mean every
+    /// live node has its rows.
+    fn rows_cover_nodes(&self) -> bool {
+        self.node_style.len() == self.nodes.len() && self.node_data.len() == self.nodes.len()
+    }
+
     /// Every live node has exactly its rows, and every row matches its node.
     fn validate_rows(&self) -> Result<(), ErrorReason> {
-        if self.node_style.len() != self.nodes.len() || self.node_data.len() != self.nodes.len() {
+        self.validate_style_rows()?;
+        self.validate_data_rows()
+    }
+
+    /// Every live node has its rows, each style row within its ranges.
+    fn validate_style_rows(&self) -> Result<(), ErrorReason> {
+        if !self.rows_cover_nodes() {
             return Err(ErrorReason::InvalidField);
         }
         for node in self.nodes.as_slice() {
@@ -1036,12 +1084,50 @@ impl GuiRoot {
                 .get(node.id.0)
                 .ok_or(ErrorReason::InvalidField)?
                 .validate()?;
+        }
+        Ok(())
+    }
+
+    /// Every live node has its rows, each data row matching its node's kind.
+    fn validate_data_rows(&self) -> Result<(), ErrorReason> {
+        if !self.rows_cover_nodes() {
+            return Err(ErrorReason::InvalidField);
+        }
+        for node in self.nodes.as_slice() {
             self.node_data
                 .get(node.id.0)
                 .ok_or(ErrorReason::InvalidField)?
                 .validate_for(&node.data)?;
         }
         Ok(())
+    }
+
+    /// The node rows after a tree write re-derived them: the decoder already
+    /// validated the tree and control records, and the write inserted,
+    /// removed or conformed rows only for nodes it added, removed or changed
+    /// in kind. Style rows it inserts are defaults; every data row is checked
+    /// against its node's kind, a per-node check bounded by the tree write
+    /// itself. Pruned part rows leave their index entries with them.
+    fn validate_tree_rows(&self) -> Result<(), ErrorReason> {
+        if self.skin_index.parts.len() != self.part_state.len() {
+            return Err(ErrorReason::InvalidField);
+        }
+        self.validate_data_rows()
+    }
+
+    /// Every rule a replaced theme table can break: its own rows and keys,
+    /// the part rows whose channels the write re-derived for every themed
+    /// node, and the lookup index.
+    fn validate_skin_tables(&self) -> Result<(), ErrorReason> {
+        self.validate_theme_rows()?;
+        self.validate_part_table()
+    }
+
+    /// Every rule a replaced part table can break: its rows, their keys and
+    /// the lookup index.
+    fn validate_part_table(&self) -> Result<(), ErrorReason> {
+        self.validate_part_rows()?;
+        self.validate_skin_index()
     }
 
     /// Check one written row property against its range, its node's kind and
@@ -1073,6 +1159,8 @@ impl GuiRoot {
         }
     }
 
+    /// Validate the complete root, as insertion and restoration do.
+    #[cfg(test)]
     pub(in crate::world) fn validate_complete(&self) -> Result<(), ErrorReason> {
         <Self as ComponentLifecycle>::validate(self)
     }
@@ -1149,29 +1237,74 @@ impl ComponentLifecycle for GuiRoot {
         Some(&mut self.properties)
     }
 
+    /// A root is validated whole only on insertion, restoration and evaluated
+    /// replacement. Walking every node, row and skin entry after each GUI
+    /// command costs O(nodes + part rows) per written field, roughly half a
+    /// millisecond on a thousand-node root; [`Self::validate_field`] instead
+    /// checks the same rules for exactly what each write changed.
+    fn validates_after_operation() -> bool {
+        false
+    }
+
     fn validate(&self) -> Result<(), ErrorReason> {
         self.nodes.validate().map_err(field_error)?;
         self.validate_rows()?;
-        self.validate_theme_rows()?;
-        self.validate_part_rows()?;
-        self.validate_skin_index()
+        self.validate_skin_tables()
     }
 
-    /// Each write is checked where it lands: a row property against its range
-    /// and node. Whole theme and part tables are checked for consistent keys;
-    /// the tree and node tables are structurally validated by their decoders.
-    /// Only GUI commands write tables on a live root, and new incarnations are
-    /// validated completely before admission. Extension values carry no GUI
-    /// rules.
+    /// Each write is checked where it lands, after
+    /// [`Self::after_field_write`] re-derived what depends on it, so that
+    /// together the checks cover every rule of [`Self::validate`] for what
+    /// the write changed:
+    ///
+    /// - the tree: its decoder validates the tree and control records, then
+    ///   the node rows it re-derived are checked against the nodes;
+    /// - a whole node table: each of its rows against its node;
+    /// - a whole theme table: both skin tables and their index, since the
+    ///   write re-derives every themed node's channels;
+    /// - a whole part table: its rows, keys and the index;
+    /// - a node row property: its range, its node's kind and the row-wide
+    ///   slider rule; a theme reference also checks the node's part rows;
+    /// - a theme or part row property: its range; theme motion also checks
+    ///   the part rows of the nodes referencing the theme.
+    ///
+    /// Row keys are never writable, and extension values carry no GUI rules.
     fn validate_field(&self, offset: u32) -> Result<(), ErrorReason> {
+        if offset == Self::nodes_field() {
+            return self.validate_tree_rows();
+        }
+        if offset == Self::node_style_field() {
+            return self.validate_style_rows();
+        }
+        if offset == Self::node_data_field() {
+            return self.validate_data_rows();
+        }
         if offset == Self::theme_parts_field() {
-            return self.validate_theme_rows();
+            return self.validate_skin_tables();
         }
         if offset == Self::part_state_field() {
-            return self.validate_part_rows();
+            return self.validate_part_table();
         }
         match Self::row_property(offset) {
-            Some(GuiRootRowProperty::Node(reference)) => self.validate_row_property(reference),
+            Some(GuiRootRowProperty::Node(reference)) => {
+                self.validate_row_property(reference)?;
+                if reference.property == GuiNodeRowProperty::Style(GuiNodeStyleProperty::Theme) {
+                    self.validate_node_parts(reference.node.0)?;
+                }
+                Ok(())
+            }
+            Some(
+                reference @ GuiRootRowProperty::Theme {
+                    slot,
+                    property: Some(GuiPartProperty::Motion),
+                },
+            ) => {
+                self.validate_skin_property(reference)?;
+                match self.theme_parts.get(slot) {
+                    Some(row) => self.validate_theme_node_parts(row.theme),
+                    None => Ok(()),
+                }
+            }
             Some(reference) => self.validate_skin_property(reference),
             None => Ok(()),
         }
@@ -1228,3 +1361,7 @@ impl ComponentLifecycle for GuiRoot {
 fn field_error(_: crate::components::schema::FieldError) -> ErrorReason {
     ErrorReason::InvalidValue
 }
+
+#[cfg(test)]
+#[path = "root_validation_tests.rs"]
+mod tests;

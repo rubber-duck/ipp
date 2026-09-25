@@ -999,6 +999,118 @@ fn removing_a_subtree_removes_node_and_part_rows() {
     insert(&mut world, entity, 4, Some(1), column(), Default::default()).unwrap();
 }
 
+/// A root validates each command's writes for what they change rather than
+/// the whole root after every operation; invalid edits are still rejected
+/// and leave the root as it was.
+#[test]
+fn invalid_gui_commands_are_rejected_without_changing_the_root() {
+    let (mut host, world_id) = host_world();
+    let mut world = host.world_mut(world_id).unwrap();
+    let entity = create_root(&mut world, Surface::default());
+    let root_incarnation = incarnation(&world, entity);
+    insert(&mut world, entity, 1, None, column(), Default::default()).unwrap();
+    let slider = insert(
+        &mut world,
+        entity,
+        2,
+        Some(1),
+        slider(0.5, 1.0),
+        Default::default(),
+    )
+    .unwrap();
+    let removed = insert(
+        &mut world,
+        entity,
+        3,
+        Some(1),
+        GuiNodeData::Text("x".into()),
+        GuiNodeStyle {
+            theme: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let background = GuiPartId::base(GuiPrimitivePart::Background);
+    edit(
+        &mut world,
+        GuiCommand::UpdateTheme {
+            entity,
+            root_incarnation,
+            theme: 1,
+            part: background,
+            patch: GuiPartPatch::default().set(
+                GuiPartProperty::Color,
+                DynamicValue::Vec4([0.1, 0.2, 0.3, 1.0]),
+            ),
+        },
+    )
+    .unwrap();
+    edit(
+        &mut world,
+        GuiCommand::RemoveNode {
+            handle: removed,
+        },
+    )
+    .unwrap();
+    let before = root(&world, entity);
+
+    let rejected = [
+        // A parent link to a node the tree does not hold.
+        GuiCommand::InsertNode {
+            entity,
+            root_incarnation,
+            id: GuiNodeId(4),
+            parent: Some(GuiNodeId(99)),
+            index: 0,
+            data: column(),
+            values: GuiNodeDataRow::default(),
+            style: GuiNodeStyle::default(),
+        },
+        // A move under itself would form a cycle.
+        GuiCommand::MoveNode {
+            handle: slider,
+            parent: Some(GuiNodeId(2)),
+            index: 0,
+        },
+        // Out-of-range style and data row values.
+        GuiCommand::UpdateNode {
+            handle: slider,
+            patch: GuiNodePatch {
+                opacity: Some(1.5),
+                ..Default::default()
+            },
+        },
+        GuiCommand::SetControlValue {
+            handle: slider,
+            expected_revision: 1,
+            value: GuiControlValue::Scalar(5.0),
+        },
+        // An out-of-range theme part value.
+        GuiCommand::UpdateTheme {
+            entity,
+            root_incarnation,
+            theme: 1,
+            part: background,
+            patch: GuiPartPatch::default().set(GuiPartProperty::Opacity, DynamicValue::F32(3.0)),
+        },
+        // Part rows keyed to a removed node, and theme-only motion on a node.
+        GuiCommand::UpdatePart {
+            handle: removed,
+            part: GuiPrimitivePart::Background,
+            patch: GuiPartPatch::default().set(GuiPartProperty::Opacity, DynamicValue::F32(0.5)),
+        },
+        GuiCommand::UpdatePart {
+            handle: slider,
+            part: GuiPrimitivePart::Background,
+            patch: GuiPartPatch::default().set(GuiPartProperty::Duration, DynamicValue::F32(1.0)),
+        },
+    ];
+    for command in rejected {
+        assert!(edit(&mut world, command.clone()).is_err(), "{command:?}");
+        assert_eq!(root(&world, entity), before, "{command:?}");
+    }
+}
+
 #[test]
 fn inspection_is_bounded_by_depth_and_count() {
     let (mut host, world_id) = host_world();

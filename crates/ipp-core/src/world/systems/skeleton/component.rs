@@ -9,6 +9,10 @@ use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
 
 /// Per-instance skeleton source, optional reusable pose, and sparse local overrides.
+///
+/// Every operation that changes a Skeleton validates the complete value: two
+/// source URIs and at most [`crate::MAX_JOINTS`] (32) override rows, a bounded
+/// check of well under a microsecond that needs no per-field replacement.
 #[repr(C)]
 #[derive(Debug, SchemaComponent)]
 pub struct Skeleton {

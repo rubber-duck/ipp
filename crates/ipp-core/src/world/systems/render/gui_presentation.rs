@@ -247,13 +247,14 @@ impl RenderSystem {
             for part in parts {
                 let id = part.id;
                 let node = part.node;
-                let interaction = self.gui_skin_cursors.interaction_for(
+                let interaction = self.gui_skin_cursors.interaction_for_part(
                     crate::systems::gui::GuiInputTarget {
                         entity,
                         root_incarnation: id.root_incarnation,
                         node: id.node,
                     },
-                    node.enabled,
+                    id.part,
+                    node,
                 );
                 let Some(desired) = crate::systems::gui::resolve_paint_appearance(
                     authored_root,

@@ -95,7 +95,7 @@ fn part_row_shares_appearance_indices_then_channels_then_keys() {
 
 #[test]
 fn part_identities_enumerate_every_base_state_and_variant_once() {
-    assert_eq!(GuiPartId::COUNT, 65);
+    assert_eq!(GuiPartId::COUNT, 117);
     let mut seen = std::collections::BTreeSet::new();
     for index in 0..GuiPartId::COUNT {
         let id = GuiPartId::from_index(index).unwrap();

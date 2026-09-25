@@ -430,8 +430,11 @@ pub struct GuiEvaluatedNode {
     /// singular transform, invalid input). Unavailable nodes keep a zero
     /// rectangle and are skipped by paint and hit testing.
     pub available: bool,
-    /// True when the accumulated clip is empty: paint is suppressed while
-    /// the retained rectangle stays observable.
+    /// True when paint is suppressed while the retained rectangle stays
+    /// observable: placeholders, and empty accumulated clips that no scroll
+    /// can reopen. Content under nested ScrollViews keeps painting with an
+    /// empty clip, because an outer scroll can move an inner viewport back
+    /// into view.
     pub paint_suppressed: bool,
     /// Visual translation in parent-final logical units.
     pub visual_offset: [f32; 2],
@@ -443,6 +446,11 @@ pub struct GuiEvaluatedNode {
     pub acc_scale: [f32; 2],
     /// Scroll content extents in logical units; set only by ScrollView.
     pub content_extents: Option<[f32; 2]>,
+    /// ScrollView viewport in final logical `[min_x, min_y, max_x, max_y]`
+    /// coordinates at zero scroll; set only by ScrollView. Its descendants'
+    /// clips intersect it, so scrolled paint and hit testing move the clip
+    /// it contributes with the ScrollView's own ancestor scroll shift.
+    pub viewport: Option<SurfaceClipRect>,
     /// Final-logical origin of the content box (node origin plus padding).
     /// Leaf paint anchors here; container backgrounds still use `rect`.
     pub content_origin: [f32; 2],
@@ -1304,6 +1312,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             visual_scale: scale,
             acc_scale: acc_total,
             content_extents: outcome.content_extents,
+            viewport: None,
             content_origin: content_origin_final,
             color: style.color,
             background: style.background_color,
@@ -1661,6 +1670,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             visual_scale: [1.0, 1.0],
             acc_scale: [1.0, 1.0],
             content_extents: None,
+            viewport: None,
             content_origin: [slot_final[0], slot_final[1]],
             color: style.color,
             background: style.background_color,
@@ -2435,20 +2445,24 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// parent's clip for its children, narrowed by the parent's translated
     /// ScrollView viewport, and the root inherits `root_clip`. An empty
     /// intersection stays an explicit empty clip so the subtree suppresses
-    /// paint and hits instead of escaping its ancestors.
+    /// hits instead of escaping its ancestors. Paint stays suppressed too,
+    /// except below two or more ScrollViews: there an outer scroll moves
+    /// the inner viewport and can reopen the clip.
     fn resolve_placement(&mut self, root_clip: Option<SurfaceClipRect>) {
-        // (depth, accumulated translation, clip inherited by children)
-        let mut ancestors: Vec<(u32, [f32; 2], Option<SurfaceClipRect>)> = Vec::new();
+        // (depth, accumulated translation, clip inherited by children,
+        // ScrollView ancestors of the children)
+        let mut ancestors: Vec<(u32, [f32; 2], Option<SurfaceClipRect>, u32)> = Vec::new();
         for (record, placement) in self.nodes.iter_mut().zip(&self.placements) {
             while ancestors
                 .last()
-                .is_some_and(|(depth, _, _)| *depth >= record.depth)
+                .is_some_and(|(depth, ..)| *depth >= record.depth)
             {
                 ancestors.pop();
             }
-            let (inherited, clip) = ancestors
-                .last()
-                .map_or(([0.0, 0.0], root_clip), |(_, shift, clip)| (*shift, *clip));
+            let (inherited, clip, scroll_ancestors) = ancestors.last().map_or(
+                ([0.0, 0.0], root_clip, 0),
+                |(_, shift, clip, scroll_ancestors)| (*shift, *clip, *scroll_ancestors),
+            );
             let shift = [
                 inherited[0] + placement.shift[0],
                 inherited[1] + placement.shift[1],
@@ -2460,7 +2474,8 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             record.content_origin[1] += shift[1];
             record.clip = clip;
             record.paint_suppressed = placement.placeholder
-                || clip.is_some_and(crate::systems::surface::surface_clip_is_empty);
+                || (scroll_ancestors < 2
+                    && clip.is_some_and(crate::systems::surface::surface_clip_is_empty));
 
             let viewport = placement.viewport.map(|viewport| {
                 [
@@ -2470,12 +2485,20 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     viewport[3] + shift[1],
                 ]
             });
+            record.viewport = viewport;
             let children_clip = match (clip, viewport) {
                 (Some(outer), Some(inner)) => Some(nested_clip(outer, inner)),
                 (outer, None) => outer,
                 (None, inner) => inner,
             };
-            ancestors.push((record.depth, shift, children_clip));
+            let children_scroll_ancestors =
+                scroll_ancestors + u32::from(placement.viewport.is_some());
+            ancestors.push((
+                record.depth,
+                shift,
+                children_clip,
+                children_scroll_ancestors,
+            ));
         }
     }
 }
@@ -2498,7 +2521,7 @@ struct FlexPlacement {
 /// Intersect a nested viewport with its inherited clip. Unlike
 /// [`intersect_surface_clips`], a disjoint or empty result stays an explicit
 /// empty clip, so descendants remain suppressed rather than unclipped.
-fn nested_clip(outer: SurfaceClipRect, inner: SurfaceClipRect) -> SurfaceClipRect {
+pub(crate) fn nested_clip(outer: SurfaceClipRect, inner: SurfaceClipRect) -> SurfaceClipRect {
     intersect_surface_clips(outer, inner).unwrap_or([
         outer[0].max(inner[0]),
         outer[1].max(inner[1]),

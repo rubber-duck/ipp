@@ -3,9 +3,12 @@ import type { BrowserGuiInputCommand } from "./input.js";
 
 /** Admission gate for scene gestures sharing a canvas with runtime GUI input.
  *
- * Pointer presses and wheel samples resolve true only when the correlated
- * runtime reply says that the exact input missed every panel. Callers may
- * buffer DOM motion while admission is pending; aborting the signal fences a
+ * Pointer presses resolve true only when the correlated runtime reply says
+ * that the exact input missed every panel. Wheel samples also resolve true
+ * when no ScrollView consumed them, so scene controls such as camera zoom
+ * work over non-scrollable panels and past every scroll edge; a sample a
+ * ScrollView scrolled even partially stays with the GUI. Callers may buffer
+ * DOM motion while admission is pending; aborting the signal fences a
  * cancelled gesture or an old canvas/session generation.
  */
 export interface GuiUnhandledInputGate {
@@ -182,7 +185,10 @@ export function settleUnhandledInputGateSubmission(
   )
     return;
   entry.done = true;
-  const admitted = outcome?.unhandled?.kind === "noPanelHit";
+  const reason = outcome?.unhandled?.kind;
+  const admitted =
+    reason === "noPanelHit" ||
+    (entry.kind === "scroll" && reason === "scrollUnconsumed");
   if (entry.waiter) settleWaiter(state, entry.waiter, admitted);
   else removeEntry(state, entry);
 }

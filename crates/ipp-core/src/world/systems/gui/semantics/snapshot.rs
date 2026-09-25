@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use super::types::{
-    GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole, GuiSemanticTree, actions_for_role,
-    name_for_data, role_for_data,
+    GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole, GuiSemanticScroll, GuiSemanticTree,
+    actions_for_role, name_for_data, role_for_data,
 };
 use crate::{
     EntityId, GuiEvaluatedContent, GuiEvaluatedView, GuiInputEffectKind, GuiInspectResponse,
@@ -27,19 +27,22 @@ pub fn build_tree(
     inspect: &GuiInspectResponse,
     view: &GuiEvaluatedView,
 ) -> Result<GuiSemanticTree, String> {
-    build_tree_with_focus(inspect, view, None)
+    build_tree_with_input(inspect, view, None, &BTreeMap::new())
 }
 
-/// Build a semantic snapshot with observed keyboard focus.
+/// Build a semantic snapshot with observed keyboard focus and committed
+/// scroll offsets.
 ///
 /// The focus lands in the tree only when its node is present; stale focus
-/// never fabricates a target. Focus rides
-/// the existing inspect plus input-focus reads through the normal client
-/// boundary (no new protocol tags); it is excluded from persistence.
-pub fn build_tree_with_focus(
+/// never fabricates a target. Focus rides the existing inspect plus
+/// input-focus reads through the normal client boundary; like scroll
+/// offsets, it is excluded from persistence. Evaluated ScrollViews report
+/// their offset (zero when absent from `scroll_offsets`) and capacity.
+pub fn build_tree_with_input(
     inspect: &GuiInspectResponse,
     view: &GuiEvaluatedView,
     focus: Option<GuiSemanticFocus>,
+    scroll_offsets: &BTreeMap<GuiNodeId, [f32; 2]>,
 ) -> Result<GuiSemanticTree, String> {
     if inspect.root_entity != view.entity {
         return Err("Semantic tree entity mismatch".into());
@@ -73,6 +76,16 @@ pub fn build_tree_with_focus(
         } else {
             Vec::new()
         };
+        let scroll = evaluated
+            .get(&inspected.id)
+            .filter(|node| role == GuiSemanticRole::ScrollView && node.available)
+            .map(|node| GuiSemanticScroll {
+                offset: scroll_offsets
+                    .get(&inspected.id)
+                    .copied()
+                    .unwrap_or([0.0, 0.0]),
+                max_offset: crate::world::systems::gui::layout::scroll_bars::scroll_capacity(node),
+            });
         nodes.push(GuiSemanticNode {
             id: inspected.id,
             parent: inspected.parent,
@@ -86,6 +99,7 @@ pub fn build_tree_with_focus(
             available,
             focus_scope: inspected.style.focus_scope,
             actions,
+            scroll,
         });
     }
     let focused = focus.filter(|focus| nodes.iter().any(|node| node.id == focus.id));
@@ -101,6 +115,9 @@ pub fn build_tree_with_focus(
 fn evaluated_role_hint(id: GuiNodeId, view: &GuiEvaluatedView) -> Option<GuiSemanticRole> {
     let node = view.nodes.iter().find(|node| node.node == id)?;
     let role = match &node.content {
+        GuiEvaluatedContent::Container if node.content_extents.is_some() => {
+            GuiSemanticRole::ScrollView
+        }
         GuiEvaluatedContent::Container => GuiSemanticRole::Container,
         GuiEvaluatedContent::Text {
             ..
@@ -130,8 +147,8 @@ fn evaluated_role_hint(id: GuiNodeId, view: &GuiEvaluatedView) -> Option<GuiSema
 /// Nodes whose semantic identity, structure, state or supported actions changed.
 ///
 /// Added and removed nodes are reported by their presence in exactly one
-/// tree. Evaluated bounds and the tree evaluation tick are intentionally
-/// excluded, so pure movement never appears here. Focus is diffed separately
+/// tree. Evaluated bounds, scroll positions and the tree evaluation tick
+/// are intentionally excluded, so pure movement never appears here. Focus is diffed separately
 /// by comparing [`GuiSemanticTree::focused`].
 pub fn changed_nodes(old: &GuiSemanticTree, new: &GuiSemanticTree) -> Vec<GuiNodeId> {
     let mut changes = Vec::new();
@@ -248,6 +265,10 @@ impl crate::WorldContext<'_> {
             .map(|focus| GuiSemanticFocus {
                 id: focus.target.node,
             });
-        build_tree_with_focus(&inspect, view, focus)
+        let scroll_offsets = self
+            .system::<crate::GuiInputSystem>(crate::GuiInputSystem::ID)
+            .map(|input| input.scroll_offsets_for(entity, view.root_incarnation))
+            .unwrap_or_default();
+        build_tree_with_input(&inspect, view, focus, &scroll_offsets)
     }
 }

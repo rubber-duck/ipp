@@ -480,7 +480,9 @@ fn nested_scroll_moves_paint_without_reflow() {
         .find(|item| item.entity == entity)
         .map(|item| item.primitives.clone())
         .unwrap();
-    assert_eq!(before.len(), 4);
+    // Four backgrounds plus a vertical scroll bar track and thumb for each
+    // overflowing ScrollView.
+    assert_eq!(before.len(), 8);
     assert_eq!(world.gui_scroll_revision(), 0);
 
     // Route the inner scroll, then apply it: content moves up by 4.

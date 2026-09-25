@@ -315,6 +315,7 @@ pub(crate) fn encode_gui_unhandled_inner(
             ipp_core::GuiUnhandledReason::NoCapture => w.u8(4)?,
             ipp_core::GuiUnhandledReason::NotFocusable => w.u8(5)?,
             ipp_core::GuiUnhandledReason::NotOwner => w.u8(6)?,
+            ipp_core::GuiUnhandledReason::ScrollUnconsumed => w.u8(7)?,
         }
     }
     Ok(w.0)

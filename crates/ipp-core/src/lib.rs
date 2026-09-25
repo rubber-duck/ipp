@@ -95,7 +95,7 @@ pub use systems::gui::{
 pub use systems::gui::semantics::{
     GuiSemanticAction, GuiSemanticActionCommand, GuiSemanticActionError, GuiSemanticActionKind,
     GuiSemanticActionRequest, GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole,
-    GuiSemanticSnapshotQuery, GuiSemanticTree, action_command,
+    GuiSemanticScroll, GuiSemanticSnapshotQuery, GuiSemanticTree, action_command,
 };
 
 pub use systems::camera::{CameraMotion, CameraStateChange, CameraStatePatch, PreparedCamera};

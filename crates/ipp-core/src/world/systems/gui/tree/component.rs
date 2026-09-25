@@ -830,7 +830,7 @@ impl GuiRoot {
 
     /// Base parts the theme at `theme_slot` declares motion for, as a bit
     /// mask by base part index.
-    fn animated_parts(&self, theme_slot: u32) -> u8 {
+    fn animated_parts(&self, theme_slot: u32) -> u16 {
         let mut mask = 0;
         for index in 0..GuiPartId::COUNT {
             if let Some(id) = GuiPartId::from_index(index)
@@ -848,7 +848,7 @@ impl GuiRoot {
     /// `animated` of the theme at `theme_slot`, pushing a row where one is
     /// needed and dropping rows left with neither overrides nor channels.
     /// Opened channels start from the part's base appearance.
-    fn sync_part_channels(&mut self, node: u32, theme_slot: Option<u32>, animated: u8) {
+    fn sync_part_channels(&mut self, node: u32, theme_slot: Option<u32>, animated: u16) {
         for part in GUI_BASE_PARTS {
             let key = (node, base_part_index(part));
             let needed = animated & (1 << key.1) != 0;

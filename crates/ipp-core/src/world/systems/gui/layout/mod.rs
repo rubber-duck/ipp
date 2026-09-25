@@ -6,6 +6,7 @@
 //! views.
 
 pub(super) mod evaluation;
+pub(crate) mod scroll_bars;
 pub(super) mod skin;
 pub(super) mod system;
 
@@ -18,9 +19,9 @@ pub use evaluation::{
 };
 pub use skin::{
     FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, GuiControlVariant, GuiInteractionState, GuiPartMotion,
-    GuiPartStyle, GuiSkinCursors, GuiSkinState, GuiSkinnedAppearance, MAX_SKIN_DEPTH,
-    MAX_SKIN_NODES, apply_appearance_to_primitive, apply_asset_to_primitive, part_overrides,
-    resolve_appearance, resolve_state_part_motion, resolve_state_part_style,
+    GuiPartStyle, GuiScrollBarCursor, GuiSkinCursors, GuiSkinState, GuiSkinnedAppearance,
+    MAX_SKIN_DEPTH, MAX_SKIN_NODES, apply_appearance_to_primitive, apply_asset_to_primitive,
+    part_overrides, resolve_appearance, resolve_state_part_motion, resolve_state_part_style,
     skinned_primitives_for_view, theme_part_style, variant_for_content,
 };
 pub(crate) use skin::{

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 import type { Page } from "playwright";
@@ -980,6 +981,251 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
         back,
         typed,
       });
+    },
+  );
+});
+
+test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const build: BrowserBuildConfiguration = {
+    name: "headless-gui",
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    exportWasm: resolve(profile, "export.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+  await runBrowserEnvironment(
+    "gui-scroll",
+    {
+      workspace,
+      build,
+      mismatchBuild: build,
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/browser",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const fixture = `${env.urls.origin}/target/react-build/gui-scroll-fixture.js`;
+      await env.page.evaluate(
+        async ({ fixture, runtime }) =>
+          (await import(fixture)).mountScrollCanvas(runtime),
+        {
+          fixture,
+          runtime: {
+            generatedModuleUrl: env.urls.generated,
+            workerScriptUrl: env.urls.workerScript,
+            wasmUrl: env.urls.wasm,
+            timeoutMs: 20_000,
+            logLevel: "off",
+          },
+        },
+      );
+      const bounds = await env.page.locator("#scroll-gui-canvas").boundingBox();
+      assert.ok(bounds, "scroll canvas has no layout box");
+      const page = (x: number, y: number) =>
+        [bounds.x + x, bounds.y + y] as const;
+
+      // Canvas pixels sampled per frame, 60 px per GUI logical unit:
+      // `right` sits at logical (3, 0.5), `middle` at (3, 1.5), `narrow` at
+      // (1, 2.5) and `low` at (3, 2.5).
+      const points = {
+        right: [180, 30],
+        middle: [180, 90],
+        narrow: [60, 150],
+        low: [180, 150],
+      } as const;
+      type Rgb = readonly [number, number, number];
+      type Samples = Record<keyof typeof points, Rgb>;
+      const sample = async (label: string): Promise<Samples> => {
+        const frame = await env.page.evaluate(
+          async ({ url, points }) =>
+            (await import(url)).scrollFrame(Object.values(points)),
+          { url: fixture, points },
+        );
+        assert.equal(frame.failedDrawCalls, 0);
+        await writeFile(
+          resolve(env.evidence.directory, `${label}.png`),
+          Buffer.from(
+            frame.dataUrl.slice("data:image/png;base64,".length),
+            "base64",
+          ),
+        );
+        const samples = Object.fromEntries(
+          Object.keys(points).map((key, index) => [key, frame.samples[index]]),
+        ) as Samples;
+        env.evidence.record(label, samples);
+        return samples;
+      };
+      // Dominant display colour of a sample: fills are 0.8 against 0.1
+      // linear lanes, so dominant lanes lead the others by far more than 80.
+      const hue = (rgb: Rgb): string => {
+        const [r, g, b] = rgb;
+        const lead = (a: number, ...rest: number[]) =>
+          rest.every((other) => a > other + 80);
+        if (lead(r, b) && lead(g, b) && Math.abs(r - g) < 40) return "yellow";
+        if (lead(r, g) && lead(b, g) && Math.abs(r - b) < 40) return "magenta";
+        if (lead(g, r) && lead(b, r) && Math.abs(g - b) < 40) return "cyan";
+        if (Math.min(r, g, b) > 200) return "white";
+        if (lead(r, g, b)) return "red";
+        if (lead(g, r, b)) return "green";
+        if (lead(b, r, g)) return "blue";
+        if (Math.max(r, g, b) - Math.min(r, g, b) < 20 && r > 40) return "gray";
+        return `other(${rgb.join(",")})`;
+      };
+      const expectFrame = async (
+        label: string,
+        expected: Record<keyof typeof points, string>,
+      ) => {
+        const deadline = performance.now() + 5_000;
+        let samples = await sample(label);
+        const matches = (value: Samples) =>
+          Object.entries(expected).every(
+            ([key, colour]) => hue(value[key as keyof Samples]) === colour,
+          );
+        while (!matches(samples) && performance.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          samples = await sample(label);
+        }
+        assert.deepEqual(
+          Object.fromEntries(
+            Object.entries(samples).map(([key, rgb]) => [key, hue(rgb)]),
+          ),
+          expected,
+          `${label}: ${JSON.stringify(samples)}`,
+        );
+      };
+
+      await expectFrame("scroll-initial", {
+        right: "red",
+        middle: "red",
+        narrow: "blue",
+        low: "gray",
+      });
+
+      // A primary drag over plain outer content scrolls it by the dragged
+      // 60 px (1 unit). The inner viewport moves up to y -1..1, so its green
+      // block at y 1..2 falls outside it and must not paint over the outer
+      // background at `middle`.
+      await env.page.mouse.move(...page(180, 150));
+      await env.page.mouse.down();
+      await env.page.mouse.move(...page(180, 90), { steps: 6 });
+      await env.page.mouse.up();
+      await expectFrame("scroll-outer-dragged", {
+        right: "red",
+        middle: "gray",
+        narrow: "blue",
+        low: "gray",
+      });
+
+      // A wheel over the moved inner viewport scrolls the inner view by its
+      // remaining unit: the green block rides up into view at `right`.
+      await env.page.mouse.move(...page(180, 30));
+      await env.page.mouse.wheel(0, 1);
+      await expectFrame("scroll-inner-wheeled", {
+        right: "green",
+        middle: "gray",
+        narrow: "blue",
+        low: "gray",
+      });
+
+      // The outer scroll bar column, 6 px rows at x 235 inside its
+      // 3.85..4 track: the thumb rows are the magenta (or pressed white)
+      // run, whose extent follows the committed offset over the capacity.
+      const rows = Array.from({ length: 30 }, (_, row) => 3 + row * 6);
+      const thumbRows = async (label: string, thumb: string) => {
+        const frame = await env.page.evaluate(
+          async ({ url, points }) => (await import(url)).scrollFrame(points),
+          { url: fixture, points: rows.map((y) => [235, y]) },
+        );
+        assert.equal(frame.failedDrawCalls, 0);
+        await writeFile(
+          resolve(env.evidence.directory, `${label}.png`),
+          Buffer.from(
+            frame.dataUrl.slice("data:image/png;base64,".length),
+            "base64",
+          ),
+        );
+        const hues = frame.samples.map((rgb: Rgb) => hue(rgb));
+        env.evidence.record(label, hues);
+        // Rows averaging across a thumb end blend both colours; every other
+        // row is track or thumb.
+        const blended = hues.filter(
+          (colour: string) => colour !== thumb && colour !== "cyan",
+        );
+        assert.ok(
+          blended.length <= 2 &&
+            blended.every((colour: string) => colour.startsWith("other")),
+          `${label}: bar column is not only track and thumb: ${hues.join(",")}`,
+        );
+        const covered = rows.filter((_, index) => hues[index] === thumb);
+        return [covered[0], covered.at(-1)] as const;
+      };
+      // Expect the thumb run to cover [start, end) in pixels: rows sample
+      // every 6 px and average 7 px, so run ends land within 10 px.
+      const expectThumb = async (
+        label: string,
+        start: number,
+        end: number,
+        thumb = "magenta",
+      ) => {
+        const deadline = performance.now() + 5_000;
+        let span = await thumbRows(label, thumb);
+        const near = ([first, last]: readonly [
+          number | undefined,
+          number | undefined,
+        ]) =>
+          first !== undefined &&
+          last !== undefined &&
+          Math.abs(first - start) <= 10 &&
+          Math.abs(last - end) <= 10;
+        while (!near(span) && performance.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          span = await thumbRows(label, thumb);
+        }
+        assert.ok(
+          near(span),
+          `${label}: thumb rows ${span} not ${start}..${end}`,
+        );
+      };
+
+      // Outer offset 1 of 2: the 108 px thumb starts half way along its
+      // 72 px travel.
+      await expectThumb("bar-scrolled", 36, 144);
+
+      // Dragging the thumb 36 px down scrolls the outer view by one more
+      // unit with the pressed skin while held; the capture holds when the
+      // pointer leaves the bar.
+      await env.page.mouse.move(...page(235, 90));
+      await env.page.mouse.down();
+      await env.page.mouse.move(...page(150, 126), { steps: 6 });
+      await expectThumb("bar-thumb-pressed", 72, 180, "white");
+      await env.page.mouse.up();
+      await expectThumb("bar-thumb-dragged", 72, 180);
+      // Outer offset 2 leaves the narrow blue block above `narrow` and the
+      // yellow block under the lower samples.
+      await expectFrame("bar-content-after-drag", {
+        right: "gray",
+        middle: "gray",
+        narrow: "yellow",
+        low: "yellow",
+      });
+
+      // A track press above the thumb pages back by one viewport, clamped
+      // at the start.
+      await env.page.mouse.click(...page(235, 20));
+      await expectThumb("bar-track-paged", 0, 108);
+
+      const canvasCount = await env.page.evaluate(
+        async (url) => (await import(url)).closeScrollCanvas(),
+        fixture,
+      );
+      assert.equal(canvasCount, 0);
     },
   );
 });

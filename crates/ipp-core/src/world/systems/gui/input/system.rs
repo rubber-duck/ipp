@@ -34,10 +34,21 @@
 //! most once. Scroll offsets stay owned by this system so scrolled content
 //! never reflows layout; scroll routing consumes deltas innermost-first
 //! against evaluated ScrollView extents with edge clamping and outward
-//! propagation, while hit testing observes the retained snapshot translated
-//! by ancestor offsets. Button and checkbox presses stay provisional until
-//! an eligible tap completes on release; drags leaving the press-time
-//! rectangle hand the gesture to scrolling.
+//! propagation, chaining same-tick scrolls against routed offsets that
+//! include the deltas already queued, while hit testing observes the
+//! retained snapshot translated by committed ancestor offsets and clipped by
+//! viewports that move with their own outer offsets. Button and
+//! checkbox presses stay provisional until an eligible tap completes on
+//! release. A primary press inside eligible ScrollView ancestry also arms a
+//! pointer drag: once its travel passes the drag slop, the nearest
+//! ScrollView with capacity on the dominant axis wins the gesture, the
+//! pending tap cancels and pointer travel scrolls through the same
+//! innermost-first consumption. Outside ScrollViews, drags leaving the
+//! press-time rectangle cancel the tap. ScrollView scroll bars sit above
+//! their content for hits: a thumb press captures the pointer and maps its
+//! travel along the track to the offset, a track press pages by one
+//! viewport toward the pressed side, and both scroll through the same
+//! consumption; bars take hover and press state per part.
 
 use super::super::system::{commit_control_value, resolve_control_effective};
 use super::super::tree::GuiNodeDataRow;
@@ -46,17 +57,22 @@ use super::super::tree::nodes::{
 };
 use super::super::{
     GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiHit, GuiLayoutSystem, GuiRoot,
-    GuiSkinCursors, GuiSystem,
+    GuiScrollBarCursor, GuiSkinCursors, GuiSystem,
 };
 use super::target_policy::{
     GuiTargetStatus, GuiTargetValidity, current_target, evaluated_status, evaluated_validity,
     producer_root, producer_status, producer_validity,
 };
 
+use super::super::layout::scroll_bars::{
+    GuiScrollBar, scroll_bar_axis, scroll_bar_enabled, scroll_bar_shown, scroll_bars,
+    scroll_capacity,
+};
 use crate::systems::geometry::{GeometryBounds, GeometryRay};
 use crate::systems::lifecycle_publisher::{
     ComponentLifecycleKind, EntityLifecycleKind, LifecycleObservation,
 };
+use crate::systems::surface::{GuiPrimitivePart, GuiScrollPlacement, SurfaceClipRect};
 use crate::systems::{
     System, SystemCommandContext, SystemDependency, SystemDependencyBinding, SystemFactory,
     SystemId, SystemInitContext, SystemInitError, SystemLifecycleContext, SystemRuntimeAccess,
@@ -70,6 +86,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Stable identity of the per-world GUI input routing pass.
 const MAX_PENDING_ENVELOPES: usize = 1024;
+
+/// Pointer travel, as a fraction of the panel's shorter logical extent,
+/// that a press inside ScrollView content must exceed before dragging wins
+/// over the tap.
+const SCROLL_DRAG_SLOP: f32 = 0.01;
 
 /// Which physical button a pointer event carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -430,8 +451,7 @@ pub enum GuiInputEffectKind {
     ScrollChanged {
         /// Panel entity.
         entity: EntityId,
-        /// Scrolled node: the consuming ScrollView, or the hit node for
-        /// non-scrollable content.
+        /// Consuming ScrollView.
         node: GuiNodeId,
         /// Accumulated offset in logical units.
         offset: [f32; 2],
@@ -555,6 +575,10 @@ pub enum GuiUnhandledReason {
     NotFocusable,
     /// Another session owns the single active input context.
     NotOwner,
+    /// No ScrollView consumed the scroll movement: the point has no eligible
+    /// ScrollView ancestry, or every ScrollView in it already sits at its
+    /// edge in the scroll's direction. Scene controls may take the scroll.
+    ScrollUnconsumed,
 }
 
 /// Control behaviour of one routed node.
@@ -662,8 +686,7 @@ enum EnvelopeKind {
     },
     /// Input-owned scroll accumulation for one ScrollView, already
     /// clamped against its evaluated extents at routing and re-clamped at
-    /// application. Deltas on non-scrollable hits accumulate unbounded on
-    /// the hit node as before, without reflowing layout.
+    /// application.
     Scroll {
         /// Consumed delta in logical units.
         delta: [f32; 2],
@@ -747,12 +770,30 @@ fn validate_composition_shape(
 /// incarnation, retained rectangle and mapped logical point.
 type ProjectedCandidate = (f64, EntityId, super::super::GuiHit, u64, [f32; 4], [f32; 2]);
 
-/// Scroll-aware hit: scrolled panel entity, root incarnation, resolved
-/// node, retained rectangle and logical point.
-type ScrollResolved = (EntityId, u64, GuiNodeId, [f32; 4], [f32; 2]);
+/// Topmost scroll-aware hit on one panel: an evaluated node with its
+/// scrolled rectangle, or a ScrollView scroll bar part painted above it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScrollViewHit {
+    /// Hit node; the ScrollView itself for a scroll bar hit.
+    node: GuiNodeId,
+    /// Scrolled rectangle of the hit node.
+    rect: [f32; 4],
+    /// Scroll bar part and scrolled bar geometry under the point.
+    bar: Option<(GuiPrimitivePart, GuiScrollBar)>,
+}
+
+/// Scroll-aware hit resolved across panels: panel entity, root
+/// incarnation, hit and the logical point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScrollResolved {
+    entity: EntityId,
+    root_incarnation: u64,
+    hit: ScrollViewHit,
+    point: [f32; 2],
+}
 
 /// Best scroll candidate: world/entity distance first, then the resolved hit.
-type ScrollCandidate = (f64, EntityId, GuiNodeId, u64, [f32; 4], [f32; 2]);
+type ScrollCandidate = (f64, EntityId, ScrollViewHit, u64, [f32; 2]);
 
 /// Current-tick camera ray for viewport-space pointer routing. The origin
 /// and unit direction live in World space; `near` and `far` bound the ray
@@ -792,6 +833,74 @@ struct HoverCursor {
     session: u64,
     source_tick: u64,
     position: [f32; 2],
+}
+
+/// One primary press inside eligible ScrollView ancestry. The drag stays
+/// pending until its travel passes the slop; the nearest ScrollView with
+/// capacity on the dominant axis then wins, and later travel scrolls that
+/// ScrollView and its outer chain.
+#[derive(Clone, Debug, PartialEq)]
+struct ScrollDrag {
+    /// Panel entity the press routed to.
+    entity: EntityId,
+    /// Root incarnation fencing the chain.
+    root_incarnation: u64,
+    /// Innermost-first eligible ScrollView ancestry of the pressed point.
+    chain: Vec<GuiNodeId>,
+    /// Final-logical press point.
+    origin: [f32; 2],
+    /// Final-logical point the latest scroll consumed up to.
+    last: [f32; 2],
+    /// Chain index of the winning ScrollView once the drag passed the slop.
+    active: Option<usize>,
+    /// Session that pressed.
+    session: u64,
+}
+
+impl ScrollDrag {
+    /// Whether this drag scrolls one fenced ScrollView target.
+    fn scrolls(&self, target: &GuiInputTarget) -> bool {
+        self.entity == target.entity
+            && self.root_incarnation == target.root_incarnation
+            && self.chain.contains(&target.node)
+    }
+}
+
+/// One pointer holding a ScrollView scroll bar: dragging its thumb, or
+/// holding a track press that already paged.
+#[derive(Clone, Debug, PartialEq)]
+struct ScrollBarPress {
+    /// Pressed ScrollView.
+    target: GuiInputTarget,
+    /// Pressed track or thumb part.
+    part: GuiPrimitivePart,
+    /// Innermost-first eligible ScrollView chain from the pressed view.
+    chain: Vec<GuiNodeId>,
+    /// Pointer distance past the thumb start along the bar axis.
+    grab: f32,
+    /// Session that pressed.
+    session: u64,
+}
+
+/// One pointer hovering a ScrollView scroll bar part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScrollBarHover {
+    /// Hovered ScrollView.
+    target: GuiInputTarget,
+    /// Hovered track or thumb part.
+    part: GuiPrimitivePart,
+    /// Session that hovered.
+    session: u64,
+}
+
+/// Outcome of one pointer move for a pointer's scroll drag.
+enum ScrollDragStep {
+    /// The drag owns the gesture; the move is consumed.
+    Scrolling,
+    /// Travel stays within the slop or no ScrollView can take it yet.
+    Pending,
+    /// The panel or its incarnation went away; the drag ends.
+    Lost,
 }
 
 /// Input-owned scroll state with enough provenance to publish invalidation.
@@ -838,12 +947,22 @@ pub struct GuiInputSystem {
     hovers: BTreeMap<u32, HoverCursor>,
     /// Controls pressed by pointer, for touch arbitration.
     press_owners: BTreeMap<GuiInputTarget, u32>,
+    /// Pending and active scroll drags per pointer.
+    scroll_drags: BTreeMap<u32, ScrollDrag>,
+    /// Scroll bar thumb drags and held track presses per pointer.
+    scroll_bar_presses: BTreeMap<u32, ScrollBarPress>,
+    /// Scroll bar parts hovered per pointer.
+    scroll_bar_hovers: BTreeMap<u32, ScrollBarHover>,
     /// Ordered routed intents awaiting the next mutation boundary.
     envelopes: Vec<PendingEnvelope>,
     /// Predicted control state chaining same-tick envelopes.
     predicted: BTreeMap<GuiInputTarget, PredictedControl>,
     /// Input-owned scroll offsets in logical units, never reflowed.
     scroll_offsets: BTreeMap<GuiInputTarget, ScrollCursor>,
+    /// Routed scroll offsets chaining same-tick scroll envelopes: each
+    /// ScrollView's committed offset plus the deltas already queued for it.
+    /// Dropped when those envelopes apply or cancel.
+    scroll_predicted: BTreeMap<GuiInputTarget, [f32; 2]>,
     /// Revision of input-owned scroll offsets. Bumped only when an applied
     /// scroll actually moves an offset, so paint can refresh on scroll
     /// without reflowing layout.
@@ -933,9 +1052,13 @@ impl SystemFactory for GuiInputSystemFactory {
             captures: BTreeMap::new(),
             hovers: BTreeMap::new(),
             press_owners: BTreeMap::new(),
+            scroll_drags: BTreeMap::new(),
+            scroll_bar_presses: BTreeMap::new(),
+            scroll_bar_hovers: BTreeMap::new(),
             envelopes: Vec::new(),
             predicted: BTreeMap::new(),
             scroll_offsets: BTreeMap::new(),
+            scroll_predicted: BTreeMap::new(),
             scroll_revision: 0,
             text_carets: BTreeMap::new(),
             composition: None,
@@ -1116,9 +1239,9 @@ impl GuiInputSystem {
             return view.hit_test(point);
         }
         let (_, root) = producer_root(sim, entity)?;
-        self.scroll_hit_in_view(view, &root, entity, point)
-            .map(|(node, _)| GuiHit {
-                node,
+        self.scroll_hit_in_view(view, &root, entity, point, false)
+            .map(|hit| GuiHit {
+                node: hit.node,
                 position: point,
             })
     }
@@ -2114,29 +2237,16 @@ impl GuiInputSystem {
     /// maximum offset from evaluated content extents over the retained
     /// viewport. Unknown or degenerate viewports hold still.
     fn scroll_max(view: &GuiEvaluatedView, node: GuiNodeId) -> [f32; 2] {
-        let Some(record) = view.nodes.iter().find(|record| record.node == node) else {
-            return [0.0, 0.0];
-        };
-        let extent = record.content_extents.unwrap_or([0.0, 0.0]);
-        let viewport = [
-            record.rect[2] / record.acc_scale[0].abs().max(f32::MIN_POSITIVE),
-            record.rect[3] / record.acc_scale[1].abs().max(f32::MIN_POSITIVE),
-        ];
-        if !viewport.iter().all(|lane| lane.is_finite())
-            || !extent.iter().all(|lane| lane.is_finite())
-        {
-            return [0.0, 0.0];
-        }
-        [
-            (extent[0] - viewport[0]).max(0.0),
-            (extent[1] - viewport[1]).max(0.0),
-        ]
+        view.nodes
+            .iter()
+            .find(|record| record.node == node)
+            .map_or([0.0, 0.0], scroll_capacity)
     }
 
     /// Total final-logical shift for one node from its ancestor ScrollView
     /// offsets. Each offset moves scrolled content through that ScrollView's
-    /// accumulated scale; viewport clips stay fixed while descendants shift
-    /// beneath them. Paint, hit and caret consumers share this translation.
+    /// accumulated scale beneath its viewport, which itself moves only with
+    /// outer offsets. Paint, hit and caret consumers share this translation.
     fn ancestor_shift(
         &self,
         view: &GuiEvaluatedView,
@@ -2196,33 +2306,256 @@ impl GuiInputSystem {
     /// scroll shifts applied, traversing in reverse painter order within the
     /// shared clips. Accepts containers as well as controls so scrolls
     /// resolve their ScrollView ancestry; pointer routing keeps its own
-    /// control-only fence on top. Never fabricates coordinates.
+    /// control-only fence on top. With `bars`, an enabled scroll bar painted
+    /// above the hit node wins instead. Never fabricates coordinates.
     fn scroll_hit_in_view(
         &self,
         view: &GuiEvaluatedView,
         root: &GuiRoot,
         entity: EntityId,
         point: [f32; 2],
-    ) -> Option<(GuiNodeId, [f32; 4])> {
+        bars: bool,
+    ) -> Option<ScrollViewHit> {
         if !view.available {
             return None;
         }
-        for record in view.nodes.iter().rev() {
+        let placements = self.scrolled_placements(view, entity);
+        let bar = if bars {
+            self.scroll_bar_hit(view, root, entity, &placements, point)
+        } else {
+            None
+        };
+        for (index, (record, placement)) in view.nodes.iter().zip(&placements).enumerate().rev() {
+            // A bar paints right after its ScrollView's subtree, so it covers
+            // every record up to that subtree's last one.
+            if let Some((end, hit)) = bar
+                && end >= index
+            {
+                return Some(hit);
+            }
             if !record.available || !record.enabled || !record.visible {
                 continue;
             }
-            let rect = self.scrolled_rect(view, root, entity, record);
+            let rect = [
+                record.rect[0] + placement.shift[0],
+                record.rect[1] + placement.shift[1],
+                record.rect[2],
+                record.rect[3],
+            ];
             if !rect_contains_point(rect, point) {
                 continue;
             }
-            if let Some(clip) = record.clip
+            if let Some(clip) = placement.clip
                 && !clip_contains_point(clip, point)
             {
                 continue;
             }
-            return Some((record.node, rect));
+            return Some(ScrollViewHit {
+                node: record.node,
+                rect,
+                bar: None,
+            });
         }
-        None
+        bar.map(|(_, hit)| hit)
+    }
+
+    /// Topmost enabled scroll bar under a final-logical point, with the
+    /// index of the last record of its ScrollView's subtree, after which it
+    /// paints. Outer bars paint after inner ones ending at the same record.
+    fn scroll_bar_hit(
+        &self,
+        view: &GuiEvaluatedView,
+        root: &GuiRoot,
+        entity: EntityId,
+        placements: &[GuiScrollPlacement],
+        point: [f32; 2],
+    ) -> Option<(usize, ScrollViewHit)> {
+        let mut best: Option<(usize, u32, ScrollViewHit)> = None;
+        for (index, (record, placement)) in view.nodes.iter().zip(placements).enumerate() {
+            if record.viewport.is_none()
+                || !record.available
+                || !record.visible
+                || record.paint_suppressed
+                || !(0..2).any(|axis| scroll_bar_enabled(record, axis))
+            {
+                continue;
+            }
+            if let Some(clip) = placement.clip
+                && !clip_contains_point(clip, point)
+            {
+                continue;
+            }
+            let offset = self.committed_scroll_offset(entity, view.root_incarnation, record.node);
+            let shown = [
+                scroll_bar_shown(root, record, 0),
+                scroll_bar_shown(root, record, 1),
+            ];
+            let Some(bar) = scroll_bars(record, offset, shown)
+                .into_iter()
+                .flatten()
+                .filter(|bar| scroll_bar_enabled(record, bar.axis))
+                .map(|bar| bar.shifted(placement.shift))
+                .find(|bar| rect_contains_point(bar.track, point))
+            else {
+                continue;
+            };
+            let end = view.nodes[index + 1..]
+                .iter()
+                .position(|next| next.depth <= record.depth)
+                .map_or(view.nodes.len() - 1, |after| index + after);
+            let above = best.is_none_or(|(best_end, best_depth, _)| {
+                end > best_end || (end == best_end && record.depth < best_depth)
+            });
+            if above {
+                let parts = super::super::layout::scroll_bars::scroll_bar_parts(bar.axis);
+                let part = if rect_contains_point(bar.thumb, point) {
+                    parts.1
+                } else {
+                    parts.0
+                };
+                let rect = [
+                    record.rect[0] + placement.shift[0],
+                    record.rect[1] + placement.shift[1],
+                    record.rect[2],
+                    record.rect[3],
+                ];
+                best = Some((
+                    end,
+                    record.depth,
+                    ScrollViewHit {
+                        node: record.node,
+                        rect,
+                        bar: Some((part, bar)),
+                    },
+                ));
+            }
+        }
+        best.map(|(end, _, hit)| (end, hit))
+    }
+
+    /// Committed offset of one ScrollView, or zero.
+    fn committed_scroll_offset(
+        &self,
+        entity: EntityId,
+        root_incarnation: u64,
+        node: GuiNodeId,
+    ) -> [f32; 2] {
+        self.scroll_offsets
+            .get(&GuiInputTarget {
+                entity,
+                root_incarnation,
+                node,
+            })
+            .map_or([0.0, 0.0], |cursor| cursor.offset)
+    }
+
+    /// Scrolled bar of one ScrollView on one axis at its committed offset,
+    /// when that bar takes input.
+    fn scroll_bar_of(
+        &self,
+        view: &GuiEvaluatedView,
+        root: &GuiRoot,
+        target: &GuiInputTarget,
+        axis: usize,
+    ) -> Option<GuiScrollBar> {
+        let index = view
+            .nodes
+            .iter()
+            .position(|record| record.node == target.node)?;
+        let record = &view.nodes[index];
+        if !scroll_bar_enabled(record, axis) {
+            return None;
+        }
+        let shift = self.scrolled_placements(view, target.entity)[index].shift;
+        let offset =
+            self.committed_scroll_offset(target.entity, target.root_incarnation, target.node);
+        let shown = [
+            scroll_bar_shown(root, record, 0),
+            scroll_bar_shown(root, record, 1),
+        ];
+        scroll_bars(record, offset, shown)[axis].map(|bar| bar.shifted(shift))
+    }
+
+    /// Scrolled placement of every evaluated record, index-aligned with
+    /// `view.nodes`: the final-logical shift from ancestor ScrollView
+    /// offsets and the clip with every contributing viewport moved by its
+    /// own ancestor shift. A ScrollView's viewport stays fixed relative to
+    /// its own content only, so nested content clips by the moved inner
+    /// viewport after an outer scroll. Records are in pre-order, so each
+    /// parent is the nearest preceding shallower record.
+    fn scrolled_placements(
+        &self,
+        view: &GuiEvaluatedView,
+        entity: EntityId,
+    ) -> Vec<GuiScrollPlacement> {
+        // (depth, shift inherited by children, clip inherited by children)
+        let mut ancestors: Vec<(u32, [f32; 2], Option<SurfaceClipRect>)> = Vec::new();
+        let mut placements = Vec::with_capacity(view.nodes.len());
+        for record in &view.nodes {
+            while ancestors
+                .last()
+                .is_some_and(|(depth, ..)| *depth >= record.depth)
+            {
+                ancestors.pop();
+            }
+            let (shift, clip) = ancestors
+                .last()
+                .map_or(([0.0, 0.0], record.clip), |(_, shift, clip)| {
+                    (*shift, *clip)
+                });
+            placements.push(GuiScrollPlacement {
+                shift,
+                clip,
+            });
+
+            let (children_shift, children_clip) = match record.viewport {
+                Some(viewport) => {
+                    let moved = [
+                        viewport[0] + shift[0],
+                        viewport[1] + shift[1],
+                        viewport[2] + shift[0],
+                        viewport[3] + shift[1],
+                    ];
+                    let offset = self
+                        .scroll_offsets
+                        .get(&GuiInputTarget {
+                            entity,
+                            root_incarnation: view.root_incarnation,
+                            node: record.node,
+                        })
+                        .map_or([0.0, 0.0], |cursor| cursor.offset);
+                    (
+                        [
+                            shift[0] - offset[0] * record.acc_scale[0],
+                            shift[1] - offset[1] * record.acc_scale[1],
+                        ],
+                        Some(match clip {
+                            Some(outer) => {
+                                super::super::layout::evaluation::nested_clip(outer, moved)
+                            }
+                            None => moved,
+                        }),
+                    )
+                }
+                None => (shift, clip),
+            };
+            ancestors.push((record.depth, children_shift, children_clip));
+        }
+        placements
+    }
+
+    /// Final-logical clip of one evaluated node with every contributing
+    /// ScrollView viewport moved by its own ancestor scroll shift.
+    fn scrolled_clip(
+        &self,
+        view: &GuiEvaluatedView,
+        entity: EntityId,
+        node: GuiNodeId,
+    ) -> Option<SurfaceClipRect> {
+        let index = view.nodes.iter().position(|record| record.node == node)?;
+        self.scrolled_placements(view, entity)
+            .get(index)
+            .and_then(|placement| placement.clip)
     }
 
     /// Current revision of input-owned scroll offsets. Render preparation
@@ -2232,28 +2565,28 @@ impl GuiInputSystem {
         self.scroll_revision
     }
 
-    /// Nonzero final-logical ancestor shifts for one panel, keyed by node;
-    /// identities are never reused within a root incarnation. Viewport nodes carry only outer shifts: their own offset
-    /// never applies to themselves, while their descendants shift beneath
-    /// the fixed viewport clip.
+    /// Final-logical scroll placements of one panel's moved paint, keyed by
+    /// node; identities are never reused within a root incarnation. Only
+    /// nodes whose shift is nonzero or whose clip moved appear. Viewport
+    /// nodes carry only outer shifts: their own offset never applies to
+    /// themselves, while their descendants shift beneath the viewport clip,
+    /// which itself moves with the viewport's outer shift.
     pub(crate) fn scroll_shifts_logical(
         &self,
         layout: &GuiLayoutSystem,
-        sim: &WorldSimulationState,
         entity: EntityId,
-    ) -> BTreeMap<GuiNodeId, [f32; 2]> {
-        let mut shifts = BTreeMap::new();
-        let (Some(view), Some((_, root))) = (layout.view(entity), producer_root(sim, entity))
-        else {
-            return shifts;
+    ) -> BTreeMap<GuiNodeId, GuiScrollPlacement> {
+        let Some(view) = layout.view(entity) else {
+            return BTreeMap::new();
         };
-        for record in &view.nodes {
-            let shift = self.ancestor_shift(view, &root, entity, record.node);
-            if shift != [0.0, 0.0] {
-                shifts.insert(record.node, shift);
-            }
-        }
-        shifts
+        view.nodes
+            .iter()
+            .zip(self.scrolled_placements(view, entity))
+            .filter(|(record, placement)| {
+                placement.shift != [0.0, 0.0] || placement.clip != record.clip
+            })
+            .map(|(record, placement)| (record.node, placement))
+            .collect()
     }
 }
 
@@ -2293,6 +2626,17 @@ impl GuiInputSystem {
         roots.extend(self.hovers.values().map(|cursor| cursor.target.entity));
         roots.extend(self.press_owners.keys().map(|target| target.entity));
         roots.extend(self.captures.values().map(|capture| capture.target.entity));
+        roots.extend(self.scroll_drags.values().map(|drag| drag.entity));
+        roots.extend(
+            self.scroll_bar_presses
+                .values()
+                .map(|press| press.target.entity),
+        );
+        roots.extend(
+            self.scroll_bar_hovers
+                .values()
+                .map(|hover| hover.target.entity),
+        );
         roots
     }
 
@@ -2301,11 +2645,39 @@ impl GuiInputSystem {
     /// reconstructing it from routed effects. Never mutates cursors,
     /// predictions or envelopes.
     pub(crate) fn skin_cursors(&self) -> GuiSkinCursors {
+        let mut scroll_bars: BTreeMap<GuiInputTarget, GuiScrollBarCursor> = BTreeMap::new();
+        for (target, cursor) in &self.scroll_offsets {
+            if cursor.offset != [0.0, 0.0] {
+                scroll_bars.entry(*target).or_default().offset = cursor.offset;
+            }
+        }
+        for hover in self.scroll_bar_hovers.values() {
+            scroll_bars.entry(hover.target).or_default().hovered = Some(hover.part);
+        }
+        for press in self.scroll_bar_presses.values() {
+            scroll_bars.entry(press.target).or_default().pressed = Some(press.part);
+        }
         GuiSkinCursors {
             hovered: self.hovers.values().map(|cursor| cursor.target).collect(),
             pressed: self.press_owners.keys().copied().collect(),
             focus: self.focus,
+            scroll_bars,
         }
+    }
+
+    /// Committed scroll offsets of one root incarnation's ScrollViews.
+    pub(crate) fn scroll_offsets_for(
+        &self,
+        entity: EntityId,
+        root_incarnation: u64,
+    ) -> BTreeMap<GuiNodeId, [f32; 2]> {
+        self.scroll_offsets
+            .iter()
+            .filter(|(target, _)| {
+                target.entity == entity && target.root_incarnation == root_incarnation
+            })
+            .map(|(target, cursor)| (target.node, cursor.offset))
+            .collect()
     }
 }
 
@@ -2535,8 +2907,7 @@ impl TextPaintKind {
 }
 
 /// One derived text-paint overlay in final-logical units with ancestor
-/// scroll shifts applied; viewport clips stay fixed while scrolled
-/// descendants shift beneath them.
+/// scroll shifts applied, clipped like the scrolled node it annotates.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TextPaintOverlay {
     /// Focused text input owning the overlay.
@@ -2545,7 +2916,7 @@ pub(crate) struct TextPaintOverlay {
     pub kind: TextPaintKind,
     /// Paint rects in final-logical units (caret bar widened).
     pub rects: Vec<[f32; 4]>,
-    /// Shared node clip in final-logical units, if any.
+    /// Scrolled node clip in final-logical units, if any.
     pub clip: Option<crate::systems::surface::SurfaceClipRect>,
     /// Retained node opacity.
     pub opacity: f32,
@@ -2650,11 +3021,12 @@ impl GuiInputSystem {
                 entity,
                 target,
                 evaluated.opacity,
-                evaluated.clip,
+                self.scrolled_clip(view, entity, target.node),
                 end,
                 metrics_revision,
             );
         }
+        let clip = self.scrolled_clip(view, entity, target.node);
         let mut overlays = Vec::new();
         // A clean provisional owns the selection highlight as it owns the
         // caret: it replaces the committed selection when it commits.
@@ -2674,7 +3046,7 @@ impl GuiInputSystem {
                     target,
                     kind: TextPaintKind::Selection,
                     rects,
-                    clip: evaluated.clip,
+                    clip,
                     opacity: evaluated.opacity,
                 });
             }
@@ -2686,7 +3058,7 @@ impl GuiInputSystem {
             entity,
             target,
             evaluated.opacity,
-            evaluated.clip,
+            clip,
             caret,
             metrics_revision,
         ));
@@ -2876,6 +3248,7 @@ impl GuiInputSystem {
         let provisional_caret = provisional.caret_position(composed.caret_end)?;
         let scale = *font_size * units;
         let shift = self.ancestor_shift(view, &root, entity, target.node);
+        let clip = self.scrolled_clip(view, entity, target.node);
         let origin = [origin[0] + shift[0], origin[1] + shift[1]];
         let pen_ems = pen.position;
         let pen = [
@@ -2906,7 +3279,7 @@ impl GuiInputSystem {
                 scale: evaluated.acc_scale,
                 color: evaluated.color,
                 opacity: evaluated.opacity,
-                clip: evaluated.clip.and_then(|clip| {
+                clip: clip.and_then(|clip| {
                     let min = gui_logical_to_surface_content([clip[0], clip[1]], units)?;
                     let max = gui_logical_to_surface_content([clip[2], clip[3]], units)?;
                     Some([min[0], min[1], max[0], max[1]])
@@ -2930,7 +3303,7 @@ impl GuiInputSystem {
             target,
             kind: TextPaintKind::Composition,
             rects: vec![caret_rect],
-            clip: evaluated.clip,
+            clip,
             opacity: evaluated.opacity,
         }];
         if composed.caret_start != composed.caret_end {
@@ -2951,7 +3324,7 @@ impl GuiInputSystem {
                     target,
                     kind: TextPaintKind::Selection,
                     rects,
-                    clip: evaluated.clip,
+                    clip,
                     opacity: evaluated.opacity,
                 });
             }
@@ -3081,6 +3454,28 @@ impl GuiInputSystem {
         if !self.check_owner(session, tick, input) {
             return;
         }
+        self.scroll_drags.remove(&pointer);
+        self.scroll_bar_presses.remove(&pointer);
+        self.scroll_bar_hovers.remove(&pointer);
+        // A primary press on a scroll bar drags its thumb or pages its
+        // track; inside eligible ScrollView ancestry it arms a drag that may
+        // later win the gesture from the tap.
+        let mut drag = None;
+        if button == GuiPointerButton::Primary {
+            let resolved = match projection {
+                Some(ray) => self.scroll_hit_projected(layout, sim, panel, blockers, ray),
+                None => {
+                    self.scroll_hit_logical(layout, sim, panel, position, blockers, panel_distance)
+                }
+            };
+            if let Ok(resolved) = resolved {
+                if let Some((part, bar)) = resolved.hit.bar {
+                    self.press_scroll_bar(layout, sim, session, tick, pointer, resolved, part, bar);
+                    return;
+                }
+                drag = self.scroll_drag_from(layout, sim, session, resolved);
+            }
+        }
         let routed = match self.route_point(
             layout,
             sim,
@@ -3091,6 +3486,12 @@ impl GuiInputSystem {
             projection,
         ) {
             Ok(routed) => routed,
+            Err(GuiUnhandledReason::NotFocusable) if drag.is_some() => {
+                // Non-control ScrollView content: the drag owns the press.
+                self.set_hover(session, tick, pointer, None, position);
+                self.scroll_drags.extend(drag.map(|drag| (pointer, drag)));
+                return;
+            }
             Err(reason) => {
                 self.unhandled(session, tick, input, reason);
                 self.set_hover(session, tick, pointer, None, position);
@@ -3102,9 +3503,17 @@ impl GuiInputSystem {
         // point.
         let position = routed.point;
         // Disabled controls never activate: no capture, focus or intent.
+        // Inside a ScrollView the press may still drag its content.
         if !Self::target_eligible(layout, sim, &routed.target) {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
             self.set_hover(session, tick, pointer, None, position);
+            match drag {
+                Some(drag) => {
+                    self.scroll_drags.insert(pointer, drag);
+                }
+                None => {
+                    self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
+                }
+            }
             return;
         }
         // Touch arbitration: one press per control across pointers.
@@ -3134,6 +3543,15 @@ impl GuiInputSystem {
         );
         self.press_owners.insert(routed.target, pointer);
         self.set_hover(session, tick, pointer, Some(routed.target), position);
+        // Taps arbitrate against dragging their ScrollView content; slider
+        // and text drags keep their own capture.
+        if matches!(
+            routed.kind,
+            Some(ControlKind::Button) | Some(ControlKind::Checkbox)
+        ) && let Some(drag) = drag.filter(|drag| drag.entity == routed.target.entity)
+        {
+            self.scroll_drags.insert(pointer, drag);
+        }
         // Pressing a control takes keyboard focus so the same tick can chain
         // focus-then-key inputs.
         self.set_focus(session, tick, Some(routed.target));
@@ -3218,6 +3636,34 @@ impl GuiInputSystem {
         panel_distance: Option<f32>,
         projection: Option<ProjectedRay>,
     ) {
+        if button == GuiPointerButton::Primary
+            && let Some(press) = self.scroll_bar_presses.get(&pointer)
+        {
+            if press.session != session {
+                self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+                return;
+            }
+            // Releasing a bar completes nothing; the next move re-hovers.
+            self.scroll_bar_presses.remove(&pointer);
+            self.scroll_bar_hovers.remove(&pointer);
+            return;
+        }
+        if button == GuiPointerButton::Primary
+            && let Some(drag) = self.scroll_drags.get(&pointer)
+        {
+            if drag.session != session {
+                self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+                return;
+            }
+            let active = drag.active.is_some();
+            self.scroll_drags.remove(&pointer);
+            // A drag that won the gesture already cancelled its tap, and a
+            // drag over plain content has no tap to complete.
+            if active || !self.captures.contains_key(&pointer) {
+                self.set_hover(session, tick, pointer, None, position);
+                return;
+            }
+        }
         let Some(capture) = self.captures.get(&pointer).copied() else {
             self.unhandled(session, tick, input, GuiUnhandledReason::NoCapture);
             return;
@@ -3378,6 +3824,44 @@ impl GuiInputSystem {
         panel_distance: Option<f32>,
         projection: Option<ProjectedRay>,
     ) {
+        if let Some(press) = self.scroll_bar_presses.get(&pointer).cloned() {
+            if press.session != session {
+                self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+                return;
+            }
+            self.drag_scroll_bar(layout, sim, tick, &press, position, &projection);
+            return;
+        }
+        if let Some(mut drag) = self.scroll_drags.remove(&pointer) {
+            if drag.session != session {
+                self.scroll_drags.insert(pointer, drag);
+                self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+                return;
+            }
+            match self.continue_scroll_drag(
+                layout,
+                sim,
+                tick,
+                pointer,
+                &mut drag,
+                position,
+                &projection,
+            ) {
+                ScrollDragStep::Scrolling => {
+                    self.scroll_drags.insert(pointer, drag);
+                    return;
+                }
+                ScrollDragStep::Pending => {
+                    self.scroll_drags.insert(pointer, drag);
+                    // A pressed tap keeps its own capture handling below;
+                    // plain content waits for more travel.
+                    if !self.captures.contains_key(&pointer) {
+                        return;
+                    }
+                }
+                ScrollDragStep::Lost => {}
+            }
+        }
         if let Some(capture) = self.captures.get(&pointer).copied() {
             // Drags follow only their pressing session; hover-only moves
             // below never acquire the context.
@@ -3398,11 +3882,12 @@ impl GuiInputSystem {
                 return;
             };
             if kind == ControlKind::Button || kind == ControlKind::Checkbox {
-                // Tap-versus-scroll arbitration: a button/checkbox drag that
-                // leaves the press-time rectangle hands the gesture to
-                // scrolling. The tap dies here with a cancellation so a later
-                // release, cancel or scroll-start commits nothing; slider and
-                // text drags below keep their capture.
+                // Tap-versus-drag arbitration outside ScrollView content (a
+                // scroll drag above wins first inside it): a button/checkbox
+                // drag that leaves the press-time rectangle dies here with a
+                // cancellation so a later release, cancel or scroll-start
+                // commits nothing; slider and text drags below keep their
+                // capture.
                 let inside = layout
                     .view(capture.target.entity)
                     .and_then(|view| {
@@ -3529,6 +4014,32 @@ impl GuiInputSystem {
             self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
             return;
         }
+        // Scroll bars paint above their content, so they take the hover.
+        match self.scroll_bar_under(
+            layout,
+            sim,
+            panel,
+            position,
+            blockers,
+            panel_distance,
+            projection,
+        ) {
+            Some((target, part)) => {
+                self.set_hover(session, tick, pointer, None, position);
+                self.scroll_bar_hovers.insert(
+                    pointer,
+                    ScrollBarHover {
+                        target,
+                        part,
+                        session,
+                    },
+                );
+                return;
+            }
+            None => {
+                self.scroll_bar_hovers.remove(&pointer);
+            }
+        }
         match self.route_point(
             layout,
             sim,
@@ -3557,7 +4068,7 @@ impl GuiInputSystem {
         blockers: &[super::super::GuiBlockerHit],
         panel_distance: Option<f32>,
     ) -> Result<ScrollResolved, GuiUnhandledReason> {
-        let mut best: Option<(EntityId, GuiNodeId, u64, [f32; 4])> = None;
+        let mut best: Option<(EntityId, ScrollViewHit, u64)> = None;
         let panels: Vec<EntityId> = match panel {
             Some(entity) => vec![entity],
             None => layout.evaluated_entities(),
@@ -3566,21 +4077,21 @@ impl GuiInputSystem {
             let Some(view) = layout.view(entity) else {
                 continue;
             };
-            let (_, root) = match producer_root(sim, entity) {
-                Some(root) => root,
-                None => continue,
-            };
-            let Some((node, rect)) = self.scroll_hit_in_view(view, &root, entity, position) else {
+            let Some((_, root)) = producer_root(sim, entity) else {
                 continue;
             };
-            let replace = best.is_none_or(|(current, _, _, _)| entity > current);
+            let Some(hit) = self.scroll_hit_in_view(view, &root, entity, position, true) else {
+                continue;
+            };
+            let replace = best.is_none_or(|(current, _, _)| entity > current);
             if replace {
-                best = Some((entity, node, view.root_incarnation, rect));
+                best = Some((entity, hit, view.root_incarnation));
             }
         }
-        let Some((entity, node, root_incarnation, rect)) = best else {
+        let Some((entity, hit, root_incarnation)) = best else {
             return Err(GuiUnhandledReason::NoPanelHit);
         };
+        let node = hit.node;
         let decided = match panel_distance {
             Some(distance) => {
                 let hit = GuiHit {
@@ -3614,10 +4125,18 @@ impl GuiInputSystem {
                 root_incarnation,
                 node: decided.node,
             },
-            rect,
+            hit.rect,
             position,
         ) {
-            Some(_) => Ok((entity, root_incarnation, decided.node, rect, position)),
+            Some(_) => Ok(ScrollResolved {
+                entity,
+                root_incarnation,
+                hit: ScrollViewHit {
+                    node: decided.node,
+                    ..hit
+                },
+                point: position,
+            }),
             None => Err(GuiUnhandledReason::StaleTarget),
         }
     }
@@ -3651,27 +4170,27 @@ impl GuiInputSystem {
             let Some(view) = layout.view(entity) else {
                 continue;
             };
-            let (_, root) = match producer_root(sim, entity) {
-                Some(root) => root,
-                None => continue,
+            let Some((_, root)) = producer_root(sim, entity) else {
+                continue;
             };
-            let Some((node, rect)) = self.scroll_hit_in_view(view, &root, entity, logical) else {
+            let Some(hit) = self.scroll_hit_in_view(view, &root, entity, logical, true) else {
                 continue;
             };
             let better = match best {
                 None => true,
-                Some((current_distance, current, _, _, _, _)) => {
+                Some((current_distance, current, _, _, _)) => {
                     distance < current_distance
                         || (distance == current_distance && entity < current)
                 }
             };
             if better {
-                best = Some((distance, entity, node, view.root_incarnation, rect, logical));
+                best = Some((distance, entity, hit, view.root_incarnation, logical));
             }
         }
-        let Some((distance, entity, node, root_incarnation, rect, logical)) = best else {
+        let Some((distance, entity, hit, root_incarnation, logical)) = best else {
             return Err(GuiUnhandledReason::NoPanelHit);
         };
+        let node = hit.node;
         let mut resolved = Vec::with_capacity(blockers.len());
         for blocker in blockers {
             let index = blocker.entity.index() as usize;
@@ -3700,11 +4219,11 @@ impl GuiInputSystem {
                 }
             }
         }
-        let hit = GuiHit {
+        let panel_hit = GuiHit {
             node,
             position: logical,
         };
-        match super::super::resolve_panel_hit(Some(distance as f32), Some(hit), &resolved) {
+        match super::super::resolve_panel_hit(Some(distance as f32), Some(panel_hit), &resolved) {
             super::super::GuiPanelResolution::Panel(decided) => {
                 match recheck_hit(
                     sim,
@@ -3714,10 +4233,18 @@ impl GuiInputSystem {
                         root_incarnation,
                         node: decided.node,
                     },
-                    rect,
+                    hit.rect,
                     logical,
                 ) {
-                    Some(_) => Ok((entity, root_incarnation, decided.node, rect, logical)),
+                    Some(_) => Ok(ScrollResolved {
+                        entity,
+                        root_incarnation,
+                        hit: ScrollViewHit {
+                            node: decided.node,
+                            ..hit
+                        },
+                        point: logical,
+                    }),
                     None => Err(GuiUnhandledReason::StaleTarget),
                 }
             }
@@ -3735,9 +4262,11 @@ impl GuiInputSystem {
     /// extents, pass the remainder outward and queue one envelope per
     /// ScrollView that consumed movement. A scroll that moves content
     /// disarms held button/checkbox taps on the same panel and session, so
-    /// scroll-starts never toggle. Without a ScrollView ancestor the delta
-    /// accumulates on the hit node without reflow, preserving the legacy
-    /// input-owned sink for non-scrollable content.
+    /// scroll-starts never toggle. A scroll no ScrollView consumes, over
+    /// non-scrollable content or at every edge, is reported unhandled once
+    /// so scene controls can take it; a remainder left after partial
+    /// consumption drops at the outermost edge instead, because the input
+    /// was handled.
     #[allow(clippy::too_many_arguments)]
     fn route_scroll(
         &mut self,
@@ -3765,13 +4294,19 @@ impl GuiInputSystem {
             Some(ray) => self.scroll_hit_projected(layout, sim, panel, blockers, ray),
             None => self.scroll_hit_logical(layout, sim, panel, position, blockers, panel_distance),
         };
-        let (entity, root_incarnation, hit, ..) = match resolved {
+        let ScrollResolved {
+            entity,
+            root_incarnation,
+            hit,
+            ..
+        } = match resolved {
             Ok(resolved) => resolved,
             Err(reason) => {
                 self.unhandled(session, tick, input, reason);
                 return;
             }
         };
+        let hit = hit.node;
         let target = GuiInputTarget {
             entity,
             node: hit,
@@ -3789,48 +4324,64 @@ impl GuiInputSystem {
             }
         };
         let chain = Self::scroll_chain(&root, hit);
-        if chain.is_empty() {
-            self.push_envelope(
-                tick,
-                PendingEnvelope {
-                    session,
-                    epoch: self.owner_epoch,
-                    source_tick: tick,
-                    target: Some(target),
-                    pointer: None,
-                    press_seq: None,
-                    cancel_on_miss: false,
-                    kind: EnvelopeKind::Scroll {
-                        delta,
-                    },
-                },
-            );
-            return;
-        }
         let Some(view) = layout.view(entity) else {
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
             return;
         };
+        if !self.consume_scroll(view, entity, &chain, delta, session, tick) {
+            self.unhandled(session, tick, input, GuiUnhandledReason::ScrollUnconsumed);
+            return;
+        }
+        // Leftover remainder drops at the outer edge: movement clamps.
+        self.cancel_held_taps_for_scroll(sim, session, tick, entity);
+    }
+
+    /// Routed offset of one ScrollView: its committed offset plus every
+    /// delta already queued for it this tick, so same-tick scrolls chain
+    /// against the movement their predecessors consumed.
+    fn routed_scroll_offset(&self, target: &GuiInputTarget) -> [f32; 2] {
+        self.scroll_predicted
+            .get(target)
+            .copied()
+            .unwrap_or_else(|| {
+                self.scroll_offsets
+                    .get(target)
+                    .map(|cursor| cursor.offset)
+                    .unwrap_or([0.0, 0.0])
+            })
+    }
+
+    /// Consume one delta innermost-first along a ScrollView chain against
+    /// evaluated extents and routed offsets, passing each remainder outward
+    /// and queueing one envelope per ScrollView that consumed movement.
+    /// Returns whether any ScrollView consumed movement; a leftover
+    /// remainder at the outermost edge drops.
+    fn consume_scroll(
+        &mut self,
+        view: &GuiEvaluatedView,
+        entity: EntityId,
+        chain: &[GuiNodeId],
+        delta: [f32; 2],
+        session: u64,
+        tick: u64,
+    ) -> bool {
         let mut remainder = delta;
         let mut consumed_any = false;
-        for scroll in chain {
+        for &scroll in chain {
             if remainder == [0.0, 0.0] {
                 break;
             }
             if !view.nodes.iter().any(|record| record.node == scroll) {
                 continue;
             }
+
             let target = GuiInputTarget {
                 entity,
-                root_incarnation,
+                root_incarnation: view.root_incarnation,
                 node: scroll,
             };
             let max = Self::scroll_max(view, scroll);
-            let current = self
-                .scroll_offsets
-                .get(&target)
-                .map(|cursor| cursor.offset)
-                .unwrap_or([0.0, 0.0]);
+            let current = self.routed_scroll_offset(&target);
             let next = [
                 (current[0] + remainder[0]).clamp(0.0, max[0]),
                 (current[1] + remainder[1]).clamp(0.0, max[1]),
@@ -3838,6 +4389,7 @@ impl GuiInputSystem {
             let consumed = [next[0] - current[0], next[1] - current[1]];
             if consumed != [0.0, 0.0] {
                 consumed_any = true;
+                self.scroll_predicted.insert(target, next);
                 self.push_envelope(
                     tick,
                     PendingEnvelope {
@@ -3856,10 +4408,308 @@ impl GuiInputSystem {
             }
             remainder = [remainder[0] - consumed[0], remainder[1] - consumed[1]];
         }
-        // Leftover remainder drops at the outer edge: movement clamps.
-        if consumed_any {
-            self.cancel_held_taps_for_scroll(sim, session, tick, entity);
+        consumed_any
+    }
+
+    /// Innermost-first eligible ScrollView ancestry of one hit node that
+    /// the retained view evaluated.
+    fn eligible_scroll_chain(
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        entity: EntityId,
+        root_incarnation: u64,
+        node: GuiNodeId,
+    ) -> Vec<GuiNodeId> {
+        let (Some(view), Some((_, root))) = (layout.view(entity), producer_root(sim, entity))
+        else {
+            return Vec::new();
+        };
+        Self::scroll_chain(&root, node)
+            .into_iter()
+            .filter(|&node| {
+                Self::target_eligible(
+                    layout,
+                    sim,
+                    &GuiInputTarget {
+                        entity,
+                        root_incarnation,
+                        node,
+                    },
+                ) && view.nodes.iter().any(|record| record.node == node)
+            })
+            .collect()
+    }
+
+    /// Arm a scroll drag for a primary press from its scroll-aware hit,
+    /// keeping the innermost-first eligible ScrollView ancestry. None
+    /// outside ScrollView content.
+    fn scroll_drag_from(
+        &self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        session: u64,
+        resolved: ScrollResolved,
+    ) -> Option<ScrollDrag> {
+        let chain = Self::eligible_scroll_chain(
+            layout,
+            sim,
+            resolved.entity,
+            resolved.root_incarnation,
+            resolved.hit.node,
+        );
+        if chain.is_empty() {
+            return None;
         }
+
+        Some(ScrollDrag {
+            entity: resolved.entity,
+            root_incarnation: resolved.root_incarnation,
+            chain,
+            origin: resolved.point,
+            last: resolved.point,
+            active: None,
+            session,
+        })
+    }
+
+    /// Press a scroll bar part: capture the pointer on it, and page the
+    /// track by one viewport extent toward the pressed side. Thumb presses
+    /// scroll only once the pointer moves. Bars never take focus.
+    #[allow(clippy::too_many_arguments)]
+    fn press_scroll_bar(
+        &mut self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        session: u64,
+        tick: u64,
+        pointer: u32,
+        resolved: ScrollResolved,
+        part: GuiPrimitivePart,
+        bar: GuiScrollBar,
+    ) {
+        let target = GuiInputTarget {
+            entity: resolved.entity,
+            root_incarnation: resolved.root_incarnation,
+            node: resolved.hit.node,
+        };
+        let chain = Self::eligible_scroll_chain(
+            layout,
+            sim,
+            target.entity,
+            target.root_incarnation,
+            target.node,
+        );
+        let Some(view) = layout.view(target.entity) else {
+            return;
+        };
+        if chain.first() != Some(&target.node) {
+            return;
+        }
+        self.set_hover(session, tick, pointer, None, resolved.point);
+
+        let axis = bar.axis;
+        let along = resolved.point[axis];
+        let thumb = matches!(
+            part,
+            GuiPrimitivePart::ScrollThumbX | GuiPrimitivePart::ScrollThumbY
+        );
+        if !thumb {
+            let mut delta = [0.0, 0.0];
+            delta[axis] = if along < bar.thumb_start() {
+                -bar.page
+            } else {
+                bar.page
+            };
+            if self.consume_scroll(view, target.entity, &chain, delta, session, tick) {
+                self.cancel_held_taps_for_scroll(sim, session, tick, target.entity);
+            }
+        }
+        self.scroll_bar_hovers.insert(
+            pointer,
+            ScrollBarHover {
+                target,
+                part,
+                session,
+            },
+        );
+        self.scroll_bar_presses.insert(
+            pointer,
+            ScrollBarPress {
+                target,
+                part,
+                chain,
+                grab: along - bar.thumb_start(),
+                session,
+            },
+        );
+    }
+
+    /// Drag a pressed scroll bar thumb: the thumb follows the pointer along
+    /// the track, clamped to its ends, and the ScrollView scrolls to the
+    /// matching offset through the ordinary consumption.
+    fn drag_scroll_bar(
+        &mut self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        tick: u64,
+        press: &ScrollBarPress,
+        position: [f32; 2],
+        projection: &Option<ProjectedRay>,
+    ) {
+        let Some(axis) = scroll_bar_axis(press.part) else {
+            return;
+        };
+        if !matches!(
+            press.part,
+            GuiPrimitivePart::ScrollThumbX | GuiPrimitivePart::ScrollThumbY
+        ) {
+            return;
+        }
+        let Some(point) =
+            Self::remap_capture_point(layout, sim, &press.target, position, projection)
+        else {
+            return;
+        };
+        let (Some(view), Some((_, root))) = (
+            layout.view(press.target.entity),
+            producer_root(sim, press.target.entity),
+        ) else {
+            return;
+        };
+        let Some(bar) = self.scroll_bar_of(view, &root, &press.target, axis) else {
+            return;
+        };
+        let desired = bar.offset_for_thumb(point[axis] - press.grab);
+        let mut delta = [0.0, 0.0];
+        delta[axis] = desired - self.routed_scroll_offset(&press.target)[axis];
+        if delta[axis].is_finite()
+            && self.consume_scroll(
+                view,
+                press.target.entity,
+                &press.chain,
+                delta,
+                press.session,
+                tick,
+            )
+        {
+            self.cancel_held_taps_for_scroll(sim, press.session, tick, press.target.entity);
+        }
+    }
+
+    /// Scroll bar part under a hover point, resolved like a scroll.
+    #[allow(clippy::too_many_arguments)]
+    fn scroll_bar_under(
+        &self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        panel: Option<EntityId>,
+        position: [f32; 2],
+        blockers: &[super::super::GuiBlockerHit],
+        panel_distance: Option<f32>,
+        projection: Option<ProjectedRay>,
+    ) -> Option<(GuiInputTarget, GuiPrimitivePart)> {
+        let resolved = match projection {
+            Some(ray) => self.scroll_hit_projected(layout, sim, panel, blockers, ray),
+            None => self.scroll_hit_logical(layout, sim, panel, position, blockers, panel_distance),
+        }
+        .ok()?;
+        let (part, _) = resolved.hit.bar?;
+        Some((
+            GuiInputTarget {
+                entity: resolved.entity,
+                root_incarnation: resolved.root_incarnation,
+                node: resolved.hit.node,
+            },
+            part,
+        ))
+    }
+
+    /// Advance one pointer's scroll drag. A pending drag wins once its
+    /// travel passes the slop and a ScrollView in its chain has capacity on
+    /// the dominant axis: the pointer's pending tap cancels and the whole
+    /// travel since the press scrolls. An active drag scrolls by each
+    /// move's travel, innermost-first from the winning ScrollView outward.
+    #[allow(clippy::too_many_arguments)]
+    fn continue_scroll_drag(
+        &mut self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        tick: u64,
+        pointer: u32,
+        drag: &mut ScrollDrag,
+        position: [f32; 2],
+        projection: &Option<ProjectedRay>,
+    ) -> ScrollDragStep {
+        let Some(view) = layout
+            .view(drag.entity)
+            .filter(|view| view.root_incarnation == drag.root_incarnation)
+        else {
+            return ScrollDragStep::Lost;
+        };
+        let point = match projection {
+            Some(ray) => match Self::project_panel_point(layout, sim, drag.entity, ray, false) {
+                Some((_, point)) => point,
+                None => return ScrollDragStep::Pending,
+            },
+            None => position,
+        };
+        if !point.iter().all(|lane| lane.is_finite()) {
+            return ScrollDragStep::Pending;
+        }
+
+        let winner = match drag.active {
+            Some(winner) => winner,
+            None => {
+                let travel = [point[0] - drag.origin[0], point[1] - drag.origin[1]];
+                let slop =
+                    SCROLL_DRAG_SLOP * view.root_bounds[2].abs().min(view.root_bounds[3].abs());
+                if travel[0].hypot(travel[1]) <= slop {
+                    return ScrollDragStep::Pending;
+                }
+                let axis = usize::from(travel[1].abs() >= travel[0].abs());
+                let Some(winner) = drag
+                    .chain
+                    .iter()
+                    .position(|&node| Self::scroll_max(view, node)[axis] > 0.0)
+                else {
+                    return ScrollDragStep::Pending;
+                };
+                // The drag wins: the pointer's pending tap dies with one
+                // cancellation, so its release commits nothing.
+                if let Some(capture) = self.captures.get(&pointer).copied() {
+                    self.pending_cancellations.push(GuiInputCancellation {
+                        session: drag.session,
+                        source_tick: tick,
+                        effect_tick: tick,
+                        target: Some(capture.target),
+                        reason: GuiInputCancelReason::GestureCancelled,
+                    });
+                }
+                self.set_hover(drag.session, tick, pointer, None, point);
+                self.drop_capture(pointer);
+                drag.active = Some(winner);
+                winner
+            }
+        };
+
+        // Content follows the pointer: travel down scrolls toward the start.
+        // Offsets are ScrollView-local, so travel divides by its scale.
+        let scale = view
+            .nodes
+            .iter()
+            .find(|record| record.node == drag.chain[winner])
+            .map_or([1.0, 1.0], |record| record.acc_scale);
+        let travel = [drag.last[0] - point[0], drag.last[1] - point[1]];
+        let delta = [
+            travel[0] / scale[0].abs().max(f32::MIN_POSITIVE),
+            travel[1] / scale[1].abs().max(f32::MIN_POSITIVE),
+        ];
+        drag.last = point;
+        let chain = drag.chain[winner..].to_vec();
+        if self.consume_scroll(view, drag.entity, &chain, delta, drag.session, tick) {
+            self.cancel_held_taps_for_scroll(sim, drag.session, tick, drag.entity);
+        }
+        ScrollDragStep::Scrolling
     }
 
     /// Disarm held button/checkbox taps on one panel after a scroll moved
@@ -4913,6 +5763,15 @@ impl GuiInputSystem {
         targets.extend(self.captures.values().map(|capture| capture.target));
         targets.extend(self.hovers.values().map(|cursor| cursor.target));
         targets.extend(self.press_owners.keys().copied());
+        targets.extend(self.scroll_drags.values().flat_map(|drag| {
+            drag.chain.iter().map(|&node| GuiInputTarget {
+                entity: drag.entity,
+                root_incarnation: drag.root_incarnation,
+                node,
+            })
+        }));
+        targets.extend(self.scroll_bar_presses.values().map(|press| press.target));
+        targets.extend(self.scroll_bar_hovers.values().map(|hover| hover.target));
         targets.extend(self.envelopes.iter().filter_map(|envelope| envelope.target));
         targets.extend(self.predicted.keys().copied());
         targets.extend(self.scroll_offsets.keys().copied());
@@ -5089,6 +5948,7 @@ impl GuiInputSystem {
         }
         self.envelopes = kept;
         self.predicted.remove(&target);
+        self.scroll_predicted.remove(&target);
 
         if let Some(focus) = self.focus.filter(|focus| focus.target == target) {
             self.focus = None;
@@ -5143,6 +6003,11 @@ impl GuiInputSystem {
             }
         }
         self.press_owners.remove(&target);
+        self.scroll_drags.retain(|_, drag| !drag.scrolls(&target));
+        self.scroll_bar_presses
+            .retain(|_, press| press.target != target && !press.chain.contains(&target.node));
+        self.scroll_bar_hovers
+            .retain(|_, hover| hover.target != target);
 
         let dropped_caret = self.text_carets.remove(&target).is_some();
         let dropped_composition = self
@@ -5210,6 +6075,9 @@ impl GuiInputSystem {
     /// Apply every queued envelope in order with liveness revalidation.
     fn apply_envelopes(&mut self, access: &mut SystemRuntimeAccess<'_>, tick: u64) {
         let envelopes = std::mem::take(&mut self.envelopes);
+        // Every queued scroll resolves below, so routed offsets resync from
+        // the committed ones on the next routing pass.
+        self.scroll_predicted.clear();
         if envelopes.is_empty() {
             return;
         }
@@ -5411,8 +6279,8 @@ impl GuiInputSystem {
                     .map_or(GuiTargetStatus::Ineligible, |layout| {
                         evaluated_status(access.world, layout, &target)
                     });
-                let root = match status {
-                    GuiTargetStatus::Eligible(root) => root,
+                match status {
+                    GuiTargetStatus::Eligible(_) => {}
                     GuiTargetStatus::Removed => {
                         self.cancel_envelope(
                             tick,
@@ -5431,54 +6299,34 @@ impl GuiInputSystem {
                         );
                         return;
                     }
-                };
-                // ScrollView targets clamp authoritatively against current
-                // extents, so same-tick chains converge on the bound instead
-                // of overshooting it. Non-scrollable hits keep the legacy
-                // unbounded input-owned sink without reflowing layout.
-                let scrollable = root.nodes().node(target.node).is_some_and(|live| {
-                    matches!(
-                        live.data,
-                        GuiNodeData::Container(GuiContainerKind::ScrollView)
-                    )
-                });
-                let (offset, moved) = if scrollable {
-                    let current = self
-                        .scroll_offsets
-                        .get(&target)
-                        .map(|cursor| cursor.offset)
-                        .unwrap_or([0.0, 0.0]);
-                    let max = self
-                        .layout(&*access)
-                        .ok()
-                        .and_then(|layout| layout.view(target.entity))
-                        .map(|view| Self::scroll_max(view, target.node))
-                        .unwrap_or([f32::INFINITY, f32::INFINITY]);
-                    let next = [
-                        (current[0] + delta[0]).clamp(0.0, max[0]),
-                        (current[1] + delta[1]).clamp(0.0, max[1]),
-                    ];
-                    self.scroll_offsets.insert(
-                        target,
-                        ScrollCursor {
-                            offset: next,
-                            session: envelope.session,
-                            source_tick: envelope.source_tick,
-                        },
-                    );
-                    (next, next != current)
-                } else {
-                    let entry = self.scroll_offsets.entry(target).or_insert(ScrollCursor {
-                        offset: [0.0, 0.0],
+                }
+                // Targets clamp authoritatively against current extents, so
+                // same-tick chains converge on the bound instead of
+                // overshooting it; routing only queues ScrollView targets.
+                let current = self
+                    .scroll_offsets
+                    .get(&target)
+                    .map(|cursor| cursor.offset)
+                    .unwrap_or([0.0, 0.0]);
+                let max = self
+                    .layout(&*access)
+                    .ok()
+                    .and_then(|layout| layout.view(target.entity))
+                    .map(|view| Self::scroll_max(view, target.node))
+                    .unwrap_or([f32::INFINITY, f32::INFINITY]);
+                let offset = [
+                    (current[0] + delta[0]).clamp(0.0, max[0]),
+                    (current[1] + delta[1]).clamp(0.0, max[1]),
+                ];
+                let moved = offset != current;
+                self.scroll_offsets.insert(
+                    target,
+                    ScrollCursor {
+                        offset,
                         session: envelope.session,
                         source_tick: envelope.source_tick,
-                    });
-                    entry.offset[0] += delta[0];
-                    entry.offset[1] += delta[1];
-                    entry.session = envelope.session;
-                    entry.source_tick = envelope.source_tick;
-                    (entry.offset, delta != [0.0, 0.0])
-                };
+                    },
+                );
                 // Clamp-to-edge no-ops leave the stored offset untouched and
                 // never bump; dropped outer-edge remainder never reaches an
                 // envelope, so this is the only bump site.
@@ -6091,6 +6939,11 @@ impl System for GuiInputSystem {
             self.drop_capture(pointer);
         }
         self.hovers.retain(|_, cursor| cursor.session != session);
+        self.scroll_drags.retain(|_, drag| drag.session != session);
+        self.scroll_bar_presses
+            .retain(|_, press| press.session != session);
+        self.scroll_bar_hovers
+            .retain(|_, hover| hover.session != session);
         // Ownership derives from captures; rebuild it after the purge.
         self.press_owners.clear();
         for (pointer, capture) in &self.captures {
@@ -6098,6 +6951,7 @@ impl System for GuiInputSystem {
         }
         // Predictions resync from committed values on next routing.
         self.predicted.clear();
+        self.scroll_predicted.clear();
         let carets_before = self.text_carets.len();
         self.text_carets
             .retain(|_, cursor| cursor.session != session);
@@ -6464,6 +7318,21 @@ impl GuiInputSystem {
     /// with an identical pointer ID reports `NotOwner` without touching
     /// the owner's gesture.
     fn route_cancel(&mut self, session: u64, tick: u64, input: &GuiInputCommand, pointer: u32) {
+        if self
+            .scroll_drags
+            .get(&pointer)
+            .is_some_and(|drag| drag.session == session)
+        {
+            self.scroll_drags.remove(&pointer);
+        }
+        if self
+            .scroll_bar_presses
+            .get(&pointer)
+            .is_some_and(|press| press.session == session)
+        {
+            self.scroll_bar_presses.remove(&pointer);
+            self.scroll_bar_hovers.remove(&pointer);
+        }
         let Some(capture) = self.captures.get(&pointer).copied() else {
             return;
         };
@@ -6601,9 +7470,10 @@ impl crate::WorldContext<'_> {
 
     /// Total final-logical shift for one node from its ancestor ScrollView
     /// offsets, or zero outside scrolled subtrees. Retained paint, hit and
-    /// caret consumers apply this translation to the retained rectangle
-    /// while viewport clips stay fixed. Render preparation translates
-    /// retained paint by this shift when the scroll revision moves.
+    /// caret consumers apply this translation to the retained rectangle and
+    /// clip it by viewports moved with their own outer shifts. Render
+    /// preparation places retained paint the same way when the scroll
+    /// revision moves.
     pub fn gui_scroll_shift(&self, entity: EntityId, node: GuiNodeId) -> [f32; 2] {
         let (Some(input), Some(layout), Some(root)) = (
             self.system::<GuiInputSystem>(GuiInputSystem::ID),
@@ -6779,11 +7649,17 @@ impl crate::WorldContext<'_> {
 #[path = "commit_source_tests.rs"]
 mod commit_source_tests;
 #[cfg(test)]
+#[path = "drag_scrolling_tests.rs"]
+mod drag_scrolling_tests;
+#[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[cfg(test)]
 #[path = "routing_tests.rs"]
 mod routing_tests;
+#[cfg(test)]
+#[path = "scroll_bar_tests.rs"]
+mod scroll_bar_tests;
 #[cfg(test)]
 #[path = "scrolling_tests.rs"]
 mod scrolling_tests;

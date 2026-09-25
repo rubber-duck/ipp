@@ -70,12 +70,12 @@ const snapshotBytes = () =>
     u64(3n),
     u64(12n),
     u32(2),
-    // Container root: id, no parent, role, no name, no value,
-    // revision, bounds, enabled, visible, available, focus scope, no
-    // actions.
+    // ScrollView root: id, no parent, role, no name, no value, revision,
+    // bounds, enabled, visible, available, focus scope, no actions, scroll
+    // position.
     u32(1),
     u32(0),
-    u8(0),
+    u8(8),
     u8(0),
     u8(0),
     u32(0),
@@ -88,6 +88,11 @@ const snapshotBytes = () =>
     u8(1),
     u8(1),
     u8(0),
+    u8(1),
+    f32(0),
+    f32(2),
+    f32(0),
+    f32(4),
     // Button: parent, role, name, revision, bounds, flags, one action.
     u32(2),
     u32(1),
@@ -106,6 +111,8 @@ const snapshotBytes = () =>
     u8(0),
     u8(1),
     u8(0),
+    // No scroll position.
+    u8(0),
     // Observed focus.
     u8(1),
     u32(2),
@@ -118,7 +125,7 @@ const snapshotTree = {
   nodes: [
     {
       id: 1,
-      role: "container",
+      role: "scrollView",
       value: { kind: "none" },
       revision: 0,
       bounds: [0, 0, 10, 10],
@@ -127,6 +134,7 @@ const snapshotTree = {
       available: true,
       focusScope: true,
       actions: [],
+      scroll: { offset: [0, 2], maxOffset: [0, 4] },
     },
     {
       id: 2,

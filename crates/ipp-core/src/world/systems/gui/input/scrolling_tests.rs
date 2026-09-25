@@ -8,51 +8,42 @@ use crate::{
 };
 
 #[test]
-fn scroll_then_pointer_shares_one_snapshot_without_reflow() {
+fn wheel_over_non_scrollable_content_is_unhandled_without_phantom_scroll() {
     let mut fixture = setup();
     insert_nodes(&mut fixture, true, false);
     let at = node_centre(&mut fixture, GuiNodeId(2));
     let panel = fixture.panel;
-    // Scroll alone never reflows: offsets stay input-owned while routing
-    // shares the retained snapshot.
     let before = world(&mut fixture).gui_layout_view(panel).unwrap();
-    {
+    assert_eq!(world(&mut fixture).gui_scroll_revision(), 0);
+
+    // No ScrollView sits under the point: the wheel reports unhandled
+    // exactly once for scene controls and moves no offset.
+    let routed = {
         let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(
-                SESSION,
-                GuiInputCommand::Scroll {
-                    panel: None,
-                    position: at,
-                    delta: [0.0, 2.0],
-                    blockers: Vec::new(),
-                    panel_distance: None,
-                },
-            )
+            .enqueue_gui_input_command(SESSION, scroll_command(at, [0.0, 5.0]))
             .unwrap();
-        context.step(0.0).unwrap();
-    }
+        context.step(0.0).unwrap()
+    };
+    let reasons: Vec<_> = routed
+        .gui_unhandled_inputs
+        .iter()
+        .map(|unhandled| unhandled.reason.clone())
+        .collect();
+    assert_eq!(reasons, vec![GuiUnhandledReason::ScrollUnconsumed]);
     let report = world(&mut fixture).step(0.0).unwrap();
+    assert!(scroll_offsets_of(&routed).is_empty());
+    assert!(scroll_offsets_of(&report).is_empty());
+    assert!(report.gui_unhandled_inputs.is_empty());
+    assert_eq!(world(&mut fixture).gui_scroll_revision(), 0);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        [0.0, 0.0]
+    );
     let after = world(&mut fixture).gui_layout_view(panel).unwrap();
     assert_eq!(before.layout_revision, after.layout_revision);
     assert_eq!(before.reflow_count, after.reflow_count);
-    let scroll = report
-        .gui_input_effects
-        .iter()
-        .find_map(|effect| match &effect.kind {
-            GuiInputEffectKind::ScrollChanged {
-                offset,
-                ..
-            } => Some(*offset),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(scroll, [0.0, 2.0]);
-    // Scroll offsets stay input-owned: layout never observes them.
-    assert_eq!(
-        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
-        [0.0, 2.0]
-    );
+
     // A routed toggle refreshes retained paint/state without geometry work.
     {
         let mut context = world(&mut fixture);
@@ -61,13 +52,7 @@ fn scroll_then_pointer_shares_one_snapshot_without_reflow() {
         }
         context.step(0.0).unwrap();
     }
-    let report = world(&mut fixture).step(0.0).unwrap();
-    assert!(
-        report
-            .gui_input_effects
-            .iter()
-            .any(|effect| matches!(effect.kind, GuiInputEffectKind::ControlCommitted { .. }))
-    );
+    world(&mut fixture).step(0.0).unwrap();
     let toggled = world(&mut fixture).gui_layout_view(panel).unwrap();
     assert_eq!(toggled.layout_revision, after.layout_revision);
     assert_eq!(toggled.reflow_count, after.reflow_count);
@@ -86,167 +71,87 @@ fn scroll_then_pointer_shares_one_snapshot_without_reflow() {
         }
         other => panic!("expected checkbox, got {other:?}"),
     }
-    // The input-owned scroll offset survives the commit reflow.
+}
+
+#[test]
+fn scroll_at_every_edge_is_unhandled_once() {
+    let mut fixture = setup();
+    insert_nested_scroll(&mut fixture);
+    // Scrolling toward the start at rest: neither ScrollView can consume.
+    let routed = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, -3.0]))
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert_eq!(routed.gui_unhandled_inputs.len(), 1);
     assert_eq!(
-        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        routed.gui_unhandled_inputs[0].reason,
+        GuiUnhandledReason::ScrollUnconsumed
+    );
+    let report = world(&mut fixture).step(0.0).unwrap();
+    assert!(scroll_offsets_of(&report).is_empty());
+    assert_eq!(world(&mut fixture).gui_scroll_revision(), 0);
+
+    // Partial consumption is handled: the remainder past the outer edge
+    // drops without an unhandled record.
+    let routed = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, 20.0]))
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert!(routed.gui_unhandled_inputs.is_empty());
+    world(&mut fixture).step(0.0).unwrap();
+    // At both far edges the same wheel is unhandled again.
+    let routed = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, 1.0]))
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert_eq!(routed.gui_unhandled_inputs.len(), 1);
+}
+
+#[test]
+fn removing_a_scrolled_view_resets_its_offset() {
+    let mut fixture = setup();
+    insert_nested_scroll(&mut fixture);
+    let panel = fixture.panel;
+    let root_incarnation = incarnation(&mut fixture);
+    scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 2.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
         [0.0, 2.0]
     );
-}
+    let revision = world(&mut fixture).gui_scroll_revision();
 
-/// Nested ScrollViews without fonts: outer viewport 10x6 over 10x10 content,
-/// inner viewport 10x4 over 10x8 content, plus one checkbox riding the inner
-/// content at local [0, 4].
-fn insert_nested_scroll(fixture: &mut Fixture) {
-    let root_incarnation = incarnation(fixture);
-    let panel = fixture.panel;
-    let style = |width: f32, height: f32| GuiNodeStyle {
-        width: Some(width),
-        height: Some(height),
-        ..Default::default()
-    };
-    let commands = vec![
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(1),
-            parent: None,
-            index: 0,
-            data: GuiNodeData::Container(GuiContainerKind::Column),
-            values: crate::GuiNodeDataRow::default(),
-            style: style(10.0, 10.0),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(2),
-            parent: Some(GuiNodeId(1)),
-            index: 0,
-            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
-            values: crate::GuiNodeDataRow::default(),
-            style: style(10.0, 6.0),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(3),
-            parent: Some(GuiNodeId(2)),
-            index: 0,
-            data: GuiNodeData::Container(GuiContainerKind::Column),
-            values: crate::GuiNodeDataRow::default(),
-            style: GuiNodeStyle::default(),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(4),
-            parent: Some(GuiNodeId(3)),
-            index: 0,
-            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
-            values: crate::GuiNodeDataRow::default(),
-            style: style(10.0, 4.0),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(5),
-            parent: Some(GuiNodeId(4)),
-            index: 0,
-            data: GuiNodeData::Container(GuiContainerKind::Column),
-            values: crate::GuiNodeDataRow::default(),
-            style: GuiNodeStyle::default(),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(6),
-            parent: Some(GuiNodeId(5)),
-            index: 0,
-            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
-            values: crate::GuiNodeDataRow::default(),
-            style: style(10.0, 4.0),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(7),
-            parent: Some(GuiNodeId(5)),
-            index: 1,
-            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
-            values: crate::GuiNodeDataRow::default(),
-            style: style(10.0, 4.0),
-        },
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(8),
-            parent: Some(GuiNodeId(3)),
-            index: 1,
-            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
-            values: crate::GuiNodeDataRow::default(),
-            style: style(10.0, 6.0),
-        },
-        // Node identities allocate sequentially: id 9 must come last.
-        GuiCommand::InsertNode {
-            entity: panel,
-            root_incarnation,
-            id: GuiNodeId(9),
-            parent: Some(GuiNodeId(7)),
-            index: 0,
-            data: GuiNodeData::Checkbox,
-            values: GuiNodeDataRow::checkbox(false),
-            // Explicit size: layout evaluation drops unsized controls.
-            style: style(1.0, 1.0),
-        },
-    ];
-    let mut context = world(fixture);
-    for command in commands {
-        context.enqueue_gui_command(SESSION, command).unwrap();
-    }
-    context.step(0.0).unwrap();
-}
-
-/// Scroll offsets reported by one apply step, keyed by consuming node.
-fn scroll_offsets_of(report: &crate::WorldUpdateReport) -> Vec<(GuiNodeId, [f32; 2])> {
-    let mut offsets: Vec<(GuiNodeId, [f32; 2])> = report
-        .gui_input_effects
-        .iter()
-        .filter_map(|effect| match &effect.kind {
-            GuiInputEffectKind::ScrollChanged {
-                node,
-                offset,
-                ..
-            } => Some((*node, *offset)),
-            _ => None,
-        })
-        .collect();
-    offsets.sort_by_key(|(node, _)| *node);
-    offsets
-}
-
-fn scroll_command(position: [f32; 2], delta: [f32; 2]) -> GuiInputCommand {
-    GuiInputCommand::Scroll {
-        panel: None,
-        position,
-        delta,
-        blockers: Vec::new(),
-        panel_distance: None,
-    }
-}
-
-/// Route one scroll and apply it, returning the apply-step report.
-fn scroll_and_apply(
-    fixture: &mut Fixture,
-    position: [f32; 2],
-    delta: [f32; 2],
-) -> crate::WorldUpdateReport {
-    {
-        let mut context = world(fixture);
+    let report = {
+        let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(SESSION, scroll_command(position, delta))
+            .enqueue_gui_command(
+                SESSION,
+                GuiCommand::RemoveNode {
+                    handle: crate::GuiNodeHandle::new(
+                        SESSION,
+                        panel,
+                        root_incarnation,
+                        GuiNodeId(4),
+                    ),
+                },
+            )
             .unwrap();
-        context.step(0.0).unwrap();
-    }
-    world(fixture).step(0.0).unwrap()
+        context.step(0.0).unwrap()
+    };
+    assert_eq!(scroll_offsets_of(&report), vec![(GuiNodeId(4), [0.0, 0.0])]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 0.0]
+    );
+    assert!(world(&mut fixture).gui_scroll_revision() > revision);
 }
 
 #[test]
@@ -308,19 +213,15 @@ fn scrolled_content_moves_and_reveals_clipped_targets() {
         world(&mut fixture).gui_scrolled_rect(panel, GuiNodeId(6)),
         Some([0.0, 0.0, 10.0, 4.0])
     );
-    // Before scrolling, the point sits over the plain container: no control
-    // activates there.
+    // Before scrolling, the point sits over plain ScrollView content: no
+    // control activates there, and the press only arms a content drag.
     {
         let mut context = world(&mut fixture);
         context
             .enqueue_gui_input_command(SESSION, down_up(7, [0.07, 0.07])[0].clone())
             .unwrap();
         let report = context.step(0.0).unwrap();
-        assert_eq!(report.gui_unhandled_inputs.len(), 1);
-        assert_eq!(
-            report.gui_unhandled_inputs[0].reason,
-            GuiUnhandledReason::NotFocusable
-        );
+        assert!(report.gui_unhandled_inputs.is_empty());
         assert_eq!(context.gui_input_pressed(7), None);
     }
     // Scroll the inner view by its full capacity: content moves up by 4 and
@@ -385,7 +286,7 @@ fn scroll_start_cancels_held_checkbox_tap() {
     }
     world(&mut fixture).step(0.0).unwrap();
     // A scroll that moves content disarms the held tap: the cancellation
-    // reports once and the later release finds no capture.
+    // reports once and the later release completes nothing.
     {
         let mut context = world(&mut fixture);
         context
@@ -406,12 +307,8 @@ fn scroll_start_cancels_held_checkbox_tap() {
             .enqueue_gui_input_command(SESSION, down_up(1, [0.07, 0.07])[1].clone())
             .unwrap();
         let report = context.step(0.0).unwrap();
-        assert!(
-            report
-                .gui_unhandled_inputs
-                .iter()
-                .any(|unhandled| unhandled.reason == GuiUnhandledReason::NoCapture)
-        );
+        assert!(report.gui_unhandled_inputs.is_empty());
+        assert_eq!(context.gui_input_pressed(1), None);
     }
     let report = world(&mut fixture).step(0.0).unwrap();
     assert!(
@@ -490,6 +387,7 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
         visual_scale: [1.0, 1.0],
         acc_scale: [1.0, 1.0],
         content_extents: Some([10.0, 10.0]),
+        viewport: Some([0.0, 0.0, 10.0, 6.0]),
         content_origin: [0.0, 0.0],
         color: [1.0; 4],
         background: None,
@@ -730,7 +628,8 @@ fn pure_scroll_refreshes_scrolled_paint_without_reflow() {
         view.remeasure_count,
     );
     let (model_before, primitive_before, items_before) = paint_observation(&mut fixture);
-    assert_eq!(items_before.len(), 4);
+    // Four backgrounds plus a vertical track and thumb per overflowing view.
+    assert_eq!(items_before.len(), 8);
 
     scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 4.0]);
     assert_eq!(
@@ -781,5 +680,262 @@ fn pure_scroll_refreshes_scrolled_paint_without_reflow() {
     assert_eq!(
         (model_edge, primitive_edge),
         (model_after + 1, primitive_after + 1)
+    );
+}
+
+#[test]
+fn same_tick_scrolls_chain_outward_like_separate_ticks() {
+    let mut fixture = setup();
+    insert_nested_scroll(&mut fixture);
+    let panel = fixture.panel;
+    // Two wheel events routed in one Host tick, each exactly the inner
+    // capacity: the second chains against the first's queued movement and
+    // passes outward instead of re-consuming the inner capacity.
+    {
+        let mut context = world(&mut fixture);
+        for _ in 0..2 {
+            context
+                .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, 4.0]))
+                .unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    let report = world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        scroll_offsets_of(&report),
+        vec![(GuiNodeId(2), [0.0, 4.0]), (GuiNodeId(4), [0.0, 4.0])]
+    );
+    let inner = world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4));
+    let outer = world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2));
+    assert_eq!((inner, outer), ([0.0, 4.0], [0.0, 4.0]));
+
+    // Routing the same pair in separate ticks lands identically.
+    let mut separate = setup();
+    insert_nested_scroll(&mut separate);
+    scroll_and_apply(&mut separate, [5.0, 1.0], [0.0, 4.0]);
+    scroll_and_apply(&mut separate, [5.0, 1.0], [0.0, 4.0]);
+    let panel = separate.panel;
+    let separate_inner = world(&mut separate).gui_input_scroll(panel, GuiNodeId(4));
+    let separate_outer = world(&mut separate).gui_input_scroll(panel, GuiNodeId(2));
+    assert_eq!((separate_inner, separate_outer), (inner, outer));
+
+    // Predictions drop with their applied envelopes: a later reversal over
+    // the outer content consumes against the committed offsets.
+    let report = scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, -1.0]);
+    assert_eq!(scroll_offsets_of(&report), vec![(GuiNodeId(2), [0.0, 3.0])]);
+}
+
+/// Outer ScrollView 10x6 over a column holding an inner ScrollView 10x4
+/// (content 10x8) and a narrow 1x6 filler. `leaf` rides the inner content
+/// at local y 4..5 as node 9, full width. Outer and inner capacities are 4.
+fn insert_clip_fixture(fixture: &mut Fixture, leaf: GuiNodeData, values: GuiNodeDataRow) {
+    let root_incarnation = incarnation(fixture);
+    let panel = fixture.panel;
+    let style = |width: f32, height: f32| GuiNodeStyle {
+        width: Some(width),
+        height: Some(height),
+        ..Default::default()
+    };
+    let node =
+        |id: u32, parent: Option<u32>, index: u32, data, values, style| GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(id),
+            parent: parent.map(GuiNodeId),
+            index,
+            data,
+            values,
+            style,
+        };
+    let column = || GuiNodeData::Container(GuiContainerKind::Column);
+    let scroll = || GuiNodeData::Container(GuiContainerKind::ScrollView);
+    let sized = || GuiNodeData::Container(GuiContainerKind::SizedBox);
+    let empty = GuiNodeDataRow::default;
+    let asset = matches!(leaf, GuiNodeData::TextInput { .. })
+        .then(super::super::super::test_support::font_source);
+    let commands = vec![
+        node(1, None, 0, column(), empty(), style(10.0, 10.0)),
+        node(2, Some(1), 0, scroll(), empty(), style(10.0, 6.0)),
+        node(3, Some(2), 0, column(), empty(), GuiNodeStyle::default()),
+        node(4, Some(3), 0, scroll(), empty(), style(10.0, 4.0)),
+        node(5, Some(4), 0, column(), empty(), GuiNodeStyle::default()),
+        node(6, Some(5), 0, sized(), empty(), style(10.0, 4.0)),
+        node(7, Some(5), 1, sized(), empty(), style(10.0, 4.0)),
+        // Only x 0..1: below the inner viewport, x = 5 meets containers only.
+        node(8, Some(3), 1, sized(), empty(), style(1.0, 6.0)),
+        node(
+            9,
+            Some(7),
+            0,
+            leaf,
+            values,
+            GuiNodeStyle {
+                background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                asset,
+                ..style(10.0, 1.0)
+            },
+        ),
+    ];
+    let mut context = world(fixture);
+    for command in commands {
+        context.enqueue_gui_command(SESSION, command).unwrap();
+    }
+    context.step(0.0).unwrap();
+}
+
+#[test]
+fn nested_clip_follows_outer_scroll_for_hits_and_paint() {
+    let mut fixture = setup();
+    insert_clip_fixture(
+        &mut fixture,
+        GuiNodeData::Checkbox,
+        GuiNodeDataRow::checkbox(false),
+    );
+    let panel = fixture.panel;
+    world(&mut fixture).step(0.0).unwrap();
+
+    // Scroll only the outer view by 2, over the narrow filler.
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, 2.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        [0.0, 2.0]
+    );
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 0.0]
+    );
+
+    // The inner viewport now spans y -2..2, so the checkbox at y 2..3 sits
+    // below it: a tap there reaches no checkbox.
+    {
+        let mut context = world(&mut fixture);
+        for command in down_up(3, [5.0, 2.5]) {
+            context.enqueue_gui_input_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        committed_bool(&mut fixture, GuiNodeId(9)),
+        (GuiControlValue::Bool(false), 1)
+    );
+
+    // Paint agrees: the checkbox background moves up by 2 under the moved
+    // inner viewport, clipped to its overlap with the outer viewport.
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    assert_eq!(
+        paint_box_of(&primitives, GuiNodeId(9)),
+        ([0.0, 2.0], Some([0.0, 0.0, 10.0, 2.0]))
+    );
+
+    // Scrolling the inner view by 2 lifts the checkbox into the moved
+    // viewport, where the same kind of tap now reaches it.
+    scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 2.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 2.0]
+    );
+    {
+        let mut context = world(&mut fixture);
+        for command in down_up(3, [5.0, 0.5]) {
+            context.enqueue_gui_input_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        committed_bool(&mut fixture, GuiNodeId(9)),
+        (GuiControlValue::Bool(true), 2)
+    );
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    assert_eq!(
+        paint_box_of(&primitives, GuiNodeId(9)),
+        ([0.0, 0.0], Some([0.0, 0.0, 10.0, 2.0]))
+    );
+}
+
+#[test]
+fn nested_viewport_scrolled_into_view_paints_its_content() {
+    let mut fixture = setup();
+    insert_nested_scroll_paint(&mut fixture);
+    let panel = fixture.panel;
+    world(&mut fixture).step(0.0).unwrap();
+    // Push the inner viewport fully above the outer one, then bring it back:
+    // its content keeps painting whenever the moved clip reopens.
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, 4.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        [0.0, 4.0]
+    );
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    // Inner content (node 6) now lies at y -4..0 with the inner viewport
+    // at y -4..0, which misses the outer viewport: nothing of it paints.
+    assert!(primitives.iter().all(|primitive| !matches!(
+        primitive.style().identity,
+        crate::SurfacePrimitiveIdentity::Gui(id) if id.node == GuiNodeId(6)
+    )));
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, -3.0]);
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    assert_eq!(
+        paint_box_of(&primitives, GuiNodeId(6)),
+        ([0.0, -1.0], Some([0.0, 0.0, 10.0, 3.0]))
+    );
+}
+
+#[test]
+fn caret_overlay_clip_matches_scrolled_paint_and_hits() {
+    let mut fixture = setup();
+    register_font(&mut fixture);
+    insert_clip_fixture(
+        &mut fixture,
+        GuiNodeData::TextInput {
+            text: "ab".into(),
+            placeholder: String::new(),
+        },
+        GuiNodeDataRow::default(),
+    );
+    let panel = fixture.panel;
+    world(&mut fixture).step(0.0).unwrap();
+    // Scroll outer by 2 and inner by 1: the input rides to y 1..2 inside
+    // the moved inner viewport, whose visible part is y 0..2.
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, 2.0]);
+    scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 1.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 1.0]
+    );
+    // A press inside the moved viewport focuses the input.
+    {
+        let mut context = world(&mut fixture);
+        for command in down_up(3, [5.0, 1.5]) {
+            context.enqueue_gui_input_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        world(&mut fixture)
+            .gui_input_focus()
+            .map(|focus| focus.target.node),
+        Some(GuiNodeId(9))
+    );
+
+    let expected = Some([0.0, 0.0, 10.0, 2.0]);
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    let node_clips: Vec<_> = primitives
+        .iter()
+        .filter(|primitive| {
+            matches!(
+                primitive.style().identity,
+                crate::SurfacePrimitiveIdentity::Gui(id) if id.node == GuiNodeId(9)
+            )
+        })
+        .map(|primitive| primitive.style().clip)
+        .collect();
+    // Background, label and caret all share the moved clip.
+    assert!(node_clips.len() >= 3, "{node_clips:?}");
+    assert!(
+        node_clips.iter().all(|clip| *clip == expected),
+        "{node_clips:?}"
     );
 }

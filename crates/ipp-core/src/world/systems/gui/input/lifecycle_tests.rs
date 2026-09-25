@@ -29,25 +29,8 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
     let at = node_centre(&mut fixture, GuiNodeId(2));
     let root_incarnation = incarnation(&mut fixture);
 
-    // Establish input-owned scroll first, then retain a press/focus/hover on
-    // the same fully fenced target without releasing the pointer.
-    {
-        let mut context = world(&mut fixture);
-        context
-            .enqueue_gui_input_command(
-                SESSION,
-                GuiInputCommand::Scroll {
-                    panel: Some(panel),
-                    position: at,
-                    delta: [1.0, 2.0],
-                    blockers: Vec::new(),
-                    panel_distance: None,
-                },
-            )
-            .unwrap();
-        context.step(0.0).unwrap();
-    }
-    world(&mut fixture).step(0.0).unwrap();
+    // Retain a press/focus/hover on one fully fenced target without
+    // releasing the pointer.
     {
         let mut context = world(&mut fixture);
         context
@@ -61,7 +44,6 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
         assert!(context.gui_input_focus().is_some());
         assert!(context.gui_input_hover(1).is_some());
         assert!(context.gui_input_pressed(1).is_some());
-        assert_eq!(context.gui_input_scroll(panel, GuiNodeId(2)), [1.0, 2.0]);
         assert_eq!(interaction_roots(&context), BTreeSet::from([panel]));
     }
 
@@ -84,10 +66,6 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
         interaction_roots(&world(&mut fixture)).is_empty(),
         "removed targets leave no interaction priority"
     );
-    assert_eq!(
-        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
-        [0.0, 0.0]
-    );
     assert!(report.gui_input_effects.iter().any(|effect| matches!(
         effect.kind,
         GuiInputEffectKind::FocusChanged {
@@ -99,14 +77,6 @@ fn node_removal_without_new_input_invalidates_all_retained_cursors() {
         GuiInputEffectKind::HoverChanged {
             pointer: 1,
             target: None,
-            ..
-        }
-    )));
-    assert!(report.gui_input_effects.iter().any(|effect| matches!(
-        effect.kind,
-        GuiInputEffectKind::ScrollChanged {
-            node: GuiNodeId(2),
-            offset: [0.0, 0.0],
             ..
         }
     )));

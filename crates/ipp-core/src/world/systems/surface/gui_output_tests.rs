@@ -452,11 +452,22 @@ fn scrolled_kinds() -> Vec<SurfaceRenderPrimitive> {
 }
 
 #[cfg(feature = "gui")]
+fn placement(shift: [f32; 2], clip: Option<[f32; 4]>) -> super::GuiScrollPlacement {
+    super::GuiScrollPlacement {
+        shift,
+        clip,
+    }
+}
+
+#[cfg(feature = "gui")]
 #[test]
-fn scroll_translation_moves_every_kind_keeping_clips_and_payloads() {
+fn scroll_translation_moves_every_kind_and_payloads_under_moved_clips() {
     let base = scrolled_kinds();
-    let shifts: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
-        BTreeMap::from([(crate::systems::gui::GuiNodeId(5), [0.5, -4.0])]);
+    let clip = Some([0.5, -3.0, 8.0, 1.0]);
+    let shifts = BTreeMap::from([(
+        crate::systems::gui::GuiNodeId(5),
+        placement([0.5, -4.0], clip),
+    )]);
 
     let moved = super::translate_gui_primitives_for_scroll(base.clone(), &shifts);
     assert_eq!(moved.len(), base.len());
@@ -468,7 +479,7 @@ fn scroll_translation_moves_every_kind_keeping_clips_and_payloads() {
                 before.style().position[1] - 4.0
             ]
         );
-        assert_eq!(after.style().clip, before.style().clip);
+        assert_eq!(after.style().clip, clip);
         assert_eq!(after.style().identity, before.style().identity);
         assert_eq!(after.style().scale, before.style().scale);
         assert_eq!(after.style().color, before.style().color);
@@ -521,8 +532,10 @@ fn scroll_translation_moves_shifted_nodes_and_ignores_unshifted_paint() {
 
     // Unknown nodes and empty maps pass through untouched,
     // as does the authored primitive which GUI scrolling never moves.
-    let stale: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
-        BTreeMap::from([(crate::systems::gui::GuiNodeId(7), [0.5, -4.0])]);
+    let stale = BTreeMap::from([(
+        crate::systems::gui::GuiNodeId(7),
+        placement([0.5, -4.0], None),
+    )]);
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &stale),
         base
@@ -531,17 +544,30 @@ fn scroll_translation_moves_shifted_nodes_and_ignores_unshifted_paint() {
         super::translate_gui_primitives_for_scroll(base.clone(), &BTreeMap::new()),
         base
     );
-    // Zero and non-finite shifts never move paint.
-    let zero: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
-        BTreeMap::from([(crate::systems::gui::GuiNodeId(5), [0.0, 0.0])]);
+    // Unmoved placements and non-finite shifts or clips never move paint.
+    let clip = base[0].style().clip;
+    let zero = BTreeMap::from([(
+        crate::systems::gui::GuiNodeId(5),
+        placement([0.0, 0.0], clip),
+    )]);
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &zero),
         base
     );
-    let wild: BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]> =
-        BTreeMap::from([(crate::systems::gui::GuiNodeId(5), [f32::NAN, 0.0])]);
+    let wild = BTreeMap::from([(
+        crate::systems::gui::GuiNodeId(5),
+        placement([f32::NAN, 0.0], clip),
+    )]);
     assert_eq!(
         super::translate_gui_primitives_for_scroll(base.clone(), &wild),
+        base
+    );
+    let wild_clip = BTreeMap::from([(
+        crate::systems::gui::GuiNodeId(5),
+        placement([0.0, 1.0], Some([0.0, f32::INFINITY, 1.0, 1.0])),
+    )]);
+    assert_eq!(
+        super::translate_gui_primitives_for_scroll(base.clone(), &wild_clip),
         base
     );
 }

@@ -357,3 +357,159 @@ pub(super) fn insert_font_control(fixture: &mut Fixture, node: impl Into<Authore
     }
     context.step(0.0).unwrap();
 }
+
+/// Nested ScrollViews without fonts: outer viewport 10x6 over 10x10 content,
+/// inner viewport 10x4 over 10x8 content, plus one checkbox riding the inner
+/// content at local [0, 4].
+pub(super) fn insert_nested_scroll(fixture: &mut Fixture) {
+    let root_incarnation = incarnation(fixture);
+    let panel = fixture.panel;
+    let style = |width: f32, height: f32| GuiNodeStyle {
+        width: Some(width),
+        height: Some(height),
+        ..Default::default()
+    };
+    let commands = vec![
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(1),
+            parent: None,
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
+            style: style(10.0, 10.0),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(2),
+            parent: Some(GuiNodeId(1)),
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
+            values: crate::GuiNodeDataRow::default(),
+            style: style(10.0, 6.0),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(3),
+            parent: Some(GuiNodeId(2)),
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
+            style: GuiNodeStyle::default(),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(4),
+            parent: Some(GuiNodeId(3)),
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::ScrollView),
+            values: crate::GuiNodeDataRow::default(),
+            style: style(10.0, 4.0),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(5),
+            parent: Some(GuiNodeId(4)),
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: crate::GuiNodeDataRow::default(),
+            style: GuiNodeStyle::default(),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(6),
+            parent: Some(GuiNodeId(5)),
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
+            style: style(10.0, 4.0),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(7),
+            parent: Some(GuiNodeId(5)),
+            index: 1,
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
+            style: style(10.0, 4.0),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(8),
+            parent: Some(GuiNodeId(3)),
+            index: 1,
+            data: GuiNodeData::Container(GuiContainerKind::SizedBox),
+            values: crate::GuiNodeDataRow::default(),
+            style: style(10.0, 6.0),
+        },
+        // Node identities allocate sequentially: id 9 must come last.
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(9),
+            parent: Some(GuiNodeId(7)),
+            index: 0,
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
+            // Explicit size: layout evaluation drops unsized controls.
+            style: style(1.0, 1.0),
+        },
+    ];
+    let mut context = world(fixture);
+    for command in commands {
+        context.enqueue_gui_command(SESSION, command).unwrap();
+    }
+    context.step(0.0).unwrap();
+}
+
+/// Scroll offsets reported by one apply step, keyed by consuming node.
+pub(super) fn scroll_offsets_of(report: &crate::WorldUpdateReport) -> Vec<(GuiNodeId, [f32; 2])> {
+    let mut offsets: Vec<(GuiNodeId, [f32; 2])> = report
+        .gui_input_effects
+        .iter()
+        .filter_map(|effect| match &effect.kind {
+            GuiInputEffectKind::ScrollChanged {
+                node,
+                offset,
+                ..
+            } => Some((*node, *offset)),
+            _ => None,
+        })
+        .collect();
+    offsets.sort_by_key(|(node, _)| *node);
+    offsets
+}
+
+pub(super) fn scroll_command(position: [f32; 2], delta: [f32; 2]) -> GuiInputCommand {
+    GuiInputCommand::Scroll {
+        panel: None,
+        position,
+        delta,
+        blockers: Vec::new(),
+        panel_distance: None,
+    }
+}
+
+/// Route one scroll and apply it, returning the apply-step report.
+pub(super) fn scroll_and_apply(
+    fixture: &mut Fixture,
+    position: [f32; 2],
+    delta: [f32; 2],
+) -> crate::WorldUpdateReport {
+    {
+        let mut context = world(fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command(position, delta))
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    world(fixture).step(0.0).unwrap()
+}

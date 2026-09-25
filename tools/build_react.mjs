@@ -12,6 +12,10 @@ const output =
   process.env.IPP_BUILD_OUTPUT ?? resolve(workspace, "target/react-build");
 const fixture = resolve(workspace, "tests/react/fixture.ts");
 const guiBrowserFixture = resolve(workspace, "tests/browser/gui-fixture.tsx");
+const guiScrollFixture = resolve(
+  workspace,
+  "tests/browser/gui-scroll-fixture.tsx",
+);
 await mkdir(output, { recursive: true });
 const builds = await Promise.all(
   ["development", "production"].map(async (environment) => {
@@ -50,6 +54,16 @@ const guiBrowserBuild = await bundleBrowser(
 builds.push({
   environment: "gui-browser",
   ...(await artifact(guiBrowserPath)),
+});
+const guiScrollPath = resolve(output, "gui-scroll-fixture.js");
+await bundleBrowser(guiScrollFixture, guiScrollPath, "development", {
+  alias: {
+    "@ipp/client": resolve(workspace, "packages/ipp-client/src/index.ts"),
+  },
+});
+builds.push({
+  environment: "gui-scroll-browser",
+  ...(await artifact(guiScrollPath)),
 });
 const packageReport = JSON.parse(
   await readFile(

@@ -143,6 +143,14 @@ pub enum GuiPrimitivePart {
     Selection,
     /// Provisional composition glyph run.
     Composition,
+    /// ScrollView horizontal scroll bar track.
+    ScrollTrackX,
+    /// ScrollView horizontal scroll bar thumb.
+    ScrollThumbX,
+    /// ScrollView vertical scroll bar track.
+    ScrollTrackY,
+    /// ScrollView vertical scroll bar thumb.
+    ScrollThumbY,
 }
 
 #[cfg(feature = "gui")]
@@ -158,6 +166,10 @@ impl GuiPrimitivePart {
             Self::Caret => "caret",
             Self::Selection => "selection",
             Self::Composition => "composition",
+            Self::ScrollTrackX => "scrollTrackX",
+            Self::ScrollThumbX => "scrollThumbX",
+            Self::ScrollTrackY => "scrollTrackY",
+            Self::ScrollThumbY => "scrollThumbY",
         }
     }
 }
@@ -910,22 +922,33 @@ pub fn append_gui_surface_primitives(
     );
 }
 
-/// Translate retained GUI paint by scrolled-ancestor shifts, in Surface
+/// Scroll placement of one GUI node's paint: the shift from its ancestor
+/// ScrollView offsets and the clip whose contributing viewports moved with
+/// their own ancestor shifts.
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuiScrollPlacement {
+    /// Translation from ancestor scroll offsets.
+    pub shift: [f32; 2],
+    /// Effective clip after scrolling, or None for the whole root content.
+    pub clip: Option<SurfaceClipRect>,
+}
+
+/// Place retained GUI paint by scrolled-ancestor placements, in Surface
 /// content metres.
 ///
-/// `shifts` maps a node to its ancestor scroll shift; only primitives of a
-/// shifted node move. Node identities are never reused within a root
-/// incarnation, and the caller filters by incarnation. Authored primitives and GUI
-/// primitives without a shift pass through unchanged, so unscrolled
-/// subtrees stay byte-identical. Every kind moves its `position` while
-/// glyph payloads, box parameters and bitmap sizes stay put; per-primitive
-/// clips stay fixed because retained clips compose ScrollView viewport
-/// rects in final coordinates, matching scroll-aware hit testing.
-/// Non-finite shifts never move paint.
+/// `placements` maps a node to its scroll placement; only primitives of a
+/// placed node change. Node identities are never reused within a root
+/// incarnation, and the caller filters by incarnation. Authored primitives
+/// and GUI primitives without a placement pass through unchanged, so
+/// unscrolled subtrees stay byte-identical. Every kind moves its `position`
+/// and takes the placement clip while glyph payloads, box parameters and
+/// bitmap sizes stay put, matching scroll-aware hit testing. Non-finite
+/// shifts or clips never move paint.
 #[cfg(feature = "gui")]
 pub fn translate_gui_primitives_for_scroll(
     primitives: Vec<SurfaceRenderPrimitive>,
-    shifts: &BTreeMap<crate::systems::gui::GuiNodeId, [f32; 2]>,
+    placements: &BTreeMap<crate::systems::gui::GuiNodeId, GuiScrollPlacement>,
 ) -> Vec<SurfaceRenderPrimitive> {
     primitives
         .into_iter()
@@ -933,8 +956,16 @@ pub fn translate_gui_primitives_for_scroll(
             let SurfacePrimitiveIdentity::Gui(id) = primitive.style().identity else {
                 return primitive;
             };
-            let shift = shifts.get(&id.node).copied().unwrap_or([0.0, 0.0]);
-            if shift == [0.0, 0.0] || !shift.iter().all(|lane| lane.is_finite()) {
+            let Some(placement) = placements.get(&id.node) else {
+                return primitive;
+            };
+            let finite = placement.shift.iter().all(|lane| lane.is_finite())
+                && placement
+                    .clip
+                    .is_none_or(|clip| clip.iter().all(|lane| lane.is_finite()));
+            if !finite
+                || (placement.shift == [0.0, 0.0] && placement.clip == primitive.style().clip)
+            {
                 return primitive;
             }
             let mut moved = primitive.clone();
@@ -956,7 +987,11 @@ pub fn translate_gui_primitives_for_scroll(
                     ..
                 } => style,
             };
-            style.position = [style.position[0] + shift[0], style.position[1] + shift[1]];
+            style.position = [
+                style.position[0] + placement.shift[0],
+                style.position[1] + placement.shift[1],
+            ];
+            style.clip = placement.clip;
             moved
         })
         .collect()

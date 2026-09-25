@@ -502,23 +502,34 @@ impl RenderSystem {
                             &self.gui_skin_overrides,
                         );
                         // Scrolled paint translates retained content-metre
-                        // geometry by each node's ancestor shift; viewport
-                        // clips stay fixed while descendants shift beneath
-                        // them. Without a scroll revision nothing moved, so
+                        // geometry by each node's ancestor shift and clips it
+                        // by viewports moved with their own ancestor shifts.
+                        // Without a scroll revision nothing moved, so
                         // retained bytes pass through untouched. Translation
                         // preserves the skinned style and color.
                         let mut translated = match gui_input {
                             Some(input) if input.scroll_revision() != 0 => {
                                 let units = view.units_per_metre;
-                                let shifts =
-                                    input.scroll_shifts_logical(gui_layout, ecs.world, item.entity);
-                                if shifts.is_empty() || !units.is_finite() || units <= 0.0 {
+                                let placements =
+                                    input.scroll_shifts_logical(gui_layout, item.entity);
+                                if placements.is_empty() || !units.is_finite() || units <= 0.0 {
                                     primitives
                                 } else {
-                                    let metres: std::collections::BTreeMap<_, _> = shifts
+                                    let metres: std::collections::BTreeMap<_, _> = placements
                                         .into_iter()
-                                        .map(|(id, shift)| {
-                                            (id, [shift[0] / units, shift[1] / units])
+                                        .map(|(id, placement)| {
+                                            (
+                                                id,
+                                                crate::systems::surface::GuiScrollPlacement {
+                                                    shift: [
+                                                        placement.shift[0] / units,
+                                                        placement.shift[1] / units,
+                                                    ],
+                                                    clip: placement
+                                                        .clip
+                                                        .map(|clip| clip.map(|lane| lane / units)),
+                                                },
+                                            )
                                         })
                                         .collect();
                                     crate::systems::surface::rendering::translate_gui_primitives_for_scroll(

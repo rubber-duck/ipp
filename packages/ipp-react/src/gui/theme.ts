@@ -12,12 +12,20 @@ import {
   type GuiPartValues,
 } from "@ipp/client";
 
+/** Themeable base parts. `scrollTrackX`/`scrollThumbX` and
+ * `scrollTrackY`/`scrollThumbY` style a ScrollView's scroll bars, which
+ * show while content overflows; a `disabled` colour or opacity on a track
+ * keeps its bar visible when the content fits. */
 export const GUI_THEME_PARTS = [
   "background",
   "fill",
   "label",
   "icon",
   "focusRing",
+  "scrollTrackX",
+  "scrollThumbX",
+  "scrollTrackY",
+  "scrollThumbY",
 ] as const;
 
 export type GuiThemePartName = (typeof GUI_THEME_PARTS)[number];

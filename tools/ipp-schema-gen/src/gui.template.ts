@@ -29,6 +29,7 @@ import type {
   GuiSemanticActionRequest,
   GuiSemanticFocus,
   GuiSemanticNode,
+  GuiSemanticScroll,
   GuiSemanticSnapshotQuery,
   GuiSemanticTree,
   GuiTree,
@@ -1260,6 +1261,8 @@ function readGuiUnhandledObservation(r: Reader): GuiUnhandledObservation {
     return { session, tick, input, reason: { kind: "notFocusable" } };
   if (reason === 6)
     return { session, tick, input, reason: { kind: "notOwner" } };
+  if (reason === 7)
+    return { session, tick, input, reason: { kind: "scrollUnconsumed" } };
   return fail("GUI unhandled reason");
 }
 
@@ -1432,6 +1435,7 @@ const GUI_SEMANTIC_ROLES = [
   "checkbox",
   "slider",
   "textInput",
+  "scrollView",
 ] as const;
 
 const GUI_SEMANTIC_ACTION_KINDS = [
@@ -1480,6 +1484,14 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
     if (action === undefined) fail("GUI semantic action kind");
     actions.push(action);
   }
+  const scrollTag = r.u8();
+  let scroll: GuiSemanticScroll | undefined;
+  if (scrollTag === 1)
+    scroll = {
+      offset: [r.f32(), r.f32()],
+      maxOffset: [r.f32(), r.f32()],
+    };
+  else if (scrollTag !== 0) fail("GUI semantic scroll option");
   return {
     id,
     ...(parentTag === 0 ? {} : { parent: parentTag }),
@@ -1493,6 +1505,7 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
     available,
     focusScope,
     actions,
+    ...(scroll === undefined ? {} : { scroll }),
   };
 }
 

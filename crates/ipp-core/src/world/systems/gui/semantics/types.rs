@@ -68,6 +68,9 @@ pub struct GuiSemanticNode {
     /// False while measurement failed; unavailable nodes are skipped by
     /// interaction.
     pub available: bool,
+    /// Whether this node is a focus scope: keyboard traversal from a focused
+    /// descendant stays within its subtree.
+    pub focus_scope: bool,
     /// Supported headless actions.
     pub actions: Vec<GuiSemanticActionKind>,
 }

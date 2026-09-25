@@ -65,13 +65,14 @@ const actionBytes = (kind, payload = new Uint8Array()) =>
 
 const snapshotBytes = () =>
   concatenate([
-    u8(1),
+    u8(2),
     u64(42n),
     u64(3n),
     u64(12n),
     u32(2),
     // Container root: id, no parent, role, no name, no value,
-    // revision, bounds, enabled, visible, available, no actions.
+    // revision, bounds, enabled, visible, available, focus scope, no
+    // actions.
     u32(1),
     u32(0),
     u8(0),
@@ -82,6 +83,7 @@ const snapshotBytes = () =>
     f32(0),
     f32(10),
     f32(10),
+    u8(1),
     u8(1),
     u8(1),
     u8(1),
@@ -101,6 +103,7 @@ const snapshotBytes = () =>
     u8(1),
     u8(1),
     u8(1),
+    u8(0),
     u8(1),
     u8(0),
     // Observed focus.
@@ -122,6 +125,7 @@ const snapshotTree = {
       enabled: true,
       visible: true,
       available: true,
+      focusScope: true,
       actions: [],
     },
     {
@@ -135,6 +139,7 @@ const snapshotTree = {
       enabled: true,
       visible: true,
       available: true,
+      focusScope: false,
       actions: ["press"],
     },
   ],

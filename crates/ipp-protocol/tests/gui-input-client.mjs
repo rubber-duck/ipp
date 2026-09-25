@@ -148,6 +148,11 @@ test("every gui input action encodes its exact wire payload", () => {
     codec.encodeGuiInput({ kind: "key", key: "home", pressed: false }),
     payloads.key(),
   );
+  // Shift+Tab traversal extends the key enumeration at the end.
+  assert.deepEqual(
+    codec.encodeGuiInput({ kind: "key", key: "backTab", pressed: true }),
+    concatenate([u8(1), u8(6), u8(12), u8(1)]),
+  );
   assert.deepEqual(
     codec.encodeGuiInput({ kind: "text", text: "héllo" }),
     concatenate([u8(1), u8(7), text("héllo")]),
@@ -296,10 +301,11 @@ test("GUI inspection envelopes decode one legal maximum text value", () => {
     // Empty node_data row, no control value.
     u8(0),
     u8(0),
-    // node_style row: enabled, color, opacity, font_size, position, scale.
+    // node_style row: enabled, color, opacity, font_size, position, scale,
+    // focus_scope.
     u8(0b0000_0001),
     u8(0b1011_0100),
-    u8(0b0000_0001),
+    u8(0b0001_0001),
     u32(1),
     f32(1),
     f32(1),
@@ -311,6 +317,7 @@ test("GUI inspection envelopes decode one legal maximum text value", () => {
     f32(0),
     f32(1),
     f32(1),
+    u32(0),
   ]);
   assert.ok(payload.byteLength > 65_536);
   const response = layout("response-gui-inspect", {
@@ -332,6 +339,7 @@ test("GUI inspection envelopes decode one legal maximum text value", () => {
     fontSize: Math.fround(0.1),
     position: [0, 0],
     scale: [1, 1],
+    focusScope: false,
   });
 });
 
@@ -374,7 +382,7 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
       f32(0.25),
       u8(0b0000_0011),
       u8(0b1011_0100),
-      u8(0b0000_0001),
+      u8(0b0001_0001),
       u32(1),
       f32(2),
       f32(1),
@@ -387,6 +395,7 @@ test("GUI edits encode data, values and style in the contract row layouts", () =
       f32(-0.25),
       f32(1),
       f32(1),
+      u32(0),
       // Update: handle, no data or values, changed and set masks over the
       // style layout (enabled, width cleared, position), set values.
       u8(2),

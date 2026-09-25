@@ -281,6 +281,7 @@ impl Reader<'_> {
             9 => Ok(GuiKey::Down),
             10 => Ok(GuiKey::Home),
             11 => Ok(GuiKey::End),
+            12 => Ok(GuiKey::BackTab),
             _ => Err(ProtocolError::Malformed("GUI input key")),
         }
     }

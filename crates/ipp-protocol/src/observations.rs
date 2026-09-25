@@ -575,6 +575,7 @@ fn write_gui_input(w: &mut Writer, input: &GuiInputCommand) -> Result<(), Protoc
                 ipp_core::GuiKey::Down => 9,
                 ipp_core::GuiKey::Home => 10,
                 ipp_core::GuiKey::End => 11,
+                ipp_core::GuiKey::BackTab => 12,
             })?;
             w.u8(u8::from(*pressed))?;
         }

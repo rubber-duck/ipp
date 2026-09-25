@@ -101,7 +101,7 @@ fn encode_gui_semantic_snapshot_inner(tree: &GuiSemanticTree) -> Result<Vec<u8>,
         return Err(ProtocolError::Malformed("GUI semantic entity"));
     }
     let mut w = Writer(Vec::new());
-    w.u8(1)?;
+    w.u8(2)?;
     w.u64(tree.entity.to_bits())?;
     w.u64(tree.root_incarnation)?;
     w.u64(tree.evaluation_tick)?;
@@ -167,6 +167,7 @@ fn write_semantic_node(w: &mut Writer, node: &GuiSemanticNode) -> Result<(), Pro
     w.u8(u8::from(node.enabled))?;
     w.u8(u8::from(node.visible))?;
     w.u8(u8::from(node.available))?;
+    w.u8(u8::from(node.focus_scope))?;
     if node.actions.len() > 5 {
         return Err(ProtocolError::Malformed("GUI semantic actions"));
     }

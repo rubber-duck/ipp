@@ -93,6 +93,7 @@ function styleSignature(input: GuiNodeStyle | GuiDeclarationStyle): unknown {
     style.fontSize ?? 0.1,
     assetSignature(style.asset),
     style.enabled ?? true,
+    style.focusScope ?? false,
     [...(style.position ?? [0, 0])],
     [...(style.scale ?? [1, 1])],
   ];
@@ -202,6 +203,7 @@ export function equalGuiStyle(
     Object.is(a.fontSize, b.fontSize) &&
     equalGuiAsset(a.asset, b.asset) &&
     Object.is(a.enabled ?? true, b.enabled ?? true) &&
+    Object.is(a.focusScope ?? false, b.focusScope ?? false) &&
     equalTuples(a.position, b.position) &&
     equalTuples(a.scale, b.scale)
   );

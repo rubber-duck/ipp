@@ -84,6 +84,7 @@ pub fn build_tree_with_focus(
             enabled,
             visible,
             available,
+            focus_scope: inspected.style.focus_scope,
             actions,
         });
     }
@@ -168,6 +169,7 @@ fn semantic_node_changed(previous: &GuiSemanticNode, current: &GuiSemanticNode) 
         || previous.enabled != current.enabled
         || previous.visible != current.visible
         || previous.available != current.available
+        || previous.focus_scope != current.focus_scope
         || previous.actions != current.actions
 }
 

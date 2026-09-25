@@ -174,6 +174,10 @@ export interface GuiStyleProps {
   /** Effective interactivity; false skips hit testing and activation.
    * Defaults to true. Disabled controls never activate. */
   readonly enabled?: boolean | undefined;
+  /** Bound keyboard traversal: Tab and Shift+Tab from a focused descendant
+   * cycle within this node's subtree, and Escape releases focus. Defaults to
+   * false. */
+  readonly focusScope?: boolean | undefined;
 }
 
 export interface GuiNodeProps extends GuiStyleProps {
@@ -294,6 +298,7 @@ export function guiStyleFor(props: GuiStyleProps): GuiDeclarationStyle {
     opacity: props.opacity ?? 1,
     fontSize: props.fontSize ?? 0.1,
     enabled: props.enabled ?? true,
+    ...(props.focusScope ? { focusScope: true } : {}),
   };
   if (props.asset !== undefined) style.asset = props.asset;
   return style;

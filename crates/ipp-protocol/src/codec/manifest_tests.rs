@@ -2678,10 +2678,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             &mut covered,
         );
 
-        // One semantic snapshot: version, panel identity, two nodes,
-        // then the observed focus. Names and values are whole bounded strings;
+        // One semantic snapshot: version, panel identity, two nodes (the
+        // container a focus scope), then the observed focus. Names and values are whole bounded strings;
         // oversize values reject instead of publishing a misleading prefix.
-        let mut snapshot = vec![1u8];
+        let mut snapshot = vec![2u8];
         snapshot.extend(42u64.to_le_bytes());
         snapshot.extend(3u64.to_le_bytes());
         snapshot.extend(12u64.to_le_bytes());
@@ -2695,7 +2695,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         for bound in [0.0f32, 0.0, 10.0, 10.0] {
             snapshot.extend(bound.to_le_bytes());
         }
-        snapshot.extend([1, 1, 1, 0]);
+        snapshot.extend([1, 1, 1, 1, 0]);
         snapshot.extend(2u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.push(4);
@@ -2707,7 +2707,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         for bound in [1.0f32, 1.0, 2.0, 1.0] {
             snapshot.extend(bound.to_le_bytes());
         }
-        snapshot.extend([1, 1, 1]);
+        snapshot.extend([1, 1, 1, 0]);
         snapshot.push(1);
         snapshot.push(0);
         snapshot.push(1);
@@ -2733,6 +2733,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             enabled: true,
                             visible: true,
                             available: true,
+                            focus_scope: true,
                             actions: Vec::new(),
                         },
                         ipp_core::GuiSemanticNode {
@@ -2746,6 +2747,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             enabled: true,
                             visible: true,
                             available: true,
+                            focus_scope: false,
                             actions: vec![ipp_core::GuiSemanticActionKind::Press],
                         },
                     ],

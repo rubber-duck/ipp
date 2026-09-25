@@ -83,15 +83,27 @@ pub enum GuiPointerButton {
 }
 
 /// Non-text keys routable to the focused control.
+///
+/// Keyboard traversal follows tree order within the innermost focus scope
+/// (a node whose `focus_scope` style property is set) containing the focused
+/// control, or across every panel in deterministic entity order when no
+/// scope contains it, and wraps at either end. Without focus, [`Self::Tab`]
+/// and [`Self::BackTab`] enter the keyboard panel: the panel that most
+/// recently held focus in this input context while it still has a focusable
+/// control, otherwise the first panel in traversal order. Entry acquires an
+/// unowned input context. Disabled, hidden, transparent and unavailable
+/// controls are skipped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiKey {
-    /// Advance keyboard focus to the next control, wrapping around.
+    /// Move keyboard focus to the next control in traversal order, or enter
+    /// the keyboard panel at its first control.
     Tab,
     /// Activate the focused button or checkbox.
     Enter,
     /// Activate the focused button or checkbox, or type a space into text.
     Space,
-    /// Release keyboard focus.
+    /// Release keyboard focus, leaving every focus scope; the next
+    /// [`Self::Tab`] or [`Self::BackTab`] enters the keyboard panel again.
     Escape,
     /// Delete the grapheme before the caret, or the selection, in focused text.
     Backspace,
@@ -109,6 +121,9 @@ pub enum GuiKey {
     Home,
     /// Jump a focused slider to its maximum.
     End,
+    /// Move keyboard focus to the previous control in traversal order, or
+    /// enter the keyboard panel at its last control (Shift+Tab).
+    BackTab,
 }
 
 /// One ordered input routed against the retained per-tick snapshot.
@@ -716,6 +731,10 @@ pub struct GuiInputSystem {
     owner_epoch: u64,
     /// Keyboard focus cursor, updated during routing for same-tick chaining.
     focus: Option<GuiInputFocus>,
+    /// Panel and root incarnation that most recently held keyboard focus in
+    /// this context: the entry panel for traversal from no focus. A hint
+    /// revalidated against the current traversal order on use.
+    keyboard_panel: Option<(EntityId, u64)>,
     /// Frame the focus cursor was set against.
     focus_tick: u64,
     /// Monotonic fence for focus/blur and focused-node lifetime changes.
@@ -813,6 +832,7 @@ impl SystemFactory for GuiInputSystemFactory {
             owner: None,
             owner_epoch: 0,
             focus: None,
+            keyboard_panel: None,
             focus_tick: 0,
             focus_generation: 0,
             captures: BTreeMap::new(),
@@ -1537,6 +1557,9 @@ impl GuiInputSystem {
             session,
         });
         self.focus_tick = tick;
+        if let Some(target) = focus {
+            self.keyboard_panel = Some((target.entity, target.root_incarnation));
+        }
         if previous != focus {
             self.focus_generation = self.focus_generation.saturating_add(1).max(1);
             self.touch_caret();
@@ -1855,6 +1878,102 @@ impl GuiInputSystem {
             }
         }
         order
+    }
+
+    /// Keyboard traversal order around one focused target: the focusable
+    /// controls inside its innermost focus scope, in tree order, or every
+    /// panel's order when no scope contains it.
+    fn traversal_order(
+        &self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        root: &GuiRoot,
+        focused: &GuiInputTarget,
+    ) -> Vec<GuiInputTarget> {
+        let order = self.focusables(layout, sim);
+        let Some(scope) = Self::focus_scope_of(root, focused.node) else {
+            return order;
+        };
+
+        order
+            .into_iter()
+            .filter(|target| {
+                target.entity == focused.entity
+                    && target.root_incarnation == focused.root_incarnation
+                    && Self::within_subtree(root, target.node, scope)
+            })
+            .collect()
+    }
+
+    /// Innermost focus-scope ancestor of one node, excluding the node.
+    fn focus_scope_of(root: &GuiRoot, node: GuiNodeId) -> Option<GuiNodeId> {
+        let nodes = root.nodes();
+        let mut current = nodes.node(node)?.parent;
+        // Parent links form a tree; the bound only guards malformed input.
+        for _ in 0..nodes.len() {
+            let id = current?;
+            if root.style_row(id).is_some_and(|style| style.focus_scope) {
+                return Some(id);
+            }
+            current = nodes.node(id)?.parent;
+        }
+        None
+    }
+
+    /// Whether `node` lies in the subtree rooted at `ancestor`.
+    fn within_subtree(root: &GuiRoot, node: GuiNodeId, ancestor: GuiNodeId) -> bool {
+        let nodes = root.nodes();
+        let mut current = Some(node);
+        for _ in 0..=nodes.len() {
+            match current {
+                Some(id) if id == ancestor => return true,
+                Some(id) => current = nodes.node(id).and_then(|live| live.parent),
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// Enter keyboard traversal without focus: Tab takes the keyboard panel's
+    /// first focusable control and BackTab its last. Entry acquires an unowned
+    /// context like other context-establishing input; nothing focusable
+    /// leaves the input unhandled without acquiring.
+    fn enter_traversal(
+        &mut self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        session: u64,
+        tick: u64,
+        input: &GuiInputCommand,
+        backward: bool,
+    ) {
+        let order = self.focusables(layout, sim);
+        let in_panel = |target: &GuiInputTarget, (entity, incarnation): (EntityId, u64)| {
+            target.entity == entity && target.root_incarnation == incarnation
+        };
+        let panel = self
+            .keyboard_panel
+            .filter(|panel| order.iter().any(|target| in_panel(target, *panel)))
+            .or_else(|| {
+                order
+                    .first()
+                    .map(|target| (target.entity, target.root_incarnation))
+            });
+        let Some(panel) = panel else {
+            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+            return;
+        };
+        if !self.check_owner(session, tick, input) {
+            return;
+        }
+
+        let mut candidates = order.iter().filter(|target| in_panel(target, panel));
+        let entry = if backward {
+            candidates.next_back()
+        } else {
+            candidates.next()
+        };
+        self.set_focus(session, tick, entry.copied());
     }
 
     /// Whether one full target remains live and evaluated eligible.
@@ -3667,7 +3786,12 @@ impl GuiInputSystem {
         key: GuiKey,
     ) {
         let Some(focus) = self.focus else {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+            match key {
+                GuiKey::Tab | GuiKey::BackTab => {
+                    self.enter_traversal(layout, sim, session, tick, input, key == GuiKey::BackTab);
+                }
+                _ => self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus),
+            }
             return;
         };
         // Keys follow only the focus owner's session; follow-on edits never
@@ -3688,17 +3812,21 @@ impl GuiInputSystem {
             return;
         }
         match key {
-            GuiKey::Tab => {
-                let order = self.focusables(layout, sim);
-                if order.is_empty() {
+            GuiKey::Tab | GuiKey::BackTab => {
+                let order = self.traversal_order(layout, sim, &root, &focus.target);
+                let len = order.len();
+                if len == 0 {
                     self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
                     return;
                 }
-                let next = order
-                    .iter()
-                    .position(|target| *target == focus.target)
-                    .map(|index| order[(index + 1) % order.len()])
-                    .unwrap_or(order[0]);
+
+                let backward = key == GuiKey::BackTab;
+                let next = match order.iter().position(|target| *target == focus.target) {
+                    Some(index) if backward => order[(index + len - 1) % len],
+                    Some(index) => order[(index + 1) % len],
+                    None if backward => order[len - 1],
+                    None => order[0],
+                };
                 self.set_focus(session, tick, Some(next));
             }
             GuiKey::Escape => {
@@ -5547,6 +5675,7 @@ impl System for GuiInputSystem {
         self.ingress.retain(|item| item.session != session);
         if self.owner.is_some_and(|owner| owner.session == session) {
             self.owner = None;
+            self.keyboard_panel = None;
             self.next_epoch();
         }
         let drained: Vec<_> = std::mem::take(&mut self.envelopes);
@@ -6223,3 +6352,6 @@ mod test_support;
 #[cfg(test)]
 #[path = "text_tests.rs"]
 mod text_tests;
+#[cfg(test)]
+#[path = "traversal_tests.rs"]
+mod traversal_tests;

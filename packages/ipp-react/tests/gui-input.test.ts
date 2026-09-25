@@ -7,6 +7,7 @@ import {
   canvasRelativePoint,
   createGuiInputSink,
   domMouseButtonToGuiButton,
+  keyboardFocusHandoff,
   keyboardKeyToGuiKey,
   toGuiInputCommand,
   wheelDeltaToLogical,
@@ -21,6 +22,9 @@ test("button, key and geometry helpers translate platform values", () => {
   assert.equal(domMouseButtonToGuiButton(1), "auxiliary");
   assert.equal(domMouseButtonToGuiButton(4), null);
   assert.equal(keyboardKeyToGuiKey("Tab"), "tab");
+  assert.equal(keyboardKeyToGuiKey("Tab", false), "tab");
+  assert.equal(keyboardKeyToGuiKey("Tab", true), "backTab");
+  assert.equal(keyboardKeyToGuiKey(" ", true), "space");
   assert.equal(keyboardKeyToGuiKey(" "), "space");
   assert.equal(keyboardKeyToGuiKey("ArrowDown"), "down");
   assert.equal(keyboardKeyToGuiKey("a"), null);
@@ -444,6 +448,99 @@ test("pointer, wheel and keyboard events forward in DOM order", () => {
   detach();
   assert.equal(canvas.listeners.get("pointerdown")?.size ?? 0, 0);
   assert.equal(keyboard.listeners.get("keydown")?.size ?? 0, 0);
+});
+
+test("canvas key ownership forwards traversal and activation keys once", () => {
+  const { keyboard, sent, detach } = harness();
+  const pressed = [
+    keyboard.dispatch("keydown", { key: "Tab", shiftKey: false }),
+    keyboard.dispatch("keydown", { key: "Tab", shiftKey: true }),
+    keyboard.dispatch("keydown", { key: " " }),
+    keyboard.dispatch("keydown", { key: "Enter" }),
+    keyboard.dispatch("keydown", { key: "ArrowRight" }),
+    keyboard.dispatch("keydown", { key: "Shift", shiftKey: true }),
+  ];
+  // A non-editable key owner prevents every forwarded default: traversal
+  // never moves DOM focus and Space or arrows never scroll the page.
+  assert.deepEqual(
+    pressed.map((result) => result.prevented),
+    [true, true, true, true, true, false],
+  );
+  assert.deepEqual(sent, [
+    { kind: "key", key: "tab", pressed: true },
+    { kind: "key", key: "backTab", pressed: true },
+    { kind: "key", key: "space", pressed: true },
+    { kind: "key", key: "enter", pressed: true },
+    { kind: "key", key: "right", pressed: true },
+  ]);
+  detach();
+});
+
+test("editable key owners keep text defaults but never Tab", () => {
+  const editable = fakeTarget();
+  Object.assign(editable, { tagName: "TEXTAREA", isContentEditable: false });
+  const { sent, detach } = harness({
+    keyboardTarget: editable as unknown as HTMLElement,
+  });
+  const space = editable.dispatch("keydown", { key: " " });
+  const back = editable.dispatch("keydown", { key: "Tab", shiftKey: true });
+  assert.equal(space.prevented, false);
+  assert.equal(back.prevented, true);
+  assert.deepEqual(sent, [
+    { kind: "key", key: "space", pressed: true },
+    { kind: "key", key: "backTab", pressed: true },
+  ]);
+  detach();
+});
+
+test("keyboard ownership hands off between the key owner and the native editor", () => {
+  const base = {
+    documentFocused: true,
+    editorFocused: false,
+    ownerFocused: false,
+    pointerActivationPending: false,
+  };
+  // Tab from the focused canvas into a text input focuses the editor.
+  assert.equal(
+    keyboardFocusHandoff({ ...base, textFocused: true, ownerFocused: true }),
+    "editor",
+  );
+  // A pending trusted tap focuses the editor itself with the soft keyboard.
+  assert.equal(
+    keyboardFocusHandoff({
+      ...base,
+      textFocused: true,
+      ownerFocused: true,
+      pointerActivationPending: true,
+    }),
+    null,
+  );
+  // Focus elsewhere in the page is never stolen.
+  assert.equal(keyboardFocusHandoff({ ...base, textFocused: true }), null);
+  // Tab or Escape out of the editor returns keys to the canvas.
+  assert.equal(
+    keyboardFocusHandoff({ ...base, textFocused: false, editorFocused: true }),
+    "owner",
+  );
+  assert.equal(keyboardFocusHandoff({ ...base, textFocused: false }), null);
+  // Unchanged text focus and a background document move nothing.
+  assert.equal(
+    keyboardFocusHandoff({
+      ...base,
+      textFocused: undefined,
+      editorFocused: true,
+    }),
+    null,
+  );
+  assert.equal(
+    keyboardFocusHandoff({
+      ...base,
+      textFocused: false,
+      editorFocused: true,
+      documentFocused: false,
+    }),
+    null,
+  );
 });
 
 test("composition updates commit once and empty ends cancel", () => {

@@ -357,6 +357,61 @@ fn wire_gui_input_admits_press_with_correlated_reply() {
     );
 }
 
+/// Keyboard-only use over the wire: Tab and Shift+Tab enter the panel from
+/// no focus and route later keys to the entered control, each with a
+/// handled correlated reply.
+#[test]
+fn wire_keyboard_traversal_enters_and_activates_without_pointer() {
+    let mut host = ready();
+    let (panel, _) = build_panel(&mut host);
+    let key = |key| {
+        RequestBody::GuiInput(Box::new(GuiInputCommand::Key {
+            key,
+            pressed: true,
+        }))
+    };
+    let expect_handled = |host: &mut Host<Platform>, requests: [u64; 2]| {
+        host.tick(0.01).unwrap();
+        let mut replies = Vec::new();
+        let mut session = host.session_mut(SESSION).unwrap();
+        while let Some(reply) = session.take_response() {
+            let request_id = u64::from_le_bytes(reply[8..16].try_into().unwrap());
+            if requests.contains(&request_id) {
+                assert_eq!(reply[24], 30, "expected response-gui-input");
+                assert_eq!(
+                    u16::from_le_bytes(reply[33..35].try_into().unwrap()),
+                    0,
+                    "keyboard traversal must report a handled disposition"
+                );
+                replies.push(request_id);
+            }
+        }
+        drop(session);
+        assert_eq!(replies, requests);
+        host.tick(0.01).unwrap();
+        drain_responses(host);
+    };
+
+    send(&mut host, 30, key(ipp_core::GuiKey::Tab));
+    send(&mut host, 31, key(ipp_core::GuiKey::Space));
+    expect_handled(&mut host, [30, 31]);
+    assert_eq!(
+        checkbox_value(&mut host, panel),
+        GuiControlValue::Bool(true)
+    );
+
+    send(&mut host, 32, key(ipp_core::GuiKey::Escape));
+    send(&mut host, 33, key(ipp_core::GuiKey::BackTab));
+    expect_handled(&mut host, [32, 33]);
+    send(&mut host, 34, key(ipp_core::GuiKey::Enter));
+    send(&mut host, 35, key(ipp_core::GuiKey::BackTab));
+    expect_handled(&mut host, [34, 35]);
+    assert_eq!(
+        checkbox_value(&mut host, panel),
+        GuiControlValue::Bool(false)
+    );
+}
+
 #[test]
 fn wire_gui_input_reply_correlates_authoritative_no_panel_miss() {
     let mut host = ready();

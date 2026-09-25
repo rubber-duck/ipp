@@ -37,6 +37,7 @@ export type GuiPointerButton = "primary" | "secondary" | "auxiliary";
 
 export type GuiKey =
   | "tab"
+  | "backTab"
   | "enter"
   | "space"
   | "escape"
@@ -362,11 +363,15 @@ export function domMouseButtonToGuiButton(
   }
 }
 
-/** `KeyboardEvent.key` to non-text GUI key; printable input uses `text`. */
-export function keyboardKeyToGuiKey(key: string): GuiKey | null {
+/** `KeyboardEvent.key` and Shift state to a non-text GUI key; printable
+ * input uses `text`. Shift+Tab is reverse traversal. */
+export function keyboardKeyToGuiKey(
+  key: string,
+  shiftKey = false,
+): GuiKey | null {
   switch (key) {
     case "Tab":
-      return "tab";
+      return shiftKey ? "backTab" : "tab";
     case "Enter":
       return "enter";
     case " ":
@@ -393,6 +398,42 @@ export function keyboardKeyToGuiKey(key: string): GuiKey | null {
     default:
       return null;
   }
+}
+
+/** DOM focus state around one authoritative runtime text-focus update. */
+export interface KeyboardHandoffState {
+  /** Runtime text focus after the update: true while a text input has it,
+   * false once cleared, undefined when the update left it unchanged. */
+  readonly textFocused: boolean | undefined;
+  /** The document has system focus. */
+  readonly documentFocused: boolean;
+  /** The native editor had DOM focus before the update synced it. */
+  readonly editorFocused: boolean;
+  /** The canvas relay's keyboard target has DOM focus. */
+  readonly ownerFocused: boolean;
+  /** A trusted pointer activation awaits this result; it focuses the editor
+   * itself with the soft keyboard. */
+  readonly pointerActivationPending: boolean;
+}
+
+/**
+ * Keyboard ownership handoff between the canvas relay and the native editor.
+ *
+ * Exactly one element owns keys: the native editor while a text input has
+ * runtime focus, the relay's keyboard target otherwise. Keyboard traversal
+ * into a text input therefore moves DOM focus to the editor, and traversal
+ * or Escape out of one returns it to the relay target. Returns the element
+ * to focus, or null to leave DOM focus alone.
+ */
+export function keyboardFocusHandoff(
+  state: KeyboardHandoffState,
+): "editor" | "owner" | null {
+  if (!state.documentFocused || state.textFocused === undefined) return null;
+  if (state.textFocused)
+    return state.ownerFocused && !state.pointerActivationPending
+      ? "editor"
+      : null;
+  return state.editorFocused ? "owner" : null;
 }
 
 /** Client coordinates to canvas-relative CSS pixels. */
@@ -442,6 +483,15 @@ export function wheelDeltaToLogical(
 ): GuiLogicalPoint {
   if (deltaMode === 1) return [deltaX * 16, deltaY * 16];
   return [deltaX, deltaY];
+}
+
+/** Whether an element edits text natively and so needs its key defaults. */
+function isEditableTarget(element: HTMLElement): boolean {
+  return (
+    element.isContentEditable ||
+    element.tagName === "INPUT" ||
+    element.tagName === "TEXTAREA"
+  );
 }
 
 function toU32(pointerId: number): number {
@@ -620,9 +670,15 @@ export function attachCanvasGuiInput(
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
-    const key = keyboardKeyToGuiKey(event.key);
+    const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
     if (key === null) return;
-    if (key === "tab") event.preventDefault();
+    // Traversal keys never move DOM focus. On a non-editable target the
+    // other forwarded keys would scroll the page or activate browser
+    // defaults, so their defaults are prevented too; an editable target keeps
+    // them for its own `beforeinput`.
+    if (key === "tab" || key === "backTab" || !isEditableTarget(target)) {
+      event.preventDefault();
+    }
     send({ kind: "key", key, pressed: true });
   };
 

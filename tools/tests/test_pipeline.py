@@ -406,16 +406,22 @@ class PlanningTests(unittest.TestCase):
                 ids, _ = affected([source], [])
                 self.assertTrue(set(suite_ids(suites)).issubset(ids))
 
-        # The renderer manifest and the shared smoke module back every native
-        # GLES example.
+        # The renderer manifest backs every native GLES check; the shared
+        # smoke module backs every renderer example that includes it.
         checks = {record["id"] for record in GLES_CHECKS}
-        for source in (
-            "crates/ipp-render-gl/Cargo.toml",
-            "crates/ipp-render-gl/examples/smoke/mod.rs",
+        smoke_examples = {
+            record["id"]
+            for record in GLES_CHECKS
+            if record["command"][:3] == ["cargo", "run", "-p"]
+            and record["command"][3] == "ipp-render-gl"
+        }
+        for source, expected in (
+            ("crates/ipp-render-gl/Cargo.toml", checks),
+            ("crates/ipp-render-gl/examples/smoke/mod.rs", smoke_examples),
         ):
             with self.subTest(source=source):
                 ids, _ = affected([source], [])
-                self.assertTrue(checks.issubset(ids))
+                self.assertTrue(expected.issubset(ids), expected - set(ids))
 
     def test_mapped_rust_test_targets_run_in_their_suites(self):
         # Selecting a suite for a Cargo test target is only useful when one of

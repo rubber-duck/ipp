@@ -343,6 +343,8 @@
       "crates/ipp-server/examples/gles_host.rs",
       "crates/ipp-server/examples/gles_presentation/",
       "crates/ipp-render-gl/examples/smoke/egl.rs",
+      "crates/ipp-render-gl/Cargo.toml",
+      "crates/ipp-server/Cargo.toml",
       "packages/ipp-client/src/native-presentation.ts",
       "tests/render/retained-gui-native.ts",
       "tests/render/retained-gui-environment.ts",

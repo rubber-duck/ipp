@@ -238,7 +238,7 @@ fn measure(count: u32, repetitions: u32) -> Vec<(&'static str, usize, Duration)>
         let node = handle(&mut fixture, node);
         let edit = |rep: u32| GuiCommand::UpdateNode {
             handle: node,
-            patch: patch(if rep % 2 == 0 {
+            patch: patch(if rep.is_multiple_of(2) {
                 0.5
             } else {
                 0.25
@@ -255,7 +255,7 @@ fn measure(count: u32, repetitions: u32) -> Vec<(&'static str, usize, Duration)>
     let reorder = |rep: u32| GuiCommand::MoveNode {
         handle: node,
         parent: Some(GuiNodeId(1)),
-        index: if rep % 2 == 0 {
+        index: if rep.is_multiple_of(2) {
             0
         } else {
             count / 3

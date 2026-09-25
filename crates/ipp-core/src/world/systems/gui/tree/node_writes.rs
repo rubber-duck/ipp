@@ -10,8 +10,9 @@
 //! finds no gap, grows with the sibling count.
 
 use super::component::{GuiControlCommit, GuiControlCommitValue, GuiNodeDataEdit, GuiRoot};
-use super::node_rows::GuiNodeDataProperty;
-use super::node_rows::{GuiNodeDataRow, GuiNodeStyleProperty, GuiNodeStyleRow};
+use super::node_rows::{
+    GuiNodeDataProperty, GuiNodeDataRow, GuiNodeStyleProperty, GuiNodeStyleRow,
+};
 use super::node_tree::{GuiNodeTreeProperty, GuiNodeTreeRow, place_among};
 use super::nodes::{
     GuiControlValue, GuiNodeData, GuiNodeId, GuiNodePatch, GuiNodeStyle, MAX_NODE_ID, MAX_NODES,

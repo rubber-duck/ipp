@@ -583,6 +583,14 @@ impl GuiRoot {
     /// renumbering them when their keys leave no gap, and return its key.
     #[cfg(test)]
     fn place_directly(&mut self, id: GuiNodeId, parent: u32, index: usize) -> u32 {
+        if self
+            .node_tree
+            .get(GuiNodeId(parent))
+            .and_then(GuiNodeTreeRow::node_kind)
+            == Some(GuiNodeKind::VirtualList)
+        {
+            return index as u32;
+        }
         let siblings = self.scanned_siblings(parent, Some(id));
         let (key, renumbered) = place_among(&siblings, index.min(siblings.len()));
         for (sibling, order) in renumbered {
@@ -792,6 +800,30 @@ impl GuiRoot {
             GuiControlCommitValue::Value(value) => data.value = Some(value),
             GuiControlCommitValue::Text(_) => {}
         }
+        Ok(())
+    }
+
+    /// Move a VirtualList's persisted anchor directly in its data row, as
+    /// scroll input does on a staged copy of the producer root.
+    pub(in crate::world::systems::gui) fn set_virtual_anchor(
+        &mut self,
+        id: GuiNodeId,
+        index: u32,
+        offset: f32,
+    ) -> Result<(), ErrorReason> {
+        if self.node_tree.get(id).and_then(GuiNodeTreeRow::node_kind)
+            != Some(GuiNodeKind::VirtualList)
+            || !offset.is_finite()
+            || offset < 0.0
+        {
+            return Err(ErrorReason::InvalidValue);
+        }
+        let data = self
+            .node_data
+            .get_mut(id.0)
+            .ok_or(ErrorReason::InvalidValue)?;
+        data.anchor_index = Some(index);
+        data.anchor_offset = Some(offset);
         Ok(())
     }
 
@@ -1434,6 +1466,10 @@ impl GuiNodeDataEdit {
             // committed ones.
             values.checked = current.checked.or(values.checked);
             values.value = current.value.or(values.value);
+            // A VirtualList's anchor is scroll state, kept like a committed
+            // value; scroll input and scroll-to-index move it.
+            values.anchor_index = current.anchor_index.or(values.anchor_index);
+            values.anchor_offset = current.anchor_offset.or(values.anchor_offset);
         }
         values.validate_for(kind)?;
 

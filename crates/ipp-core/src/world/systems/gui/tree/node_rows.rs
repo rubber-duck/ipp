@@ -429,11 +429,15 @@ pub(crate) fn validate_node_style_property(
 
 /// Scalar kind-specific values of one node. Presence follows the node kind:
 /// `image_size` for Image, `checked` for Checkbox, `value`, `min`, `max` and
-/// `step` for Slider, nothing otherwise.
+/// `step` for Slider, the item and anchor properties for VirtualList,
+/// nothing otherwise.
 ///
 /// `checked` and `value` are the committed control values; they and the
-/// slider range change only through GUI commands. `image_size` is an
-/// ordinary numeric property.
+/// slider range change only through GUI commands. A VirtualList's anchor is
+/// its persisted scroll position: the first visible item and the offset
+/// into it, written by scroll input and scroll-to-index and kept across
+/// ordinary edits like a committed value. `image_size` is an ordinary
+/// numeric property.
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
 pub struct GuiNodeDataRow {
     /// Image display size in local metres; positive.
@@ -448,7 +452,25 @@ pub struct GuiNodeDataRow {
     pub max: Option<f32>,
     /// Slider step increment, or 0.0 for continuous; non-negative.
     pub step: Option<f32>,
+    /// VirtualList item count; at most [`MAX_VIRTUAL_ITEMS`].
+    pub item_count: Option<u32>,
+    /// VirtualList per-item main-axis extent estimate in logical units;
+    /// finite and positive. A declared child's measured extent replaces it.
+    pub item_extent: Option<f32>,
+    /// VirtualList items wanted beyond each end of the visible range.
+    pub overscan: Option<u32>,
+    /// VirtualList main axis: 0 horizontal, 1 vertical.
+    pub axis: Option<u32>,
+    /// VirtualList persisted anchor: index of the first visible item.
+    pub anchor_index: Option<u32>,
+    /// VirtualList persisted anchor: main-axis offset into the anchor item in
+    /// logical units; finite and non-negative.
+    pub anchor_offset: Option<f32>,
 }
+
+/// Largest VirtualList item count: positions stay exact integers times the
+/// estimate in `f32`.
+pub const MAX_VIRTUAL_ITEMS: u32 = 1 << 24;
 
 /// Data row with every property absent, as for nodes without scalars.
 pub(crate) const EMPTY_NODE_DATA: GuiNodeDataRow = GuiNodeDataRow {
@@ -458,6 +480,12 @@ pub(crate) const EMPTY_NODE_DATA: GuiNodeDataRow = GuiNodeDataRow {
     min: None,
     max: None,
     step: None,
+    item_count: None,
+    item_extent: None,
+    overscan: None,
+    axis: None,
+    anchor_index: None,
+    anchor_offset: None,
 };
 
 impl GuiNodeDataRow {
@@ -488,9 +516,22 @@ impl GuiNodeDataRow {
         }
     }
 
+    /// Data of a VirtualList node anchored at its first item.
+    pub fn virtual_list(item_count: u32, item_extent: f32, overscan: u32, axis: u32) -> Self {
+        Self {
+            item_count: Some(item_count),
+            item_extent: Some(item_extent),
+            overscan: Some(overscan),
+            axis: Some(axis),
+            anchor_index: Some(0),
+            anchor_offset: Some(0.0),
+            ..Self::default()
+        }
+    }
+
     /// Keep values of properties `kind` uses, fill newly used ones with
-    /// placeholders (unchecked, a unit image, a zero slider) and clear the
-    /// rest. The result always passes [`Self::validate_for`] when the kept
+    /// placeholders (unchecked, a unit image, a zero slider, an empty
+    /// vertical list with unit estimates) and clear the rest. The result always passes [`Self::validate_for`] when the kept
     /// values do.
     pub fn conform(&mut self, kind: GuiNodeKind) {
         let used = |property: GuiNodeDataProperty| property.used_by(kind);
@@ -512,6 +553,28 @@ impl GuiNodeDataRow {
         keep(&mut self.min, used(GuiNodeDataProperty::Min), 0.0);
         keep(&mut self.max, used(GuiNodeDataProperty::Max), 0.0);
         keep(&mut self.step, used(GuiNodeDataProperty::Step), 0.0);
+        keep(
+            &mut self.item_count,
+            used(GuiNodeDataProperty::ItemCount),
+            0,
+        );
+        keep(
+            &mut self.item_extent,
+            used(GuiNodeDataProperty::ItemExtent),
+            1.0,
+        );
+        keep(&mut self.overscan, used(GuiNodeDataProperty::Overscan), 0);
+        keep(&mut self.axis, used(GuiNodeDataProperty::Axis), 1);
+        keep(
+            &mut self.anchor_index,
+            used(GuiNodeDataProperty::AnchorIndex),
+            0,
+        );
+        keep(
+            &mut self.anchor_offset,
+            used(GuiNodeDataProperty::AnchorOffset),
+            0.0,
+        );
     }
 
     /// Row properties to write, in an order that keeps `min <= value <= max`
@@ -533,6 +596,12 @@ impl GuiNodeDataRow {
             (P::Min, !widen_min),
             (P::Max, !widen_max),
             (P::Step, true),
+            (P::ItemCount, true),
+            (P::ItemExtent, true),
+            (P::Overscan, true),
+            (P::Axis, true),
+            (P::AnchorIndex, true),
+            (P::AnchorOffset, true),
         ];
         let changed = move |property: GuiNodeDataProperty| {
             self.property(property.index()).ok().flatten()
@@ -560,6 +629,12 @@ impl GuiNodeDataRow {
             GuiNodeDataProperty::Min => self.min.is_some(),
             GuiNodeDataProperty::Max => self.max.is_some(),
             GuiNodeDataProperty::Step => self.step.is_some(),
+            GuiNodeDataProperty::ItemCount => self.item_count.is_some(),
+            GuiNodeDataProperty::ItemExtent => self.item_extent.is_some(),
+            GuiNodeDataProperty::Overscan => self.overscan.is_some(),
+            GuiNodeDataProperty::Axis => self.axis.is_some(),
+            GuiNodeDataProperty::AnchorIndex => self.anchor_index.is_some(),
+            GuiNodeDataProperty::AnchorOffset => self.anchor_offset.is_some(),
         }
     }
 
@@ -609,11 +684,26 @@ pub enum GuiNodeDataProperty {
     Max,
     /// `step`: optional F32, non-negative; Slider only.
     Step,
+    /// `item_count`: optional U32 up to [`MAX_VIRTUAL_ITEMS`]; VirtualList
+    /// only.
+    ItemCount,
+    /// `item_extent`: optional F32, positive; VirtualList only.
+    ItemExtent,
+    /// `overscan`: optional U32; VirtualList only.
+    Overscan,
+    /// `axis`: optional U32, 0 or 1; VirtualList only.
+    Axis,
+    /// `anchor_index`: optional U32; VirtualList only; persisted scroll
+    /// position.
+    AnchorIndex,
+    /// `anchor_offset`: optional F32, non-negative; VirtualList only;
+    /// persisted scroll position.
+    AnchorOffset,
 }
 
 impl GuiNodeDataProperty {
     /// Number of node data properties.
-    pub const COUNT: u32 = 6;
+    pub const COUNT: u32 = 12;
 
     /// Every property in layout order; `ALL[i] as u32 == i`.
     pub const ALL: [Self; Self::COUNT as usize] = [
@@ -623,6 +713,12 @@ impl GuiNodeDataProperty {
         Self::Min,
         Self::Max,
         Self::Step,
+        Self::ItemCount,
+        Self::ItemExtent,
+        Self::Overscan,
+        Self::Axis,
+        Self::AnchorIndex,
+        Self::AnchorOffset,
     ];
 
     /// Property at a layout index.
@@ -649,8 +745,9 @@ impl GuiNodeDataProperty {
         GuiNodeDataRow::LAYOUT.properties[self as usize].kind
     }
 
-    /// Whether only GUI commands may change it: committed control values and
-    /// the slider range they are validated against.
+    /// Whether only GUI commands and routed input may change it: committed
+    /// control values, the slider range they are validated against and the
+    /// VirtualList properties, whose anchor is scroll state.
     pub const fn command_owned(self) -> bool {
         !matches!(self, Self::ImageSize)
     }
@@ -661,6 +758,12 @@ impl GuiNodeDataProperty {
             Self::ImageSize => kind == GuiNodeKind::Image,
             Self::Checked => kind == GuiNodeKind::Checkbox,
             Self::Value | Self::Min | Self::Max | Self::Step => kind == GuiNodeKind::Slider,
+            Self::ItemCount
+            | Self::ItemExtent
+            | Self::Overscan
+            | Self::Axis
+            | Self::AnchorIndex
+            | Self::AnchorOffset => kind == GuiNodeKind::VirtualList,
         }
     }
 }
@@ -717,6 +820,10 @@ pub(crate) fn validate_node_data_property(
     let valid = match (property, value) {
         (GuiNodeDataProperty::ImageSize, DynamicValue::Vec2(size)) => size.iter().all(|v| *v > 0.0),
         (GuiNodeDataProperty::Step, DynamicValue::F32(step)) => *step >= 0.0,
+        (GuiNodeDataProperty::ItemCount, DynamicValue::U32(count)) => *count <= MAX_VIRTUAL_ITEMS,
+        (GuiNodeDataProperty::ItemExtent, DynamicValue::F32(extent)) => *extent > 0.0,
+        (GuiNodeDataProperty::Axis, DynamicValue::U32(axis)) => *axis <= 1,
+        (GuiNodeDataProperty::AnchorOffset, DynamicValue::F32(offset)) => *offset >= 0.0,
         _ => true,
     };
 

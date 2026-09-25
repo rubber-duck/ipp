@@ -28,6 +28,9 @@ pub enum GuiSemanticRole {
     TextInput,
     /// Scrolling viewport over its content.
     ScrollView,
+    /// Scrolling viewport over an item count, with its declared items as
+    /// children.
+    VirtualList,
 }
 
 /// Supported headless action kinds for one semantic node.
@@ -75,9 +78,29 @@ pub struct GuiSemanticNode {
     pub focus_scope: bool,
     /// Supported headless actions.
     pub actions: Vec<GuiSemanticActionKind>,
-    /// Committed scroll position of an evaluated ScrollView; None for other
-    /// roles and for ScrollViews layout has not evaluated.
+    /// Committed scroll position of an evaluated ScrollView or VirtualList;
+    /// None for other roles and for viewports layout has not evaluated.
     pub scroll: Option<GuiSemanticScroll>,
+    /// Item count, loaded range and anchor of a VirtualList; None for other
+    /// roles.
+    pub virtual_list: Option<GuiSemanticVirtualList>,
+}
+
+/// Items of one VirtualList: its authored count, the range of items it has
+/// declared children for and its persisted anchor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuiSemanticVirtualList {
+    /// Authored item count.
+    pub item_count: u32,
+    /// First item index with a declared, evaluated child; equal to
+    /// `loaded_last` when none is loaded.
+    pub loaded_first: u32,
+    /// One past the last item index with a declared, evaluated child.
+    pub loaded_last: u32,
+    /// Persisted anchor: first visible item.
+    pub anchor_index: u32,
+    /// Persisted anchor: offset into that item in logical units.
+    pub anchor_offset: f32,
 }
 
 /// Committed scroll position of one ScrollView in its local logical units.
@@ -137,6 +160,9 @@ impl GuiSemanticTree {
 pub fn role_for_data(data: &GuiNodeData) -> GuiSemanticRole {
     match data {
         GuiNodeData::Container(crate::GuiContainerKind::ScrollView) => GuiSemanticRole::ScrollView,
+        GuiNodeData::Container(crate::GuiContainerKind::VirtualList) => {
+            GuiSemanticRole::VirtualList
+        }
         GuiNodeData::Container(_) => GuiSemanticRole::Container,
         GuiNodeData::Text(_) => GuiSemanticRole::Text,
         GuiNodeData::Drawing => GuiSemanticRole::Drawing,
@@ -183,6 +209,7 @@ pub fn actions_for_role(role: GuiSemanticRole) -> Vec<GuiSemanticActionKind> {
         }
         GuiSemanticRole::Container
         | GuiSemanticRole::ScrollView
+        | GuiSemanticRole::VirtualList
         | GuiSemanticRole::Text
         | GuiSemanticRole::Drawing
         | GuiSemanticRole::Image => Vec::new(),

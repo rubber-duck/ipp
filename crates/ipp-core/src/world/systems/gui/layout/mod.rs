@@ -3,12 +3,14 @@
 //! Evaluation turns [`GuiRoot`](super::tree::GuiRoot) trees into retained
 //! [`GuiEvaluatedView`] geometry; the layout system retains one view per
 //! root entity; skinning resolves theme and part-row appearance over those
-//! views.
+//! views. VirtualList item placement and range math live in
+//! [`virtual_list`], shared with input scrolling.
 
 pub(super) mod evaluation;
 pub(crate) mod scroll_bars;
 pub(super) mod skin;
 pub(super) mod system;
+pub(crate) mod virtual_list;
 
 #[cfg(test)]
 pub(crate) use evaluation::GuiLayoutDiagnostic;

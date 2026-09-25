@@ -66,6 +66,7 @@ fn view(nodes: Vec<GuiEvaluatedNode>) -> GuiEvaluatedView {
         root_bounds: [0.0, 0.0, 10.0, 10.0],
         units_per_metre: 1.0,
         nodes,
+        virtual_lists: Default::default(),
         diagnostics: Vec::new(),
         remeasure_count: 0,
         reflow_count: 0,

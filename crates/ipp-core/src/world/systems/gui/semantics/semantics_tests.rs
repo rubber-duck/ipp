@@ -181,6 +181,7 @@ fn view_fixture(rect_shift: f32) -> GuiEvaluatedView {
                 },
             ),
         ],
+        virtual_lists: Default::default(),
         diagnostics: Vec::new(),
         remeasure_count: 0,
         reflow_count: 1,

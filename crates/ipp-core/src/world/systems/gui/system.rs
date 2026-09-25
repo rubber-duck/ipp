@@ -103,6 +103,18 @@ pub enum GuiCommand {
         /// Appearance changes; motion is theme-only.
         patch: GuiPartPatch,
     },
+    /// Anchor a VirtualList at one item: the item's leading edge sits
+    /// `offset` logical units before the viewport start, within the list's
+    /// scroll capacity. The anchor persists and the wanted range follows.
+    ScrollToIndex {
+        /// Fenced VirtualList handle.
+        node: GuiNodeHandle,
+        /// Item index; clamped to the last item.
+        index: u32,
+        /// Main-axis offset into the item in logical units; finite and
+        /// non-negative.
+        offset: f32,
+    },
 }
 
 impl GuiCommand {
@@ -139,6 +151,10 @@ impl GuiCommand {
             }
             | Self::UpdatePart {
                 handle,
+                ..
+            }
+            | Self::ScrollToIndex {
+                node: handle,
                 ..
             } => handle.entity,
         }
@@ -801,6 +817,14 @@ fn node_writes(
         } => {
             validate_handle(root, root_incarnation, session, handle)?;
             root.control_value_writes(handle.node_id, *expected_revision, value)
+        }
+        GuiCommand::ScrollToIndex {
+            node,
+            index,
+            offset,
+        } => {
+            validate_handle(root, root_incarnation, session, node)?;
+            root.scroll_to_index_writes(node.node_id, *index, *offset)
         }
         GuiCommand::UpdateTheme {
             ..

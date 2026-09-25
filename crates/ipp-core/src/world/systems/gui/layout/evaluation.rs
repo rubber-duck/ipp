@@ -1,7 +1,8 @@
 //! Retained GUI constraint evaluation into Surface paint and hit-test geometry.
 //!
 //! This module owns single-pass box layout for
-//! Row, Column, Stack, Padding, Align, SizedBox and ScrollView containers,
+//! Row, Column, Stack, Padding, Align, SizedBox, ScrollView and VirtualList
+//! containers (VirtualList item math lives in [`super::virtual_list`]),
 //! leaf text/drawing/image evaluation through the shared headless interfaces,
 //! retained paint construction through the Surface preparation boundary and
 //! analytic hit testing in GUI coordinates.
@@ -48,7 +49,8 @@
 //!   counts toward the container's cross extent.
 //! - Stack shrinks each child's constraints by its margins on both axes,
 //!   aligns the margin box, and fits its own extent to margin boxes.
-//! - Padding, Align, SizedBox and ScrollView ignore child margins.
+//! - Padding, Align, SizedBox, ScrollView and VirtualList ignore child
+//!   margins.
 //! - The root node is offset by its top and left margins; its constraints
 //!   and clip remain the Surface rectangle.
 //!
@@ -106,6 +108,7 @@ use super::super::tree::{GUI_BASE_PARTS, GuiNodeStyleRow, GuiPartId};
 use super::super::{
     GuiContainerKind, GuiNode, GuiNodeData, GuiNodeId, GuiNodeStyle, GuiRoot, GuiTreeIndex,
 };
+use super::virtual_list::GuiVirtualListLayout;
 use crate::EntityId;
 use crate::components::rows::SchemaRow;
 use crate::services::asset_management::font::FontAsset;
@@ -572,6 +575,8 @@ pub struct GuiEvaluatedView {
     pub units_per_metre: f32,
     /// Evaluated nodes in painter order.
     pub nodes: Vec<GuiEvaluatedNode>,
+    /// Item placement of every evaluated VirtualList.
+    pub(crate) virtual_lists: BTreeMap<GuiNodeId, GuiVirtualListLayout>,
     /// Diagnostics accumulated during the latest reflow.
     pub(crate) diagnostics: Vec<GuiLayoutDiagnostic>,
     /// Cumulative text remeasurements across evaluations, observed by tests.
@@ -1056,6 +1061,7 @@ struct Evaluator<'a, 'r> {
     nodes: Vec<GuiEvaluatedNode>,
     /// Deferred placement per record, index-aligned with `nodes`.
     placements: Vec<DeferredPlacement>,
+    virtual_lists: BTreeMap<GuiNodeId, GuiVirtualListLayout>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
     #[cfg(test)]
     remeasured: u64,
@@ -1844,6 +1850,9 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             GuiContainerKind::ScrollView => {
                 self.layout_scroll(node, constraints, fill, origin_final, acc_total, depth)
             }
+            GuiContainerKind::VirtualList => {
+                self.layout_virtual_list(node, fill, origin_final, acc_total, depth)
+            }
         }
     }
 
@@ -2442,6 +2451,62 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         }
     }
 
+    /// VirtualList: the viewport fills its constraints like a ScrollView,
+    /// and each declared child measures with an unbounded main axis and the
+    /// viewport's cross extent, placed at its item index along the main
+    /// axis. The content extent covers every item; see
+    /// [`super::virtual_list`].
+    fn layout_virtual_list(
+        &mut self,
+        node: &GuiNode<'_>,
+        fill: [f32; 2],
+        origin_final: [f32; 2],
+        acc_total: [f32; 2],
+        depth: u32,
+    ) -> ContentOutcome {
+        let viewport = [fill_or_fit(0.0, fill[0]), fill_or_fit(0.0, fill[1])];
+        let viewport_clip = normalize_clip([
+            origin_final[0],
+            origin_final[1],
+            origin_final[0] + viewport[0] * acc_total[0],
+            origin_final[1] + viewport[1] * acc_total[1],
+        ]);
+        let mut list =
+            GuiVirtualListLayout::new(node_values(self.root, node.id), self.units, viewport);
+        let mut child_constraints = Constraints::loose(viewport[0], viewport[1]);
+        if list.axis == 0 {
+            child_constraints.max_w = f32::INFINITY;
+        } else {
+            child_constraints.max_h = f32::INFINITY;
+        }
+
+        for &child in self.tree.children(node.id) {
+            let order = self.root.tree_row(child).map_or(u32::MAX, |row| row.order);
+            let Some(index) = list.accepts(order) else {
+                continue;
+            };
+            let local = list.local_point(list.next_position(index));
+            let size = self.visit(
+                child,
+                child_constraints,
+                Self::place(origin_final, local, acc_total),
+                acc_total,
+                depth + 1,
+            );
+            list.push(index, child, size, self.child_available(child));
+        }
+
+        let content_size = list.content_size(viewport);
+        self.virtual_lists.insert(node.id, list);
+        ContentOutcome {
+            size: viewport,
+            content: GuiEvaluatedContent::Container,
+            available: true,
+            content_extents: Some(content_size),
+            viewport: viewport_clip,
+        }
+    }
+
     /// Apply deferred alignment and resolve clips in painter order.
     ///
     /// Records are in pre-order, so each record's parent is the nearest
@@ -2597,6 +2662,19 @@ fn hash_node_structure(
         GuiNodeData::Container(kind) => {
             hasher.u32(0);
             hasher.u32(kind as u32);
+            if kind == GuiContainerKind::VirtualList {
+                // Placement follows item indices (child order keys) and the
+                // item properties; the anchor is scroll state and never
+                // reflows.
+                let values = node_values(root, node.id);
+                hasher.u32(values.item_count.unwrap_or(0));
+                hash_option_f32(hasher, values.item_extent);
+                hasher.u32(values.overscan.unwrap_or(0));
+                hasher.u32(values.axis.unwrap_or(u32::MAX));
+                for child in children {
+                    hasher.u32(root.tree_row(*child).map_or(u32::MAX, |row| row.order));
+                }
+            }
         }
         GuiNodeData::Text(text) => {
             hasher.u32(1);
@@ -2858,6 +2936,7 @@ fn evaluate_tree(
         diagnostics: Vec::new(),
         nodes: Vec::new(),
         placements: Vec::new(),
+        virtual_lists: BTreeMap::new(),
         texts,
         #[cfg(test)]
         remeasured: 0,
@@ -2887,6 +2966,7 @@ fn evaluate_tree(
 
     EvaluatedTree {
         nodes: evaluator.nodes,
+        virtual_lists: evaluator.virtual_lists,
         diagnostics: evaluator.diagnostics,
         texts: evaluator.texts,
         #[cfg(test)]
@@ -2897,6 +2977,7 @@ fn evaluate_tree(
 /// Output of one full constraint pass.
 struct EvaluatedTree {
     nodes: Vec<GuiEvaluatedNode>,
+    virtual_lists: BTreeMap<GuiNodeId, GuiVirtualListLayout>,
     diagnostics: Vec<GuiLayoutDiagnostic>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
     /// Text measurements this pass performed.
@@ -3094,6 +3175,7 @@ impl GuiLayoutCache {
                     retained.paint_fp = u64::MAX;
                     retained.texts.clear();
                     retained.view.nodes.clear();
+                    retained.view.virtual_lists.clear();
                     retained.view.diagnostics.clear();
                     retained.view.available = true;
                     retained.view.root_incarnation = request.root_incarnation;
@@ -3157,6 +3239,7 @@ impl GuiLayoutCache {
                 retained.base = retained_geometry(&tree.nodes);
                 let view = &mut retained.view;
                 view.nodes = tree.nodes;
+                view.virtual_lists = tree.virtual_lists;
                 view.diagnostics = tree.diagnostics;
                 view.paint_revision = retained.paint_revision;
                 #[cfg(test)]
@@ -3200,6 +3283,7 @@ impl GuiLayoutCache {
             root_bounds: [0.0, 0.0, logical[0], logical[1]],
             units_per_metre: request.units_per_metre,
             nodes: tree.nodes,
+            virtual_lists: tree.virtual_lists,
             diagnostics: tree.diagnostics,
             #[cfg(test)]
             remeasure_count: retained.remeasure_count,
@@ -3300,6 +3384,7 @@ impl RetainedGuiRoot {
                 root_bounds: [0.0, 0.0, 0.0, 0.0],
                 units_per_metre,
                 nodes: Vec::new(),
+                virtual_lists: BTreeMap::new(),
                 diagnostics: Vec::new(),
                 #[cfg(test)]
                 remeasure_count: 0,

@@ -13,6 +13,7 @@ const COUNT: u32 = 1;
 const OFFSET: u32 = 2;
 const ROTATION: u32 = 3;
 const TEXTURE: u32 = 5;
+const LABEL: u32 = 9;
 
 fn item(weight: f32) -> RowsFixtureItem {
     RowsFixtureItem {
@@ -83,10 +84,11 @@ fn derived_layout_follows_declaration_order_with_kinds_flags_and_hints() {
     assert_eq!(
         names,
         [
-            "weight", "count", "offset", "rotation", "enabled", "texture", "delta", "size", "mark"
+            "weight", "count", "offset", "rotation", "enabled", "texture", "delta", "size", "mark",
+            "label"
         ]
     );
-    assert_eq!(layout.property_count(), 9);
+    assert_eq!(layout.property_count(), 10);
     assert_eq!(layout.mask_bytes(), 2);
     assert_eq!(
         layout.properties[3],
@@ -95,6 +97,17 @@ fn derived_layout_follows_declaration_order_with_kinds_flags_and_hints() {
             kind: DynamicPropertyKind::Vec4,
             optional: true,
             hint: RowPropertyHint::Rotation,
+            max_bytes: 0,
+        }
+    );
+    assert_eq!(
+        layout.properties[LABEL as usize],
+        RowProperty {
+            name: "label",
+            kind: DynamicPropertyKind::Text,
+            optional: true,
+            hint: RowPropertyHint::None,
+            max_bytes: 16,
         }
     );
     assert_eq!(layout.properties[0].kind, DynamicPropertyKind::F32);
@@ -272,7 +285,7 @@ fn component_offsets_read_and_write_row_properties_through_the_derive() {
     assert!(RowsFixture::has_field(tag + 1_000));
     assert!(!RowsFixture::has_field(0x3000_0000));
     assert!(!RowsFixture::has_field(
-        0x1000_0000 + Rows::<RowsFixtureItem>::MAX_SLOTS * 9
+        0x1000_0000 + Rows::<RowsFixtureItem>::MAX_SLOTS * RowsFixtureItem::LAYOUT.property_count()
     ));
 }
 
@@ -539,6 +552,322 @@ fn registry_dispatch_reaches_rows_and_keeps_unknown_offsets_distinct() {
     );
 }
 
+#[test]
+fn text_properties_travel_as_bounded_string_values() {
+    let mut fixture = fixture();
+    let label = item_offset(1, LABEL);
+    let weight = item_offset(1, WEIGHT);
+    assert_eq!(fixture.field(label), Ok(FieldValue::Unset));
+
+    // Sixteen UTF-8 bytes fit the bound even though they are fewer characters.
+    let full = "ünïcødé✓ab";
+    assert_eq!(full.len(), 16);
+    assert_eq!(
+        fixture.set_field(label, FieldValue::String(full.into())),
+        Ok(())
+    );
+    assert_eq!(fixture.field(label), Ok(FieldValue::String(full.into())));
+    assert_eq!(fixture.items.get(1).unwrap().label.as_deref(), Some(full));
+    assert_eq!(
+        fixture.set_field(label, FieldValue::String(format!("{full}!"))),
+        Err(FieldError::TextTooLong)
+    );
+    assert_eq!(fixture.items.get(1).unwrap().label.as_deref(), Some(full));
+
+    // Text uses the string value kind only, and only at text properties.
+    assert_eq!(
+        fixture.set_field(label, FieldValue::Dynamic(DynamicValue::Text("a".into()))),
+        Err(FieldError::WrongType)
+    );
+    assert_eq!(
+        fixture.set_field(label, FieldValue::Dynamic(DynamicValue::F32(1.0))),
+        Err(FieldError::WrongType)
+    );
+    assert_eq!(
+        fixture.set_field(weight, FieldValue::String("1".into())),
+        Err(FieldError::WrongType)
+    );
+    assert_eq!(
+        RowsFixture::validate_field(label, FieldKind::String),
+        Ok(())
+    );
+    assert_eq!(
+        RowsFixture::validate_field(label, FieldKind::Dynamic),
+        Err(FieldError::WrongType)
+    );
+    assert_eq!(
+        RowsFixture::validate_field(weight, FieldKind::String),
+        Err(FieldError::WrongType)
+    );
+
+    // The row API carries text as a row-only dynamic value with the same bound.
+    assert_eq!(
+        fixture.items.property(1, LABEL),
+        Ok(Some(DynamicValue::Text(full.into())))
+    );
+    assert_eq!(
+        fixture
+            .items
+            .set_property(1, LABEL, DynamicValue::Text("x".repeat(17))),
+        Err(FieldError::TextTooLong)
+    );
+    assert_eq!(fixture.set_field(label, FieldValue::Unset), Ok(()));
+    assert_eq!(fixture.field(label), Ok(FieldValue::Unset));
+}
+
+#[test]
+fn required_text_rejects_clearing_and_derives_its_bound() {
+    #[derive(Debug, Default, PartialEq, SchemaRow)]
+    struct Named {
+        #[schema(text = 4)]
+        name: String,
+    }
+
+    assert_eq!(Named::LAYOUT.properties[0].kind, DynamicPropertyKind::Text);
+    assert!(!Named::LAYOUT.properties[0].optional);
+    assert_eq!(Named::LAYOUT.properties[0].max_bytes, 4);
+
+    let mut rows = Rows::<Named>::new();
+    rows.push(Named::default()).unwrap();
+    assert_eq!(
+        rows.set_row_field(0, FieldValue::String("four".into())),
+        Ok(())
+    );
+    assert_eq!(rows.get(0).unwrap().name, "four");
+    assert_eq!(
+        rows.set_row_field(0, FieldValue::String("fives".into())),
+        Err(FieldError::TextTooLong)
+    );
+    assert_eq!(
+        rows.set_row_field(0, FieldValue::Unset),
+        Err(FieldError::WrongType)
+    );
+    assert_eq!(
+        Rows::<Named>::validate_row_field(0, FieldKind::Unset),
+        Err(FieldError::WrongType)
+    );
+
+    // A required text property is always present, so an empty string encodes.
+    let mut empty = Rows::<Named>::new();
+    empty.push(Named::default()).unwrap();
+    assert_eq!(Rows::<Named>::decode(&empty.encode()), Ok(empty));
+}
+
+#[test]
+fn text_encodes_as_length_and_utf8_and_decoding_checks_both() {
+    let mut rows = Rows::<RowsFixtureItem>::new();
+    rows.push(RowsFixtureItem {
+        label: Some("hé".into()),
+        ..RowsFixtureItem::default()
+    })
+    .unwrap();
+
+    let mut expected = Vec::new();
+    expected.extend(1u32.to_le_bytes()); // next slot
+    expected.extend(1u32.to_le_bytes()); // live rows
+    expected.extend(0u32.to_le_bytes()); // slot
+    expected.extend([0b0101_0011, 0b0000_0010]); // weight, count, enabled, delta, label
+    expected.extend(0f32.to_le_bytes());
+    expected.extend(0u32.to_le_bytes());
+    expected.extend(0u32.to_le_bytes());
+    expected.extend(0i32.to_le_bytes());
+    expected.extend(3u32.to_le_bytes());
+    expected.extend("hé".as_bytes());
+    assert_eq!(rows.encode(), expected);
+    assert_eq!(Rows::<RowsFixtureItem>::decode(&expected), Ok(rows));
+
+    let with_label = |label: &[u8]| {
+        let mut bytes = expected[..expected.len() - 7].to_vec();
+        bytes.extend((label.len() as u32).to_le_bytes());
+        bytes.extend(label);
+        Rows::<RowsFixtureItem>::decode(&bytes)
+    };
+    assert!(with_label(b"sixteen bytes ok").is_ok());
+    assert_eq!(
+        with_label(b"seventeen bytes!!"),
+        Err(FieldError::TextTooLong)
+    );
+    assert_eq!(with_label(&[0xff, 0xfe]), Err(FieldError::WrongType));
+
+    let mut truncated = expected.clone();
+    truncated.pop();
+    assert!(Rows::<RowsFixtureItem>::decode(&truncated).is_err());
+
+    // A length beyond any text bound is rejected before the bytes are read.
+    let mut huge = expected[..expected.len() - 7].to_vec();
+    huge.extend(u32::MAX.to_le_bytes());
+    assert_eq!(
+        Rows::<RowsFixtureItem>::decode(&huge),
+        Err(FieldError::TextTooLong)
+    );
+}
+
+#[test]
+fn retained_bytes_count_text_capacity() {
+    let mut rows = Rows::<RowsFixtureItem>::new();
+    rows.push(RowsFixtureItem::default()).unwrap();
+    let without = rows.retained_bytes();
+
+    let mut label = String::with_capacity(16);
+    label.push_str("label");
+    rows.get_mut(0).unwrap().label = Some(label);
+    assert_eq!(rows.retained_bytes(), without + 16);
+    assert_eq!(rows.get(0).unwrap().retained_bytes(), 16);
+}
+
+#[test]
+fn contract_stream_carries_the_text_bound_after_the_hint() {
+    #[derive(Default, SchemaRow)]
+    struct Titled {
+        #[schema(text = 300)]
+        title: Option<String>,
+    }
+
+    let mut stream = Vec::new();
+    Rows::<Titled>::write_row_contract(0, &mut stream);
+    let mut expected = Vec::new();
+    expected.extend(0x1000_0000u32.to_le_bytes());
+    expected.extend(1u16.to_le_bytes());
+    expected.extend(5u32.to_le_bytes());
+    expected.extend(b"title");
+    expected.extend([DynamicPropertyKind::Text as u8, 1, 0]);
+    expected.extend(300u32.to_le_bytes());
+    assert_eq!(stream, expected);
+}
+
+#[test]
+fn text_is_row_only() {
+    let text = DynamicValue::Text("row".into());
+    let mut properties = crate::components::dynamic_properties::DynamicProperties::default();
+    assert_eq!(
+        properties.set("title", text.clone()),
+        Err(FieldError::WrongType)
+    );
+    assert!(properties.descriptors().is_empty());
+    assert_eq!(
+        DynamicPropertyKind::from_tag(DynamicPropertyKind::Text as u8),
+        Err(FieldError::WrongType)
+    );
+    assert_eq!(
+        DynamicValue::decode(&text.encode()),
+        Err(FieldError::WrongType)
+    );
+}
+
+fn tags(count: u32) -> Rows<RowsFixtureTag> {
+    let mut rows = Rows::new();
+    for value in 0..count {
+        rows.push(RowsFixtureTag {
+            value,
+        })
+        .unwrap();
+    }
+
+    rows
+}
+
+#[test]
+fn batch_removal_returns_live_rows_in_slot_order_and_kills_their_slots() {
+    let mut rows = tags(8);
+    rows.remove(1);
+    let capacity = rows.rows.capacity();
+
+    // Unsorted and repeated slots, a dead slot, an unallocated slot and an
+    // unaddressable slot: only live slots are removed.
+    let removed = rows.remove_slots(&[6, 2, 6, 1, 9, u32::MAX, 4]);
+    assert_eq!(
+        removed.iter().map(|row| row.value).collect::<Vec<_>>(),
+        [2, 4, 6]
+    );
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        rows.iter().map(|(slot, _)| slot).collect::<Vec<_>>(),
+        [0, 3, 5, 7]
+    );
+    for dead in [1, 2, 4, 6] {
+        assert_eq!(rows.slot_state(dead), RowSlotState::Dead);
+        assert_eq!(
+            rows.insert(
+                dead,
+                RowsFixtureTag {
+                    value: 0
+                }
+            ),
+            Err(FieldError::UnknownField)
+        );
+    }
+    assert_eq!(rows.slot_state(9), RowSlotState::Unallocated);
+    assert_eq!(rows.dead, [1, 2, 4, 6]);
+    assert_eq!(rows.next_slot(), 8);
+
+    // Row storage is kept for later growth; the dead record holds the new slots.
+    assert_eq!(rows.rows.capacity(), capacity);
+    assert_eq!(
+        rows.retained_bytes(),
+        capacity * std::mem::size_of::<(u32, RowsFixtureTag)>()
+            + rows.dead.capacity() * std::mem::size_of::<u32>()
+    );
+}
+
+#[test]
+fn batch_removal_handles_empty_and_complete_requests() {
+    let mut rows = tags(4);
+    assert!(rows.remove_slots(&[]).is_empty());
+    assert_eq!(rows.len(), 4);
+    assert!(rows.remove_slots(&[7, 8]).is_empty());
+    assert!(rows.dead.is_empty());
+
+    let removed = rows.remove_slots(&[3, 2, 1, 0]);
+    assert_eq!(
+        removed.iter().map(|row| row.value).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert!(rows.is_empty());
+    assert_eq!(rows.dead, [0, 1, 2, 3]);
+    assert_eq!(
+        rows.push(RowsFixtureTag {
+            value: 4
+        }),
+        Ok(4)
+    );
+    assert!(rows.remove_slots(&[0, 1, 2, 3]).is_empty());
+}
+
+#[test]
+fn batch_removal_scales_with_the_table_rather_than_per_slot() {
+    const ROWS: u32 = 16_384;
+    let half: Vec<u32> = (0..ROWS).step_by(2).collect();
+    let table = || {
+        let mut rows = Rows::<RowsFixtureItem>::new();
+        for slot in 0..ROWS {
+            rows.push(item(slot as f32)).unwrap();
+        }
+
+        rows
+    };
+
+    let mut single = table();
+    let started = std::time::Instant::now();
+    for slot in &half {
+        single.remove(*slot);
+    }
+    let per_slot = started.elapsed();
+
+    let mut batch = table();
+    let started = std::time::Instant::now();
+    let removed = batch.remove_slots(&half);
+    let batched = started.elapsed();
+
+    assert_eq!(removed.len(), half.len());
+    assert_eq!(batch, single);
+    assert_eq!(batch.dead, single.dead);
+    // Per-slot removal shifts the table once per slot; one pass is far cheaper.
+    assert!(
+        batched * 20 < per_slot,
+        "batch {batched:?} is not far below per-slot {per_slot:?}"
+    );
+}
+
 mod world {
     use super::*;
     use crate::world::WorldLimits;
@@ -686,5 +1015,177 @@ mod world {
             Some([0.0, 1.0, 0.0, 0.0])
         );
         assert_eq!(effective.items.get(1).unwrap().weight, 6.0);
+    }
+
+    #[test]
+    fn text_rows_are_written_bounded_overlaid_and_never_animated() {
+        use crate::systems::animation::{
+            AnimationControllerDescription, AnimationDriverDescription, AnimationProperty,
+            AnimationTrackTarget,
+        };
+        use crate::{ErrorReason, StateOverlayAlias};
+
+        let mut host = HostRuntime::new();
+        let world = host.create_world(WorldLimits::default()).unwrap();
+        let mut table = Rows::<RowsFixtureItem>::new();
+        table.push(item(1.0)).unwrap();
+        let outcome = run(
+            &mut host,
+            world,
+            vec![
+                Command::Create {
+                    alias: 1,
+                    metadata: EntityMetadata {
+                        symbolic_id: Some("text".into()),
+                        classes: vec![],
+                    },
+                },
+                Command::InsertComponent {
+                    entity: EntityRef::Alias(1),
+                    component: ComponentValue::ROWS_FIXTURE,
+                    fields: vec![crate::FieldWrite {
+                        offset: offset_of!(RowsFixture, items) as u32,
+                        value: crate::FieldValue::Rows(table.encode()),
+                    }],
+                },
+            ],
+        );
+        let entity = outcome.result.unwrap()[0].1;
+        let label = item_offset(0, LABEL);
+        let text = |value: &str| crate::FieldValue::String(value.into());
+
+        let outcome = run(&mut host, world, vec![set(entity, label, text("base"))]);
+        assert!(outcome.result.is_ok(), "{:?}", outcome.result);
+        assert_eq!(
+            state(&mut host, world, entity)
+                .0
+                .items
+                .get(0)
+                .unwrap()
+                .label,
+            Some("base".into())
+        );
+
+        // Over-long text is an invalid value; text in a dynamic payload or at a
+        // numeric property is an invalid field.
+        for (write, reason) in [
+            (text(&"x".repeat(17)), ErrorReason::InvalidValue),
+            (
+                crate::FieldValue::Dynamic(DynamicValue::Text("dynamic".into())),
+                ErrorReason::InvalidField,
+            ),
+        ] {
+            let outcome = run(&mut host, world, vec![set(entity, label, write)]);
+            assert_eq!(outcome.result.unwrap_err().reason, reason);
+        }
+        let outcome = run(
+            &mut host,
+            world,
+            vec![set(entity, item_offset(0, WEIGHT), text("1"))],
+        );
+        assert_eq!(
+            outcome.result.unwrap_err().reason,
+            ErrorReason::InvalidField
+        );
+
+        // An overlay sets the text as a discrete value and withdrawing restores the base.
+        let outcome = run(
+            &mut host,
+            world,
+            vec![
+                Command::CreateStateOverlayOwner {
+                    alias: 1,
+                },
+                Command::AttachEntityOverlayBinding {
+                    owner: StateOverlayRef::Alias(1),
+                    alias: 2,
+                    symbolic_id: "text".into(),
+                    mode: EntityOverlayMode::Bound,
+                },
+                Command::AttachComponentStateOverlay {
+                    owner: StateOverlayRef::Alias(1),
+                    binding: StateOverlayRef::Alias(2),
+                    alias: 3,
+                    component: ComponentValue::ROWS_FIXTURE,
+                    mode: ComponentOverlayMode::Bound,
+                    fields: vec![crate::FieldWrite {
+                        offset: label,
+                        value: text("overlay"),
+                    }],
+                },
+            ],
+        );
+        assert!(outcome.result.is_ok(), "{:?}", outcome.result);
+        let handle = |aliases: &[StateOverlayAlias], alias| {
+            StateOverlayRef::Handle(aliases.iter().find(|a| a.alias == alias).unwrap().id)
+        };
+        let (owner, overlay) = (
+            handle(&outcome.state_overlays, 1),
+            handle(&outcome.state_overlays, 3),
+        );
+        let (base, effective) = state(&mut host, world, entity);
+        assert_eq!(base.items.get(0).unwrap().label, Some("base".into()));
+        assert_eq!(
+            effective.items.get(0).unwrap().label,
+            Some("overlay".into())
+        );
+
+        let over_long = run(
+            &mut host,
+            world,
+            vec![Command::UpdateComponentStateOverlay {
+                owner,
+                overlay,
+                fields: vec![crate::FieldWrite {
+                    offset: label,
+                    value: text(&"y".repeat(17)),
+                }],
+                clear: vec![],
+            }],
+        );
+        assert!(over_long.result.is_err());
+
+        let outcome = run(
+            &mut host,
+            world,
+            vec![Command::UpdateComponentStateOverlay {
+                owner,
+                overlay,
+                fields: vec![],
+                clear: vec![label],
+            }],
+        );
+        assert!(outcome.result.is_ok(), "{:?}", outcome.result);
+        let (_, effective) = state(&mut host, world, entity);
+        assert_eq!(effective.items.get(0).unwrap().label, Some("base".into()));
+
+        // Animation binds numeric row properties but rejects the text property.
+        let description = |offset| AnimationControllerDescription {
+            drivers: vec![AnimationDriverDescription {
+                source: "asset://10/1".into(),
+                variant: 0,
+                track: 0,
+                target: entity,
+                property: AnimationTrackTarget::AnimationProperty(AnimationProperty {
+                    component: ComponentValue::ROWS_FIXTURE,
+                    offsets: vec![offset],
+                }),
+                weight: 1.0,
+                additive: false,
+                reference_time: 0.0,
+                repeat: false,
+            }],
+            ..Default::default()
+        };
+        let mut world = host.world_mut(world).unwrap();
+        assert!(
+            world
+                .create_animation_controller(description(item_offset(0, WEIGHT)))
+                .is_ok()
+        );
+        assert_eq!(
+            world.create_animation_controller(description(label)).err(),
+            Some(ErrorReason::InvalidField)
+        );
     }
 }

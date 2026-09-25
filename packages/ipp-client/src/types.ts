@@ -130,13 +130,16 @@ export type RowPropertyKind =
   | "vec2"
   | "vec3"
   | "vec4"
-  | "asset";
+  | "asset"
+  | "text";
 export interface RowPropertyDescriptor {
   readonly name: string;
   readonly kind: RowPropertyKind;
   readonly optional: boolean;
   /** `rotation` marks a Vec4 quaternion interpolated as a rotation. */
   readonly hint: "none" | "rotation";
+  /** UTF-8 byte bound, present exactly for `text` properties. */
+  readonly maxBytes?: number;
 }
 /** Target-exported layout of one schema rows field; order defines property indices. */
 export interface RowsLayoutDescriptor {
@@ -153,6 +156,7 @@ export interface RowAssetValue {
 export type RowPropertyValue =
   | number
   | boolean
+  | string
   | readonly number[]
   | RowAssetValue;
 /** A decoded schema rows table: live rows by never-reused slot, absent properties omitted. */

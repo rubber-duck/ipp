@@ -1,10 +1,8 @@
 use super::*;
 use crate::components::rows::{Rows, row_region_base};
-use crate::components::schema::{
-    ComponentLifecycle, FieldKind, FieldValue, SchemaComponent, SchemaField,
-};
+use crate::components::schema::{ComponentLifecycle, FieldKind, FieldValue, SchemaComponent};
 use crate::services::asset_management::font::FONT_TYPE;
-use crate::world::systems::gui::{GuiContainerKind, GuiNodeData, GuiNodeId, GuiRoot};
+use crate::world::systems::gui::{GuiContainerKind, GuiNodeData, GuiNodeId, GuiNodeKind, GuiRoot};
 
 const NAMES: [&str; 21] = [
     "enabled",
@@ -302,7 +300,7 @@ fn gui_root_exposes_node_style_rows_by_offset() {
 const DATA_NAMES: [&str; 6] = ["image_size", "checked", "value", "min", "max", "step"];
 
 /// Real offsets of the exposed rows fields: `node_style`, `node_data`,
-/// `theme_parts`, then `part_state`.
+/// `theme_parts`, `part_state`, then `node_tree`.
 fn rows_fields() -> Vec<u32> {
     let rows: Vec<u32> = GuiRoot::default()
         .fields()
@@ -310,7 +308,7 @@ fn rows_fields() -> Vec<u32> {
         .filter(|(_, value)| value.kind() == FieldKind::Rows)
         .map(|(offset, _)| offset)
         .collect();
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
     rows
 }
 
@@ -443,7 +441,13 @@ fn numeric_animation_targets_only_numeric_style_and_image_size() {
     assert!(!GuiRoot::numeric_animatable(
         0x3000_0000 + crate::systems::gui::GuiThemePartRow::THEME
     ));
-    assert!(!GuiRoot::numeric_animatable(0x5000_0000));
+    assert!(!GuiRoot::numeric_animatable(0x6000_0000));
+    // Tree rows are command-owned structure, never animatable.
+    for property in crate::systems::gui::GuiNodeTreeProperty::ALL {
+        let offset = GuiRoot::node_tree_offset(GuiNodeId(4), property).unwrap();
+        assert!(!GuiRoot::numeric_animatable(offset), "{property:?}");
+        assert!(GuiRoot::command_owned_field(offset), "{property:?}");
+    }
     assert!(!GuiRoot::numeric_animatable(0x8000_0001));
 }
 
@@ -451,15 +455,18 @@ fn numeric_animation_targets_only_numeric_style_and_image_size() {
 fn data_presence_follows_the_node_kind() {
     let kinds = kinds();
     for (data, row) in &kinds {
-        assert_eq!(row.validate_for(data), Ok(()), "{data:?}");
+        assert_eq!(row.validate_for(data.kind()), Ok(()), "{data:?}");
         for (other, other_row) in &kinds {
             if other_row != row {
-                assert!(!row.matches_kind(other), "{data:?} as {other:?}");
-                assert_eq!(row.validate_for(other), Err(ErrorReason::InvalidField));
+                assert!(!row.matches_kind(other.kind()), "{data:?} as {other:?}");
+                assert_eq!(
+                    row.validate_for(other.kind()),
+                    Err(ErrorReason::InvalidField)
+                );
             }
         }
         for property in GuiNodeDataProperty::ALL {
-            assert_eq!(row.present(property), property.used_by(data));
+            assert_eq!(row.present(property), property.used_by(data.kind()));
         }
     }
 
@@ -468,7 +475,7 @@ fn data_presence_follows_the_node_kind() {
         ..slider()
     };
     assert_eq!(
-        partial.validate_for(&GuiNodeData::Slider),
+        partial.validate_for(GuiNodeKind::Slider),
         Err(ErrorReason::InvalidField)
     );
 }
@@ -510,7 +517,7 @@ fn data_ranges_follow_today_s_content_and_control_rules() {
         ..base.clone()
     };
     assert_eq!(
-        out_of_range.validate_for(&GuiNodeData::Slider),
+        out_of_range.validate_for(GuiNodeKind::Slider),
         Err(ErrorReason::InvalidValue)
     );
     let inverted = GuiNodeDataRow {
@@ -520,7 +527,7 @@ fn data_ranges_follow_today_s_content_and_control_rules() {
         ..base
     };
     assert_eq!(
-        inverted.validate_for(&GuiNodeData::Slider),
+        inverted.validate_for(GuiNodeKind::Slider),
         Err(ErrorReason::InvalidValue)
     );
 }
@@ -565,30 +572,13 @@ fn gui_root_validates_node_data_against_live_nodes() {
 
 #[test]
 fn tree_writes_insert_and_remove_node_rows() {
+    use crate::systems::gui::GuiNodeTreeProperty as T;
+
     let mut value = crate::ComponentValue::GuiRoot(GuiRoot::default());
-    let mut staged = GuiRoot::default();
-    staged
-        .insert_node(
-            GuiNodeId(1),
-            None,
-            0,
-            GuiNodeData::Container(GuiContainerKind::Column),
-            GuiNodeDataRow::default(),
-            &GuiNodeStyle::default(),
-        )
-        .unwrap();
-    staged
-        .insert_node(
-            GuiNodeId(2),
-            Some(GuiNodeId(1)),
-            0,
-            GuiNodeData::Checkbox,
-            GuiNodeDataRow::checkbox(true),
-            &GuiNodeStyle::default(),
-        )
-        .unwrap();
-    let nodes = staged.nodes().to_value();
-    value.set_field(GuiRoot::nodes_field(), nodes).unwrap();
+    let tree = |node: u32, property| GuiRoot::node_tree_offset(GuiNodeId(node), property).unwrap();
+    let u32_value = |value| FieldValue::Dynamic(DynamicValue::U32(value));
+    value.set_field(tree(1, T::Parent), u32_value(0)).unwrap();
+    value.set_field(tree(2, T::Parent), u32_value(1)).unwrap();
     let crate::ComponentValue::GuiRoot(root) = &value else {
         unreachable!()
     };
@@ -596,11 +586,23 @@ fn tree_writes_insert_and_remove_node_rows() {
         root.style_row(GuiNodeId(2)),
         Some(&GuiNodeStyleRow::default())
     );
-    // The data row is conformed to the node's kind at once.
+    assert_eq!(
+        root.data_row(GuiNodeId(2)),
+        Some(&GuiNodeDataRow::default())
+    );
+
+    // A kind write conforms the data row to the node's kind at once.
+    value
+        .set_field(tree(2, T::Kind), u32_value(GuiNodeKind::Checkbox.code()))
+        .unwrap();
+    let crate::ComponentValue::GuiRoot(root) = &value else {
+        unreachable!()
+    };
     assert_eq!(
         root.data_row(GuiNodeId(2)),
         Some(&GuiNodeDataRow::checkbox(false))
     );
+    assert_eq!(root.control_revision(GuiNodeId(2)), 1);
 
     // Row properties of the new node are now addressable.
     let checked = GuiRoot::node_data_offset(GuiNodeId(2), GuiNodeDataProperty::Checked).unwrap();
@@ -608,14 +610,15 @@ fn tree_writes_insert_and_remove_node_rows() {
         .set_field(checked, FieldValue::Dynamic(DynamicValue::Bool(true)))
         .unwrap();
 
-    staged.remove_node(GuiNodeId(2)).unwrap();
+    // Retiring the parent retires its subtree's rows from every table.
     value
-        .set_field(GuiRoot::nodes_field(), staged.nodes().to_value())
+        .set_field(tree(1, T::Parent), FieldValue::Unset)
         .unwrap();
     let crate::ComponentValue::GuiRoot(root) = &value else {
         unreachable!()
     };
     assert_eq!(root.style_row(GuiNodeId(2)), None);
+    assert!(root.nodes().is_empty());
     assert_eq!(
         root.node_data().slot_state(2),
         crate::components::rows::RowSlotState::Dead
@@ -630,16 +633,29 @@ fn tree_writes_insert_and_remove_node_rows() {
             .is_err(),
         "dead node slots reject writes"
     );
+    assert!(
+        value.set_field(tree(2, T::Parent), u32_value(0)).is_err(),
+        "retired identities are never allocated again"
+    );
 }
 
 #[test]
 fn node_identities_stop_at_the_row_slot_bound() {
     let mut root = GuiRoot::default();
-    root.nodes_mut().next_id = crate::MAX_GUI_NODE_ID - 1;
+    let first = GuiNodeId(crate::MAX_GUI_NODE_ID - 2);
+    root.insert_node_at(
+        first,
+        None,
+        0,
+        GuiNodeData::Drawing,
+        GuiNodeDataRow::default(),
+        &GuiNodeStyle::default(),
+    )
+    .unwrap();
     let last = GuiNodeId(crate::MAX_GUI_NODE_ID - 1);
     root.insert_node(
         last,
-        None,
+        Some(first),
         0,
         GuiNodeData::Drawing,
         GuiNodeDataRow::default(),

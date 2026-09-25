@@ -111,13 +111,17 @@ function component(r) {
 function rowsLayout(r) {
   const regionBase = r.u32();
   const properties = [];
-  for (let i = 0, n = r.u16(); i < n; i++)
-    properties.push({
+  for (let i = 0, n = r.u16(); i < n; i++) {
+    const property = {
       name: r.string(),
       kind: r.u8(),
       optional: r.u8() === 1,
       hint: r.u8(),
-    });
+    };
+    // Text properties (kind 13) follow their hint with a u32 byte bound.
+    if (property.kind === 13) property.maxBytes = r.u32();
+    properties.push(property);
+  }
   return { regionBase, properties };
 }
 function contract(bytes) {
@@ -294,14 +298,18 @@ for (const f of [nf, wf]) {
       { name: "weight", kind: 1, optional: false, hint: 0 },
       { name: "rotation", kind: 7, optional: true, hint: 1 },
       { name: "source", kind: 12, optional: true, hint: 0 },
+      { name: "label", kind: 13, optional: true, hint: 0, maxBytes: 8 },
     ],
   });
 }
 assert.deepEqual(wf.rows.fields.rows.default, nf.rows.fields.rows.default);
 assert.deepEqual(
   wf.rows.fields.rows.default,
-  // next slot 2, one live row at slot 1 with only its weight (0.5) present.
-  [2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0x3f],
+  // next slot 2, one live row at slot 1 with its weight (0.5) and label ("ok").
+  [
+    2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0b1001, 0, 0, 0, 0x3f, 2, 0, 0, 0, 0x6f,
+    0x6b,
+  ],
 );
 if (nf.pointerBits === 64) {
   assert.notEqual(

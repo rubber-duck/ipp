@@ -150,9 +150,23 @@ export function rowFieldOffset(
     fail("row slot out of range");
   return layout.regionBase + slot * count + index;
 }
+/** Check a row text value against its property's UTF-8 byte bound. */
+function rowText(
+  field: string,
+  property: RowsLayoutDescriptor["properties"][number],
+  value: unknown,
+): string {
+  if (typeof value !== "string")
+    fail(`row property ${field}.${property.name} requires text`);
+  const bound = property.maxBytes ?? fail("text row property has no bound");
+  if (new TextEncoder().encode(value).length > bound)
+    fail(`row property ${field}.${property.name} exceeds ${bound} bytes`);
+  return value;
+}
 /**
  * One `setField` per listed property in layout order: values replace a property
- * and `null` clears an optional one.
+ * and `null` clears an optional one. Text is sent as a string value after its
+ * UTF-8 byte length is checked against the property's bound.
  */
 export function rowPatchCommands(
   entity: EntityRef,
@@ -183,13 +197,15 @@ export function rowPatchCommands(
         value:
           value === null
             ? { kind: "unset" }
-            : {
-                kind: "dynamic",
-                value: {
-                  kind: property.kind,
-                  value,
-                } as import("./dynamic-properties.js").DynamicValue,
-              },
+            : property.kind === "text"
+              ? { kind: "string", value: rowText(field, property, value) }
+              : {
+                  kind: "dynamic",
+                  value: {
+                    kind: property.kind,
+                    value,
+                  } as import("./dynamic-properties.js").DynamicValue,
+                },
       },
     });
   }
@@ -254,6 +270,13 @@ export function decodeRowsTable<Row = Record<string, RowPropertyValue>>(
           variant,
         };
         values[property.name] = asset;
+      } else if (property.kind === "text") {
+        const length = u32();
+        if (length > (property.maxBytes ?? 0)) fail("row text bound");
+        const start = take(length);
+        values[property.name] = new TextDecoder("utf-8", {
+          fatal: true,
+        }).decode(bytes.subarray(start, start + length));
       } else if (property.kind === "i32")
         values[property.name] = view.getInt32(take(4), true);
       else if (property.kind === "u32") values[property.name] = u32();
@@ -1889,14 +1912,6 @@ export class IppClient extends ClientBase {
   /** Dispatch one semantic action through the validated control policy. */
   async semanticAction(action: GuiSemanticActionRequest): Promise<void> {
     await this.submitGuiSemanticAction(action);
-  }
-
-  encodeGuiTree(tree: GuiTree): Uint8Array<ArrayBuffer> {
-    return encodeGuiTree(tree);
-  }
-
-  decodeGuiTree(bytes: Uint8Array): GuiTree {
-    return decodeGuiTree(bytes);
   }
   // #endif
 

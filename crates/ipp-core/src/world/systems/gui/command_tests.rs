@@ -1,7 +1,8 @@
-//! GuiCommand writes derived from the edited node's rows produce the same
-//! root, part rows and live channels included, as applying the edit to the
-//! complete root, over randomized edit sequences with theme edits between
-//! them.
+//! GuiCommand row writes produce the same root, part rows and live channels
+//! included, as applying the edit directly to the complete root, over
+//! randomized edit sequences with theme edits between them; every write
+//! leaves a whole-valid root, and the derived child order updated from the
+//! written nodes equals a rebuild.
 
 use super::*;
 use crate::DynamicValue;
@@ -78,10 +79,7 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
             handle,
             parent,
             index,
-        } => next
-            .nodes_mut()
-            .move_node(handle.node_id, *parent, *index as usize)
-            .map_err(|_| ErrorReason::InvalidValue)?,
+        } => next.move_node(handle.node_id, *parent, *index as usize)?,
         GuiCommand::RemoveNode {
             handle,
         } => {
@@ -116,17 +114,34 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
 }
 
 /// Apply ordinary authored writes to a root the way the World applies them:
-/// field writes through the registry (tree writes sync rows, row writes are
+/// field writes through the registry (tree writes derive rows, row writes are
 /// validated where they land). Every write must leave a complete valid root,
-/// which the per-field checks guarantee without a whole-root check.
-fn apply_writes(root: &GuiRoot, commands: &[Command]) -> Result<GuiRoot, ErrorReason> {
+/// which the per-field checks guarantee without a whole-root check. Nodes
+/// whose `parent` or `order` a write changed are added to `moved`.
+fn apply_writes(
+    root: &GuiRoot,
+    commands: &[Command],
+    moved: &mut Vec<GuiNodeId>,
+) -> Result<GuiRoot, ErrorReason> {
+    use crate::systems::gui::{GuiNodePropertyRef, GuiNodeRowProperty, GuiRootRowProperty};
+
     let mut value = crate::ComponentValue::GuiRoot(root.clone());
     for command in commands {
         match command {
             Command::SetField {
                 field,
                 ..
-            } => crate::components::registry::write(&mut value, field)?,
+            } => {
+                crate::components::registry::write(&mut value, field)?;
+                if let Some(GuiRootRowProperty::Node(GuiNodePropertyRef {
+                    node,
+                    property: GuiNodeRowProperty::Tree(property),
+                })) = GuiRoot::row_property(field.offset)
+                    && property.structural()
+                {
+                    moved.push(node);
+                }
+            }
             other => panic!("unexpected GUI write {other:?}"),
         }
         let crate::ComponentValue::GuiRoot(root) = &value else {
@@ -226,7 +241,7 @@ fn patch(random: &mut Random) -> GuiNodePatch {
 }
 
 fn handle(root: &GuiRoot, random: &mut Random) -> Option<GuiNodeHandle> {
-    let nodes = root.nodes().as_slice();
+    let nodes: Vec<_> = root.nodes().iter().collect();
     let node = nodes.get(random.below(nodes.len()))?;
     // Occasionally stale: a removed or never-allocated node fails the fence.
     let id = if random.chance(5) {
@@ -238,7 +253,7 @@ fn handle(root: &GuiRoot, random: &mut Random) -> Option<GuiNodeHandle> {
 }
 
 fn command(root: &GuiRoot, random: &mut Random) -> Option<GuiCommand> {
-    let live: Vec<GuiNodeId> = root.nodes().as_slice().iter().map(|node| node.id).collect();
+    let live: Vec<GuiNodeId> = root.nodes().iter().map(|node| node.id).collect();
     let pick = |random: &mut Random| live.get(random.below(live.len())).copied();
     Some(match random.below(6) {
         0 | 1 => {
@@ -333,11 +348,17 @@ fn scoped_command_writes_reach_the_complete_root_result() {
                 continue;
             };
 
-            let scoped = edit_commands(entity(), &root, INCARNATION, SESSION, &command)
-                .and_then(|writes| apply_writes(&root, &writes));
+            let mut tree = GuiTreeIndex::new(&root, INCARNATION);
+            let mut moved = Vec::new();
+            let scoped = edit_commands(entity(), &root, &tree, INCARNATION, SESSION, &command)
+                .and_then(|writes| apply_writes(&root, &writes, &mut moved));
             let full = full_edit(&root, &command);
             assert_eq!(scoped, full, "{command:?}");
             if let Ok(next) = full {
+                for node in moved {
+                    tree.update(&next, node);
+                }
+                assert_eq!(tree, GuiTreeIndex::new(&next, INCARNATION), "{command:?}");
                 root = next;
                 applied += 1;
                 peak = peak.max(root.nodes().len());

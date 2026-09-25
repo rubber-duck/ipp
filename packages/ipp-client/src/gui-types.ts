@@ -256,41 +256,6 @@ export type GuiPartPatch = {
   [K in keyof GuiPartValues]?: GuiPartValues[K] | null;
 };
 
-export interface GuiNode {
-  id: GuiNodeId;
-  parent?: GuiNodeId;
-  children: readonly GuiNodeId[];
-  data: GuiNodeData;
-}
-
-/**
- * GuiRoot.nodes: structure plus control records. Style and kind-specific
- * scalars live in the `node_style` and `node_data` rows. A live root only
- * accepts this through incremental edits.
- */
-export interface GuiTree {
-  nextId: number;
-  rootNode?: GuiNodeId;
-  nodes: readonly GuiNode[];
-  /** One record per control node; omitted means none. */
-  controls?: GuiControls;
-}
-
-/**
- * Control record of one node: the revision that produced its committed value
- * and, for a text input, the committed text. Checkbox and slider values live
- * in the node's `node_data` row. A node whose data stopped being a control
- * keeps its revision.
- */
-export interface GuiControlRecord {
-  id: GuiNodeId;
-  revision: number;
-  text?: string;
-}
-
-/** Control records of a tree, in node identity order. */
-export type GuiControls = readonly GuiControlRecord[];
-
 export type GuiEdit =
   | {
       action: "insert";

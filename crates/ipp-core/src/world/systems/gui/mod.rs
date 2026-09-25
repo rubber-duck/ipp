@@ -1,15 +1,15 @@
 //! Authoritative GUI tree, stable node handles and committed control values on Surfaces.
 //!
-//! `GuiRoot.nodes` stores structure plus one control record per control node:
-//! its revision and, for a text input, the committed text. Committed checkbox
-//! and slider values and the slider range are `node_data` rows. While a root
-//! incarnation is live, structure and committed values change only through
-//! [`GuiCommand`]; a new incarnation (insertion or restore) may supply them
-//! whole.
-//! Node style, node data, root-owned theme parts and per-node part state are
-//! compiled rows addressed by field offset; node rows and part rows are
-//! removed with their node. Dynamic properties hold only application
-//! extension values.
+//! `GuiRoot.node_tree` stores structure as rows at slot = node id: parent,
+//! sparse sibling order key, kind, bounded authored strings, committed text
+//! and control revision. Child order is derived from `(order, id)` into the
+//! [`GuiSystem`]'s per-root [`GuiTreeIndex`]. While a root incarnation is live
+//! the tree changes only through [`GuiCommand`], each a bounded number of row
+//! writes validated where they land; a new incarnation (insertion or restore)
+//! may supply it whole. Node style, node data, root-owned theme parts and
+//! per-node part state are compiled rows addressed by field offset too; node
+//! rows and part rows are removed with their node. Dynamic properties hold
+//! only application extension values.
 //! Operation guards reject raw Surface items on GUI-owned Surfaces, GUI roots on
 //! populated Surfaces and overlays that would supply either structure.
 //!
@@ -51,9 +51,10 @@
 //! retained focus/capture/hover/caret targets proportionally to active cursors;
 //! when no cursor changes, publication and retained views stay untouched.
 //!
-//! Caps: `MAX_NODES` nodes per tree, [`MAX_LAYOUT_DEPTH`] evaluation depth,
-//! 1024 pending input envelopes, [`MAX_GUI_TEXT_BYTES`] text bytes, and bounded
-//! 32-deep / 256-node inspection.
+//! Caps: `MAX_NODES` nodes per tree, [`MAX_LAYOUT_DEPTH`] evaluation depth
+//! (also the deepest placement a command may write), 1024 pending input
+//! envelopes, [`MAX_GUI_TEXT_BYTES`] text bytes, and bounded 32-deep /
+//! 256-node inspection.
 //! No extra passes or systems exist for controls. `AnimationSystem` stays the
 //! sole sampler: numeric style, theme part and part-state properties are
 //! row-addressed fields that animation writes directly through prepared row
@@ -111,10 +112,11 @@ pub use system::{
 };
 pub(crate) use tree::controls::slider_rail;
 pub use tree::{
-    GUI_BASE_PARTS, GuiContainerKind, GuiControlEntry, GuiControlState, GuiControlValue,
-    GuiControls, GuiNode, GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle,
-    GuiNodeId, GuiNodePatch, GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle,
-    GuiNodeStyleChange, GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPartChannel, GuiPartId,
-    GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty, GuiPartVariant, GuiRoot,
-    GuiRootRowProperty, GuiThemePartRow, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES,
+    GUI_BASE_PARTS, GuiContainerKind, GuiControlState, GuiControlValue, GuiNode, GuiNodeData,
+    GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodeKind, GuiNodePatch,
+    GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleChange, GuiNodeStyleProperty,
+    GuiNodeStyleRow, GuiNodeTree, GuiNodeTreeProperty, GuiNodeTreeRow, GuiNodes, GuiPartChannel,
+    GuiPartId, GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty, GuiPartVariant,
+    GuiRoot, GuiRootRowProperty, GuiThemePartRow, GuiTreeIndex, MAX_GUI_NODE_ID,
+    MAX_GUI_TEXT_BYTES,
 };

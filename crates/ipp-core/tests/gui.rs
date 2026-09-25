@@ -182,10 +182,10 @@ fn ordered_gui_command_group_stops_at_first_failure() {
 }
 
 fn children(world: &WorldContext<'_>, entity: EntityId, id: u32) -> Vec<u32> {
-    root(world, entity)
-        .nodes()
-        .node(GuiNodeId(id))
+    world
+        .inspect_gui(entity, Some(GuiNodeId(id)), 2, 256)
         .unwrap()
+        .nodes[0]
         .children
         .iter()
         .map(|id| id.0)
@@ -204,19 +204,24 @@ fn set_field(entity: EntityId, offset: u32, bytes: Vec<u8>) -> Command {
         component: ComponentValue::GUI_ROOT,
         field: FieldWrite {
             offset,
-            value: FieldValue::Bytes(bytes),
+            value: FieldValue::Rows(bytes),
         },
     }
 }
 
-fn gui_field_bytes(root: &GuiRoot) -> (u32, Vec<u8>) {
+/// Real offset and table encoding of a root's `node_tree` rows field, the
+/// fifth rows field.
+fn gui_tree_table(root: &GuiRoot) -> (u32, Vec<u8>) {
     use ipp_core::components::schema::SchemaComponent;
 
-    let (offset, value) = root.fields().into_iter().next().unwrap();
-    let ipp_core::components::schema::FieldValue::Bytes(bytes) = value else {
-        panic!("GUI structural field is bytes")
-    };
-    (offset, bytes)
+    root.fields()
+        .into_iter()
+        .filter_map(|(offset, value)| match value {
+            ipp_core::components::schema::FieldValue::Rows(bytes) => Some((offset, bytes)),
+            _ => None,
+        })
+        .nth(GuiRoot::NODE_TREE_FIELD)
+        .unwrap()
 }
 
 #[test]
@@ -625,7 +630,6 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
     assert_eq!(
         restored_root
             .nodes()
-            .as_slice()
             .iter()
             .map(|node| node.id)
             .collect::<Vec<_>>(),
@@ -745,12 +749,12 @@ fn structural_fields_of_a_live_root_change_only_through_gui_commands() {
 
     // Writing an older saved tree back cannot bypass revision or identity fences,
     // and neither can clearing the tree to restart identities.
-    let (offset, bytes) = gui_field_bytes(&saved);
+    let (offset, bytes) = gui_tree_table(&saved);
     assert_eq!(
         submit(&mut world, vec![set_field(entity, offset, bytes)]),
         Err(ErrorReason::InvalidValue)
     );
-    let (offset, bytes) = gui_field_bytes(&GuiRoot::default());
+    let (offset, bytes) = gui_tree_table(&GuiRoot::default());
     assert!(submit(&mut world, vec![set_field(entity, offset, bytes)]).is_err());
     assert_eq!(control(&world, entity, 2), (GuiControlValue::Bool(true), 2));
 
@@ -769,20 +773,28 @@ fn structural_fields_of_a_live_root_change_only_through_gui_commands() {
     );
     assert!(world.validate_gui_node_handle(&handle, SESSION).is_err());
 
-    // Control records must match their nodes exactly: drop the checkbox's
-    // trailing record (id, revision, tag, value) and its count.
+    // Control revisions must match their nodes exactly: a checkbox without
+    // a revision fails whole validation of a new incarnation.
     use ipp_core::components::schema::SchemaComponent;
-    let (offset, mut bytes) = gui_field_bytes(&saved);
-    bytes.truncate(bytes.len() - 14);
-    bytes.extend(0u32.to_le_bytes());
+    let (offset, _) = gui_tree_table(&saved);
+    let mut rows = saved.node_tree().rows().clone();
+    rows.get_mut(2).unwrap().revision = 0;
     let mut mismatched = saved.clone();
+    mismatched
+        .set_field(
+            offset,
+            ipp_core::components::schema::FieldValue::Rows(rows.encode()),
+        )
+        .unwrap();
     assert!(
-        mismatched
-            .set_field(
-                offset,
-                ipp_core::components::schema::FieldValue::Bytes(bytes)
-            )
-            .is_err()
+        submit(
+            &mut world,
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiRoot(mismatched),
+            )],
+        )
+        .is_err()
     );
 }
 
@@ -1402,10 +1414,10 @@ fn overlays_override_gui_properties_but_not_gui_structure_or_raw_items() {
         ]
     };
 
-    let (nodes, tree) = gui_field_bytes(&GuiRoot::default());
+    let (nodes, tree) = gui_tree_table(&GuiRoot::default());
     let tree_write = FieldWrite {
         offset: nodes,
-        value: FieldValue::Bytes(tree),
+        value: FieldValue::Rows(tree),
     };
     assert!(
         submit(

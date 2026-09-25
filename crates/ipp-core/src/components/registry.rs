@@ -200,7 +200,8 @@ fn field_error(error: crate::components::schema::FieldError) -> crate::ErrorReas
         crate::components::schema::FieldError::UnknownComponent => {
             crate::ErrorReason::UnknownComponent
         }
-        crate::components::schema::FieldError::NonFinite => crate::ErrorReason::InvalidValue,
+        crate::components::schema::FieldError::NonFinite
+        | crate::components::schema::FieldError::TextTooLong => crate::ErrorReason::InvalidValue,
         crate::components::schema::FieldError::CreationUnavailable => {
             crate::ErrorReason::MissingCreationContract
         }

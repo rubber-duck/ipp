@@ -79,10 +79,6 @@ export interface GuiWorldClient extends Client {
   semanticAction(
     action: import("./gui-types.js").GuiSemanticActionRequest,
   ): Promise<void>;
-  encodeGuiTree(
-    tree: import("./gui-types.js").GuiTree,
-  ): Uint8Array<ArrayBuffer>;
-  decodeGuiTree(bytes: Uint8Array): import("./gui-types.js").GuiTree;
   createGuiNodeHandle(
     entity: bigint,
     rootIncarnation: bigint,

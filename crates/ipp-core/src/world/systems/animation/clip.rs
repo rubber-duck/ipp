@@ -1010,6 +1010,10 @@ impl AnimationValue {
             // Row tables and absence are never animation keys; their kind tags
             // would also collide with the rotation and pose value tags.
             Self::Field(FieldValue::Rows(_) | FieldValue::Unset) => Err(ErrorReason::InvalidAsset),
+            // Row text is never animated.
+            Self::Field(FieldValue::Dynamic(crate::DynamicValue::Text(_))) => {
+                Err(ErrorReason::InvalidAsset)
+            }
             Self::Field(FieldValue::Dynamic(value)) => {
                 value.validate().map_err(|_| ErrorReason::InvalidAsset)
             }

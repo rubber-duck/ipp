@@ -37,6 +37,8 @@ pub(super) fn bind_frozen_f32(
         ComponentValue::LINEAR_DRIVER => storage.linear_driver_ptr(index)?.cast::<u8>(),
         ComponentValue::BOUNDING_GEOMETRY => storage.bounding_geometry_ptr(index)?.cast::<u8>(),
         ComponentValue::PICKING_GEOMETRY => storage.picking_geometry_ptr(index)?.cast::<u8>(),
+        #[cfg(feature = "gui")]
+        ComponentValue::GUI_ROOT => storage.gui_root_ptr(index)?.cast::<u8>(),
         #[cfg(feature = "mesh-poses")]
         ComponentValue::MESH_POSE => storage.mesh_pose_ptr(index)?.cast::<u8>(),
         #[cfg(feature = "particles")]
@@ -77,6 +79,8 @@ pub(super) fn frozen_f32_field_supported(component: u16, offset: u32) -> bool {
         | ComponentValue::PICKING_GEOMETRY => {
             super::numeric_fields::range(component, offset).is_some()
         }
+        #[cfg(feature = "gui")]
+        ComponentValue::GUI_ROOT => super::numeric_fields::range(component, offset).is_some(),
         #[cfg(feature = "mesh-poses")]
         ComponentValue::MESH_POSE => super::numeric_fields::range(component, offset).is_some(),
         #[cfg(feature = "particles")]
@@ -215,6 +219,8 @@ pub(super) fn bind_transition<T: AnimationSample>(
                 ComponentValue::PICKING_GEOMETRY => {
                     storage.picking_geometry_ptr(index)?.cast::<u8>()
                 }
+                #[cfg(feature = "gui")]
+                ComponentValue::GUI_ROOT => storage.gui_root_ptr(index)?.cast::<u8>(),
                 #[cfg(feature = "mesh-poses")]
                 ComponentValue::MESH_POSE => storage.mesh_pose_ptr(index)?.cast::<u8>(),
                 #[cfg(feature = "particles")]

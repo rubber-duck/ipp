@@ -18,11 +18,11 @@
 //! and camera motion never appears here: it invalidates projection and model
 //! work only, never layout.
 //!
-//! `units_per_metre` is an evaluation input, not stored component state. The
-//! current tree carries no stored lane for it, so callers pass an explicit
-//! value ([`DEFAULT_UNITS_PER_METRE`] keeps logical units identical to
-//! Surface metres). A stored lane can replace the parameter without changing
-//! the evaluator shape.
+//! `U` is the root's own persisted `GuiRoot::units_per_metre` density, read
+//! from the effective component, so ordinary writes, animation and
+//! StateOverlays reflow the root through the same fingerprint as any other
+//! layout input. [`DEFAULT_UNITS_PER_METRE`] keeps logical units identical to
+//! Surface metres. The evaluator takes the value as an explicit request field.
 //!
 //! ## Pass structure
 //!
@@ -257,8 +257,8 @@ fn hash_asset(hasher: &mut Fingerprint, source: Option<&AssetSource>) {
     }
 }
 
-/// Logical units per Surface metre used when the caller supplies none.
-/// Keeps logical units identical to Surface metres.
+/// Default `GuiRoot::units_per_metre` density; keeps logical units identical
+/// to Surface metres.
 pub const DEFAULT_UNITS_PER_METRE: f32 = 1.0;
 
 /// Maximum tree depth followed during evaluation. Deeper subtrees are cut

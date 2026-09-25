@@ -60,6 +60,10 @@ pub(super) fn range(component: u16, offset: u32) -> Option<AnimationNumericRange
                 None
             }
         }
+        #[cfg(feature = "gui")]
+        ComponentValue::GUI_ROOT if fields!(crate::systems::gui::GuiRoot; units_per_metre) => {
+            Some(Positive)
+        }
         #[cfg(feature = "mesh-poses")]
         ComponentValue::MESH_POSE if fields!(MeshPose; weight) => Some(Unit),
         #[cfg(feature = "particles")]

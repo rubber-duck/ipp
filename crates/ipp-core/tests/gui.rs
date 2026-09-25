@@ -659,6 +659,64 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
 }
 
 #[test]
+fn world_snapshot_round_trips_root_density() {
+    let (mut host, world_id) = host_world();
+    {
+        let mut world = host.world_mut(world_id).unwrap();
+        let mut surface = Surface::default();
+        surface.width = 4.0;
+        surface.height = 3.0;
+        let entity = create_root(&mut world, surface);
+        submit(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::GUI_ROOT,
+                field: FieldWrite {
+                    offset: std::mem::offset_of!(GuiRoot, units_per_metre) as u32,
+                    value: FieldValue::F32(2.5),
+                },
+            }],
+        )
+        .unwrap();
+        assert_eq!(root(&world, entity).units_per_metre, 2.5);
+    }
+
+    let limits = WorldPersistenceLimits::default();
+    let bytes = host.save_world(world_id, 123, limits).unwrap();
+    let snapshot = WorldSnapshot::decode(&bytes, 123, limits).unwrap();
+    let saved_density =
+        snapshot.entities[0]
+            .components
+            .iter()
+            .find_map(|component| match component {
+                ComponentValue::GuiRoot(root) => Some(root.units_per_metre),
+                _ => None,
+            });
+    assert_eq!(saved_density, Some(2.5));
+
+    let mut restored_host = HostRuntime::new();
+    let restored_id = restored_host
+        .load_world(
+            &bytes,
+            123,
+            WorldLoadOptions::default(),
+            WorldLimits::default(),
+            limits,
+        )
+        .unwrap();
+    let mut restored = restored_host.world_mut(restored_id).unwrap();
+    let entity = restored.entities()[0].id;
+    assert_eq!(root(&restored, entity).units_per_metre, 2.5);
+
+    // Restored Worlds reconstruct layout output from the persisted density.
+    restored.update_for_test(0.0).unwrap();
+    let view = restored.gui_layout_view(entity).unwrap();
+    assert_eq!(view.units_per_metre, 2.5);
+    assert_eq!(view.root_bounds, [0.0, 0.0, 10.0, 7.5]);
+}
+
+#[test]
 fn structural_fields_of_a_live_root_change_only_through_gui_commands() {
     let (mut host, world_id) = host_world();
     let mut world = host.world_mut(world_id).unwrap();

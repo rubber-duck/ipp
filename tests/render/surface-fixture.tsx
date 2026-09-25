@@ -36,6 +36,7 @@ import { probeErrorCheckBridge } from "./error-check-bridge.js";
 import { probeSurfaceCacheBridge } from "./surface-cache-bridge.js";
 import type {
   FrameCapture,
+  GuiWorldClient,
   PickingWorldClient,
   RenderWorldClient,
   WorldPersistenceHostClient,
@@ -441,6 +442,34 @@ export async function guiPanel(config: {
   ));
   // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
   return { pixelsPerMetre: height / ORTHO_HEIGHT };
+}
+
+/**
+ * Write the retained GUI panel's root density through an ordinary GuiRoot
+ * field write and return its root node's evaluated logical bounds once a
+ * frame has reflowed it.
+ */
+export async function guiPanelDensity(units: number) {
+  const entity = await entityBySymbol("retained-gui-panel");
+  successfulBatch(
+    await client.batch(
+      componentFields(client, "GuiRoot", { units_per_metre: units }).map(
+        (field) => ({
+          kind: "setField",
+          entity: { kind: "handle", id: entity },
+          component: client.components.GuiRoot!.id,
+          field,
+        }),
+      ),
+    ),
+  );
+  await client.waitForFrame();
+  const tree = await (client as unknown as GuiWorldClient).semanticSnapshot({
+    entity,
+  });
+  const rootNode = tree.nodes.find((node) => node.parent === undefined);
+  if (!rootNode) throw new Error("Retained GUI panel has no root node");
+  return [...rootNode.bounds];
 }
 
 /**

@@ -261,14 +261,21 @@ async function pointsForNode(
   const { entity, camera, surface } = await galleryGuiPlacement();
   const width = Number(surface.fields.width);
   const height = Number(surface.fields.height);
+  // Semantic bounds are logical units; the root density maps them to metres.
+  const units = Number(
+    entity.effective.find(
+      ({ component }) =>
+        component === requireCanvas().client.components.GuiRoot?.id,
+    )?.fields.units_per_metre ?? 1,
+  );
   const [x, y, nodeWidth, nodeHeight] = node.bounds;
   const points = projectSnapshotPoints(
     entity,
     camera,
     fractions.map(([fractionX, fractionY]) => {
-      const logicalX = x + nodeWidth * fractionX;
-      const logicalY = y + nodeHeight * fractionY;
-      return [logicalX - width / 2, height / 2 - logicalY, 0];
+      const contentX = (x + nodeWidth * fractionX) / units;
+      const contentY = (y + nodeHeight * fractionY) / units;
+      return [contentX - width / 2, height / 2 - contentY, 0];
     }),
   );
   return points.map((point) => ({ ...point, node }));

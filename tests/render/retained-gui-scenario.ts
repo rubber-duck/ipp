@@ -637,6 +637,35 @@ async function exerciseRetainedControls(
       pixels > 200,
       `mixed GUI content lacks ${name}: ${pixels} pixels`,
     );
+  // Density is a per-root unit scale: a write reflows the root into twice
+  // the logical extent, while the metre-denominated panel completes a frame
+  // with the same paint.
+  const denseBounds = await call<number[]>("guiPanelDensity", [2]);
+  assert.deepEqual(
+    denseBounds.map((value) => Math.round(value * 1000) / 1000),
+    [0, 0, 7.6, 4.8],
+    `density 2 root bounds: ${JSON.stringify(denseBounds)}`,
+  );
+  const { frame: denseFrame } = await settle("gui-mixed-density");
+  assert.ok(
+    Number(denseFrame.statistics!.gui!.guiBatches) > 0,
+    "gui-mixed-density: retained GUI batches",
+  );
+  const density = compareFrames(
+    mixed.pixels,
+    driver.pixels("gui-mixed-density"),
+    12,
+  );
+  assert.ok(
+    density.changedPixels <= 20,
+    `a density change must keep metre-denominated paint: ${JSON.stringify(density)}`,
+  );
+  assert.deepEqual(
+    (await call<number[]>("guiPanelDensity", [1])).map(
+      (value) => Math.round(value * 1000) / 1000,
+    ),
+    [0, 0, 3.8, 2.4],
+  );
   const withoutGlow = await panel(
     "mixed-without-glow",
     "gui-mixed-without-glow",
@@ -737,7 +766,7 @@ async function exerciseRetainedControls(
     sparse.frame.triangles > filled.frame.triangles,
     `a sparse outline draws edge strips instead of an interior quad: ${JSON.stringify(sparseFilled.triangles)}`,
   );
-  return { content, glow, mirror, sparseFilled };
+  return { content, glow, density, mirror, sparseFilled };
 }
 
 /**

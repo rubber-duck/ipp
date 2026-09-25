@@ -92,6 +92,13 @@ const buttonRef: { current: GuiNodeHandle | null } = {
 const checkboxRef: { current: GuiNodeHandle | null } = {
   current: null,
 };
+/** Buttons of the optional keyboard-order panels. */
+const farButtonRef: { current: GuiNodeHandle | null } = {
+  current: null,
+};
+const backButtonRef: { current: GuiNodeHandle | null } = {
+  current: null,
+};
 const sliderRef: { current: GuiNodeHandle | null } = {
   current: null,
 };
@@ -110,6 +117,7 @@ let callbackRenders: number[] = [];
 let presses = 0;
 let errors: string[] = [];
 let cameraReady = false;
+let keyboardPanels = false;
 let observationTrace: string[] = [];
 let renderedRevision = 0;
 let setCommitRevision: ((value: number) => void) | undefined;
@@ -309,6 +317,7 @@ function Application({
         <Entity id="mounted-gui-commit-revision">
           <Transform x={commitRevision} />
         </Entity>
+        {keyboardPanels ? <KeyboardOrderPanels theme={namedTheme} /> : null}
         <Entity id="mounted-gui-panel">
           <Transform />
           <Surface width={4} height={3} />
@@ -373,6 +382,54 @@ function Application({
   );
 }
 
+/**
+ * Panels that order keyboard traversal around the main panel without
+ * appearing in its frame: created before it, off to the side of the
+ * orthographic view, a front-facing panel 2 m deeper than the main panel and
+ * a back-facing panel 3 m nearer the camera. Traversal must visit the main
+ * panel, then the deeper panel, then the back-facing one.
+ */
+function KeyboardOrderPanels({
+  theme,
+}: {
+  readonly theme: GuiControlTheme;
+}): ReactElement {
+  return (
+    <>
+      <Entity id="mounted-gui-back-panel">
+        <Transform x={-12} z={3} qy={1} qw={0} />
+        <Surface width={2} height={1} />
+        <GuiRoot>
+          <Column width={2} height={1}>
+            <Button
+              nodeRef={backButtonRef}
+              width={2}
+              height={1}
+              label="Back"
+              theme={theme}
+            />
+          </Column>
+        </GuiRoot>
+      </Entity>
+      <Entity id="mounted-gui-far-panel">
+        <Transform x={12} z={-2} />
+        <Surface width={2} height={1} />
+        <GuiRoot>
+          <Column width={2} height={1}>
+            <Button
+              nodeRef={farButtonRef}
+              width={2}
+              height={1}
+              label="Far"
+              theme={theme}
+            />
+          </Column>
+        </GuiRoot>
+      </Entity>
+    </>
+  );
+}
+
 async function until(predicate: () => boolean, message: string): Promise<void> {
   const deadline = performance.now() + 10_000;
   while (!predicate()) {
@@ -385,8 +442,10 @@ async function until(predicate: () => boolean, message: string): Promise<void> {
 
 export async function mountGuiCanvas(
   runtime: CanvasRuntimeConfiguration,
+  options: { readonly keyboardPanels?: boolean } = {},
 ): Promise<void> {
   await closeGuiCanvas();
+  keyboardPanels = options.keyboardPanels ?? false;
   handle = undefined;
   latestTextFocus = undefined;
   commits = 0;
@@ -403,6 +462,8 @@ export async function mountGuiCanvas(
   buttonRef.current = null;
   checkboxRef.current = null;
   sliderRef.current = null;
+  farButtonRef.current = null;
+  backButtonRef.current = null;
   const host = document.createElement("div");
   host.id = "mounted-gui-host";
   document.body.replaceChildren(host);
@@ -415,6 +476,8 @@ export async function mountGuiCanvas(
       textRef.current !== null &&
       checkboxRef.current !== null &&
       sliderRef.current !== null &&
+      (!keyboardPanels ||
+        (farButtonRef.current !== null && backButtonRef.current !== null)) &&
       cameraReady,
     "mounted IppCanvas GUI did not acknowledge",
   );
@@ -782,25 +845,41 @@ export async function keyboardObservation(): Promise<{
     checkbox: checkboxRef.current,
     slider: sliderRef.current,
     button: buttonRef.current,
+    farButton: farButtonRef.current,
+    backButton: backButtonRef.current,
   };
   if (current === undefined || controls.text === null)
     throw new Error("GUI keyboard fixture is not ready");
   await current.flush();
   const client = current.client as GuiWorldClient;
-  const [snapshot, inspected] = await Promise.all([
-    client.semanticSnapshot({ entity: controls.text.entity }),
+  const text = controls.text;
+  // Focus may sit on any panel; each panel's snapshot reports its own.
+  const panels = [
+    ...new Set(
+      Object.values(controls)
+        .filter((control) => control !== null)
+        .map((control) => control.entity),
+    ),
+  ];
+  const [snapshots, inspected] = await Promise.all([
+    Promise.all(panels.map((entity) => client.semanticSnapshot({ entity }))),
     client.inspectGui({
-      entity: controls.text.entity,
-      nodeId: controls.text.nodeId,
+      entity: text.entity,
+      nodeId: text.nodeId,
       maxDepth: 1,
     }),
   ]);
-  const focusedId = snapshot.focused?.id;
+  const focusedAt = snapshots.findIndex(
+    (snapshot) => snapshot.focused !== undefined,
+  );
+  const focusedEntity = panels[focusedAt];
+  const focusedId = snapshots[focusedAt]?.focused?.id;
   const focused =
     focusedId === undefined
       ? null
       : (Object.entries(controls).find(
-          ([, control]) => control?.nodeId === focusedId,
+          ([, control]) =>
+            control?.entity === focusedEntity && control.nodeId === focusedId,
         )?.[0] ?? `node-${focusedId}`);
   const active = document.activeElement;
   const value = inspected.nodes[0]?.controlValue;

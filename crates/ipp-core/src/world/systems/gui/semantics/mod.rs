@@ -1,13 +1,14 @@
 //! Headless GUI semantic tree for machine clients.
 //!
-//! This module consumes only the frozen GUI read interfaces:
-//! [`GuiEvaluatedContent`](crate::GuiEvaluatedContent) committed
-//! payloads, [`GuiControlState`](crate::GuiControlState) `{value, revision}`
-//! (observed here through `inspect_gui` control fields), `inspect_gui`
-//! snapshots ([`GuiInspectResponse`](crate::GuiInspectResponse)) and
-//! [`GuiInputEffectKind`](crate::GuiInputEffectKind) committed effects.
-//! It never reads authoritative storage, the input router, the layout
-//! cache or skin internals directly.
+//! Snapshots read through the World's public GUI read boundary, never
+//! authoritative row storage or skin internals: `inspect_gui` snapshots
+//! ([`GuiInspectResponse`](crate::GuiInspectResponse)) supply structure,
+//! committed values and revisions; the retained
+//! [`GuiEvaluatedView`](crate::GuiEvaluatedView) from the layout System
+//! supplies evaluated bounds, states and scroll capacity; and the input
+//! System supplies the observed keyboard focus and committed scroll
+//! offsets. [`GuiInputEffectKind`](crate::GuiInputEffectKind) committed
+//! effects decide when a retained tree refreshes.
 //!
 //! The semantic tree is the machine-client contract: autonomous agents
 //! observe and actuate GUI through semantic snapshots and actions, not by
@@ -20,10 +21,10 @@
 //! pre-stabilization policy.
 //!
 //! Observed keyboard focus appears in the tree so observe-act loops can
-//! target the focused control; every other transient state stays out:
-//! caret, selection, provisional composition, hover, press cursors, scroll
-//! offsets, pending envelopes and playback have no fields here and never
-//! persist.
+//! target the focused control, and each ScrollView reports its committed
+//! offset and capacity; every other transient state stays out: caret,
+//! selection, provisional composition, hover, press cursors, pending
+//! envelopes and playback have no fields here and never persist.
 //!
 //! Layout: [`types`] holds roles, nodes, trees, queries and actions;
 //! [`snapshot`] builds snapshots and diffs over inspection plus the

@@ -889,7 +889,7 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
       await env.page.evaluate(
         async ({ fixture, runtime }) => {
           const mounted = await import(fixture);
-          await mounted.mountGuiCanvas(runtime);
+          await mounted.mountGuiCanvas(runtime, { keyboardPanels: true });
         },
         {
           fixture,
@@ -943,8 +943,10 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
       };
 
       // From a fresh mount no pointer ever touches the page. The document's
-      // first Tab focuses the canvas; the next enters the panel at its first
-      // control, the text input, whose native editor then owns the keys.
+      // first Tab focuses the canvas; the next enters the nearest
+      // front-facing panel at its first control, the text input, whose
+      // native editor then owns the keys. The keyboard-order panels were
+      // created first, and the back-facing one is nearer the camera.
       const fresh = await readKeyboard();
       assert.equal(fresh.focused, null);
       assert.equal(fresh.keyOwner, "other");
@@ -1006,9 +1008,14 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
       assert.equal(typed.presses, 1);
       assert.deepEqual(typed.errors, []);
 
-      // Traversal wraps at the ends: Shift+Tab from the first control
-      // reaches the last.
+      // Traversal crosses panels in view order and wraps at the ends:
+      // Shift+Tab from the first control reaches the back-facing panel,
+      // which orders after the deeper front-facing one, and Tab returns.
+      await press("Shift+Tab", "backButton", "canvas");
+      await press("Shift+Tab", "farButton", "canvas");
       await press("Shift+Tab", "button", "canvas");
+      await press("Tab", "farButton", "canvas");
+      await press("Tab", "backButton", "canvas");
       await press("Tab", "text", "editor");
 
       const teardown = await env.page.evaluate(
@@ -1148,6 +1155,40 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         middle: "red",
         narrow: "blue",
         low: "gray",
+      });
+
+      // Nested bars stay visible where they would share the right edge: the
+      // inner bar column at x 228 (logical 3.8) shows its yellow thumb and
+      // blue track beside the outer magenta thumb at x 235.
+      const column = {
+        innerThumb: [228, 30],
+        innerTrack: [228, 100],
+        outerThumb: [235, 30],
+      } as const;
+      const columnFrame = await env.page.evaluate(
+        async ({ url, points }) =>
+          (await import(url)).scrollFrame(Object.values(points)),
+        { url: fixture, points: column },
+      );
+      assert.equal(columnFrame.failedDrawCalls, 0);
+      await writeFile(
+        resolve(env.evidence.directory, "scroll-nested-bars.png"),
+        Buffer.from(
+          columnFrame.dataUrl.slice("data:image/png;base64,".length),
+          "base64",
+        ),
+      );
+      const columnHues = Object.fromEntries(
+        Object.keys(column).map((key, index) => [
+          key,
+          hue(columnFrame.samples[index]),
+        ]),
+      );
+      env.evidence.record("scroll-nested-bars", columnFrame.samples);
+      assert.deepEqual(columnHues, {
+        innerThumb: "yellow",
+        innerTrack: "blue",
+        outerThumb: "magenta",
       });
 
       // A primary drag over plain outer content scrolls it by the dragged

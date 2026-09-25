@@ -30,8 +30,11 @@
 //! entity ties. Without a camera or viewport (native and headless use),
 //! pointer events carry a GUI-logical point instead: without a distance the
 //! overlay panel counts as nearest and the topmost hit across panels is the
-//! greatest [`EntityId`](crate::EntityId). Each source input dispatches at
-//! most once. Scroll offsets stay owned by this system so scrolled content
+//! greatest [`EntityId`](crate::EntityId). Keys carry no point: keyboard
+//! traversal crosses panels, and Tab without focus enters one, in the
+//! keyboard panel order of [`GuiKey`], which the active camera's view
+//! distance decides with front-facing panels first. Each source input
+//! dispatches at most once. Scroll offsets stay owned by this system so scrolled content
 //! never reflows layout; scroll routing consumes deltas innermost-first
 //! against evaluated ScrollView extents with edge clamping and outward
 //! propagation, chaining same-tick scrolls against routed offsets that
@@ -59,14 +62,14 @@ use super::super::{
     GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiHit, GuiLayoutSystem, GuiRoot,
     GuiScrollBarCursor, GuiSkinCursors, GuiSystem,
 };
+use super::keyboard_panels::{GuiKeyboardView, keyboard_panel_order};
 use super::target_policy::{
     GuiTargetStatus, GuiTargetValidity, current_target, evaluated_status, evaluated_validity,
     producer_root, producer_status, producer_validity,
 };
 
 use super::super::layout::scroll_bars::{
-    GuiScrollBar, scroll_bar_axis, scroll_bar_enabled, scroll_bar_shown, scroll_bars,
-    scroll_capacity,
+    GuiScrollBar, scroll_bar_axis, scroll_bar_enabled, scroll_bars_in_view, scroll_capacity,
 };
 use crate::systems::geometry::{GeometryBounds, GeometryRay};
 use crate::systems::lifecycle_publisher::{
@@ -107,13 +110,17 @@ pub enum GuiPointerButton {
 ///
 /// Keyboard traversal follows tree order within the innermost focus scope
 /// (a node whose `focus_scope` style property is set) containing the focused
-/// control, or across every panel in deterministic entity order when no
-/// scope contains it, and wraps at either end. Without focus, [`Self::Tab`]
-/// and [`Self::BackTab`] enter the keyboard panel: the panel that most
+/// control, or across every panel in keyboard panel order when no scope
+/// contains it, and wraps at either end. With an active camera, keyboard
+/// panel order puts front-facing panels first by World-space view distance,
+/// then back-facing panels by the same distance, with entity ties; without
+/// one it is entity order. Without focus, [`Self::Tab`] and [`Self::BackTab`]
+/// enter the keyboard panel at its first or last control: the first panel
+/// in keyboard panel order, which is the nearest front-facing panel with a
+/// camera. Only without a camera does entry prefer the panel that most
 /// recently held focus in this input context while it still has a focusable
-/// control, otherwise the first panel in traversal order. Entry acquires an
-/// unowned input context. Disabled, hidden, transparent and unavailable
-/// controls are skipped.
+/// control. Entry acquires an unowned input context. Disabled, hidden,
+/// transparent and unavailable controls are skipped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiKey {
     /// Move keyboard focus to the next control in traversal order, or enter
@@ -651,12 +658,9 @@ struct PendingEnvelope {
     source_tick: u64,
     /// Intended target, or None for blur.
     target: Option<GuiInputTarget>,
-    /// Pointer whose gesture produced this envelope, for click-cancel.
+    /// Pointer whose gesture produced this envelope; a pointer cancel
+    /// cancels its pending envelopes.
     pointer: Option<u32>,
-    /// Gesture sequence of the producing press, for click-cancel.
-    press_seq: Option<u64>,
-    /// Whether releasing off-target cancels this envelope.
-    cancel_on_miss: bool,
     /// Routed intent.
     kind: EnvelopeKind,
 }
@@ -821,8 +825,6 @@ struct PointerCapture {
     target: GuiInputTarget,
     /// Pressed button; releases of other buttons never complete the press.
     button: GuiPointerButton,
-    /// Gesture sequence identifying this press.
-    seq: u64,
     /// Session that pressed.
     session: u64,
     /// Frame whose snapshot established the capture.
@@ -940,8 +942,9 @@ pub struct GuiInputSystem {
     /// focus (activation, nudging, caret) follows every source.
     focus_visible: bool,
     /// Panel and root incarnation that most recently held keyboard focus in
-    /// this context: the entry panel for traversal from no focus. A hint
-    /// revalidated against the current traversal order on use.
+    /// this context: the entry panel for traversal from no focus when no
+    /// camera orders the panels. A hint revalidated against the current
+    /// traversal order on use.
     keyboard_panel: Option<(EntityId, u64)>,
     /// Frame the focus cursor was set against.
     focus_tick: u64,
@@ -986,8 +989,6 @@ pub struct GuiInputSystem {
     published_caret_revision: u64,
     /// Session that owned the last published focused text state.
     published_text_session: Option<u64>,
-    /// Next gesture sequence.
-    next_seq: u64,
     /// Last frame observed, fencing session-replacement records.
     last_tick: u64,
     /// Routed effects awaiting the frame report.
@@ -1073,7 +1074,6 @@ impl SystemFactory for GuiInputSystemFactory {
             caret_revision: 0,
             published_caret_revision: 0,
             published_text_session: None,
-            next_seq: 1,
             last_tick: 0,
             pending_effects: Vec::new(),
             pending_cancellations: Vec::new(),
@@ -1772,8 +1772,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: focus,
                 pointer: None,
-                press_seq: None,
-                cancel_on_miss: false,
                 kind: EnvelopeKind::Focus {
                     focus,
                     keyboard,
@@ -1836,8 +1834,6 @@ impl GuiInputSystem {
         tick: u64,
         target: GuiInputTarget,
         pointer: Option<u32>,
-        press_seq: Option<u64>,
-        cancel_on_miss: bool,
         expected_revision: u32,
         value: GuiControlValue,
     ) {
@@ -1856,8 +1852,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: Some(target),
                 pointer,
-                press_seq,
-                cancel_on_miss,
                 kind: EnvelopeKind::SetValue {
                     expected_revision,
                     value,
@@ -2075,14 +2069,37 @@ impl GuiInputSystem {
         super::text_edit::snap_to_boundary(base_text, offset.min(base_text.len() as u32))
     }
 
-    /// All focusable controls in deterministic tab order.
+    /// Active camera pose ordering keyboard panels, or None without an
+    /// active camera. Keys carry no viewport point, so unlike pointer
+    /// projection this needs no host viewport.
+    fn keyboard_view(
+        &self,
+        access: &SystemRuntimeAccess<'_>,
+        sim: &WorldSimulationState,
+    ) -> Option<GuiKeyboardView> {
+        let camera = access.dependency(self.camera?)?;
+        let read = camera.read(sim);
+        // The selection may outlive its entity; only a live camera orders.
+        let lens = read.active_camera_component()?;
+        GuiKeyboardView::of_camera(sim, read.active_camera()?, lens)
+    }
+
+    /// All focusable controls in deterministic tab order: panels in keyboard
+    /// panel order (view order with a camera, otherwise entity order), each
+    /// in tree order.
     fn focusables(
         &self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
     ) -> Vec<GuiInputTarget> {
+        let mut panels = layout.evaluated_entities();
+        if let Some(view) = view {
+            panels = keyboard_panel_order(sim, view, panels);
+        }
+
         let mut order = Vec::new();
-        for entity in layout.evaluated_entities() {
+        for entity in panels {
             let Some(view) = layout.view(entity) else {
                 continue;
             };
@@ -2129,10 +2146,11 @@ impl GuiInputSystem {
         &self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
         root: &GuiRoot,
         focused: &GuiInputTarget,
     ) -> Vec<GuiInputTarget> {
-        let order = self.focusables(layout, sim);
+        let order = self.focusables(layout, sim, view);
         let Some(scope) = Self::focus_scope_of(root, focused.node) else {
             return order;
         };
@@ -2177,30 +2195,35 @@ impl GuiInputSystem {
     }
 
     /// Enter keyboard traversal without focus: Tab takes the keyboard panel's
-    /// first focusable control and BackTab its last. Entry acquires an unowned
-    /// context like other context-establishing input; nothing focusable
-    /// leaves the input unhandled without acquiring.
+    /// first focusable control and BackTab its last. The keyboard panel is
+    /// the first panel in keyboard panel order; only without a camera does
+    /// the most recently focused panel take precedence. Entry acquires an
+    /// unowned context like other context-establishing input; nothing
+    /// focusable leaves the input unhandled without acquiring.
+    #[allow(clippy::too_many_arguments)]
     fn enter_traversal(
         &mut self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
         session: u64,
         tick: u64,
         input: &GuiInputCommand,
         backward: bool,
     ) {
-        let order = self.focusables(layout, sim);
+        let order = self.focusables(layout, sim, view);
         let in_panel = |target: &GuiInputTarget, (entity, incarnation): (EntityId, u64)| {
             target.entity == entity && target.root_incarnation == incarnation
         };
-        let panel = self
+        let recent = self
             .keyboard_panel
-            .filter(|panel| order.iter().any(|target| in_panel(target, *panel)))
-            .or_else(|| {
-                order
-                    .first()
-                    .map(|target| (target.entity, target.root_incarnation))
-            });
+            .filter(|_| view.is_none())
+            .filter(|panel| order.iter().any(|target| in_panel(target, *panel)));
+        let panel = recent.or_else(|| {
+            order
+                .first()
+                .map(|target| (target.entity, target.root_incarnation))
+        });
         let Some(panel) = panel else {
             self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
             return;
@@ -2408,12 +2431,9 @@ impl GuiInputSystem {
             {
                 continue;
             }
-            let offset = self.committed_scroll_offset(entity, view.root_incarnation, record.node);
-            let shown = [
-                scroll_bar_shown(root, record, 0),
-                scroll_bar_shown(root, record, 1),
-            ];
-            let Some(bar) = scroll_bars(record, offset, shown)
+            let offset_of =
+                |node: GuiNodeId| self.committed_scroll_offset(entity, view.root_incarnation, node);
+            let Some(bar) = scroll_bars_in_view(view, root, index, offset_of)
                 .into_iter()
                 .flatten()
                 .filter(|bar| scroll_bar_enabled(record, bar.axis))
@@ -2490,13 +2510,10 @@ impl GuiInputSystem {
             return None;
         }
         let shift = self.scrolled_placements(view, target.entity)[index].shift;
-        let offset =
-            self.committed_scroll_offset(target.entity, target.root_incarnation, target.node);
-        let shown = [
-            scroll_bar_shown(root, record, 0),
-            scroll_bar_shown(root, record, 1),
-        ];
-        scroll_bars(record, offset, shown)[axis].map(|bar| bar.shifted(shift))
+        let offset_of = |node: GuiNodeId| {
+            self.committed_scroll_offset(target.entity, target.root_incarnation, node)
+        };
+        scroll_bars_in_view(view, root, index, offset_of)[axis].map(|bar| bar.shifted(shift))
     }
 
     /// Scrolled placement of every evaluated record, index-aligned with
@@ -3554,13 +3571,11 @@ impl GuiInputSystem {
             );
             return;
         }
-        let seq = self.next_seq();
         self.captures.insert(
             pointer,
             PointerCapture {
                 target: routed.target,
                 button,
-                seq,
                 session,
                 source_tick: tick,
             },
@@ -3633,8 +3648,6 @@ impl GuiInputSystem {
                         tick,
                         routed.target,
                         Some(pointer),
-                        Some(seq),
-                        false,
                         revision,
                         value,
                     );
@@ -3643,8 +3656,8 @@ impl GuiInputSystem {
         }
     }
 
-    /// Route one pointer-up: complete taps, commit drag ends, click-cancel
-    /// press-time intents released off-target. A release of a different
+    /// Route one pointer-up: complete taps on the pressed control and commit
+    /// drag ends; a release off-target completes no tap. A release of a different
     /// button never completes the press.
     #[allow(clippy::too_many_arguments)]
     fn route_up(
@@ -3731,19 +3744,18 @@ impl GuiInputSystem {
             }
             _ => None,
         };
+        // Taps queue their click intents only here, so a release off the
+        // pressed control completes nothing. A drag released off-target
+        // still commits the values it already routed.
         let Some(position) = same else {
-            self.cancel_press_envelopes(session, tick, pointer, capture.seq);
-            // A drag released off-target still commits its routed values;
-            // only click-type intents cancel.
             if kind == ControlKind::Slider {
                 self.set_hover(session, tick, pointer, None, position);
             }
             return;
         };
-        // A target disabled mid-press completes nothing: pending click
-        // intents cancel rather than committing a stale tap.
+        // A target disabled mid-press completes nothing rather than
+        // committing a stale tap.
         if !Self::target_eligible(layout, sim, &capture.target) {
-            self.cancel_press_envelopes(session, tick, pointer, capture.seq);
             return;
         }
         self.set_hover(session, tick, pointer, Some(capture.target), position);
@@ -3757,8 +3769,6 @@ impl GuiInputSystem {
                         source_tick: tick,
                         target: Some(capture.target),
                         pointer: Some(pointer),
-                        press_seq: Some(capture.seq),
-                        cancel_on_miss: false,
                         kind: EnvelopeKind::PressButton,
                     },
                 );
@@ -3786,8 +3796,6 @@ impl GuiInputSystem {
                     tick,
                     capture.target,
                     Some(pointer),
-                    Some(capture.seq),
-                    false,
                     revision,
                     GuiControlValue::Bool(!current),
                 );
@@ -3823,8 +3831,6 @@ impl GuiInputSystem {
                         tick,
                         capture.target,
                         Some(pointer),
-                        Some(capture.seq),
-                        false,
                         revision,
                         value,
                     );
@@ -4024,8 +4030,6 @@ impl GuiInputSystem {
                         tick,
                         capture.target,
                         Some(pointer),
-                        Some(capture.seq),
-                        false,
                         revision,
                         value,
                     );
@@ -4424,8 +4428,6 @@ impl GuiInputSystem {
                         source_tick: tick,
                         target: Some(target),
                         pointer: None,
-                        press_seq: None,
-                        cancel_on_miss: false,
                         kind: EnvelopeKind::Scroll {
                             delta: consumed,
                         },
@@ -4780,10 +4782,12 @@ impl GuiInputSystem {
 
     /// Route one key press on the focused control.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn route_key(
         &mut self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
         session: u64,
         tick: u64,
         input: &GuiInputCommand,
@@ -4792,7 +4796,8 @@ impl GuiInputSystem {
         let Some(focus) = self.focus else {
             match key {
                 GuiKey::Tab | GuiKey::BackTab => {
-                    self.enter_traversal(layout, sim, session, tick, input, key == GuiKey::BackTab);
+                    let backward = key == GuiKey::BackTab;
+                    self.enter_traversal(layout, sim, view, session, tick, input, backward);
                 }
                 _ => self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus),
             }
@@ -4817,7 +4822,7 @@ impl GuiInputSystem {
         }
         match key {
             GuiKey::Tab | GuiKey::BackTab => {
-                let order = self.traversal_order(layout, sim, &root, &focus.target);
+                let order = self.traversal_order(layout, sim, view, &root, &focus.target);
                 let len = order.len();
                 if len == 0 {
                     self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
@@ -4849,8 +4854,6 @@ impl GuiInputSystem {
                         source_tick: tick,
                         target: None,
                         pointer: None,
-                        press_seq: None,
-                        cancel_on_miss: false,
                         kind: EnvelopeKind::Focus {
                             focus: None,
                             keyboard: false,
@@ -4868,8 +4871,6 @@ impl GuiInputSystem {
                             source_tick: tick,
                             target: Some(focus.target),
                             pointer: None,
-                            press_seq: None,
-                            cancel_on_miss: false,
                             kind: EnvelopeKind::PressButton,
                         },
                     );
@@ -4890,8 +4891,6 @@ impl GuiInputSystem {
                         tick,
                         focus.target,
                         None,
-                        None,
-                        false,
                         revision,
                         GuiControlValue::Bool(!current),
                     );
@@ -4937,8 +4936,6 @@ impl GuiInputSystem {
                     tick,
                     focus.target,
                     None,
-                    None,
-                    false,
                     revision,
                     GuiControlValue::Text(outcome.text.clone()),
                 );
@@ -4995,16 +4992,9 @@ impl GuiInputSystem {
                     _ => 1.0,
                 };
                 match slider_nudge(&content, &base, steps) {
-                    Some(value) => self.push_value_envelope(
-                        session,
-                        tick,
-                        focus.target,
-                        None,
-                        None,
-                        false,
-                        revision,
-                        value,
-                    ),
+                    Some(value) => {
+                        self.push_value_envelope(session, tick, focus.target, None, revision, value)
+                    }
                     None => self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable),
                 }
             }
@@ -5057,8 +5047,6 @@ impl GuiInputSystem {
                     tick,
                     focus.target,
                     None,
-                    None,
-                    false,
                     revision,
                     GuiControlValue::Scalar(value),
                 );
@@ -5099,8 +5087,6 @@ impl GuiInputSystem {
                     tick,
                     focus.target,
                     None,
-                    None,
-                    false,
                     revision,
                     GuiControlValue::Text(outcome.text.clone()),
                 );
@@ -5131,8 +5117,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: Some(target),
                 pointer: None,
-                press_seq: None,
-                cancel_on_miss: false,
                 kind: EnvelopeKind::Submit {
                     expected_revision,
                 },
@@ -5181,8 +5165,6 @@ impl GuiInputSystem {
             tick,
             *target,
             None,
-            None,
-            false,
             revision,
             GuiControlValue::Text(outcome.text.clone()),
         );
@@ -5536,8 +5518,6 @@ impl GuiInputSystem {
             tick,
             focus.target,
             None,
-            None,
-            false,
             revision,
             GuiControlValue::Text(outcome.text.clone()),
         );
@@ -5653,40 +5633,6 @@ impl GuiInputSystem {
             self.press_owners.remove(&capture.target);
         }
         self.hovers.remove(&pointer);
-    }
-
-    /// Cancel click-type envelopes of a press released off-target. Only the
-    /// pressing session's envelopes cancel; another session's identical
-    /// pointer ID never reaches them.
-    fn cancel_press_envelopes(&mut self, session: u64, tick: u64, pointer: u32, seq: u64) {
-        let mut kept = Vec::with_capacity(self.envelopes.len());
-        for envelope in self.envelopes.drain(..) {
-            if envelope.session == session
-                && envelope.pointer == Some(pointer)
-                && envelope.press_seq == Some(seq)
-                && envelope.cancel_on_miss
-                && let Some(target) = envelope.target
-            {
-                self.predicted.remove(&target);
-                self.pending_cancellations.push(GuiInputCancellation {
-                    session,
-                    source_tick: envelope.source_tick,
-                    effect_tick: tick,
-                    target: Some(target),
-                    reason: GuiInputCancelReason::GestureCancelled,
-                });
-                continue;
-            }
-            kept.push(envelope);
-        }
-        self.envelopes = kept;
-    }
-
-    /// Allocate the next gesture sequence.
-    fn next_seq(&mut self) -> u64 {
-        let seq = self.next_seq.max(1);
-        self.next_seq = seq.saturating_add(1).max(1);
-        seq
     }
 }
 
@@ -5940,8 +5886,6 @@ impl GuiInputSystem {
             source_tick: tick,
             target: Some(command.target),
             pointer: None,
-            press_seq: None,
-            cancel_on_miss: false,
             kind: envelope_kind,
         });
         Ok(())
@@ -7237,7 +7181,11 @@ impl GuiInputSystem {
                 debug_assert!(pressed, "key releases are filtered during admission");
                 if self
                     .route_with_layout(access, |input, layout, sim| {
-                        input.route_key(layout, sim, *session, tick, command, key);
+                        // Only traversal reads the camera pose.
+                        let view = matches!(key, GuiKey::Tab | GuiKey::BackTab)
+                            .then(|| input.keyboard_view(access, sim))
+                            .flatten();
+                        input.route_key(layout, sim, view.as_ref(), *session, tick, command, key);
                     })
                     .is_err()
                 {
@@ -7415,8 +7363,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: None,
                 pointer: None,
-                press_seq: None,
-                cancel_on_miss: false,
                 kind: EnvelopeKind::Focus {
                     focus: None,
                     keyboard: false,

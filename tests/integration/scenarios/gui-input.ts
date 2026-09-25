@@ -7,6 +7,8 @@ import type {
 } from "@ipp/client";
 import {
   aliasId,
+  cameraClient,
+  componentFields,
   createEntity,
   insertComponent,
   successfulBatch,
@@ -785,6 +787,7 @@ export async function exerciseGuiInput(
   await host.detachWorld();
   const scrolling = await exerciseGuiScrolling(host);
   const removal = await exerciseGuiRemoval(host, fontBytes);
+  const keyboardEntry = await exerciseGuiKeyboardEntry(host);
   return {
     traversal,
     submissions: submitted.length,
@@ -794,7 +797,162 @@ export async function exerciseGuiInput(
     unhandledScroll: unscrolled.unhandled?.kind,
     scrolling,
     removal,
+    keyboardEntry,
   };
+}
+
+/**
+ * Keyboard entry and cross-panel traversal follow the active camera in their
+ * own World. Three 2x1 panels hold checkboxes 2 and 3 each: a back-facing
+ * panel 2 m in front of the camera, created first, then front-facing panels
+ * 10 m and 6 m away. Tab from no focus enters the nearest front-facing
+ * panel, traversal crosses the front-facing panels by distance before the
+ * back-facing one, and turning the camera around makes the formerly
+ * back-facing panel the only front-facing entry.
+ */
+async function exerciseGuiKeyboardEntry(
+  host: WorldPersistenceHostClient<GuiTestClient>,
+) {
+  const client = await host.createWorld({ symbolicId: "gui-keyboard-entry" });
+  const placements = [
+    { symbolicId: "gui-keyboard-back", z: 8, qy: 1, qw: 0 },
+    { symbolicId: "gui-keyboard-far", z: 0 },
+    { symbolicId: "gui-keyboard-near", z: 4 },
+  ];
+  const panels: bigint[] = [];
+  for (const { symbolicId, ...placement } of placements) {
+    const ref = { kind: "alias", alias: 1 } as const;
+    const entity = aliasId(
+      await client.batch([
+        createEntity(1, symbolicId),
+        insertComponent(client, "Transform", ref, placement),
+        insertComponent(client, "Surface", ref, { width: 2, height: 1 }),
+        insertComponent(client, "GuiRoot", ref),
+      ]),
+      1,
+    );
+    const { rootIncarnation } = await client.inspectGui({ entity });
+    const checkbox = (id: number) =>
+      ({
+        action: "insert",
+        entity,
+        rootIncarnation,
+        id,
+        parent: 1,
+        index: id - 2,
+        data: { kind: "checkbox" },
+        values: { checked: false },
+        style: { width: 1, height: 1 },
+      }) as const;
+    await client.editGuiBatch([
+      {
+        action: "insert",
+        entity,
+        rootIncarnation,
+        id: 1,
+        index: 0,
+        data: { kind: "container", containerKind: "row" },
+        style: { width: 2, height: 1 },
+      },
+      checkbox(2),
+      checkbox(3),
+    ]);
+    panels.push(entity);
+  }
+  const [back, far, near] = panels as [bigint, bigint, bigint];
+  const name = new Map([
+    [back, "back"],
+    [far, "far"],
+    [near, "near"],
+  ]);
+
+  // A perspective camera 10 m along +Z looks down -Z at every panel.
+  const cameraRef = { kind: "alias", alias: 1 } as const;
+  const camera = aliasId(
+    await client.batch([
+      createEntity(1, "gui-keyboard-camera"),
+      insertComponent(client, "Transform", cameraRef, { z: 10 }),
+      insertComponent(client, "Camera", cameraRef, {
+        projection: 0,
+        fov_y: Math.PI / 4,
+        near: 0.1,
+        far: 100,
+      }),
+    ]),
+    1,
+  );
+  const cameras = cameraClient(client);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      stop();
+      reject(new Error("The keyboard entry camera never activated"));
+    }, 10000);
+    const stop = cameras.onCameraStateChanged((event) => {
+      if (event.changes.activeCamera !== camera) return;
+      clearTimeout(timer);
+      stop();
+      resolve();
+    });
+    cameras.sendCommand({ type: "CameraActivateCommand", entity: camera });
+  });
+
+  /** Panel and node holding keyboard focus, from each semantic snapshot. */
+  const focused = async () => {
+    for (const entity of panels) {
+      const id = await focusedNode(client, entity);
+      if (id !== undefined) return `${name.get(entity)}:${id}`;
+    }
+    return "none";
+  };
+  const press = async (key: "tab" | "backTab" | "escape") => {
+    await client.submitGuiInput({ kind: "key", key, pressed: true });
+    return focused();
+  };
+  const enter = async (key: "tab" | "backTab") => {
+    await press("escape");
+    return press(key);
+  };
+
+  const entry = [await enter("tab"), await enter("backTab")];
+  await enter("tab");
+  const traversal: string[] = [];
+  for (let step = 0; step < 6; step += 1) traversal.push(await press("tab"));
+  expect(
+    JSON.stringify(entry) === JSON.stringify(["near:2", "near:3"]) &&
+      JSON.stringify(traversal) ===
+        JSON.stringify([
+          "near:3",
+          "far:2",
+          "far:3",
+          "back:2",
+          "back:3",
+          "near:2",
+        ]),
+    `Keyboard entry ignored the view order: ${JSON.stringify({ entry, traversal })}`,
+  );
+
+  // Turning the camera around behind the panels leaves the formerly
+  // back-facing panel as the only front-facing one.
+  successfulBatch(
+    await client.batch(
+      componentFields(client, "Transform", { z: -10, qy: 1, qw: 0 }).map(
+        (field) => ({
+          kind: "setField",
+          entity: { kind: "handle", id: camera },
+          component: client.components.Transform!.id,
+          field,
+        }),
+      ),
+    ),
+  );
+  const turned = await enter("tab");
+  expect(
+    turned === "back:2",
+    `Camera motion did not move keyboard entry: ${turned}`,
+  );
+  await press("escape");
+  await host.detachWorld();
+  return { entry, traversal, turned };
 }
 
 type GuiEditNode = Parameters<GuiTestClient["editGui"]>[0] & {

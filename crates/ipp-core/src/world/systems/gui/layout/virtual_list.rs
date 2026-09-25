@@ -126,6 +126,11 @@ impl GuiVirtualListLayout {
         size
     }
 
+    /// Largest main-axis scroll offset: the content beyond the viewport.
+    pub(crate) fn capacity(&self) -> f32 {
+        (self.content_extent() - self.viewport).max(0.0)
+    }
+
     /// Total main extent of every item.
     pub(crate) fn content_extent(&self) -> f32 {
         self.item_count as f32 * self.item_extent + self.delta_before(self.items.len())

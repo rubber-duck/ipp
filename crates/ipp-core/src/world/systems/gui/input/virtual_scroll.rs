@@ -22,7 +22,6 @@
 //! first evaluation of a list or of a restored incarnation. Cost follows
 //! evaluated lists and their declared children, never the item count.
 
-use super::super::layout::scroll_bars::scroll_capacity;
 use super::super::{GuiInputEffect, GuiInputEffectKind, GuiInputTarget, GuiLayoutSystem};
 use super::system::{GuiInputSystem, ScrollCursor, stage_producer_root};
 use super::target_policy::producer_root;
@@ -139,14 +138,9 @@ impl GuiInputSystem {
                 let values = root.data_row(node);
                 let anchor_index = values.and_then(|row| row.anchor_index).unwrap_or(0);
                 let anchor_offset = values.and_then(|row| row.anchor_offset).unwrap_or(0.0);
-                let capacity = view
-                    .nodes
-                    .iter()
-                    .find(|record| record.node == node)
-                    .map_or([0.0, 0.0], scroll_capacity)[list.axis];
                 let main = list
                     .anchored_offset(anchor_index, anchor_offset)
-                    .clamp(0.0, capacity);
+                    .clamp(0.0, list.capacity());
                 let mut offset = [0.0, 0.0];
                 offset[list.axis] = main;
 

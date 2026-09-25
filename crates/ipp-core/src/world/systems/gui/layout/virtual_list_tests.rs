@@ -25,6 +25,7 @@ fn undeclared_items_take_the_estimate() {
 
     assert_eq!(list.content_extent(), 200.0);
     assert_eq!(list.content_size([4.0, 5.0]), [4.0, 200.0]);
+    assert_eq!(list.capacity(), 195.0);
     assert_eq!(list.position(7), 14.0);
     assert_eq!(list.item_at(0.0), 0);
     assert_eq!(list.item_at(13.9), 6);
@@ -94,6 +95,7 @@ fn children_past_the_count_or_repeating_an_index_are_not_placed() {
 fn an_empty_list_wants_nothing() {
     let list = list(0, 2.0, 3, 5.0);
     assert_eq!(list.content_extent(), 0.0);
+    assert_eq!(list.capacity(), 0.0);
     assert_eq!(list.item_at(10.0), 0);
     assert_eq!(list.wanted_range(0.0), (0, 0));
     assert_eq!(list.anchored_offset(4, 1.0), 1.0);

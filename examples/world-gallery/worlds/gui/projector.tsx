@@ -413,6 +413,21 @@ export function HolographicProjector({
   );
 }
 
+/**
+ * Transform fields for an object in front of the projected panel. `local`
+ * is in panel-local metres before the panel scale: +X right and +Y up from
+ * the panel centre, and +Z out of its front face toward the viewer.
+ */
+export function placedOnPanel(local: Point, stagingX: number) {
+  const offset = rotatedAxis(local);
+  return {
+    x: stagingX + PANEL_CENTER[0] + offset[0],
+    y: PANEL_CENTER[1] + offset[1],
+    z: PANEL_CENTER[2] + offset[2],
+    ...PROJECTOR_ROTATION,
+  };
+}
+
 export const PROJECTED_PANEL_TRANSFORM = {
   x: PANEL_CENTER[0],
   y: PANEL_CENTER[1],

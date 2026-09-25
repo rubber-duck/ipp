@@ -27,6 +27,7 @@ import {
   encodePng,
   intersectionOverUnion,
   mask,
+  pixelDifference,
   type RgbaFrame,
 } from "./retained-gui-images.js";
 import {
@@ -992,15 +993,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
         ),
         "each panel fill must paint at effective alpha 0.9",
       );
-      assert.equal(
-        initial.detailed.nodes.filter(
-          ({ data, style }) =>
-            data.kind === "container" &&
-            data.containerKind === "scrollView" &&
-            style.enabled !== false,
-        ).length,
-        1,
-      );
+      // The event log ScrollView nests inside the telemetry ScrollView.
+      telemetryScrollViews(initial);
 
       const buttons = initial.semantic.nodes.filter(
         ({ role }) => role === "button",
@@ -1010,6 +1004,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "EMBER",
         "NEON",
         "PULSE",
+        "PURGE",
         "SPAN",
         "UPLINK",
       ]);
@@ -1963,12 +1958,13 @@ test("Gallery runs a real GUI demo and cleans it up", {
         const [px, py, pw, ph] = pulseButton.bounds;
         const title = textBounds(detail, "GUI DEMO");
         const spanButton = semanticNode(detail.semantic, "button", "SPAN");
-        // SPAN and UPLINK labels sit centred in their buttons (ipp-jtst.8).
+        // SPAN, UPLINK and PURGE labels sit centred in their buttons
+        // (ipp-jtst.8).
         // Button labels lay out left-aligned and are not separate text
         // leaves, so the specimen tunes each button's left padding and the
         // check weighs each sample by its contrast with the row median
         // (the button fill), comparing the ink centroid to the centre.
-        for (const name of ["SPAN", "UPLINK"] as const) {
+        for (const name of ["SPAN", "UPLINK", "PURGE"] as const) {
           const [bx, by, bw, bh] = semanticNode(
             detail.semantic,
             "button",
@@ -2264,14 +2260,21 @@ test("Gallery runs a real GUI demo and cleans it up", {
       });
 
       await g.page.locator("#ipp-world-canvas").scrollIntoViewIfNeeded();
-      const scroll = await g.call<ProjectedGuiNode>("galleryGuiScrollPoint");
+      // Wheel over the telemetry readouts, above the nested event log.
+      const telemetry = telemetryScrollViews(await waitForGui()).outer;
+      const [scroll] = await projectContent(g, [
+        [
+          telemetry.bounds[0] + telemetry.bounds[2] * 0.5,
+          telemetry.bounds[1] + 0.15,
+        ],
+      ]);
       const cameraBeforeScroll = transform(await g.inspect());
       await g.capture("gui-demo-before-scroll");
-      await g.page.mouse.move(scroll.clientX, scroll.clientY);
-      // One 100 px wheel notch scrolls the metre-sized telemetry log by the
-      // gallery's wheel step, an eighth of its 0.78 m viewport.
+      await g.page.mouse.move(scroll!.clientX, scroll!.clientY);
+      // One 100 px wheel notch scrolls the telemetry view by the gallery's
+      // wheel step, an eighth of its 0.78 viewport.
       const scrollState = (state: GalleryGuiState) =>
-        state.semantic.nodes.find(({ id }) => id === scroll.node.id)!;
+        state.semantic.nodes.find(({ id }) => id === telemetry.id)!;
       const beforeNotch = scrollState(await waitForGui());
       assert.ok(beforeNotch.scroll, "telemetry ScrollView has no scroll state");
       const notchTarget = Math.min(
@@ -2936,6 +2939,938 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         ember,
         durationMs: performance.now() - started,
       });
+      assert.deepEqual(g.errors, []);
+    },
+  );
+});
+
+type Gallery = Awaited<ReturnType<typeof openGallery>>;
+
+interface ProjectedPoint {
+  readonly x: number;
+  readonly y: number;
+  readonly clientX: number;
+  readonly clientY: number;
+}
+
+/** Surface half extents, restated from the panel's 7.4 x 4.8 Surface. */
+const PANEL_HALF = [3.7, 2.4] as const;
+
+/** Runtime scroll bar thickness: a twentieth of the viewport's shorter side. */
+const SCROLL_BAR_THICKNESS = 0.05;
+
+/** Shortest thumb, in bar thicknesses. */
+const SCROLL_THUMB_MIN = 2;
+
+/** The gallery's wheel step: an eighth of the 0.78 telemetry viewport. */
+const WHEEL_STEP = 0.78 / 8;
+
+/** Project Surface content points through the actual panel and camera. */
+function projectContent(
+  g: Gallery,
+  points: readonly (readonly [number, number])[],
+) {
+  return g.call<readonly ProjectedPoint[]>(
+    "projectGalleryPoints",
+    "gui-demo",
+    points.map(([x, y]) => [x - PANEL_HALF[0], PANEL_HALF[1] - y, 0]),
+  );
+}
+
+async function waitForGuiState(
+  g: Gallery,
+  predicate: (state: GalleryGuiState) => boolean = () => true,
+): Promise<GalleryGuiState> {
+  const deadline = performance.now() + 15_000;
+  let lastError: unknown;
+  while (performance.now() < deadline) {
+    try {
+      const state = await g.call<GalleryGuiState>("galleryGuiState");
+      if (predicate(state)) return state;
+    } catch (failure) {
+      lastError = failure;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `GUI demo did not settle${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
+  );
+}
+
+/** The telemetry ScrollView and the event log ScrollView nested inside it. */
+function telemetryScrollViews(state: GalleryGuiState) {
+  const views = state.detailed.nodes.filter(
+    ({ data, style }) =>
+      data.kind === "container" &&
+      data.containerKind === "scrollView" &&
+      style.enabled !== false,
+  );
+  assert.equal(views.length, 2, "expected the telemetry and event log views");
+  const semantic = (id: number) => {
+    const node = state.semantic.nodes.find((candidate) => candidate.id === id);
+    assert.ok(node, `ScrollView ${id} is absent from semantics`);
+    return node;
+  };
+  const nested = (id: number) => {
+    for (let node = semantic(id); node.parent !== undefined; ) {
+      if (views.some((view) => view.id === node.parent)) return true;
+      node = semantic(node.parent);
+    }
+    return false;
+  };
+  const inner = views.filter(({ id }) => nested(id));
+  const outer = views.filter(({ id }) => !nested(id));
+  assert.equal(inner.length, 1, "the event log is not nested");
+  assert.equal(outer.length, 1);
+  const pair = { outer: semantic(outer[0]!.id), inner: semantic(inner[0]!.id) };
+  assert.ok(pair.outer.scroll && pair.inner.scroll, "missing scroll state");
+  return pair as {
+    outer: GuiSemanticNode & { scroll: NonNullable<GuiSemanticNode["scroll"]> };
+    inner: GuiSemanticNode & { scroll: NonNullable<GuiSemanticNode["scroll"]> };
+  };
+}
+
+/**
+ * Expected vertical scroll bar of one ScrollView at `[x, y]` on screen:
+ * a track along the right edge as thick as a twentieth of the shorter
+ * viewport side, and a thumb whose length is the visible fraction of the
+ * track, never shorter than two thicknesses, placed by offset / capacity.
+ */
+function expectedScrollBar(
+  node: GuiSemanticNode & { scroll: NonNullable<GuiSemanticNode["scroll"]> },
+  x: number,
+  y: number,
+) {
+  const [, , width, height] = node.bounds;
+  const thickness = SCROLL_BAR_THICKNESS * Math.min(width, height);
+  const capacity = node.scroll.maxOffset[1];
+  const extent = height + capacity;
+  const length = Math.min(
+    height,
+    Math.max(height * (height / extent), SCROLL_THUMB_MIN * thickness),
+  );
+  const fraction = capacity > 0 ? node.scroll.offset[1] / capacity : 0;
+  const top = y + (height - length) * fraction;
+  return {
+    thickness,
+    track: [x + width - thickness, y, x + width, y + height] as LogicalRect,
+    thumb: [x + width - thickness, top, x + width, top + length] as LogicalRect,
+  };
+}
+
+/** Convex hull of projected points, in order around the hull. */
+function convexHull(points: readonly ProjectedPoint[]): ProjectedPoint[] {
+  const sorted = [...points].sort(
+    (a, b) => a.clientX - b.clientX || a.clientY - b.clientY,
+  );
+  const cross = (o: ProjectedPoint, a: ProjectedPoint, b: ProjectedPoint) =>
+    (a.clientX - o.clientX) * (b.clientY - o.clientY) -
+    (a.clientY - o.clientY) * (b.clientX - o.clientX);
+  const half = (ordered: readonly ProjectedPoint[]) => {
+    const chain: ProjectedPoint[] = [];
+    for (const point of ordered) {
+      while (
+        chain.length >= 2 &&
+        cross(chain[chain.length - 2]!, chain[chain.length - 1]!, point) <= 0
+      )
+        chain.pop();
+      chain.push(point);
+    }
+    chain.pop();
+    return chain;
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
+/** Greedy word wrap of monospaced text into lines of at most `columns`. */
+function wrapColumns(text: string, columns: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    const candidate = line === "" ? word : `${line} ${word}`;
+    if (candidate.length <= columns || line === "") line = candidate;
+    else {
+      lines.push(line);
+      line = word;
+    }
+  }
+  if (line !== "") lines.push(line);
+  return lines;
+}
+
+/**
+ * Compare a colour classification of one completed-frame area with the
+ * logical rectangles expected to hold it, and write the expected mask, the
+ * actual crop, the actual mask and their difference as PNG evidence. The
+ * area maps to frame pixels through its projected corners, so the detail
+ * view or the authored camera both work while the panel stays planar.
+ */
+async function compareMask(
+  g: Gallery,
+  directory: string,
+  name: string,
+  capture: {
+    readonly label: string;
+    readonly width: number;
+    readonly height: number;
+  },
+  area: LogicalRect,
+  expected: readonly LogicalRect[],
+  select: (pixel: readonly [number, number, number]) => boolean,
+) {
+  const [x0, y0, x1, y1] = area;
+  const corners = await projectContent(g, [
+    [x0, y0],
+    [x1, y0],
+    [x0, y1],
+    [x1, y1],
+  ]);
+  const [a, b, d] = corners as [ProjectedPoint, ProjectedPoint, ProjectedPoint];
+  const region = await g.call<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    pixels: string;
+  }>("viewerCaptureRegionPixels", capture.label, [
+    Math.min(...corners.map(({ x }) => x)),
+    Math.min(...corners.map(({ y }) => y)),
+    Math.max(...corners.map(({ x }) => x)),
+    Math.max(...corners.map(({ y }) => y)),
+  ]);
+  const crop = decodeRegion(region);
+  const det = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
+  const expectedImage = new Uint8Array(crop.pixels.length);
+  const actualImage = new Uint8Array(crop.pixels.length);
+  let expectedPixels = 0;
+  let actualPixels = 0;
+  let both = 0;
+  for (let row = 0; row < crop.height; row++) {
+    for (let column = 0; column < crop.width; column++) {
+      const index = row * crop.width + column;
+      const px = (region.left + column + 0.5) / capture.width;
+      const py = (region.top + row + 0.5) / capture.height;
+      const u = ((px - a.x) * (d.y - a.y) - (py - a.y) * (d.x - a.x)) / det;
+      const v = ((b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)) / det;
+      const inside = u >= 0 && u <= 1 && v >= 0 && v <= 1;
+      const lx = x0 + u * (x1 - x0);
+      const ly = y0 + v * (y1 - y0);
+      const wanted =
+        inside &&
+        expected.some(
+          ([ex0, ey0, ex1, ey1]) =>
+            lx >= ex0 && lx <= ex1 && ly >= ey0 && ly <= ey1,
+        );
+      const offset = index * 4;
+      const found =
+        inside &&
+        select([
+          crop.pixels[offset]!,
+          crop.pixels[offset + 1]!,
+          crop.pixels[offset + 2]!,
+        ]);
+      expectedPixels += Number(wanted);
+      actualPixels += Number(found);
+      both += Number(wanted && found);
+      const outside = inside ? 0 : 64;
+      expectedImage.set(
+        wanted ? [255, 255, 255, 255] : [outside, outside, outside, 255],
+        offset,
+      );
+      actualImage.set(
+        found ? [255, 255, 255, 255] : [outside, outside, outside, 255],
+        offset,
+      );
+    }
+  }
+  const expectedFrame = { ...crop, pixels: expectedImage };
+  const actualMask = { ...crop, pixels: actualImage };
+  await Promise.all([
+    writeFile(
+      join(directory, `${name}-expected.png`),
+      encodePng(expectedFrame),
+    ),
+    writeFile(join(directory, `${name}-actual.png`), encodePng(crop)),
+    writeFile(
+      join(directory, `${name}-actual-mask.png`),
+      encodePng(actualMask),
+    ),
+    writeFile(
+      join(directory, `${name}-diff.png`),
+      encodePng(differenceImage(expectedFrame, actualMask, 128)),
+    ),
+  ]);
+  const union = expectedPixels + actualPixels - both;
+  return {
+    expectedPixels,
+    actualPixels,
+    intersectionOverUnion: union === 0 ? 1 : both / union,
+    precision: actualPixels === 0 ? 1 : both / actualPixels,
+    recall: expectedPixels === 0 ? 1 : both / expectedPixels,
+  };
+}
+
+test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input at its shield", {
+  timeout: 180_000,
+}, async (context) => {
+  await runBrowserEnvironment(
+    "GUI settings panel",
+    {
+      ...galleryEnvironment,
+      evidenceParent: resolve(
+        "target/integration-artifacts/gallery-gui/settings-panel",
+      ),
+    },
+    context.signal,
+    async (scenario) => {
+      const g = await openGallery(scenario, { initialPage: "gui" });
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector<HTMLOutputElement>("#status")?.dataset
+            .state === "ready",
+      );
+      const directory = scenario.evidence.directory;
+      const evidence: Record<string, unknown> = {};
+      const record = async (name: string, value: unknown) => {
+        evidence[name] = value;
+        await writeFile(
+          join(directory, "settings-panel-evidence.json"),
+          JSON.stringify(
+            evidence,
+            (_key, value) =>
+              typeof value === "bigint" ? String(value) : value,
+            2,
+          ) + "\n",
+        );
+      };
+      const text = async (selector: string) =>
+        documentStatus(await g.page.locator(selector).textContent());
+      const capture = async (label: string) => {
+        const { frame } = await g.capture(label);
+        assert.equal(frame.failedDrawCalls, 0);
+        return { label, width: frame.width, height: frame.height };
+      };
+      // Hold the waveform still so completed frames differ only by the
+      // inputs under test.
+      await g.call(
+        "galleryGuiAction",
+        { role: "checkbox" },
+        { kind: "toggle" },
+      );
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-autoscan")?.textContent === "standby",
+      );
+      await new Promise((resolve) => setTimeout(resolve, SKIN_SETTLE_MS));
+      await g.page.mouse.move(1, 1);
+
+      // Wrapped notes. The monospaced advance and line height come from the
+      // single-line TELEMETRY label; the expected lines are a greedy word
+      // wrap of the notes into the columns their fixed width holds.
+      const initial = await waitForGuiState(g);
+      const title = textBounds(initial, "TELEMETRY");
+      const advance = title[2] / "TELEMETRY".length / 0.24;
+      const lineHeight = title[3] / 0.24;
+      const notesNode = initial.detailed.nodes.find(
+        ({ data }) => data.kind === "text" && data.text.length > 80,
+      );
+      assert.ok(notesNode && notesNode.data.kind === "text", "missing notes");
+      const notesText = notesNode.data.text;
+      const notes = initial.semantic.nodes.find(
+        ({ id }) => id === notesNode.id,
+      )!;
+      const glyph = advance * 0.13;
+      const line = lineHeight * 0.13;
+      const lines = wrapColumns(
+        notesText,
+        Math.floor(notes.bounds[2] / glyph + 1e-4),
+      );
+      await record("notes", {
+        bounds: notes.bounds,
+        advance,
+        lineHeight,
+        lines,
+      });
+      assert.ok(lines.length >= 3, `notes wrapped into ${lines.length} lines`);
+      near(notes.bounds[2], 2.86, "notes width");
+      assert.ok(
+        Math.abs(notes.bounds[3] - lines.length * line) < 1e-3,
+        `notes height ${notes.bounds[3]} is not ${lines.length} lines of ${line}`,
+      );
+
+      const views = telemetryScrollViews(initial);
+      await record("scroll-views", views);
+      assert.deepEqual(views.outer.scroll.offset, [0, 0]);
+      assert.deepEqual(views.inner.scroll.offset, [0, 0]);
+      assert.ok(views.outer.scroll.maxOffset[1] > 0.5);
+      assert.ok(views.inner.scroll.maxOffset[1] > 1);
+      near(views.outer.bounds[3], 0.78, "telemetry viewport height");
+      assert.ok(
+        views.inner.bounds[1] + views.inner.bounds[3] >
+          views.outer.bounds[1] + views.outer.bounds[3],
+        "the event log must start below the telemetry fold",
+      );
+
+      await g.call("faceGalleryGuiToCamera");
+      try {
+        const detail = await capture("settings-bars-top");
+
+        // Each wrapped line paints ink from the left edge to its last glyph,
+        // once the telemetry view scrolls the notes into its viewport.
+        const checkNotes = async (
+          frame: typeof detail,
+          outerOffset: number,
+        ) => {
+          const nx = notes.bounds[0];
+          const ny = notes.bounds[1] - outerOffset;
+          const lineRects = lines.map(
+            (content, index) =>
+              [
+                nx,
+                ny + index * line,
+                nx + content.length * glyph,
+                ny + (index + 1) * line,
+              ] as LogicalRect,
+          );
+          const inkBounds = await g.call<Record<string, LogicalRect>>(
+            "galleryGuiInkBounds",
+            frame.label,
+            Object.fromEntries(
+              lineRects.map(([x0, y0, , y1], index) => [
+                `line${index}`,
+                [x0 - 0.02, y0, x0 + notes.bounds[2] + 0.02, y1] as LogicalRect,
+              ]),
+            ),
+          );
+          const notesMask = await compareMask(
+            g,
+            directory,
+            "settings-notes",
+            frame,
+            [
+              nx - 0.03,
+              ny - 0.03,
+              nx + notes.bounds[2] + 0.03,
+              ny + notes.bounds[3] + 0.03,
+            ],
+            lineRects,
+            (pixel) => Math.max(...pixel) >= 110,
+          );
+          await record("notes-frame", { lineRects, inkBounds, notesMask });
+          lineRects.forEach(([x0, , x1], index) => {
+            const ink = inkBounds[`line${index}`]!;
+            assert.ok(
+              ink[0] > x0 - 0.015 && ink[0] < x0 + glyph,
+              `line ${index} ink starts at ${ink[0]}, not ${x0}`,
+            );
+            assert.ok(
+              ink[2] > x1 - glyph && ink[2] < x1 + 0.015,
+              `line ${index} ink ends at ${ink[2]}, not before ${x1}: ${lines[index]}`,
+            );
+          });
+          assert.ok(notesMask.actualPixels > 200, "notes painted no ink");
+          assert.ok(
+            notesMask.precision > 0.97,
+            `notes ink escaped its wrapped lines: ${JSON.stringify(notesMask)}`,
+          );
+        };
+
+        // Scroll bar frames: each visible thumb paints where an independent
+        // geometry calculation puts it for the committed offsets.
+        const barFrame = async (
+          frame: typeof detail,
+          state: ReturnType<typeof telemetryScrollViews>,
+          name: string,
+          withLog: boolean,
+        ) => {
+          const [ox, oy] = state.outer.bounds;
+          const bars = {
+            outer: expectedScrollBar(state.outer, ox, oy),
+            // Nested bounds are laid out at zero ancestor scroll; the outer
+            // offset moves the event log on screen.
+            ...(withLog
+              ? {
+                  inner: expectedScrollBar(
+                    state.inner,
+                    state.inner.bounds[0],
+                    state.inner.bounds[1] - state.outer.scroll.offset[1],
+                  ),
+                }
+              : {}),
+          };
+          const tracks = Object.fromEntries(
+            Object.entries(bars).map(([bar, { track }]) => [
+              bar,
+              [track[0] - 0.01, track[1], track[2] + 0.01, track[3]],
+            ]),
+          ) as Record<string, LogicalRect>;
+          const ink = await g.call<Record<string, LogicalRect>>(
+            "galleryGuiInkBounds",
+            frame.label,
+            tracks,
+          );
+          const masks: Record<string, unknown> = {};
+          for (const [bar, expected] of Object.entries(bars)) {
+            const mask = await compareMask(
+              g,
+              directory,
+              `${name}-${bar}-bar`,
+              frame,
+              [
+                expected.track[0] - 0.03,
+                expected.track[1],
+                expected.track[2] + 0.03,
+                expected.track[3],
+              ],
+              [expected.thumb],
+              (pixel) => Math.max(...pixel) >= 150,
+            );
+            masks[bar] = mask;
+            const [, top, , bottom] = ink[bar]!;
+            assert.ok(
+              Math.abs(top - expected.thumb[1]) < 0.03 &&
+                Math.abs(bottom - expected.thumb[3]) < 0.03,
+              `${name} ${bar} thumb spans ${top}..${bottom}, expected ${expected.thumb[1]}..${expected.thumb[3]}`,
+            );
+            assert.ok(
+              mask.intersectionOverUnion > 0.5,
+              `${name} ${bar} thumb mask: ${JSON.stringify(mask)}`,
+            );
+          }
+          await record(name, { bars, ink, masks });
+        };
+        await barFrame(detail, views, "settings-bars-top", false);
+
+        const cameraBefore = transform(await g.inspect());
+        const wheelAt = async (point: ProjectedPoint, deltaY: number) => {
+          await g.page.mouse.move(point.clientX, point.clientY);
+          await g.page.mouse.wheel(0, deltaY);
+        };
+        const until = (
+          predicate: (
+            views: ReturnType<typeof telemetryScrollViews>,
+          ) => boolean,
+        ) =>
+          waitForGuiState(g, (state) =>
+            predicate(telemetryScrollViews(state)),
+          ).then(telemetryScrollViews);
+        const at = (actual: number, expected: number) =>
+          Math.abs(actual - expected) < 1e-4;
+        const dragThumb = async (
+          bar: ReturnType<typeof expectedScrollBar>,
+          toward: "start" | "end",
+        ) => {
+          const x = (bar.track[0] + bar.track[2]) / 2;
+          const [from, to] = await projectContent(g, [
+            [x, (bar.thumb[1] + bar.thumb[3]) / 2],
+            [x, toward === "end" ? bar.track[3] + 0.3 : bar.track[1] - 0.3],
+          ]);
+          await g.drag(
+            [from!.clientX, from!.clientY],
+            [to!.clientX, to!.clientY],
+          );
+        };
+
+        // A wheel notch over the readouts scrolls the telemetry view.
+        const [readouts] = await projectContent(g, [
+          [
+            views.outer.bounds[0] + views.outer.bounds[2] * 0.4,
+            views.outer.bounds[1] + 0.15,
+          ],
+        ]);
+        await wheelAt(readouts!, 100);
+        const notched = await until(({ outer }) =>
+          at(outer.scroll.offset[1], WHEEL_STEP),
+        );
+        assert.deepEqual(notched.inner.scroll.offset, [0, 0]);
+
+        // Seven more notches bring the wrapped notes fully into view.
+        for (let notch = 0; notch < 7; notch++) await wheelAt(readouts!, 100);
+        const notesShown = await until(({ outer }) =>
+          at(outer.scroll.offset[1], 8 * WHEEL_STEP),
+        );
+        assert.deepEqual(notesShown.inner.scroll.offset, [0, 0]);
+        const notesTop = notes.bounds[1] - notesShown.outer.scroll.offset[1];
+        assert.ok(
+          notesTop >= notesShown.outer.bounds[1] &&
+            notesTop + notes.bounds[3] <=
+              notesShown.outer.bounds[1] + notesShown.outer.bounds[3],
+          "the scrolled notes are clipped by the telemetry view",
+        );
+        await g.page.mouse.move(1, 1);
+        await checkNotes(
+          await capture("settings-notes"),
+          notesShown.outer.scroll.offset[1],
+        );
+
+        // Dragging the telemetry thumb past its track end opens the log.
+        await dragThumb(
+          expectedScrollBar(
+            notesShown.outer,
+            notesShown.outer.bounds[0],
+            notesShown.outer.bounds[1],
+          ),
+          "end",
+        );
+        const opened = await until(({ outer }) =>
+          at(outer.scroll.offset[1], outer.scroll.maxOffset[1]),
+        );
+        assert.deepEqual(opened.inner.scroll.offset, [0, 0]);
+
+        // The log sits inside the telemetry viewport once opened.
+        const [ix, iy, iw, ih] = opened.inner.bounds;
+        const logTop = iy - opened.outer.scroll.offset[1];
+        assert.ok(
+          logTop >= opened.outer.bounds[1] - 1e-4 &&
+            logTop + ih <=
+              opened.outer.bounds[1] + opened.outer.bounds[3] + 1e-4,
+          `opened log ${logTop}..${logTop + ih} is clipped by the telemetry view`,
+        );
+        const [log] = await projectContent(g, [
+          [ix + iw * 0.4, logTop + ih / 2],
+        ]);
+
+        // A notch over the log scrolls the log alone.
+        await wheelAt(log!, 100);
+        const logNotched = await until(({ inner }) =>
+          at(inner.scroll.offset[1], WHEEL_STEP),
+        );
+        assert.deepEqual(
+          logNotched.outer.scroll.offset,
+          opened.outer.scroll.offset,
+          "a wheel over the event log also scrolled the telemetry view",
+        );
+
+        // Dragging the log thumb past its track end scrolls it to its end.
+        const logBar = (state: typeof opened) =>
+          expectedScrollBar(
+            state.inner,
+            state.inner.bounds[0],
+            state.inner.bounds[1] - state.outer.scroll.offset[1],
+          );
+        await dragThumb(logBar(logNotched), "end");
+        const logEnd = await until(({ inner }) =>
+          at(inner.scroll.offset[1], inner.scroll.maxOffset[1]),
+        );
+        assert.deepEqual(
+          logEnd.outer.scroll.offset,
+          opened.outer.scroll.offset,
+        );
+        await g.page.mouse.move(1, 1);
+        const scrolledFrame = await capture("settings-bars-scrolled");
+        await barFrame(scrolledFrame, logEnd, "settings-bars-scrolled", true);
+        assert.ok(
+          (await g.difference(detail.label, scrolledFrame.label))
+            .changedPixels > 200,
+          "nested scrolling did not visibly move the telemetry content",
+        );
+
+        // Back at its start, the log passes unused upward movement outward:
+        // the telemetry view scrolls up a notch while the log holds still.
+        await dragThumb(logBar(logEnd), "start");
+        const logStart = await until(({ inner }) =>
+          at(inner.scroll.offset[1], 0),
+        );
+        assert.deepEqual(
+          logStart.outer.scroll.offset,
+          opened.outer.scroll.offset,
+        );
+        await wheelAt(log!, -100);
+        const passed = await until(({ outer }) =>
+          at(
+            outer.scroll.offset[1],
+            opened.outer.scroll.offset[1] - WHEEL_STEP,
+          ),
+        );
+        assert.deepEqual(passed.inner.scroll.offset, [0, 0]);
+        await record("nested-scrolling", {
+          notched: notched.outer.scroll,
+          opened: opened.outer.scroll,
+          logNotched: logNotched.inner.scroll,
+          logEnd: logEnd.inner.scroll,
+          passed: { outer: passed.outer.scroll, inner: passed.inner.scroll },
+        });
+        await g.page.mouse.move(1, 1);
+        assert.deepEqual(
+          transform(await g.inspect()),
+          cameraBefore,
+          "GUI scrolling was also processed as a camera gesture",
+        );
+      } finally {
+        await g.call("releaseGalleryGuiTransform");
+      }
+
+      // The armed shield is scene picking geometry marked as a blocker: a
+      // press and a wheel notch aimed at PURGE through the glass are
+      // blocked, reach neither the panel nor the camera, and are observable
+      // as blocked input.
+      const purge = async () => {
+        const state = await waitForGuiState(g);
+        const node = semanticNode(state.semantic, "button", "PURGE");
+        const [x, y, width, height] = node.bounds;
+        const [centre] = await projectContent(g, [
+          [x + width / 2, y + height / 2],
+        ]);
+        return { node, centre: centre! };
+      };
+      const armed = await purge();
+      // The click point lies inside the shield's projected front face.
+      const shieldFace = await g.call<readonly ProjectedPoint[]>(
+        "projectGalleryPoints",
+        "gui-input-shield",
+        [
+          [-0.5, 0.5, 0.5],
+          [0.5, 0.5, 0.5],
+          [0.5, -0.5, 0.5],
+          [-0.5, -0.5, 0.5],
+        ],
+      );
+      const insideQuad = (
+        quad: readonly ProjectedPoint[],
+        { clientX, clientY }: ProjectedPoint,
+      ) =>
+        quad.every((corner, index) => {
+          const next = quad[(index + 1) % quad.length]!;
+          return (
+            (next.clientX - corner.clientX) * (clientY - corner.clientY) -
+              (next.clientY - corner.clientY) * (clientX - corner.clientX) >=
+            0
+          );
+        }) ||
+        quad.every((corner, index) => {
+          const next = quad[(index + 1) % quad.length]!;
+          return (
+            (next.clientX - corner.clientX) * (clientY - corner.clientY) -
+              (next.clientY - corner.clientY) * (clientX - corner.clientX) <=
+            0
+          );
+        });
+      assert.ok(
+        insideQuad(shieldFace, armed.centre),
+        "PURGE is not behind the input shield from the authored camera",
+      );
+      assert.equal(await text("#gui-shield"), "armed, 0 blocked");
+      const commandBefore = await text("#gui-command");
+      const cameraAuthored = transform(await g.inspect());
+      const armedFrame = await capture("settings-shield-armed");
+      await g.page.mouse.click(armed.centre.clientX, armed.centre.clientY);
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-shield")?.textContent ===
+          "armed, 1 blocked",
+      );
+      await g.page.mouse.wheel(0, 100);
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-shield")?.textContent ===
+          "armed, 2 blocked",
+      );
+      await g.page.mouse.move(1, 1);
+      await g.settle();
+      assert.equal(await text("#gui-command"), commandBefore);
+      assert.deepEqual(
+        transform(await g.inspect()),
+        cameraAuthored,
+        "blocked input reached the camera",
+      );
+      const blocked = await waitForGuiState(g);
+      const blockedPurge = semanticNode(blocked.semantic, "button", "PURGE");
+      assert.equal(blockedPurge.revision, armed.node.revision);
+      const logTexts = blocked.detailed.nodes.flatMap(({ data }) =>
+        data.kind === "text" ? [data.text] : [],
+      );
+      assert.ok(
+        logTexts.some((entry) => entry.endsWith("SHIELD BLOCKED PRESS")) &&
+          logTexts.some((entry) => entry.endsWith("SHIELD BLOCKED WHEEL")),
+        "the event log did not record the blocked inputs",
+      );
+
+      // Lifting the shield keeps the glass in front of PURGE but stops
+      // marking it: the same click now presses PURGE through the glass.
+      await g.page.locator("#gui-shield-toggle").click();
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-shield")?.textContent ===
+          "lifted, 2 blocked",
+      );
+      await g.page.mouse.move(1, 1);
+      const liftedFrame = await capture("settings-shield-lifted");
+      const lifted = await g.inspect();
+      assert.ok(
+        lifted.entities.some(
+          ({ metadata }) => metadata.symbolicId === "gui-input-shield",
+        ),
+        "lifting the shield removed its glass",
+      );
+      // Only the shield's marks change between the armed and lifted
+      // frames: every changed pixel lies on the projected box, and the
+      // changed frame spans it.
+      const shieldBox = convexHull(
+        await g.call<readonly ProjectedPoint[]>(
+          "projectGalleryPoints",
+          "gui-input-shield",
+          [-0.5, 0.5].flatMap((x) =>
+            [-0.5, 0.5].flatMap((y) => [-0.5, 0.5].map((z) => [x, y, z])),
+          ),
+        ),
+      );
+      const faceBounds = [
+        Math.min(...shieldBox.map(({ x }) => x)),
+        Math.min(...shieldBox.map(({ y }) => y)),
+        Math.max(...shieldBox.map(({ x }) => x)),
+        Math.max(...shieldBox.map(({ y }) => y)),
+      ] as const;
+      const pad = 3 / armedFrame.width;
+      const bounds = [
+        faceBounds[0] - pad,
+        faceBounds[1] - pad,
+        faceBounds[2] + pad,
+        faceBounds[3] + pad,
+      ];
+      const regions = await Promise.all(
+        [armedFrame.label, liftedFrame.label].map((label) =>
+          g.call<{
+            left: number;
+            top: number;
+            width: number;
+            height: number;
+            pixels: string;
+          }>("viewerCaptureRegionPixels", label, bounds),
+        ),
+      );
+      const [before, after] = regions.map(decodeRegion) as [
+        RgbaFrame,
+        RgbaFrame,
+      ];
+      const { left, top } = regions[0]!;
+      const face = shieldBox.map(
+        ({ x, y }) =>
+          ({
+            x,
+            y,
+            clientX: x * armedFrame.width - left,
+            clientY: y * armedFrame.height - top,
+          }) as ProjectedPoint,
+      );
+      const expectedGlass = new Uint8Array(before.pixels.length);
+      const changedGlass = new Uint8Array(before.pixels.length);
+      const changedExtent = [Infinity, Infinity, -Infinity, -Infinity];
+      let facePixels = 0;
+      let changedPixels = 0;
+      let changedOnFace = 0;
+      for (let row = 0; row < before.height; row++) {
+        for (let column = 0; column < before.width; column++) {
+          const index = row * before.width + column;
+          const inside = insideQuad(face, {
+            x: 0,
+            y: 0,
+            clientX: column + 0.5,
+            clientY: row + 0.5,
+          });
+          const changed = pixelDifference(before, after, index) > 24;
+          facePixels += Number(inside);
+          changedPixels += Number(changed);
+          changedOnFace += Number(inside && changed);
+          if (changed && inside) {
+            changedExtent[0] = Math.min(changedExtent[0]!, column);
+            changedExtent[1] = Math.min(changedExtent[1]!, row);
+            changedExtent[2] = Math.max(changedExtent[2]!, column + 1);
+            changedExtent[3] = Math.max(changedExtent[3]!, row + 1);
+          }
+          expectedGlass.set(
+            inside ? [255, 255, 255, 255] : [0, 0, 0, 255],
+            index * 4,
+          );
+          changedGlass.set(
+            changed ? [255, 255, 255, 255] : [0, 0, 0, 255],
+            index * 4,
+          );
+        }
+      }
+      const expectedFrame = { ...before, pixels: expectedGlass };
+      const changedFrame = { ...before, pixels: changedGlass };
+      await Promise.all([
+        writeFile(
+          join(directory, "settings-shield-expected.png"),
+          encodePng(expectedFrame),
+        ),
+        writeFile(
+          join(directory, "settings-shield-armed-crop.png"),
+          encodePng(before),
+        ),
+        writeFile(
+          join(directory, "settings-shield-actual.png"),
+          encodePng(after),
+        ),
+        writeFile(
+          join(directory, "settings-shield-actual-mask.png"),
+          encodePng(changedFrame),
+        ),
+        writeFile(
+          join(directory, "settings-shield-diff.png"),
+          encodePng(differenceImage(expectedFrame, changedFrame, 128)),
+        ),
+      ]);
+      const faceExtent = [
+        Math.min(...face.map(({ clientX }) => clientX)),
+        Math.min(...face.map(({ clientY }) => clientY)),
+        Math.max(...face.map(({ clientX }) => clientX)),
+        Math.max(...face.map(({ clientY }) => clientY)),
+      ];
+      const glass = {
+        facePixels,
+        changedPixels,
+        precision: changedOnFace / Math.max(1, changedPixels),
+        changedExtent,
+        faceExtent,
+      };
+      await record("shield-glass", glass);
+      assert.ok(facePixels > 400, "the shield covers too few pixels");
+      assert.ok(
+        changedPixels > 150,
+        `lifting the shield barely changed its marks: ${JSON.stringify(glass)}`,
+      );
+      assert.ok(
+        glass.precision > 0.95,
+        `lifting the shield changed pixels off its glass: ${JSON.stringify(glass)}`,
+      );
+      changedExtent.forEach((value, side) =>
+        assert.ok(
+          Math.abs(value - faceExtent[side]!) < 2.5,
+          `the changed shield frame does not span its face: ${JSON.stringify(glass)}`,
+        ),
+      );
+
+      await g.page.mouse.click(armed.centre.clientX, armed.centre.clientY);
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-command")?.textContent === "Log purged",
+      );
+      const purged = await waitForGuiState(g, (state) =>
+        state.detailed.nodes.some(
+          ({ data }) =>
+            data.kind === "text" && data.text.endsWith("LOG PURGED"),
+        ),
+      );
+      const purgedViews = telemetryScrollViews(purged);
+      assert.equal(purgedViews.inner.scroll.maxOffset[1], 0);
+      assert.equal(await text("#gui-shield"), "lifted, 2 blocked");
+
+      // Re-arming marks the glass again.
+      await g.page.locator("#gui-shield-toggle").click();
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-shield")?.textContent ===
+          "armed, 2 blocked",
+      );
+      await g.page.mouse.click(armed.centre.clientX, armed.centre.clientY);
+      await g.page.waitForFunction(
+        () =>
+          document.querySelector("#gui-shield")?.textContent ===
+          "armed, 3 blocked",
+      );
+      await g.page.mouse.move(1, 1);
+      await capture("settings-panel-final");
       assert.deepEqual(g.errors, []);
     },
   );

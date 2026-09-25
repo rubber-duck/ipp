@@ -24,10 +24,48 @@ const LEFT_WIDTH = 3.24;
 const RIGHT_WIDTH = 3.4;
 const PULSE_HEIGHT = 0.84;
 const TELEMETRY_VIEW_HEIGHT = 0.78;
+const EVENT_LOG_VIEW_WIDTH = 2.86;
+const EVENT_LOG_VIEW_HEIGHT = 0.56;
 
-/** Metres one wheel notch scrolls the panel: an eighth of the telemetry
- * ScrollView viewport, the panel's only scrollable view. */
+/** Logical units one wheel notch scrolls the panel: an eighth of the outer
+ * telemetry viewport. The nested event log scrolls by the same step. */
 export const GUI_WHEEL_STEP = TELEMETRY_VIEW_HEIGHT / 8;
+
+/** Operator notes. The Text leaf has a fixed width and no height, so layout
+ * wraps it at word boundaries into as many lines as it needs. */
+export const TELEMETRY_NOTES =
+  "GAIN DRIVES THE PROJECTOR LIGHT, CUBE ENERGY AND WAVE AMPLITUDE. " +
+  "HOLD SCAN TO ARM UPLINK. THE AMBER SHIELD GUARDS PURGE FROM STRAY CLICKS.";
+
+/** Bottom command row: CALLSIGN label, callsign editor, UPLINK, the status
+ * readout and PURGE, separated by fixed gaps across the content width. */
+const COMMAND_ROW = {
+  label: 1.12,
+  callsign: 2.12,
+  uplink: 1.0,
+  status: 1.34,
+  purge: 0.84,
+  height: 0.38,
+} as const;
+
+/**
+ * Surface content rectangle `[x, y, width, height]` of the input shield in
+ * front of PURGE: the button's cell with a 0.1 margin, clear of UPLINK and
+ * of the panel's rounded shell. The panel column starts 0.3 from the left
+ * and 0.25 from the top; the command row follows 3.81 of rows and gaps plus
+ * its 0.1 top margin, and PURGE ends the 6.8-wide row.
+ */
+export const SHIELD_CONTENT_RECT = [
+  0.3 + 6.8 - COMMAND_ROW.purge - 0.1,
+  0.25 + 3.81 + 0.1 - 0.1,
+  COMMAND_ROW.purge + 0.2,
+  COMMAND_ROW.height + 0.2,
+] as const;
+
+/** PURGE label inset. Button labels lay out left-aligned from the content
+ * origin, so the left padding is tuned as for SPAN and UPLINK below: PURGE
+ * measures 0.396 wide, leaving (0.84 - 0.396) / 2 per side. */
+const PURGE_LABEL_INSET = 0.222;
 
 const PULSE_ICON_CELL = 0.9;
 const SPAN_NARROW = 1.2;
@@ -672,6 +710,37 @@ function PulseAndSkins({
   );
 }
 
+/**
+ * Themed scroll bars: a dim rounded track and a bright thumb that lights
+ * under hover and press. Disabled track and thumb colours keep both bars
+ * visible while their content fits, as the event log does after PURGE.
+ */
+function scrollBarTheme(palette: Palette): GuiControlTheme {
+  const rounded = [0.015, 0.015] as const;
+  const track = {
+    color: [palette.muted[0], palette.muted[1], palette.muted[2], 0.35],
+    cornerRadius: rounded,
+  } as const;
+  const thumb = (color: Color) => ({ color, cornerRadius: rounded });
+  return {
+    parts: {
+      scrollTrackY: { base: track, disabled: track },
+      scrollThumbY: {
+        base: thumb(palette.secondary),
+        hovered: thumb(palette.hovered),
+        pressed: thumb(palette.primary),
+        disabled: { color: palette.muted, cornerRadius: rounded },
+      },
+    },
+  };
+}
+
+/**
+ * Telemetry readouts, wrapped operator notes and the event log. The event
+ * log is a ScrollView nested inside the outer telemetry ScrollView: a wheel
+ * over the log scrolls the log until it reaches an end, then the runtime
+ * passes the unused movement outward to the telemetry view.
+ */
 function Telemetry({
   scene,
   palette,
@@ -679,6 +748,7 @@ function Telemetry({
   scene: GuiSceneState;
   palette: Palette;
 }) {
+  const bars = useMemo(() => scrollBarTheme(palette), [palette]);
   return (
     <Frame width={RIGHT_WIDTH} height={1.32} palette={palette}>
       <Column width={3.4} height={1.32} padding={[0.04, 0.16, 0.04, 0.16]}>
@@ -691,10 +761,12 @@ function Telemetry({
           color={palette.primary}
         />
         <ScrollView
+          key="telemetry"
           width={3.05}
           height={TELEMETRY_VIEW_HEIGHT}
           margin={[0.1, 0.03, 0, 0]}
           opacity={scene.prepared ? 1 : 0}
+          theme={bars}
         >
           <Column width={2.92} padding={[0, 0, 0.06, 0]}>
             {[
@@ -722,19 +794,36 @@ function Telemetry({
                 />
               </Row>
             ))}
-            <Padding width={2.92} height={0.12} />
-            {scene.events.map((event, index) => (
-              <Text
-                key={event}
-                text={event}
-                width={2.9}
-                minHeight={0.28}
-                margin={[0, 0, 0.05, 0]}
-                asset={scene.font}
-                fontSize={0.16}
-                color={index === 0 ? palette.primary : palette.muted}
-              />
-            ))}
+            <Text
+              key="notes"
+              text={TELEMETRY_NOTES}
+              width={2.86}
+              margin={[0.1, 0, 0.12, 0]}
+              asset={scene.font}
+              fontSize={0.13}
+              color={palette.muted}
+            />
+            <ScrollView
+              key="event-log"
+              width={EVENT_LOG_VIEW_WIDTH}
+              height={EVENT_LOG_VIEW_HEIGHT}
+              theme={bars}
+            >
+              <Column width={2.76}>
+                {scene.events.map((event, index) => (
+                  <Text
+                    key={event}
+                    text={event}
+                    width={2.74}
+                    minHeight={0.28}
+                    margin={[0, 0, 0.05, 0]}
+                    asset={scene.font}
+                    fontSize={0.16}
+                    color={index === 0 ? palette.primary : palette.muted}
+                  />
+                ))}
+              </Column>
+            </ScrollView>
           </Column>
         </ScrollView>
       </Column>
@@ -831,18 +920,22 @@ export function ProjectorDashboard({
           <Padding width={0.16} height={1.32} />
           <Telemetry scene={scene} palette={palette} />
         </Row>
-        <Row width={CONTENT_WIDTH} height={0.38} margin={[0.1, 0, 0, 0]}>
+        <Row
+          width={CONTENT_WIDTH}
+          height={COMMAND_ROW.height}
+          margin={[0.1, 0, 0, 0]}
+        >
           <Label
             scene={scene}
             text="CALLSIGN"
-            width={1.12}
+            width={COMMAND_ROW.label}
             height={0.38}
             size={0.17}
             color={palette.muted}
           />
           <TextInput
             key="callsign"
-            width={2.12}
+            width={COMMAND_ROW.callsign}
             height={0.38}
             padding={[0.075, 0.14, 0.075, 0.14]}
             text="VESPER-7"
@@ -855,7 +948,7 @@ export function ProjectorDashboard({
           <Padding width={0.16} height={0.38} />
           <Button
             key="uplink"
-            width={1.0}
+            width={COMMAND_ROW.uplink}
             height={0.38}
             // As above: UPLINK measures 0.502 wide, leaving
             // (1.0 - 0.502) / 2 per side.
@@ -873,14 +966,29 @@ export function ProjectorDashboard({
             scene={scene}
             text={
               scene.lastCommand === "Awaiting command"
-                ? "ARRAY ONLINE  /  V.07"
+                ? "ONLINE / V.07"
                 : scene.lastCommand.toUpperCase()
             }
-            width={2.28}
+            width={COMMAND_ROW.status}
             height={0.38}
             size={0.15}
             color={palette.muted}
             right
+          />
+          <Padding flex={1} height={0.38} />
+          {/* PURGE clears the event log. The 3D input shield in front of it
+              blocks pointer and wheel input while armed; keyboard traversal
+              and semantic actions still reach it. */}
+          <Button
+            key="purge"
+            width={COMMAND_ROW.purge}
+            height={0.38}
+            padding={[0.085, 0.1, 0.085, PURGE_LABEL_INSET]}
+            label="PURGE"
+            fontSize={0.15}
+            theme={inputTheme}
+            opacity={scene.prepared ? 1 : 0}
+            onPress={scene.purge}
           />
         </Row>
       </Column>

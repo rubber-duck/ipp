@@ -518,4 +518,63 @@ async function exerciseGuiScrolling(
     (await checked(9)) && !(await checked(7)),
     "Same-tick wheel chaining lost movement before the outer ScrollView",
   );
+
+  // A touch drag over plain outer content scrolls it by the dragged
+  // distance: two units down return the outer view to 0, bringing the
+  // inner view (still scrolled by 1) back with its checkbox at y 1..2.
+  const drag = async (
+    pointer: number,
+    from: [number, number],
+    to: [number, number],
+  ) => {
+    const replies = [
+      await client.submitGuiInput({
+        kind: "pointerDown",
+        pointer,
+        position: from,
+        button: "primary",
+      }),
+      await client.submitGuiInput({
+        kind: "pointerMove",
+        pointer,
+        position: [from[0], (from[1] + to[1]) / 2],
+      }),
+      await client.submitGuiInput({
+        kind: "pointerMove",
+        pointer,
+        position: to,
+      }),
+      await client.submitGuiInput({
+        kind: "pointerUp",
+        pointer,
+        position: to,
+        button: "primary",
+      }),
+    ];
+    expect(
+      replies.every((reply) => reply.unhandled === undefined),
+      `A ScrollView drag was reported unhandled: ${JSON.stringify(replies, (_, value) => (typeof value === "bigint" ? `${value}` : value))}`,
+    );
+  };
+  await drag(2, [2, 0.5], [2, 2.5]);
+  await tap(3, [2, 1.5]);
+  expect(
+    (await checked(7)) && (await checked(9)),
+    "A touch drag over ScrollView content did not scroll it",
+  );
+
+  // A drag starting on the inner checkbox wins over its tap: the inner view
+  // is already at its end, so the unit of upward travel passes to the outer
+  // view and the checkbox commits nothing. The outer shift then lifts the
+  // checkbox to y 0..1.
+  await drag(4, [2, 1.5], [2, 0.5]);
+  expect(
+    await checked(7),
+    "A drag starting on a checkbox committed its toggle",
+  );
+  await tap(5, [2, 0.5]);
+  expect(
+    !(await checked(7)),
+    "Drag travel beyond the inner ScrollView did not pass outward",
+  );
 }

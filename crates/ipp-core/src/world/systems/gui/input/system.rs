@@ -36,9 +36,14 @@
 //! against evaluated ScrollView extents with edge clamping and outward
 //! propagation, chaining same-tick scrolls against routed offsets that
 //! include the deltas already queued, while hit testing observes the
-//! retained snapshot translated by committed ancestor offsets. Button and checkbox presses stay provisional until
-//! an eligible tap completes on release; drags leaving the press-time
-//! rectangle hand the gesture to scrolling.
+//! retained snapshot translated by committed ancestor offsets. Button and
+//! checkbox presses stay provisional until an eligible tap completes on
+//! release. A primary press inside eligible ScrollView ancestry also arms a
+//! pointer drag: once its travel passes the drag slop, the nearest
+//! ScrollView with capacity on the dominant axis wins the gesture, the
+//! pending tap cancels and pointer travel scrolls through the same
+//! innermost-first consumption. Outside ScrollViews, drags leaving the
+//! press-time rectangle cancel the tap.
 
 use super::super::system::{commit_control_value, resolve_control_effective};
 use super::super::tree::GuiNodeDataRow;
@@ -71,6 +76,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Stable identity of the per-world GUI input routing pass.
 const MAX_PENDING_ENVELOPES: usize = 1024;
+
+/// Pointer travel, as a fraction of the panel's shorter logical extent,
+/// that a press inside ScrollView content must exceed before dragging wins
+/// over the tap.
+const SCROLL_DRAG_SLOP: f32 = 0.01;
 
 /// Which physical button a pointer event carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -693,6 +703,47 @@ struct HoverCursor {
     position: [f32; 2],
 }
 
+/// One primary press inside eligible ScrollView ancestry. The drag stays
+/// pending until its travel passes the slop; the nearest ScrollView with
+/// capacity on the dominant axis then wins, and later travel scrolls that
+/// ScrollView and its outer chain.
+#[derive(Clone, Debug, PartialEq)]
+struct ScrollDrag {
+    /// Panel entity the press routed to.
+    entity: EntityId,
+    /// Root incarnation fencing the chain.
+    root_incarnation: u64,
+    /// Innermost-first eligible ScrollView ancestry of the pressed point.
+    chain: Vec<GuiNodeId>,
+    /// Final-logical press point.
+    origin: [f32; 2],
+    /// Final-logical point the latest scroll consumed up to.
+    last: [f32; 2],
+    /// Chain index of the winning ScrollView once the drag passed the slop.
+    active: Option<usize>,
+    /// Session that pressed.
+    session: u64,
+}
+
+impl ScrollDrag {
+    /// Whether this drag scrolls one fenced ScrollView target.
+    fn scrolls(&self, target: &GuiInputTarget) -> bool {
+        self.entity == target.entity
+            && self.root_incarnation == target.root_incarnation
+            && self.chain.contains(&target.node)
+    }
+}
+
+/// Outcome of one pointer move for a pointer's scroll drag.
+enum ScrollDragStep {
+    /// The drag owns the gesture; the move is consumed.
+    Scrolling,
+    /// Travel stays within the slop or no ScrollView can take it yet.
+    Pending,
+    /// The panel or its incarnation went away; the drag ends.
+    Lost,
+}
+
 /// Input-owned scroll state with enough provenance to publish invalidation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScrollCursor {
@@ -727,6 +778,8 @@ pub struct GuiInputSystem {
     hovers: BTreeMap<u32, HoverCursor>,
     /// Controls pressed by pointer, for touch arbitration.
     press_owners: BTreeMap<GuiInputTarget, u32>,
+    /// Pending and active scroll drags per pointer.
+    scroll_drags: BTreeMap<u32, ScrollDrag>,
     /// Ordered routed intents awaiting the next mutation boundary.
     envelopes: Vec<PendingEnvelope>,
     /// Predicted control state chaining same-tick envelopes.
@@ -823,6 +876,7 @@ impl SystemFactory for GuiInputSystemFactory {
             captures: BTreeMap::new(),
             hovers: BTreeMap::new(),
             press_owners: BTreeMap::new(),
+            scroll_drags: BTreeMap::new(),
             envelopes: Vec::new(),
             predicted: BTreeMap::new(),
             scroll_offsets: BTreeMap::new(),
@@ -2084,6 +2138,7 @@ impl GuiInputSystem {
         roots.extend(self.hovers.values().map(|cursor| cursor.target.entity));
         roots.extend(self.press_owners.keys().map(|target| target.entity));
         roots.extend(self.captures.values().map(|capture| capture.target.entity));
+        roots.extend(self.scroll_drags.values().map(|drag| drag.entity));
         roots
     }
 
@@ -2840,6 +2895,23 @@ impl GuiInputSystem {
         if !self.check_owner(session, tick, input) {
             return;
         }
+        self.scroll_drags.remove(&pointer);
+        // A primary press inside eligible ScrollView ancestry arms a drag
+        // that may later win the gesture from the tap.
+        let drag = if button == GuiPointerButton::Primary {
+            self.scroll_drag_at(
+                layout,
+                sim,
+                session,
+                panel,
+                position,
+                blockers,
+                panel_distance,
+                projection,
+            )
+        } else {
+            None
+        };
         let routed = match self.route_point(
             layout,
             sim,
@@ -2850,6 +2922,12 @@ impl GuiInputSystem {
             projection,
         ) {
             Ok(routed) => routed,
+            Err(GuiUnhandledReason::NotFocusable) if drag.is_some() => {
+                // Non-control ScrollView content: the drag owns the press.
+                self.set_hover(session, tick, pointer, None, position);
+                self.scroll_drags.extend(drag.map(|drag| (pointer, drag)));
+                return;
+            }
             Err(reason) => {
                 self.unhandled(session, tick, input, reason);
                 self.set_hover(session, tick, pointer, None, position);
@@ -2861,9 +2939,17 @@ impl GuiInputSystem {
         // point.
         let position = routed.point;
         // Disabled controls never activate: no capture, focus or intent.
+        // Inside a ScrollView the press may still drag its content.
         if !Self::target_eligible(layout, sim, &routed.target) {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
             self.set_hover(session, tick, pointer, None, position);
+            match drag {
+                Some(drag) => {
+                    self.scroll_drags.insert(pointer, drag);
+                }
+                None => {
+                    self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
+                }
+            }
             return;
         }
         // Touch arbitration: one press per control across pointers.
@@ -2893,6 +2979,15 @@ impl GuiInputSystem {
         );
         self.press_owners.insert(routed.target, pointer);
         self.set_hover(session, tick, pointer, Some(routed.target), position);
+        // Taps arbitrate against dragging their ScrollView content; slider
+        // and text drags keep their own capture.
+        if matches!(
+            routed.kind,
+            Some(ControlKind::Button) | Some(ControlKind::Checkbox)
+        ) && let Some(drag) = drag.filter(|drag| drag.entity == routed.target.entity)
+        {
+            self.scroll_drags.insert(pointer, drag);
+        }
         // Pressing a control takes keyboard focus so the same tick can chain
         // focus-then-key inputs.
         self.set_focus(session, tick, Some(routed.target));
@@ -2977,6 +3072,22 @@ impl GuiInputSystem {
         panel_distance: Option<f32>,
         projection: Option<ProjectedRay>,
     ) {
+        if button == GuiPointerButton::Primary
+            && let Some(drag) = self.scroll_drags.get(&pointer)
+        {
+            if drag.session != session {
+                self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+                return;
+            }
+            let active = drag.active.is_some();
+            self.scroll_drags.remove(&pointer);
+            // A drag that won the gesture already cancelled its tap, and a
+            // drag over plain content has no tap to complete.
+            if active || !self.captures.contains_key(&pointer) {
+                self.set_hover(session, tick, pointer, None, position);
+                return;
+            }
+        }
         let Some(capture) = self.captures.get(&pointer).copied() else {
             self.unhandled(session, tick, input, GuiUnhandledReason::NoCapture);
             return;
@@ -3137,6 +3248,36 @@ impl GuiInputSystem {
         panel_distance: Option<f32>,
         projection: Option<ProjectedRay>,
     ) {
+        if let Some(mut drag) = self.scroll_drags.remove(&pointer) {
+            if drag.session != session {
+                self.scroll_drags.insert(pointer, drag);
+                self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+                return;
+            }
+            match self.continue_scroll_drag(
+                layout,
+                sim,
+                tick,
+                pointer,
+                &mut drag,
+                position,
+                &projection,
+            ) {
+                ScrollDragStep::Scrolling => {
+                    self.scroll_drags.insert(pointer, drag);
+                    return;
+                }
+                ScrollDragStep::Pending => {
+                    self.scroll_drags.insert(pointer, drag);
+                    // A pressed tap keeps its own capture handling below;
+                    // plain content waits for more travel.
+                    if !self.captures.contains_key(&pointer) {
+                        return;
+                    }
+                }
+                ScrollDragStep::Lost => {}
+            }
+        }
         if let Some(capture) = self.captures.get(&pointer).copied() {
             // Drags follow only their pressing session; hover-only moves
             // below never acquire the context.
@@ -3157,11 +3298,12 @@ impl GuiInputSystem {
                 return;
             };
             if kind == ControlKind::Button || kind == ControlKind::Checkbox {
-                // Tap-versus-scroll arbitration: a button/checkbox drag that
-                // leaves the press-time rectangle hands the gesture to
-                // scrolling. The tap dies here with a cancellation so a later
-                // release, cancel or scroll-start commits nothing; slider and
-                // text drags below keep their capture.
+                // Tap-versus-drag arbitration outside ScrollView content (a
+                // scroll drag above wins first inside it): a button/checkbox
+                // drag that leaves the press-time rectangle dies here with a
+                // cancellation so a later release, cancel or scroll-start
+                // commits nothing; slider and text drags below keep their
+                // capture.
                 let inside = layout
                     .view(capture.target.entity)
                     .and_then(|view| {
@@ -3650,6 +3792,145 @@ impl GuiInputSystem {
             remainder = [remainder[0] - consumed[0], remainder[1] - consumed[1]];
         }
         consumed_any
+    }
+
+    /// Arm a scroll drag for a primary press: resolve the scroll-aware hit
+    /// under the press and keep its innermost-first eligible ScrollView
+    /// ancestry. None outside ScrollView content.
+    #[allow(clippy::too_many_arguments)]
+    fn scroll_drag_at(
+        &self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        session: u64,
+        panel: Option<EntityId>,
+        position: [f32; 2],
+        blockers: &[super::super::GuiBlockerHit],
+        panel_distance: Option<f32>,
+        projection: Option<ProjectedRay>,
+    ) -> Option<ScrollDrag> {
+        let resolved = match projection {
+            Some(ray) => self.scroll_hit_projected(layout, sim, panel, blockers, ray),
+            None => self.scroll_hit_logical(layout, sim, panel, position, blockers, panel_distance),
+        };
+        let (entity, root_incarnation, hit, _, point) = resolved.ok()?;
+        let view = layout.view(entity)?;
+        let (_, root) = producer_root(sim, entity)?;
+        let chain: Vec<GuiNodeId> = Self::scroll_chain(&root, hit)
+            .into_iter()
+            .filter(|&node| {
+                Self::target_eligible(
+                    layout,
+                    sim,
+                    &GuiInputTarget {
+                        entity,
+                        root_incarnation,
+                        node,
+                    },
+                ) && view.nodes.iter().any(|record| record.node == node)
+            })
+            .collect();
+        if chain.is_empty() {
+            return None;
+        }
+
+        Some(ScrollDrag {
+            entity,
+            root_incarnation,
+            chain,
+            origin: point,
+            last: point,
+            active: None,
+            session,
+        })
+    }
+
+    /// Advance one pointer's scroll drag. A pending drag wins once its
+    /// travel passes the slop and a ScrollView in its chain has capacity on
+    /// the dominant axis: the pointer's pending tap cancels and the whole
+    /// travel since the press scrolls. An active drag scrolls by each
+    /// move's travel, innermost-first from the winning ScrollView outward.
+    #[allow(clippy::too_many_arguments)]
+    fn continue_scroll_drag(
+        &mut self,
+        layout: &GuiLayoutSystem,
+        sim: &WorldSimulationState,
+        tick: u64,
+        pointer: u32,
+        drag: &mut ScrollDrag,
+        position: [f32; 2],
+        projection: &Option<ProjectedRay>,
+    ) -> ScrollDragStep {
+        let Some(view) = layout
+            .view(drag.entity)
+            .filter(|view| view.root_incarnation == drag.root_incarnation)
+        else {
+            return ScrollDragStep::Lost;
+        };
+        let point = match projection {
+            Some(ray) => match Self::project_panel_point(layout, sim, drag.entity, ray, false) {
+                Some((_, point)) => point,
+                None => return ScrollDragStep::Pending,
+            },
+            None => position,
+        };
+        if !point.iter().all(|lane| lane.is_finite()) {
+            return ScrollDragStep::Pending;
+        }
+
+        let winner = match drag.active {
+            Some(winner) => winner,
+            None => {
+                let travel = [point[0] - drag.origin[0], point[1] - drag.origin[1]];
+                let slop =
+                    SCROLL_DRAG_SLOP * view.root_bounds[2].abs().min(view.root_bounds[3].abs());
+                if travel[0].hypot(travel[1]) <= slop {
+                    return ScrollDragStep::Pending;
+                }
+                let axis = usize::from(travel[1].abs() >= travel[0].abs());
+                let Some(winner) = drag
+                    .chain
+                    .iter()
+                    .position(|&node| Self::scroll_max(view, node)[axis] > 0.0)
+                else {
+                    return ScrollDragStep::Pending;
+                };
+                // The drag wins: the pointer's pending tap dies with one
+                // cancellation, so its release commits nothing.
+                if let Some(capture) = self.captures.get(&pointer).copied() {
+                    self.pending_cancellations.push(GuiInputCancellation {
+                        session: drag.session,
+                        source_tick: tick,
+                        effect_tick: tick,
+                        target: Some(capture.target),
+                        reason: GuiInputCancelReason::GestureCancelled,
+                    });
+                }
+                self.set_hover(drag.session, tick, pointer, None, point);
+                self.drop_capture(pointer);
+                drag.active = Some(winner);
+                winner
+            }
+        };
+
+        // Content follows the pointer: travel down scrolls toward the start.
+        // Offsets are ScrollView-local, so travel divides by its scale.
+        let scale = view
+            .nodes
+            .iter()
+            .find(|record| record.node == drag.chain[winner])
+            .map_or([1.0, 1.0], |record| record.acc_scale);
+        let travel = [drag.last[0] - point[0], drag.last[1] - point[1]];
+        let delta = [
+            travel[0] / scale[0].abs().max(f32::MIN_POSITIVE),
+            travel[1] / scale[1].abs().max(f32::MIN_POSITIVE),
+        ];
+        drag.last = point;
+        let chain = drag.chain[winner..].to_vec();
+        if self.consume_scroll(view, drag.entity, &chain, delta, drag.session, tick) {
+            self.cancel_held_taps_for_scroll(sim, drag.session, tick, drag.entity);
+        }
+        ScrollDragStep::Scrolling
     }
 
     /// Disarm held button/checkbox taps on one panel after a scroll moved
@@ -4582,6 +4863,13 @@ impl GuiInputSystem {
         targets.extend(self.captures.values().map(|capture| capture.target));
         targets.extend(self.hovers.values().map(|cursor| cursor.target));
         targets.extend(self.press_owners.keys().copied());
+        targets.extend(self.scroll_drags.values().flat_map(|drag| {
+            drag.chain.iter().map(|&node| GuiInputTarget {
+                entity: drag.entity,
+                root_incarnation: drag.root_incarnation,
+                node,
+            })
+        }));
         targets.extend(self.envelopes.iter().filter_map(|envelope| envelope.target));
         targets.extend(self.predicted.keys().copied());
         targets.extend(self.scroll_offsets.keys().copied());
@@ -4809,6 +5097,7 @@ impl GuiInputSystem {
             }
         }
         self.press_owners.remove(&target);
+        self.scroll_drags.retain(|_, drag| !drag.scrolls(&target));
 
         let dropped_caret = self.text_carets.remove(&target).is_some();
         let dropped_composition = self
@@ -5632,6 +5921,7 @@ impl System for GuiInputSystem {
             self.drop_capture(pointer);
         }
         self.hovers.retain(|_, cursor| cursor.session != session);
+        self.scroll_drags.retain(|_, drag| drag.session != session);
         // Ownership derives from captures; rebuild it after the purge.
         self.press_owners.clear();
         for (pointer, capture) in &self.captures {
@@ -5939,6 +6229,13 @@ impl GuiInputSystem {
     /// with an identical pointer ID reports `NotOwner` without touching
     /// the owner's gesture.
     fn route_cancel(&mut self, session: u64, tick: u64, input: &GuiInputCommand, pointer: u32) {
+        if self
+            .scroll_drags
+            .get(&pointer)
+            .is_some_and(|drag| drag.session == session)
+        {
+            self.scroll_drags.remove(&pointer);
+        }
         let Some(capture) = self.captures.get(&pointer).copied() else {
             return;
         };
@@ -6250,6 +6547,9 @@ impl crate::WorldContext<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "drag_scrolling_tests.rs"]
+mod drag_scrolling_tests;
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;

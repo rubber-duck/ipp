@@ -127,7 +127,9 @@ export interface GuiActionEvent {
   readonly propagationStopped: boolean;
 }
 
-/** Shared layout/presentation lanes. Omitted lanes keep their previous value. */
+/** Shared layout/presentation lanes. Omitted lanes keep their previous value.
+ * Lengths are logical units; the root's units-per-metre density maps them to
+ * Surface metres, so a density change scales the whole root. */
 export interface GuiStyleProps {
   readonly width?: number | undefined;
   readonly height?: number | undefined;
@@ -135,9 +137,9 @@ export interface GuiStyleProps {
   readonly minHeight?: number | undefined;
   readonly maxWidth?: number | undefined;
   readonly maxHeight?: number | undefined;
-  /** Content padding [top, right, bottom, left] in local metres. */
+  /** Content padding [top, right, bottom, left] in logical units. */
   readonly padding?: readonly [number, number, number, number] | undefined;
-  /** Outer margin [top, right, bottom, left] in local metres, interpreted by
+  /** Outer margin [top, right, bottom, left] in logical units, interpreted by
    * the parent container. Row and Column reserve main-axis margins; on the
    * cross axis only the leading margin offsets the child, without adding
    * to the container's size. Stack reserves all four edges, aligns the
@@ -164,7 +166,7 @@ export interface GuiStyleProps {
     | readonly [number, number, number, number]
     | undefined;
   readonly opacity?: number | undefined;
-  /** Font size in local metres per em. */
+  /** Font size in logical units per em. */
   readonly fontSize?: number | undefined;
   /** Bound asset reference (font, drawing or image). Binds inline through
    * the reconciler: the same source shared by two views creates no
@@ -208,7 +210,7 @@ export interface GuiTextProps extends GuiNodeProps {
 export interface GuiDrawingProps extends GuiNodeProps {}
 
 export interface GuiImageProps extends GuiNodeProps {
-  /** Display size in local metres; both dimensions must be finite and positive. */
+  /** Display size in logical units; both dimensions must be finite and positive. */
   readonly size?: readonly [number, number] | undefined;
 }
 

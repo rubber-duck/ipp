@@ -5,6 +5,7 @@ import {
   count,
   intersectionOverUnion,
   mask,
+  maskBounds,
   pixelDifference,
   type RgbaFrame,
 } from "./retained-gui-images.js";
@@ -76,6 +77,10 @@ export const RETAINED_COUNTERS = [
   "totalGlyphPopulates",
   "totalGlyphPopulationFailures",
   "totalGlyphPageRetirements",
+  "guiLayoutReflows",
+  "guiTextMeasurements",
+  "totalGuiLayoutReflows",
+  "totalGuiTextMeasurements",
 ] as const;
 
 /**
@@ -91,7 +96,7 @@ const ATLAS_LIMITS = { maxPages: 3, idlePagePublications: 0xffff_ffff };
 const isText = (r: number, g: number, b: number) =>
   g > 160 && r > 120 && b > 120;
 
-/** Scenario-owned GUI shape geometry in Surface metres. */
+/** Scenario-owned GUI shape geometry in logical units (metres at density 1). */
 const GUI_SHAPE = {
   width: 1.6,
   height: 1.2,
@@ -609,41 +614,53 @@ async function exerciseRetainedControls(
   ) => Promise<{ frame: WorkloadFrame; attempts: number }>,
 ) {
   const { call } = driver;
-  const panel = async (variant: string, label: string, angle = 0) => {
-    const { pixelsPerMetre } = await call<{ pixelsPerMetre: number }>(
-      "guiPanel",
-      [{ variant, shape: GUI_SHAPE, angle }],
-    );
+  const panel = async (
+    variant: string,
+    label: string,
+    angle = 0,
+    text?: { text?: string; color?: readonly number[] },
+  ) => {
+    const { pixelsPerMetre, guiEdits } = await call<{
+      pixelsPerMetre: number;
+      guiEdits: { requests: number; edits: number };
+    }>("guiPanel", [
+      { variant, shape: GUI_SHAPE, angle, ...(text ? { label: text } : {}) },
+    ]);
     const { frame } = await settle(label);
     assert.ok(
       Number(frame.statistics!.gui!.guiBatches) > 0,
       `${label}: retained GUI batches`,
     );
-    return { frame, pixelsPerMetre, pixels: driver.pixels(label) };
+    return { frame, pixelsPerMetre, guiEdits, pixels: driver.pixels(label) };
   };
 
   // Mixed content: gradient shape with glow, atlas glyphs and a curve drawing.
   const mixed = await panel("mixed", "gui-mixed");
-  const classify = (select: (r: number, g: number, b: number) => boolean) =>
-    count(mask(mixed.pixels, select));
-  const content = {
-    gradient: classify((r, _g, b) => r > 200 && b < 90),
-    glyphs: classify((r, g, b) => g > 200 && g - r > 60 && g - b > 40),
+  const classes = {
+    gradient: (r: number, _g: number, b: number) => r > 200 && b < 90,
+    glyphs: (r: number, g: number, b: number) =>
+      g > 200 && g - r > 60 && g - b > 40,
     // The icon's #2468a0 evenodd frame.
-    curve: classify((r, g, b) => b > 120 && b - r > 80 && g < 140),
+    curve: (r: number, g: number, b: number) =>
+      b > 120 && b - r > 80 && g < 140,
   };
-  for (const [name, pixels] of Object.entries(content))
+  const content: Record<string, number> = {};
+  for (const [name, select] of Object.entries(classes)) {
+    const pixels = count(mask(mixed.pixels, select));
+    content[name] = pixels;
     assert.ok(
       pixels > 200,
       `mixed GUI content lacks ${name}: ${pixels} pixels`,
     );
-  // Density is a per-root unit scale: a write reflows the root into twice
-  // the logical extent, while the metre-denominated panel completes a frame
-  // with the same paint.
+  }
+  // Density maps logical units to Surface metres: authored lengths stay
+  // logical, so a write keeps the root's logical bounds and paints the whole
+  // panel (shape, border, radii, glow, glyphs and curve) at half size about
+  // the Surface's top-left corner.
   const denseBounds = await call<number[]>("guiPanelDensity", [2]);
   assert.deepEqual(
     denseBounds.map((value) => Math.round(value * 1000) / 1000),
-    [0, 0, 7.6, 4.8],
+    [0, 0, 3.8, 2.4],
     `density 2 root bounds: ${JSON.stringify(denseBounds)}`,
   );
   const { frame: denseFrame } = await settle("gui-mixed-density");
@@ -651,21 +668,57 @@ async function exerciseRetainedControls(
     Number(denseFrame.statistics!.gui!.guiBatches) > 0,
     "gui-mixed-density: retained GUI batches",
   );
-  const density = compareFrames(
-    mixed.pixels,
-    driver.pixels("gui-mixed-density"),
-    12,
-  );
-  assert.ok(
-    density.changedPixels <= 20,
-    `a density change must keep metre-denominated paint: ${JSON.stringify(density)}`,
-  );
+  const dense = driver.pixels("gui-mixed-density");
+  // The 3.8 x 2.4 m Surface is centred in the orthographic view.
+  const origin = [
+    mixed.frame.width / 2 - 1.9 * mixed.pixelsPerMetre,
+    mixed.frame.height / 2 - 1.2 * mixed.pixelsPerMetre,
+  ] as const;
+  const density: Record<string, unknown> = {};
+  for (const [name, select] of Object.entries(classes)) {
+    const full = mask(mixed.pixels, select);
+    const half = mask(dense, select);
+    const ratio = count(half) / count(full);
+    assert.ok(
+      ratio > 0.15 && ratio < 0.35,
+      `density 2 must quarter the ${name} area: ${count(half)} of ${count(full)} pixels`,
+    );
+    const before = maskBounds(full, mixed.frame.width)!;
+    const after = maskBounds(half, dense.width);
+    assert.ok(after, `density 2 lost the ${name} content`);
+    density[name] = { ratio, before, after };
+    after.forEach((lane, index) => {
+      const expected =
+        origin[index % 2]! + (before[index]! - origin[index % 2]!) / 2;
+      assert.ok(
+        Math.abs(lane - expected) <= 3,
+        `density 2 ${name} bounds ${JSON.stringify(after)} must halve ${JSON.stringify(before)} about ${JSON.stringify(origin)}`,
+      );
+    });
+  }
   assert.deepEqual(
     (await call<number[]>("guiPanelDensity", [1])).map(
       (value) => Math.round(value * 1000) / 1000,
     ),
     [0, 0, 3.8, 2.4],
   );
+  const { frame: restoredFrame } = await settle("gui-mixed-density-restored");
+  assert.ok(
+    Number(restoredFrame.statistics!.gui!.guiBatches) > 0,
+    "gui-mixed-density-restored: retained GUI batches",
+  );
+  const restored = compareFrames(
+    mixed.pixels,
+    driver.pixels("gui-mixed-density-restored"),
+    12,
+  );
+  assert.ok(
+    restored.changedPixels <= 20,
+    `restoring density 1 must restore the original paint: ${JSON.stringify(restored)}`,
+  );
+  density.restored = restored;
+
+  const work = await exerciseLayoutWork(driver, panel, restoredFrame, classes);
   const withoutGlow = await panel(
     "mixed-without-glow",
     "gui-mixed-without-glow",
@@ -766,7 +819,89 @@ async function exerciseRetainedControls(
     sparse.frame.triangles > filled.frame.triangles,
     `a sparse outline draws edge strips instead of an interior quad: ${JSON.stringify(sparseFilled.triangles)}`,
   );
-  return { content, glow, density, mirror, sparseFilled };
+  return { content, glow, density, work, mirror, sparseFilled };
+}
+
+/**
+ * GUI work counters over the real worker transport: an unchanged frame does
+ * no layout work, a paint-only edit commits one node edit and measures no
+ * text, and a local text edit commits one node edit that remeasures only
+ * that leaf. Layout totals follow the rendered World, so differences between
+ * two captures of the panel's World measure the work between them.
+ */
+async function exerciseLayoutWork(
+  driver: RetainedGuiDriver,
+  panel: (
+    variant: string,
+    label: string,
+    angle?: number,
+    text?: { text?: string; color?: readonly number[] },
+  ) => Promise<{
+    frame: WorkloadFrame;
+    guiEdits: { requests: number; edits: number };
+    pixels: RgbaFrame;
+  }>,
+  settled: WorkloadFrame,
+  classes: Record<string, (r: number, g: number, b: number) => boolean>,
+) {
+  const value = (frame: WorkloadFrame, key: string) =>
+    Number(counters(frame)[key]);
+  const since = (after: WorkloadFrame, before: WorkloadFrame) => ({
+    reflows:
+      value(after, "totalGuiLayoutReflows") -
+      value(before, "totalGuiLayoutReflows"),
+    measurements:
+      value(after, "totalGuiTextMeasurements") -
+      value(before, "totalGuiTextMeasurements"),
+  });
+
+  const unchanged = await driver.capture("gui-work-unchanged", true);
+  const idle = {
+    since: since(unchanged, settled),
+    latest: [
+      value(unchanged, "guiLayoutReflows"),
+      value(unchanged, "guiTextMeasurements"),
+    ],
+  };
+  assert.deepEqual(
+    idle,
+    { since: { reflows: 0, measurements: 0 }, latest: [0, 0] },
+    `an unchanged frame must do no layout work: ${JSON.stringify(idle)}`,
+  );
+
+  const painted = await panel("mixed", "gui-work-paint", 0, {
+    color: [1, 0.1, 0.9, 1],
+  });
+  const paint = {
+    edits: painted.guiEdits,
+    since: since(painted.frame, unchanged),
+    greenGlyphs: count(mask(painted.pixels, classes.glyphs!)),
+  };
+  assert.ok(
+    paint.edits.requests === 1 &&
+      paint.edits.edits === 1 &&
+      paint.since.measurements === 0 &&
+      paint.since.reflows === 0 &&
+      paint.greenGlyphs === 0,
+    `a paint-only edit must commit one node edit without layout or text work: ${JSON.stringify(paint)}`,
+  );
+
+  const edited = await panel("mixed", "gui-work-text", 0, {
+    text: "GUI",
+    color: [1, 0.1, 0.9, 1],
+  });
+  const text = {
+    edits: edited.guiEdits,
+    since: since(edited.frame, painted.frame),
+  };
+  assert.ok(
+    text.edits.requests === 1 &&
+      text.edits.edits === 1 &&
+      text.since.reflows >= 1 &&
+      text.since.measurements === 1,
+    `a local text edit must commit one node edit that remeasures one leaf: ${JSON.stringify(text)}`,
+  );
+  return { idle, paint, text };
 }
 
 /**

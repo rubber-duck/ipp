@@ -146,10 +146,49 @@ fn box_paint(
         .surface_primitives()
 }
 
-/// Authored lanes are metres, so density rescales the logical layout (root
-/// and node rectangles, hit positions) while paint and hit regions stay
-/// together on the same Surface content: the 1 m box spans `U` logical
-/// units, still covers content `[0, 1]` and paints exactly as `paint`.
+/// Density-1 box paint mapped to a density `units`: positions and every box
+/// length divide by the density once, because authored lengths are logical
+/// units. The root clip is the Surface rectangle at every density.
+fn paint_at_density(
+    paint: &[crate::systems::surface::SurfaceRenderPrimitive],
+    units: f32,
+) -> Vec<crate::systems::surface::SurfaceRenderPrimitive> {
+    use crate::systems::surface::SurfaceRenderPrimitive;
+
+    paint
+        .iter()
+        .map(|primitive| {
+            let SurfaceRenderPrimitive::Box {
+                style,
+                size,
+                corner_radius,
+                border_width,
+                border_color,
+                fill,
+                glow,
+            } = primitive
+            else {
+                panic!("box panel paints boxes only: {primitive:?}");
+            };
+            let mut style = *style;
+            style.position = style.position.map(|lane| lane / units);
+            SurfaceRenderPrimitive::Box {
+                style,
+                size: size.map(|lane| lane / units),
+                corner_radius: corner_radius.map(|lane| lane / units),
+                border_width: border_width / units,
+                border_color: *border_color,
+                fill: *fill,
+                glow: *glow,
+            }
+        })
+        .collect()
+}
+
+/// Authored lanes are logical units, so density rescales the root extent
+/// while the 1x1 box keeps its logical rectangle: paint and hit regions
+/// shrink together on the Surface, covering content `[0, 1/U]`, and paint
+/// equals the density-1 `paint` divided by `U`.
 fn assert_box_at_density(
     host: &mut HostRuntime,
     world: WorldId,
@@ -169,16 +208,17 @@ fn assert_box_at_density(
         .iter()
         .find(|node| node.node == GuiNodeId(2))
         .unwrap();
-    assert_eq!(node.rect, [0.0, 0.0, units, units]);
+    assert_eq!(node.rect, [0.0, 0.0, 1.0, 1.0]);
 
-    let hit = view.hit_test_content([0.75, 0.75]).unwrap();
+    let hit = view.hit_test_content([0.75 / units, 0.75 / units]).unwrap();
     assert_eq!(hit.node, GuiNodeId(2));
-    assert_eq!(hit.position, [0.75 * units, 0.75 * units]);
+    assert_eq!(hit.position, [0.75, 0.75]);
     assert_ne!(
-        view.hit_test_content([1.25, 0.25]).map(|hit| hit.node),
+        view.hit_test_content([1.25 / units, 0.25 / units])
+            .map(|hit| hit.node),
         Some(GuiNodeId(2))
     );
-    assert_eq!(view.surface_primitives(), paint);
+    assert_eq!(view.surface_primitives(), paint_at_density(paint, units));
 }
 
 #[test]
@@ -670,6 +710,110 @@ fn pending_font_recovers_without_authored_edits() {
             .unwrap()
             .available
     );
+}
+
+/// Diagnostics counters of the scheduled pass: an unchanged frame does no
+/// layout work, a paint-only edit neither reflows nor measures text, and a
+/// text edit reflows once and measures only its own leaf.
+#[test]
+fn layout_statistics_count_reflows_and_text_measurements() {
+    use crate::systems::gui::{GuiNodeHandle, GuiNodePatch};
+
+    let (mut host, world, panel) = setup();
+    register_font(&mut host, world);
+    let incarnation = host
+        .world_mut(world)
+        .unwrap()
+        .inspect_gui(panel, None, 1, 1)
+        .unwrap()
+        .root_incarnation;
+    let text = |id: u32, label: &str| GuiCommand::InsertNode {
+        entity: panel,
+        root_incarnation: incarnation,
+        id: GuiNodeId(id),
+        parent: Some(GuiNodeId(1)),
+        index: id - 2,
+        data: GuiNodeData::Text(label.into()),
+        values: crate::GuiNodeDataRow::default(),
+        style: GuiNodeStyle {
+            asset: Some(font_source()),
+            font_size: 0.1,
+            ..Default::default()
+        },
+    };
+    let statistics = |host: &mut HostRuntime| {
+        host.world_mut(world)
+            .unwrap()
+            .system::<GuiLayoutSystem>(GuiLayoutSystem::ID)
+            .unwrap()
+            .statistics()
+    };
+    let step = |host: &mut HostRuntime, commands: Vec<GuiCommand>| {
+        let mut context = host.world_mut(world).unwrap();
+        for command in commands {
+            context.enqueue_gui_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    };
+    step(
+        &mut host,
+        vec![
+            GuiCommand::InsertNode {
+                entity: panel,
+                root_incarnation: incarnation,
+                id: GuiNodeId(1),
+                parent: None,
+                index: 0,
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
+                style: GuiNodeStyle::default(),
+            },
+            text(2, "A"),
+            text(3, "V"),
+        ],
+    );
+    let mounted = statistics(&mut host);
+    assert!(mounted.total.reflows >= 1);
+    assert_eq!(mounted.total.text_measurements, 2);
+
+    step(&mut host, Vec::new());
+    let unchanged = statistics(&mut host);
+    assert_eq!(unchanged.latest, Default::default());
+    assert_eq!(unchanged.total, mounted.total);
+
+    let update = |id: u32, patch: GuiNodePatch| GuiCommand::UpdateNode {
+        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(id)),
+        patch,
+    };
+    step(
+        &mut host,
+        vec![update(
+            2,
+            GuiNodePatch {
+                color: Some([1.0, 0.0, 0.0, 1.0]),
+                ..Default::default()
+            },
+        )],
+    );
+    let painted = statistics(&mut host);
+    assert_eq!(painted.latest, Default::default());
+    assert_eq!(painted.total, mounted.total);
+
+    step(
+        &mut host,
+        vec![update(
+            3,
+            GuiNodePatch {
+                data: Some(GuiNodeData::Text("AV".into())),
+                ..Default::default()
+            },
+        )],
+    );
+    let edited = statistics(&mut host);
+    assert_eq!(edited.latest.reflows, 1);
+    assert_eq!(edited.latest.text_measurements, 1);
+    assert_eq!(edited.total.reflows, mounted.total.reflows + 1);
+    assert_eq!(edited.total.text_measurements, 3);
 }
 
 struct EmptyResolver;

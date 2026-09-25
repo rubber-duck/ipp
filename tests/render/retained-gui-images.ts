@@ -126,6 +126,27 @@ export function count(values: Uint8Array): number {
   return total;
 }
 
+/** Inclusive pixel bounds `[left, top, right, bottom]` of a mask, or null when empty. */
+export function maskBounds(
+  values: Uint8Array,
+  width: number,
+): [number, number, number, number] | null {
+  let bounds: [number, number, number, number] | null = null;
+  for (let index = 0; index < values.length; index++) {
+    if (!values[index]) continue;
+    const [x, y] = [index % width, Math.floor(index / width)];
+    bounds = bounds
+      ? [
+          Math.min(bounds[0], x),
+          Math.min(bounds[1], y),
+          Math.max(bounds[2], x),
+          Math.max(bounds[3], y),
+        ]
+      : [x, y, x, y];
+  }
+  return bounds;
+}
+
 /** Intersection over union of two masks; empty masks agree completely. */
 export function intersectionOverUnion(a: Uint8Array, b: Uint8Array): number {
   let intersection = 0;

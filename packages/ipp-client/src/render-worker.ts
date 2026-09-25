@@ -103,9 +103,13 @@ const RECORD = {
   totalSurfaceCacheDirect: 33,
   totalSurfaceCacheFallbacks: 34,
   totalSurfaceCacheAllocations: 35,
+  guiLayoutReflows: 36,
+  guiTextMeasurements: 37,
+  totalGuiLayoutReflows: 38,
+  totalGuiTextMeasurements: 39,
 } as const;
 
-const RECORD_WORDS = 36;
+const RECORD_WORDS = 40;
 
 /** Capability groups compiled into the runtime, as bits of `RECORD.flags`. */
 const RECORD_SHADOWS = 1;
@@ -500,6 +504,10 @@ export class RenderWorkerService {
               "totalGlyphPopulates",
               "totalGlyphPopulationFailures",
               "totalGlyphPageRetirements",
+              "guiLayoutReflows",
+              "guiTextMeasurements",
+              "totalGuiLayoutReflows",
+              "totalGuiTextMeasurements",
             ]),
           }
         : {}),

@@ -38,7 +38,7 @@ pub const MAX_SKIN_NODES: usize = 65_536;
 /// Evaluation depth mirrored from [`MAX_LAYOUT_DEPTH`].
 pub const MAX_SKIN_DEPTH: usize = MAX_LAYOUT_DEPTH;
 
-/// Focus-ring border width in Surface metres.
+/// Default focus-ring border width in logical units.
 pub const FOCUS_BORDER_WIDTH: f32 = 0.005;
 
 /// Default focus-ring border colour.
@@ -282,9 +282,9 @@ pub struct GuiPartStyle {
     pub align_x: Option<f32>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
-    /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
+    /// Optional per-axis corner radii `[rx, ry]` in logical units.
     pub corner_radius: Option<[f32; 2]>,
-    /// Optional border width in local Surface metres.
+    /// Optional border width in logical units.
     pub border_width: Option<f32>,
     /// Optional straight linear RGBA border color.
     pub border_color: Option<[f32; 4]>,
@@ -294,21 +294,22 @@ pub struct GuiPartStyle {
     /// independently through the candidate chain, so a state that paints its
     /// own colour over an inherited gradient declares mode 0 explicitly.
     pub fill_mode: Option<f32>,
-    /// Optional gradient start point (or radial center) in local shape metres.
+    /// Optional gradient start point (or radial center) in local shape
+    /// logical units.
     pub gradient_start: Option<[f32; 2]>,
-    /// Optional gradient end point in local shape metres.
+    /// Optional gradient end point in local shape logical units.
     pub gradient_end: Option<[f32; 2]>,
     /// Optional gradient stop 0 straight linear RGBA color.
     pub gradient_color0: Option<[f32; 4]>,
     /// Optional gradient stop 1 straight linear RGBA color.
     pub gradient_color1: Option<[f32; 4]>,
-    /// Optional radial gradient radius in local shape metres.
+    /// Optional radial gradient radius in local shape logical units.
     pub gradient_radius: Option<f32>,
     /// Optional straight linear RGBA glow color.
     pub glow_color: Option<[f32; 4]>,
     /// Optional glow intensity multiplier (>= 0.0).
     pub glow_intensity: Option<f32>,
-    /// Optional outward glow radius in local Surface metres (>= 0.0).
+    /// Optional outward glow radius in logical units (>= 0.0).
     pub glow_radius: Option<f32>,
     /// Optional glow falloff exponent (>= 0.0).
     pub glow_falloff: Option<f32>,
@@ -494,9 +495,9 @@ pub struct GuiSkinnedAppearance {
     pub align_x: Option<f32>,
     /// Optional drawing or bitmap source.
     pub asset: Option<AssetSource>,
-    /// Optional per-axis corner radii `[rx, ry]` in local Surface metres.
+    /// Optional per-axis corner radii `[rx, ry]` in logical units.
     pub corner_radius: Option<[f32; 2]>,
-    /// Optional border width in local Surface metres.
+    /// Optional border width in logical units.
     pub border_width: Option<f32>,
     /// Optional straight linear RGBA border color.
     pub border_color: Option<[f32; 4]>,
@@ -743,16 +744,75 @@ pub(crate) fn appearance_with_effective_numeric(
     appearance
 }
 
-/// Apply numeric skin properties while preserving primitive identity and geometry.
+impl GuiSkinnedAppearance {
+    /// The same appearance with its material lengths (corner radii, border
+    /// width, gradient geometry and glow radius) mapped from logical units
+    /// to Surface metres by the root's `units` per metre, once, at paint.
+    pub fn in_surface_metres(&self, units: f32) -> Self {
+        let metres = |value: f32| value / units;
+        let fill = self.fill.map(|fill| match fill {
+            GuiShapeFill::Solid(color) => GuiShapeFill::Solid(color),
+            GuiShapeFill::LinearGradient {
+                start,
+                end,
+                start_color,
+                end_color,
+            } => GuiShapeFill::LinearGradient {
+                start: start.map(metres),
+                end: end.map(metres),
+                start_color,
+                end_color,
+            },
+            GuiShapeFill::RadialGradient {
+                center,
+                radius,
+                start_color,
+                end_color,
+            } => GuiShapeFill::RadialGradient {
+                center: center.map(metres),
+                radius: metres(radius),
+                start_color,
+                end_color,
+            },
+        });
+
+        Self {
+            corner_radius: self.corner_radius.map(|radius| radius.map(metres)),
+            border_width: self.border_width.map(metres),
+            fill,
+            glow: self.glow.map(|glow| GuiShapeGlow {
+                radius: metres(glow.radius),
+                ..glow
+            }),
+            ..self.clone()
+        }
+    }
+}
+
+/// Apply numeric skin properties while preserving primitive identity and
+/// geometry. Material lengths are logical units; `units` (the root's
+/// logical units per Surface metre) maps them to metres. A drawing's scale
+/// also maps its logical-unit coordinates to metres, while box, glyph and
+/// bitmap payloads already arrive in metres and take the scale unchanged.
 pub fn apply_appearance_to_primitive(
     primitive: &SurfaceRenderPrimitive,
     appearance: &GuiSkinnedAppearance,
+    units: f32,
 ) -> SurfaceRenderPrimitive {
+    let appearance = &appearance.in_surface_metres(units);
+    let scale = match primitive {
+        SurfaceRenderPrimitive::Drawing {
+            ..
+        } => appearance
+            .scale
+            .map(|scale| [scale[0] / units, scale[1] / units]),
+        _ => appearance.scale,
+    };
     let mut next = crate::systems::surface::surface_primitive_with_skin_style(
         primitive,
         appearance.color,
         appearance.opacity,
-        appearance.scale,
+        scale,
     );
     #[cfg(feature = "gui")]
     if let SurfaceRenderPrimitive::Box {
@@ -1404,7 +1464,7 @@ fn skin_primitive(
         retained_resources.remove(&retained_key);
         return Some(primitive);
     };
-    let styled = apply_appearance_to_primitive(&primitive, &appearance);
+    let styled = apply_appearance_to_primitive(&primitive, &appearance, view.units_per_metre);
     let styled = match &node.content {
         GuiEvaluatedContent::Checkbox {
             ..
@@ -1525,7 +1585,8 @@ fn focus_ring_primitive(
     });
     let appearance = override_appearance
         .cloned()
-        .or_else(|| resolve_appearance(root, node, interaction, GuiPrimitivePart::FocusRing))?;
+        .or_else(|| resolve_appearance(root, node, interaction, GuiPrimitivePart::FocusRing))?
+        .in_surface_metres(units);
     let color = appearance
         .border_color
         .or(appearance.color)
@@ -1545,7 +1606,9 @@ fn focus_ring_primitive(
         },
         size: [node.rect[2] / units, node.rect[3] / units],
         corner_radius: appearance.corner_radius.unwrap_or([0.0, 0.0]),
-        border_width: appearance.border_width.unwrap_or(FOCUS_BORDER_WIDTH),
+        border_width: appearance
+            .border_width
+            .unwrap_or(FOCUS_BORDER_WIDTH / units),
         border_color: color,
         fill: appearance.fill.unwrap_or(GuiShapeFill::Solid([0.0; 4])),
         glow: appearance.glow,

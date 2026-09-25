@@ -9,20 +9,29 @@
 //! ## Coordinates
 //!
 //! Evaluation works in GUI logical units with a top-left origin, +X right and
-//! +Y down, shared with the Surface content convention. The Surface rectangle
-//! (`surface_size` metres, width by height) sets the root constraints; with a
-//! finite positive `units_per_metre` factor `U`, the logical root extent is
-//! `(W*U, H*U)` and logical `(x, y)` maps to Surface content `(x/U, y/U)`.
-//! Only paint construction performs that division, through the shared
-//! `.3` mapping helpers. There is no GUI axis flip or origin translation,
-//! and camera motion never appears here: it invalidates projection and model
-//! work only, never layout.
+//! +Y down, shared with the Surface content convention. Every authored length
+//! (sizes, padding, margins, visual translation, font sizes, image sizes,
+//! drawing coordinates and skin material lengths such as corner radii,
+//! borders, gradients and glow) is already in logical units, so layout reads
+//! it unscaled. The Surface rectangle (`surface_size` metres, width by
+//! height) sets the root constraints; with a finite positive
+//! `units_per_metre` factor `U`, the logical root extent is `(W*U, H*U)` and
+//! logical `(x, y)` maps to Surface content `(x/U, y/U)`. Only paint
+//! construction performs that division, once, through the shared mapping
+//! helpers; it also divides glyph font sizes, drawing scales and material
+//! lengths by `U`. A larger `U` therefore shrinks the root's content on the
+//! Surface and reflows it into a larger logical extent; at `U = 1` logical
+//! units equal Surface metres. There is no GUI axis flip or origin
+//! translation, and camera motion never appears here: it invalidates
+//! projection and model work only, never layout.
 //!
 //! `U` is the root's own persisted `GuiRoot::units_per_metre` density, read
 //! from the effective component, so ordinary writes, animation and
 //! StateOverlays reflow the root through the same fingerprint as any other
-//! layout input. [`DEFAULT_UNITS_PER_METRE`] keeps logical units identical to
-//! Surface metres. The evaluator takes the value as an explicit request field.
+//! layout input. Hit testing maps Surface content back to logical units
+//! through the same factor, so hit regions follow paint, and semantic
+//! bounds stay logical. The evaluator takes the value as an explicit request
+//! field.
 //!
 //! ## Pass structure
 //!
@@ -261,8 +270,8 @@ fn hash_asset(hasher: &mut Fingerprint, source: Option<&AssetSource>) {
     }
 }
 
-/// Default `GuiRoot::units_per_metre` density; keeps logical units identical
-/// to Surface metres.
+/// Default `GuiRoot::units_per_metre` density; one logical unit per Surface
+/// metre.
 pub const DEFAULT_UNITS_PER_METRE: f32 = 1.0;
 
 /// Maximum tree depth followed during evaluation. Deeper subtrees are cut
@@ -479,7 +488,7 @@ pub enum GuiEvaluatedContent {
         layout: TextLayout,
         /// Retained paint identity of the ready font.
         font: SurfaceRenderResource,
-        /// Metres per em used for this measurement.
+        /// Logical units per em used for this measurement.
         font_size: f32,
         /// Measured string revision.
         text: String,
@@ -500,7 +509,7 @@ pub enum GuiEvaluatedContent {
         layout: TextLayout,
         /// Retained paint identity of the ready font.
         font: SurfaceRenderResource,
-        /// Metres per em used for this measurement.
+        /// Logical units per em used for this measurement.
         font_size: f32,
         /// Measured label revision.
         label: String,
@@ -536,7 +545,7 @@ pub enum GuiEvaluatedContent {
         layout: TextLayout,
         /// Retained paint identity of the ready font.
         font: SurfaceRenderResource,
-        /// Metres per em used for this measurement.
+        /// Logical units per em used for this measurement.
         font_size: f32,
         /// Measured string revision (effective text or placeholder).
         text: String,
@@ -855,10 +864,13 @@ pub fn resolve_panel_hit(
 /// Leaf content primitive for one evaluated node. The background box is
 /// emitted by the caller; this covers glyphs, drawings and bitmaps. Text
 /// glyph positions are relative to the content-box top-left and retain their
-/// per-line baseline offsets when scaled from ems to Surface metres. Glyph
-/// and drawing payloads stay in node-local metres with the accumulated visual
-/// scale applied through the shared style, so asymmetric scales reach the
-/// renderer while box and bitmap geometry arrives baked into final coordinates.
+/// per-line baseline offsets when scaled from ems to Surface metres through
+/// the logical font size over the units factor. Glyph and drawing payloads
+/// stay node-local with the accumulated visual scale applied through the
+/// shared style, so asymmetric scales reach the renderer while box and bitmap
+/// geometry arrives baked into final coordinates. Drawing coordinates are
+/// logical units like every authored length, so their style scale also
+/// divides by the units factor.
 fn node_content_primitive(
     root_incarnation: u64,
     node: &GuiEvaluatedNode,
@@ -926,16 +938,20 @@ fn node_content_primitive(
                 return None;
             }
 
+            let metres_per_em = font_size / units;
             Some(SurfaceRenderPrimitive::Glyphs {
                 style,
                 font: font.clone(),
-                font_size: *font_size,
+                font_size: metres_per_em,
                 glyphs: layout
                     .glyphs
                     .iter()
                     .map(|glyph| SurfaceGlyph {
                         glyph_id: glyph.glyph_id,
-                        position: [glyph.position[0] * font_size, glyph.position[1] * font_size],
+                        position: [
+                            glyph.position[0] * metres_per_em,
+                            glyph.position[1] * metres_per_em,
+                        ],
                         color: None,
                     })
                     .collect(),
@@ -943,12 +959,15 @@ fn node_content_primitive(
         }
         GuiEvaluatedContent::Drawing {
             drawing,
-        } => drawing
-            .clone()
-            .map(|drawing| SurfaceRenderPrimitive::Drawing {
-                style,
-                drawing,
-            }),
+        } => {
+            style.scale = [style.scale[0] / units, style.scale[1] / units];
+            drawing
+                .clone()
+                .map(|drawing| SurfaceRenderPrimitive::Drawing {
+                    style,
+                    drawing,
+                })
+        }
         GuiEvaluatedContent::Image {
             bitmap,
         } => {
@@ -1051,13 +1070,12 @@ struct Evaluator<'a, 'r> {
     root: &'a GuiRoot,
     tree: &'a GuiTreeIndex,
     resolver: &'r dyn GuiResourceResolver,
-    units: f32,
     diagnostics: Vec<GuiLayoutDiagnostic>,
     nodes: Vec<GuiEvaluatedNode>,
     /// Deferred placement per record, index-aligned with `nodes`.
     placements: Vec<DeferredPlacement>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "diagnostics"))]
     remeasured: u64,
 }
 
@@ -1090,43 +1108,11 @@ fn sanitized_bound(
     Some(value)
 }
 
-/// Authored size lanes are denominated in local metres, matching the style
-/// documentation; evaluation scales them into logical units by the
-/// evaluation's units factor. Scalar lanes (flex, align, colour, opacity,
-/// font size) are unit-free or carry their own scale and pass through.
-fn styled(root: &GuiRoot, id: GuiNodeId, units: f32) -> GuiNodeStyle {
-    let mut style = root.style(id).unwrap_or_default();
-    for value in [
-        &mut style.width,
-        &mut style.height,
-        &mut style.min_width,
-        &mut style.min_height,
-        &mut style.max_width,
-        &mut style.max_height,
-    ]
-    .into_iter()
-    .filter_map(|lane| lane.as_mut())
-    {
-        *value *= units;
-    }
-    if let Some(padding) = style.padding.as_mut() {
-        for value in padding.iter_mut() {
-            *value *= units;
-        }
-    }
-    if let Some(margin) = style.margin.as_mut() {
-        for value in margin.iter_mut() {
-            *value *= units;
-        }
-    }
-
-    style
-}
-
-/// Visual translation in logical units with unit-free scale.
-fn visual_scaled(root: &GuiRoot, id: GuiNodeId, units: f32) -> ([f32; 2], [f32; 2]) {
-    let (offset, scale) = root.visual_transform(id);
-    ([offset[0] * units, offset[1] * units], scale)
+/// Authored style of one node. Length lanes (sizes, padding, margins, font
+/// size) are already logical units, so layout reads them unscaled; only
+/// paint maps logical units to Surface metres.
+fn styled(root: &GuiRoot, id: GuiNodeId) -> GuiNodeStyle {
+    root.style(id).unwrap_or_default()
 }
 
 /// Revision of one node's committed control value; zero for nodes that were
@@ -1205,8 +1191,8 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             return ZERO_SIZE;
         }
 
-        let style = styled(self.root, id, self.units);
-        let (offset, scale) = visual_scaled(self.root, id, self.units);
+        let style = styled(self.root, id);
+        let (offset, scale) = self.root.visual_transform(id);
         if scale[0] == 0.0 || scale[1] == 0.0 {
             self.push_unavailable(
                 &node,
@@ -1370,7 +1356,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     style,
                     constraints.max_w,
                 );
-                ContentOutcome::leaf(outcome, self.units, constraints)
+                ContentOutcome::leaf(outcome, constraints)
             }
             GuiNodeData::Drawing => {
                 let resource = style
@@ -1409,11 +1395,10 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     });
                 }
 
-                let logical = [size[0] * self.units, size[1] * self.units];
                 ContentOutcome {
                     size: [
-                        constraints.clamp_width(logical[0]),
-                        constraints.clamp_height(logical[1]),
+                        constraints.clamp_width(size[0]),
+                        constraints.clamp_height(size[1]),
                     ],
                     content: GuiEvaluatedContent::Image {
                         bitmap: resource,
@@ -1433,7 +1418,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     style,
                     constraints.max_w,
                 );
-                ContentOutcome::leaf(outcome, self.units, constraints).map_content(
+                ContentOutcome::leaf(outcome, constraints).map_content(
                     |layout, font, font_size, text| GuiEvaluatedContent::Button {
                         layout,
                         font,
@@ -1443,7 +1428,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 )
             }
             GuiNodeData::Checkbox => {
-                let em = style.font_size * self.units;
+                let em = style.font_size;
                 let edge = 1.4 * em;
                 let checked = node_values(self.root, node.id).checked.unwrap_or(false);
                 let revision = control_revision(self.root, node.id);
@@ -1462,7 +1447,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                 }
             }
             GuiNodeData::Slider => {
-                let em = style.font_size * self.units;
+                let em = style.font_size;
                 let size = [8.0 * em, 1.4 * em];
                 let values = node_values(self.root, node.id);
                 let value = values.value.unwrap_or(0.0);
@@ -1507,7 +1492,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
                     style,
                     constraints.max_w,
                 );
-                ContentOutcome::leaf(outcome, self.units, constraints).map_content(
+                ContentOutcome::leaf(outcome, constraints).map_content(
                     |layout, font, font_size, text| GuiEvaluatedContent::TextInput {
                         layout,
                         font,
@@ -1537,7 +1522,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             });
             return LeafOutcome::unavailable();
         };
-        let em_to_logical = style.font_size * self.units;
+        let em_to_logical = style.font_size;
         if !(em_to_logical.is_finite() && em_to_logical > 0.0) {
             self.diagnostics
                 .push(GuiLayoutDiagnostic::InvalidConstraints {
@@ -1620,7 +1605,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             });
             return LeafOutcome::unavailable();
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.remeasured += 1;
         }
@@ -1695,7 +1680,7 @@ struct ContentOutcome {
 }
 
 impl ContentOutcome {
-    fn leaf(outcome: LeafOutcome, units: f32, constraints: Constraints) -> Self {
+    fn leaf(outcome: LeafOutcome, constraints: Constraints) -> Self {
         match outcome {
             LeafOutcome::Measured {
                 layout,
@@ -1703,9 +1688,8 @@ impl ContentOutcome {
                 font_size,
                 text,
             } => {
-                // Em extents scale to logical units by metres-per-em and
-                // the evaluation's units factor.
-                let em_to_logical = font_size * units;
+                // Em extents scale to logical units by logical units per em.
+                let em_to_logical = font_size;
                 let size = [
                     constraints.clamp_width(layout.size[0] * em_to_logical),
                     constraints.clamp_height(layout.size[1] * em_to_logical),
@@ -1890,7 +1874,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
 
     /// Outer margins of one child in logical units.
     fn child_margin(&self, id: GuiNodeId) -> [f32; 4] {
-        styled(self.root, id, self.units).margin.unwrap_or([0.0; 4])
+        styled(self.root, id).margin.unwrap_or([0.0; 4])
     }
 
     /// Positive flex factor of one child, or None for fixed children.
@@ -2854,19 +2838,16 @@ fn evaluate_tree(
         root: request.root,
         tree: request.tree,
         resolver,
-        units,
         diagnostics: Vec::new(),
         nodes: Vec::new(),
         placements: Vec::new(),
         texts,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "diagnostics"))]
         remeasured: 0,
     };
 
     if let Some(root_id) = request.tree.root() {
-        let margin = styled(request.root, root_id, units)
-            .margin
-            .unwrap_or([0.0; 4]);
+        let margin = styled(request.root, root_id).margin.unwrap_or([0.0; 4]);
         evaluator.visit(
             root_id,
             Constraints::loose(logical[0], logical[1]),
@@ -2889,7 +2870,7 @@ fn evaluate_tree(
         nodes: evaluator.nodes,
         diagnostics: evaluator.diagnostics,
         texts: evaluator.texts,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "diagnostics"))]
         remeasured: evaluator.remeasured,
     }
 }
@@ -2900,7 +2881,7 @@ struct EvaluatedTree {
     diagnostics: Vec<GuiLayoutDiagnostic>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
     /// Text measurements this pass performed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "diagnostics"))]
     remeasured: u64,
 }
 
@@ -2959,7 +2940,6 @@ fn retained_geometry(nodes: &[GuiEvaluatedNode]) -> Vec<RetainedGeometry> {
 /// ScrollView viewport (and so descendant clips).
 fn translate_in_place(
     root: &GuiRoot,
-    units: f32,
     base: &[RetainedGeometry],
     nodes: &mut [GuiEvaluatedNode],
 ) -> bool {
@@ -2977,7 +2957,7 @@ fn translate_in_place(
             ancestors.pop();
         }
         let inherited = ancestors.last().map_or([0.0, 0.0], |(_, shift)| *shift);
-        let (offset, scale) = visual_scaled(root, record.node, units);
+        let (offset, scale) = root.visual_transform(record.node);
         // Placeholders ignore their own translation, so only unchanged
         // offsets keep them valid.
         if scale != record.visual_scale || (!record.available && offset != base.visual_offset) {
@@ -3015,12 +2995,28 @@ fn translate_in_place(
     true
 }
 
+/// Cumulative layout work of diagnostics builds: reflows (layout passes that
+/// advance a root's layout revision) and text measurements (shaping calls
+/// that missed the retained measurement cache). Totals survive root removal;
+/// readers difference two samples to measure the work between them.
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GuiLayoutWork {
+    /// Root reflows.
+    pub reflows: u64,
+    /// Text measurements.
+    pub text_measurements: u64,
+}
+
 /// Retained constraint evaluation for every live GUI root. Unchanged frames
 /// do no work, paint-only edits never remeasure text, and structure or
 /// layout edits reflow with per-text cache reuse.
 #[derive(Default)]
 pub struct GuiLayoutCache {
     roots: BTreeMap<EntityId, RetainedGuiRoot>,
+    /// Work of every evaluation this cache performed.
+    #[cfg(any(test, feature = "diagnostics"))]
+    work: GuiLayoutWork,
 }
 
 impl GuiLayoutCache {
@@ -3124,12 +3120,7 @@ impl GuiLayoutCache {
             // advancing reflow counters; paint-only edits refresh retained
             // colours without touching measurement.
             if retained.visual_fp != visual_fp {
-                if translate_in_place(
-                    request.root,
-                    request.units_per_metre,
-                    &retained.base,
-                    &mut retained.view.nodes,
-                ) {
+                if translate_in_place(request.root, &retained.base, &mut retained.view.nodes) {
                     retained.visual_fp = visual_fp;
                     retained.paint_revision += 1;
                     retained.view.paint_revision = retained.paint_revision;
@@ -3146,6 +3137,10 @@ impl GuiLayoutCache {
                 #[cfg(test)]
                 {
                     retained.remeasure_count += tree.remeasured;
+                }
+                #[cfg(any(test, feature = "diagnostics"))]
+                {
+                    self.work.text_measurements += tree.remeasured;
                 }
 
                 retained.struct_fp = struct_fp;
@@ -3186,6 +3181,11 @@ impl GuiLayoutCache {
             retained.remeasure_count += tree.remeasured;
             retained.reflow_count += 1;
         }
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.work.reflows += 1;
+            self.work.text_measurements += tree.remeasured;
+        }
 
         retained.layout_revision += 1;
         retained.paint_revision += 1;
@@ -3214,6 +3214,12 @@ impl GuiLayoutCache {
     /// Read-only retained view for one root entity, if ever evaluated.
     pub fn view(&self, entity: EntityId) -> Option<&GuiEvaluatedView> {
         self.roots.get(&entity).map(|retained| &retained.view)
+    }
+
+    /// Cumulative reflows and text measurements across every root.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn work(&self) -> GuiLayoutWork {
+        self.work
     }
 
     /// Current paint revision for one root entity, if ever evaluated.

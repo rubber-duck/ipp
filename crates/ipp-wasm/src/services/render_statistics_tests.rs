@@ -44,6 +44,10 @@ const NAMED_WORDS: [(&str, usize); RECORD_WORDS] = [
         "totalSurfaceCacheAllocations",
         TOTAL_SURFACE_CACHE_ALLOCATIONS,
     ),
+    ("guiLayoutReflows", GUI_LAYOUT_REFLOWS),
+    ("guiTextMeasurements", GUI_TEXT_MEASUREMENTS),
+    ("totalGuiLayoutReflows", TOTAL_GUI_LAYOUT_REFLOWS),
+    ("totalGuiTextMeasurements", TOTAL_GUI_TEXT_MEASUREMENTS),
 ];
 
 #[test]
@@ -112,4 +116,28 @@ fn totals_saturate() {
     record.accumulate(&large);
 
     assert_eq!(record.fill(&large)[TOTAL_UPLOADED_BYTES], u32::MAX);
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn layout_words_follow_the_rendered_world() {
+    let mut record = RenderStatisticsRecord::new();
+    let statistics = RenderStatistics::default();
+    record.record_layout(ipp_core::GuiLayoutStatistics {
+        latest: ipp_core::GuiLayoutWork {
+            reflows: 1,
+            text_measurements: 2,
+        },
+        total: ipp_core::GuiLayoutWork {
+            reflows: 7,
+            text_measurements: u64::MAX,
+        },
+    });
+
+    let words = record.fill(&statistics);
+
+    assert_eq!(words[GUI_LAYOUT_REFLOWS], 1);
+    assert_eq!(words[GUI_TEXT_MEASUREMENTS], 2);
+    assert_eq!(words[TOTAL_GUI_LAYOUT_REFLOWS], 7);
+    assert_eq!(words[TOTAL_GUI_TEXT_MEASUREMENTS], u32::MAX);
 }

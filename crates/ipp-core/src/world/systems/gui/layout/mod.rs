@@ -29,3 +29,5 @@ pub(crate) use skin::{
     skinned_parts_for_view, skinned_primitives_for_view_with_overrides,
 };
 pub use system::{GuiLayoutSystem, GuiLayoutSystemFactory};
+#[cfg(feature = "diagnostics")]
+pub use {evaluation::GuiLayoutWork, system::GuiLayoutStatistics};

@@ -127,6 +127,13 @@ impl HostServices for GlesHostServices {
                 self.summary = summary;
                 self.tick = world.tick();
                 self.totals.accumulate(self.renderer.statistics());
+                #[cfg(feature = "gui")]
+                self.totals.record_layout(
+                    world
+                        .system::<ipp_core::GuiLayoutSystem>(ipp_core::GuiLayoutSystem::ID)
+                        .map(ipp_core::GuiLayoutSystem::statistics)
+                        .unwrap_or_default(),
+                );
                 self.answer_requests(world.id());
                 Ok(())
             }

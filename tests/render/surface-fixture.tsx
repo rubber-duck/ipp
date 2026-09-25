@@ -361,7 +361,7 @@ const PANEL_COLOR: Color = [0.02, 0.03, 0.05, 1];
 export async function guiPanel(config: {
   variant: "mixed" | "mixed-without-glow" | "filled" | "sparse" | "empty";
   control?: boolean;
-  /** Shape size, border and corner radius in Surface metres. */
+  /** Shape size, border and corner radius in logical units (metres at the default density). */
   shape: {
     width: number;
     height: number;
@@ -369,6 +369,8 @@ export async function guiPanel(config: {
     cornerRadius: number;
   };
   angle?: number;
+  /** Mixed-variant label overrides; defaults render "Gui" in green. */
+  label?: { text?: string; color?: Color };
 }) {
   const [width, height] = [640, 480];
   client.presentation!.resize(width, height);
@@ -408,7 +410,32 @@ export async function guiPanel(config: {
   };
   const fill: Color =
     variant === "sparse" ? [0, 0, 0, 0] : [0.85, 0.25, 0.08, 1];
-  await presentCached(() => (
+  // Count the GUI requests and node edits this render commits, observed at
+  // the generated client's transport entry point.
+  const gui = client as unknown as GuiWorldClient;
+  const editGuiBatch = gui.editGuiBatch;
+  const guiEdits = { requests: 0, edits: 0 };
+  gui.editGuiBatch = async (edits) => {
+    guiEdits.requests += 1;
+    guiEdits.edits += edits.length;
+    return await editGuiBatch.call(gui, edits);
+  };
+  try {
+    await renderGuiPanel(config, theme, fill);
+  } finally {
+    gui.editGuiBatch = editGuiBatch;
+  }
+  // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
+  return { pixelsPerMetre: height / ORTHO_HEIGHT, guiEdits };
+}
+
+function renderGuiPanel(
+  config: Parameters<typeof guiPanel>[0],
+  theme: GuiControlTheme,
+  fill: Color,
+) {
+  const { variant, shape } = config;
+  return presentCached(() => (
     <Entity key="gui" id="retained-gui-panel">
       <Transform bound={false} ry={config.angle ?? 0} />
       <Surface bound={false} width={3.8} height={2.4} />
@@ -442,10 +469,10 @@ export async function guiPanel(config: {
                     }}
                   />
                   <Text
-                    text="Gui"
+                    text={config.label?.text ?? "Gui"}
                     asset={assets.font}
                     fontSize={0.36}
-                    color={[0.2, 1, 0.35, 1]}
+                    color={config.label?.color ?? [0.2, 1, 0.35, 1]}
                     margin={[0.3, 0, 0, 0.15]}
                   />
                 </>
@@ -456,8 +483,6 @@ export async function guiPanel(config: {
       </GuiRoot>
     </Entity>
   ));
-  // The orthographic fixture camera spans ORTHO_HEIGHT metres vertically.
-  return { pixelsPerMetre: height / ORTHO_HEIGHT };
 }
 
 /**

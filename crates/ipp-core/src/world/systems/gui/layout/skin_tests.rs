@@ -2001,7 +2001,7 @@ fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
         glow: None,
     };
 
-    let applied = apply_appearance_to_primitive(&box_primitive, &appearance);
+    let applied = apply_appearance_to_primitive(&box_primitive, &appearance, 1.0);
     let SurfaceRenderPrimitive::Box {
         corner_radius,
         border_width,
@@ -2036,6 +2036,34 @@ fn shape_materials_resolve_corner_radius_borders_gradients_and_glow() {
             falloff: 1.5,
         })
     );
+
+    // Material lengths are logical units: at two units per metre every
+    // length paints at half its Surface size, while colours and the
+    // unit-free box scale stay put.
+    let SurfaceRenderPrimitive::Box {
+        style,
+        corner_radius,
+        border_width,
+        fill,
+        glow,
+        ..
+    } = apply_appearance_to_primitive(&box_primitive, &appearance, 2.0)
+    else {
+        panic!("expected box");
+    };
+    assert_eq!(style.scale, [1.0, 1.0]);
+    assert_eq!(corner_radius, [0.025, 0.04]);
+    assert_eq!(border_width, 0.005);
+    assert_eq!(
+        fill,
+        GuiShapeFill::LinearGradient {
+            start: [0.0, 0.0],
+            end: [0.5, 0.5],
+            start_color: [1.0, 0.0, 0.0, 1.0],
+            end_color: [0.0, 0.0, 1.0, 1.0],
+        }
+    );
+    assert_eq!(glow.map(|glow| glow.radius), Some(0.025));
 }
 
 /// Background box for node 1 as layout emits it before skinning.
@@ -2108,7 +2136,7 @@ fn solid_state_replaces_inherited_gradient_while_glow_properties_stay_independen
             fill,
             glow,
             ..
-        } = apply_appearance_to_primitive(&background_box(), &appearance)
+        } = apply_appearance_to_primitive(&background_box(), &appearance, 1.0)
         else {
             panic!("expected box");
         };

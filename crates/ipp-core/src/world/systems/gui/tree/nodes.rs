@@ -364,17 +364,17 @@ pub enum GuiControlValue {
 pub struct GuiNodeStyle {
     /// Effective interactivity; false skips hit testing and activation.
     pub enabled: bool,
-    /// Explicit width in local metres.
+    /// Explicit width in logical units.
     pub width: Option<f32>,
-    /// Explicit height in local metres.
+    /// Explicit height in logical units.
     pub height: Option<f32>,
-    /// Minimum width in local metres.
+    /// Minimum width in logical units.
     pub min_width: Option<f32>,
-    /// Minimum height in local metres.
+    /// Minimum height in logical units.
     pub min_height: Option<f32>,
-    /// Maximum width in local metres.
+    /// Maximum width in logical units.
     pub max_width: Option<f32>,
-    /// Maximum height in local metres.
+    /// Maximum height in logical units.
     pub max_height: Option<f32>,
     /// Content padding [top, right, bottom, left].
     pub padding: Option<[f32; 4]>,
@@ -395,11 +395,11 @@ pub struct GuiNodeStyle {
     pub background_color: Option<[f32; 4]>,
     /// Content opacity (0.0..=1.0).
     pub opacity: f32,
-    /// Font size in local metres per em.
+    /// Font size in logical units per em.
     pub font_size: f32,
     /// Bound asset reference (font, drawing, or image).
     pub asset: Option<AssetSource>,
-    /// Visual translation in local metres; moves paint and hit regions
+    /// Visual translation in logical units; moves paint and hit regions
     /// together without reflow.
     pub position: [f32; 2],
     /// Visual axis-aligned scale; moves paint and hit regions together

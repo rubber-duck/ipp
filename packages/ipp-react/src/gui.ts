@@ -59,7 +59,11 @@ export type {
   GuiTextSubmitListener,
   GuiToggleListener,
 } from "./gui/callbacks.js";
-export { attachCanvasGuiInput, createGuiInputSink } from "./gui/input.js";
+export {
+  attachCanvasGuiInput,
+  createGuiInputSink,
+  DEFAULT_GUI_WHEEL_STEP,
+} from "./gui/input.js";
 export type {
   AttachCanvasGuiInputOptions,
   BrowserGuiInputCommand,

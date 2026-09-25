@@ -627,6 +627,7 @@ export function IppCanvas({
     blockersKey,
     guiInput?.panelDistance,
     guiInput?.unhandledInputGate,
+    guiInput?.wheelStep,
   ]);
 
   if (

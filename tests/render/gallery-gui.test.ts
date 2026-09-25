@@ -2148,6 +2148,32 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const cameraBeforeScroll = transform(await g.inspect());
       await g.capture("gui-demo-before-scroll");
       await g.page.mouse.move(scroll.clientX, scroll.clientY);
+      // One 100 px wheel notch scrolls the metre-sized telemetry log by the
+      // gallery's wheel step, an eighth of its 0.78 m viewport.
+      const scrollState = (state: GalleryGuiState) =>
+        state.semantic.nodes.find(({ id }) => id === scroll.node.id)!;
+      const beforeNotch = scrollState(await waitForGui());
+      assert.ok(beforeNotch.scroll, "telemetry ScrollView has no scroll state");
+      const notchTarget = Math.min(
+        beforeNotch.scroll.offset[1] + 0.78 / 8,
+        beforeNotch.scroll.maxOffset[1],
+      );
+      assert.ok(
+        notchTarget > beforeNotch.scroll.offset[1] + 0.05,
+        `telemetry has no room for a wheel notch: ${JSON.stringify(beforeNotch.scroll)}`,
+      );
+      await g.page.mouse.wheel(0, 100);
+      const afterNotch = scrollState(
+        await waitForGui(
+          (state) =>
+            Math.abs(scrollState(state).scroll!.offset[1] - notchTarget) < 1e-4,
+        ),
+      );
+      await scenario.evidence.record("telemetry-wheel-notch", {
+        before: beforeNotch.scroll,
+        after: afterNotch.scroll,
+        viewportHeight: afterNotch.bounds[3],
+      });
       await g.page.mouse.wheel(0, 480);
       await g.settle();
       assert.deepEqual(

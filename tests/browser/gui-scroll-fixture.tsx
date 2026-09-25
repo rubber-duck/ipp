@@ -101,6 +101,7 @@ async function activateCamera(next: IppCanvasHandle): Promise<void> {
  * 2x2 blue block at the left and a 1-unit yellow block. The outer view can
  * scroll by 2 and the inner view by 1. The outer vertical scroll bar spans
  * x 3.85..4 with a 1.8-unit thumb travelling 1.2 units over that capacity.
+ * Wheel input keeps the relay's default step of 0.25 units per notch.
  */
 function Application({
   runtime,

@@ -40,6 +40,7 @@ import {
   INITIAL_PARTICLES,
 } from "./worlds/particles/controls.js";
 import { GuiWorld } from "./worlds/gui/scene.js";
+import { GUI_WHEEL_STEP } from "./worlds/gui/dashboard.js";
 import { GuiControls, useGuiScene } from "./worlds/gui/controls.js";
 import {
   PLATFORMER_ASSETS,
@@ -203,6 +204,7 @@ export function Gallery() {
                   guiInput: {
                     preventDefaultPointer: true,
                     unhandledInputGate: guiInputGate,
+                    wheelStep: GUI_WHEEL_STEP,
                     onError: (failure: Error) => setError(failure.message),
                   },
                 }

@@ -350,6 +350,12 @@ export interface AttachCanvasGuiInputOptions {
   readonly textBridge?: boolean;
   /** Optional shared gate for camera or other scene fallback gestures. */
   readonly unhandledInputGate?: GuiUnhandledInputGate;
+  /**
+   * GUI logical units one wheel notch scrolls; finite and positive,
+   * {@link DEFAULT_GUI_WHEEL_STEP} by default or when invalid. See
+   * {@link wheelDeltaToLogical} for choosing it.
+   */
+  readonly wheelStep?: number;
   readonly onError?: (error: Error) => void;
 }
 
@@ -481,14 +487,46 @@ export function canvasViewportPoint(
   ];
 }
 
-/** Wheel deltas to logical units; line scrolls assume 16 px per line. */
+/**
+ * Default GUI logical units one wheel notch scrolls. At the default root
+ * density of one logical unit per metre this is a quarter metre: an eighth
+ * of a 2-unit ScrollView viewport.
+ */
+export const DEFAULT_GUI_WHEEL_STEP = 0.25;
+
+/** CSS pixels one wheel notch reports in pixel mode (Chromium and Windows). */
+const WHEEL_NOTCH_PIXELS = 100;
+
+/** Lines one wheel notch reports in line mode (Firefox). */
+const WHEEL_NOTCH_LINES = 3;
+
+/** Notches one page counts in page mode: one viewport at the recommended
+ * step of an eighth of the viewport per notch. */
+const WHEEL_PAGE_NOTCHES = 8;
+
+/**
+ * Browser wheel deltas to GUI logical units.
+ *
+ * Browser deltas count CSS pixels, lines or pages, none of which relate to
+ * a panel's logical units: panels are authored at any density and seen at
+ * any projected size. Deltas therefore convert to wheel notches first,
+ * with fractional notches for smooth pixel scrolling (trackpads), and each
+ * notch scrolls `step` logical units. Choose the step as a fraction of the
+ * ScrollView viewports the canvas shows, about an eighth of the smallest.
+ */
 export function wheelDeltaToLogical(
   deltaX: number,
   deltaY: number,
   deltaMode: number,
+  step = DEFAULT_GUI_WHEEL_STEP,
 ): GuiLogicalPoint {
-  if (deltaMode === 1) return [deltaX * 16, deltaY * 16];
-  return [deltaX, deltaY];
+  const notches = (delta: number): number =>
+    deltaMode === 1
+      ? delta / WHEEL_NOTCH_LINES
+      : deltaMode === 2
+        ? delta * WHEEL_PAGE_NOTCHES
+        : delta / WHEEL_NOTCH_PIXELS;
+  return [notches(deltaX) * step, notches(deltaY) * step];
 }
 
 /** Whether an element edits text natively and so needs its key defaults. */
@@ -539,6 +577,16 @@ export function attachCanvasGuiInput(
   const report = (error: unknown): void => {
     onError?.(error instanceof Error ? error : new Error(String(error)));
   };
+  // An invalid step is reported once and scrolls by the default instead.
+  let wheelStep = options.wheelStep ?? DEFAULT_GUI_WHEEL_STEP;
+  if (!Number.isFinite(wheelStep) || wheelStep <= 0) {
+    report(
+      new RangeError(
+        `GUI wheel step must be finite and positive, not ${wheelStep}`,
+      ),
+    );
+    wheelStep = DEFAULT_GUI_WHEEL_STEP;
+  }
   // Live pointers by relay identity, keeping the raw browser identity for
   // capture calls: the relay converts to u32 while the browser API takes
   // the event's own identifier.
@@ -669,7 +717,12 @@ export function attachCanvasGuiInput(
     send({
       kind: "scroll",
       position: toViewport(raw),
-      delta: wheelDeltaToLogical(event.deltaX, event.deltaY, event.deltaMode),
+      delta: wheelDeltaToLogical(
+        event.deltaX,
+        event.deltaY,
+        event.deltaMode,
+        wheelStep,
+      ),
       blockers,
       ...maybeDistance,
     });

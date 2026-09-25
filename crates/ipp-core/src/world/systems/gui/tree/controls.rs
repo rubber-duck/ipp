@@ -37,6 +37,11 @@ impl GuiSliderRail {
     /// The track spans the whole control rectangle, so the fill starts where
     /// the track starts rather than at the first thumb center; at the minimum
     /// value it still reaches under half the thumb.
+    ///
+    /// Decision (ipp-jtst.7): the fill is deliberately not inset by the track
+    /// border. It shares the track's height and corner radius so the two read
+    /// as one shape, and the flush start is the accepted ipp-jtst.2 behavior;
+    /// the border stays visible on the unfilled remainder to mark travel.
     pub(crate) fn fill_rect(self, fraction: f32, height: f32) -> Option<[f32; 4]> {
         if !fraction.is_finite() || !height.is_finite() || height <= 0.0 {
             return None;

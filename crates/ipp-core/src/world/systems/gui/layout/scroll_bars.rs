@@ -273,6 +273,8 @@ pub(crate) fn scroll_bar_interaction(
         hovered: cursor.is_some_and(|cursor| cursor.hovered == Some(part)),
         pressed: cursor.is_some_and(|cursor| cursor.pressed == Some(part)),
         focused: false,
+        // Scroll bars never take focus, so they never earn the ring.
+        focus_visible: false,
     }
 }
 

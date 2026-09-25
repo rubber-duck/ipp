@@ -683,6 +683,9 @@ enum EnvelopeKind {
     Focus {
         /// New focus, or None after blur.
         focus: Option<GuiInputTarget>,
+        /// Whether keyboard or programmatic focus earns the focus ring.
+        /// Pointer-press focus takes semantic focus without the ring.
+        keyboard: bool,
     },
     /// Input-owned scroll accumulation for one ScrollView, already
     /// clamped against its evaluated extents at routing and re-clamped at
@@ -932,6 +935,10 @@ pub struct GuiInputSystem {
     owner_epoch: u64,
     /// Keyboard focus cursor, updated during routing for same-tick chaining.
     focus: Option<GuiInputFocus>,
+    /// Whether the focus cursor earns the focus ring: keyboard and
+    /// programmatic focus show it, pointer-press focus does not. Semantic
+    /// focus (activation, nudging, caret) follows every source.
+    focus_visible: bool,
     /// Panel and root incarnation that most recently held keyboard focus in
     /// this context: the entry panel for traversal from no focus. A hint
     /// revalidated against the current traversal order on use.
@@ -1046,6 +1053,7 @@ impl SystemFactory for GuiInputSystemFactory {
             owner: None,
             owner_epoch: 0,
             focus: None,
+            focus_visible: false,
             keyboard_panel: None,
             focus_tick: 0,
             focus_generation: 0,
@@ -1748,8 +1756,14 @@ impl GuiInputSystem {
     /// Focus moves fence provisional composition: a move away from the
     /// composed node (or to no focus) drops it, and blur collapses the old
     /// selection to its caret.
-    fn set_focus(&mut self, session: u64, tick: u64, focus: Option<GuiInputTarget>) {
-        self.update_focus_cursor(session, tick, focus);
+    fn set_focus(
+        &mut self,
+        session: u64,
+        tick: u64,
+        focus: Option<GuiInputTarget>,
+        keyboard: bool,
+    ) {
+        self.update_focus_cursor(session, tick, focus, keyboard);
         self.push_envelope(
             tick,
             PendingEnvelope {
@@ -1762,18 +1776,26 @@ impl GuiInputSystem {
                 cancel_on_miss: false,
                 kind: EnvelopeKind::Focus {
                     focus,
+                    keyboard,
                 },
             },
         );
     }
 
     /// Commit the transient focus cursor without enqueuing another envelope.
-    fn update_focus_cursor(&mut self, session: u64, tick: u64, focus: Option<GuiInputTarget>) {
+    fn update_focus_cursor(
+        &mut self,
+        session: u64,
+        tick: u64,
+        focus: Option<GuiInputTarget>,
+        keyboard: bool,
+    ) {
         let previous = self.focus.map(|focus| focus.target);
         self.focus = focus.map(|target| GuiInputFocus {
             target,
             session,
         });
+        self.focus_visible = focus.is_some() && keyboard;
         self.focus_tick = tick;
         if let Some(target) = focus {
             self.keyboard_panel = Some((target.entity, target.root_incarnation));
@@ -1999,6 +2021,7 @@ impl GuiInputSystem {
     fn clear_focus(&mut self) {
         if self.focus.is_some() {
             self.focus = None;
+            self.focus_visible = false;
             self.focus_generation = self.focus_generation.saturating_add(1).max(1);
             self.touch_caret();
         }
@@ -2192,7 +2215,7 @@ impl GuiInputSystem {
         } else {
             candidates.next()
         };
-        self.set_focus(session, tick, entry.copied());
+        self.set_focus(session, tick, entry.copied(), true);
     }
 
     /// Whether one full target remains live and evaluated eligible.
@@ -2661,6 +2684,7 @@ impl GuiInputSystem {
             hovered: self.hovers.values().map(|cursor| cursor.target).collect(),
             pressed: self.press_owners.keys().copied().collect(),
             focus: self.focus,
+            focus_visible: self.focus_visible,
             scroll_bars,
         }
     }
@@ -3553,8 +3577,10 @@ impl GuiInputSystem {
             self.scroll_drags.insert(pointer, drag);
         }
         // Pressing a control takes keyboard focus so the same tick can chain
-        // focus-then-key inputs.
-        self.set_focus(session, tick, Some(routed.target));
+        // focus-then-key inputs. Semantic focus follows the press; the ring
+        // follows the focus-visible policy (keyboard-only outside text
+        // inputs, recorded in GuiInteractionState::ring_visible and gui.md).
+        self.set_focus(session, tick, Some(routed.target), false);
         // Non-control hits never reach here: routing reports them as
         // not focusable instead. Text presses place the caret by the retained
         // pen and cancel provisional composition; they queue no value.
@@ -4805,7 +4831,7 @@ impl GuiInputSystem {
                     None if backward => order[len - 1],
                     None => order[0],
                 };
-                self.set_focus(session, tick, Some(next));
+                self.set_focus(session, tick, Some(next), true);
             }
             GuiKey::Escape => {
                 if let Some(old) = self.focus.map(|focus| focus.target) {
@@ -4827,6 +4853,7 @@ impl GuiInputSystem {
                         cancel_on_miss: false,
                         kind: EnvelopeKind::Focus {
                             focus: None,
+                            keyboard: false,
                         },
                     },
                 );
@@ -5613,6 +5640,7 @@ impl GuiInputSystem {
                 node: handle.node_id,
                 root_incarnation: incarnation,
             }),
+            true,
         );
         Ok(())
     }
@@ -5882,6 +5910,7 @@ impl GuiInputSystem {
             }
             crate::GuiSemanticAction::Focus => EnvelopeKind::Focus {
                 focus: Some(command.target),
+                keyboard: true,
             },
             _ => return Err(ErrorReason::InvalidValue),
         };
@@ -5952,6 +5981,7 @@ impl GuiInputSystem {
 
         if let Some(focus) = self.focus.filter(|focus| focus.target == target) {
             self.focus = None;
+            self.focus_visible = false;
             self.focus_generation = self.focus_generation.saturating_add(1).max(1);
             self.pending_effects.push(GuiInputEffect {
                 session: focus.session,
@@ -6102,6 +6132,7 @@ impl GuiInputSystem {
     fn purge_cursors_for_target(&mut self, target: &GuiInputTarget) {
         if self.focus.is_some_and(|focus| focus.target == *target) {
             self.focus = None;
+            self.focus_visible = false;
             self.focus_generation = self.focus_generation.saturating_add(1).max(1);
             self.touch_caret();
         }
@@ -6207,8 +6238,10 @@ impl GuiInputSystem {
         match &envelope.kind {
             EnvelopeKind::Focus {
                 focus,
+                keyboard,
             } => {
                 let focus = *focus;
+                let keyboard = *keyboard;
                 if let Some(target) = focus {
                     let status = self
                         .layout(&*access)
@@ -6254,7 +6287,7 @@ impl GuiInputSystem {
                         }
                     }
                 }
-                self.update_focus_cursor(envelope.session, envelope.source_tick, focus);
+                self.update_focus_cursor(envelope.session, envelope.source_tick, focus, keyboard);
                 self.pending_effects.push(GuiInputEffect {
                     session: envelope.session,
                     source_tick: envelope.source_tick,
@@ -6920,6 +6953,7 @@ impl System for GuiInputSystem {
         if dropped_focus {
             let source_tick = self.focus_tick;
             self.focus = None;
+            self.focus_visible = false;
             self.focus_generation = self.focus_generation.saturating_add(1).max(1);
             self.pending_cancellations.push(GuiInputCancellation {
                 session,
@@ -7388,6 +7422,7 @@ impl GuiInputSystem {
                 cancel_on_miss: false,
                 kind: EnvelopeKind::Focus {
                     focus: None,
+                    keyboard: false,
                 },
             },
         );

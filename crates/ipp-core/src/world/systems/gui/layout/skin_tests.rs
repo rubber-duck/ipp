@@ -337,9 +337,29 @@ fn focus_is_a_separate_channel_from_base_state() {
         hovered: false,
         pressed: false,
         focused: true,
+        focus_visible: true,
     };
     assert_eq!(interaction.state(), GuiSkinState::Idle);
     assert!(interaction.focused);
+    assert!(interaction.focus_visible);
+}
+
+#[test]
+fn ring_visible_keeps_pointer_focus_ring_on_text_inputs_only() {
+    let keyboard = GuiInteractionState {
+        focused: true,
+        focus_visible: true,
+        ..GuiInteractionState::idle()
+    };
+    assert!(keyboard.ring_visible(false));
+    assert!(keyboard.ring_visible(true));
+    let pointer = GuiInteractionState {
+        focused: true,
+        ..GuiInteractionState::idle()
+    };
+    assert!(!pointer.ring_visible(false));
+    assert!(pointer.ring_visible(true));
+    assert!(!GuiInteractionState::idle().ring_visible(true));
 }
 
 #[test]
@@ -356,6 +376,7 @@ fn cursors_build_interaction_per_node_from_frozen_sources() {
             },
             session: 11,
         }),
+        focus_visible: true,
         ..GuiSkinCursors::default()
     };
     let hovered = cursors.interaction_for(skin_target(entity, 2), true);
@@ -661,6 +682,7 @@ fn paint_keeps_order_identities_and_focus_border() {
             },
             session: 3,
         }),
+        focus_visible: true,
         ..GuiSkinCursors::default()
     };
     let skinned = skinned_primitives_for_view(&view, &root, &cursors, &MapResolver::empty());
@@ -718,6 +740,7 @@ fn focus_ring_paints_without_a_background_primitive() {
             target: skin_target(view.entity, 1),
             session: 2,
         }),
+        focus_visible: true,
         ..Default::default()
     };
 
@@ -816,6 +839,7 @@ fn background_label_icon_and_focus_ring_resolve_independently() {
             },
             session: 1,
         }),
+        focus_visible: true,
         ..Default::default()
     };
 
@@ -1262,7 +1286,8 @@ fn slider_fill_uses_committed_value_and_stable_skin_identity() {
     };
     // The [0, 0, 10, 5] rail has a 3.75 thumb whose centre travels between
     // 1.875 and 8.125; the fill starts at the rail's left edge and ends under
-    // the thumb centre.
+    // the thumb centre. By decision (ipp-jtst.7) the fill is not inset by the
+    // track border: position x stays 0.0 for every value including 0.0.
     let thumb_edge = 5.0 * 0.75;
     let (center_min, center_max) = (thumb_edge * 0.5, 10.0 - thumb_edge * 0.5);
     let mut identity = None;
@@ -2178,6 +2203,7 @@ fn sampled_colour_reaches_solid_fill_and_focus_stroke_but_not_gradient_stops() {
             target: skin_target(view.entity, 1),
             session: 1,
         }),
+        focus_visible: true,
         ..Default::default()
     };
     let interaction = cursors.interaction_for(skin_target(view.entity, 1), true);

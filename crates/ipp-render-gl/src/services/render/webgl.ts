@@ -2258,7 +2258,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               const page = glyphAtlasPages!.get(pageHandle >>> 0);
               if (!page) throw new Error("Stale glyph atlas page handle");
               // Switching between pages keeps the target saved by the first
-              // begin: the host target, or a cache target inside a repaint.
+              // begin: the host target, since population runs before any cache
+              // repaint and never inside one.
               glyphAtlasTarget = {
                 width: page.width,
                 height: page.height,

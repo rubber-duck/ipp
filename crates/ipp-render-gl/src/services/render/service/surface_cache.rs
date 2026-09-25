@@ -12,9 +12,10 @@
 //! slot with the current placement. A repaint that skips primitives whose
 //! resources are not resident records them, and each plan reports whether one
 //! of them is resident now, so an incomplete image repaints as soon as it can
-//! be completed. A repaint that drew text analytically while the glyph atlas
-//! population bound deferred entries repaints on the next frame, until its
-//! text uses the atlas like direct presentation. The store and its policy are
+//! be completed. A repaint also records how many of the Surface's own text
+//! runs it drew analytically while they waited for glyph atlas population,
+//! and each plan reports whether fewer of them wait now, so the image refines
+//! to atlas text at its refresh cadence. The store and its policy are
 //! documented beside it in `render/surface_cache.rs`.
 
 use super::super::frame_statistics::RenderFrameWork;
@@ -194,6 +195,13 @@ impl<D: RenderDevice> RenderService<D> {
                         .missing(world.id(), item.entity)
                         .iter()
                         .any(|&key| surface_resource_resident(world, key)),
+                    #[cfg(feature = "gui")]
+                    text_populated: {
+                        let painted = self.surface_cache.unpopulated(world.id(), item.entity);
+                        painted > 0 && self.unpopulated_runs(world.id(), item.entity) < painted
+                    },
+                    #[cfg(not(feature = "gui"))]
+                    text_populated: false,
                     visible: world.geometry_visible(item.entity, &frustum),
                     distance,
                 });
@@ -236,8 +244,9 @@ impl<D: RenderDevice> RenderService<D> {
 
     /// Repaint every planned image before `begin_frame`, in item order.
     ///
-    /// Recoverable failures release the image and present that Surface
-    /// directly; context loss fails the frame. The returned work seeds the
+    /// Recoverable failures, including a repaint without usable retained GUI
+    /// storage, release the image and present that Surface directly; context
+    /// loss fails the frame. The returned work seeds the
     /// frame's work.
     pub(super) fn repaint_surface_caches(
         &mut self,
@@ -288,24 +297,35 @@ impl<D: RenderDevice> RenderService<D> {
             } else {
                 outcomes.into_iter().collect::<Result<(), _>>()
             };
+            // An image without the Surface's retained GUI work would stay incomplete
+            // with nothing to report its recovery, so the Surface presents directly,
+            // retrying its GUI storage, until the cache retry interval ends.
+            #[cfg(feature = "gui")]
+            let unretained = self.surface_gui_unretained;
+            #[cfg(not(feature = "gui"))]
+            let unretained = false;
             match outcome {
-                Ok(()) => {
+                Ok(()) if !unretained => {
                     // Skipped primitives leave the image incomplete until their
-                    // resources are resident. Analytic text drawn while atlas
-                    // population was deferred is refined on the next frame.
+                    // resources are resident. Text runs still waiting for atlas
+                    // population refine once some of them are populated.
                     #[cfg(feature = "gui")]
-                    let refine = self.surface_analytic_text && self.glyph_frame.population_capped();
+                    let unpopulated = if self.surface_analytic_text {
+                        self.unpopulated_runs(world_id, item.entity)
+                    } else {
+                        0
+                    };
                     #[cfg(not(feature = "gui"))]
-                    let refine = false;
+                    let unpopulated = 0;
                     self.surface_cache.repainted(
                         world_id,
                         item.entity,
                         time,
                         &self.surface_missing,
-                        refine,
+                        unpopulated,
                     );
                 }
-                Err(error) => {
+                outcome => {
                     let mut device = self.device.borrow_mut();
                     self.surface_cache.failed(
                         world_id,
@@ -313,14 +333,23 @@ impl<D: RenderDevice> RenderService<D> {
                         time,
                         &mut DeviceCacheTargets(&mut *device),
                     );
-                    if error == RenderError::ContextLost {
-                        return Err(error);
+                    if outcome == Err(RenderError::ContextLost) {
+                        return Err(RenderError::ContextLost);
                     }
                 }
             }
         }
 
         Ok(stats)
+    }
+
+    /// Text runs of a Surface that draw analytically only until glyph atlas
+    /// population reaches them.
+    #[cfg(feature = "gui")]
+    fn unpopulated_runs(&self, world: ipp_core::WorldId, entity: ipp_core::EntityId) -> u32 {
+        self.glyph_batch_cache
+            .get(&world)
+            .map_or(0, |cache| cache.unpopulated_runs(entity, &self.glyph_atlas))
     }
 
     /// Composite `item`'s image at its current placement when the plan caches

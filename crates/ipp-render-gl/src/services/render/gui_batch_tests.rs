@@ -9,7 +9,7 @@ use super::super::gui_storage::{GuiPiece, GuiPieceKey, GuiPieceSource};
 use super::super::retained_surfaces::SurfacePaint;
 use super::{
     GUI_FILL_GLYPH, GuiBatchRenderCache, GuiVertex, MAX_BATCH_BOXES, RetainedSurfaceSubmission,
-    VOLATILE_FRAMES, generate_box_vertices,
+    STORAGE_RETRY_FRAMES, VOLATILE_FRAMES, generate_box_vertices,
 };
 use crate::services::render::frame_statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
@@ -300,7 +300,10 @@ impl DrawBoxBatch for GuiBatchRenderCache<MockGuiDevice> {
         let clipped: Vec<_> = boxes.iter().map(|&primitive| (primitive, clip)).collect();
         self.begin_surface(entity);
         self.push_boxes(paint, &clipped, stats);
-        self.commit_surface(|_, _| &[], stats)?;
+        if !self.commit_surface(|_, _| &[], stats)? {
+            return Ok(());
+        }
+
         let pieces = self.piece_count();
         self.draw_pieces(program, 0..pieces, |_| None, mvp, stats)
     }
@@ -1209,7 +1212,7 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
 
     draw(&mut cache, &panel).unwrap();
     device.borrow_mut().fail_writes = true;
-    assert!(draw(&mut cache, &moved).is_err());
+    draw(&mut cache, &moved).unwrap();
     assert_eq!(device.borrow().deleted_batches, [1]);
     assert_eq!(cache.resident_bytes(), 0);
     assert_eq!(
@@ -1218,11 +1221,77 @@ fn failed_batch_replacement_releases_storage_instead_of_drawing_stale_vertices()
         "stale storage is never drawn"
     );
 
-    // The next frame allocates complete storage instead of reusing the failed batch.
+    // The Surface backs off instead of paying the failing allocation every frame.
     device.borrow_mut().fail_writes = false;
+    for _ in 1..STORAGE_RETRY_FRAMES {
+        cache.finish_frame(None);
+        draw(&mut cache, &moved).unwrap();
+    }
+    assert_eq!(device.borrow().created_batches.len(), 1);
+    assert_eq!(device.borrow().draws.len(), 1);
+
+    // Once the wait ends, the next frame allocates complete storage instead of
+    // reusing the failed batch.
+    cache.finish_frame(None);
     draw(&mut cache, &moved).unwrap();
     assert_eq!(device.borrow().created_batches.len(), 2);
     assert_eq!(device.borrow().draws.last().unwrap().0, 2);
+}
+
+#[test]
+fn repeated_storage_failures_double_the_retry_wait_until_a_commit_succeeds() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let entity = ipp_core::EntityId::from_bits(1);
+    let panel = sample_box_primitive(
+        1,
+        GuiPrimitivePart::Background,
+        [0.0, 0.0],
+        [1.0, 1.0],
+        None,
+    );
+    let moved = sample_box_primitive(
+        1,
+        GuiPrimitivePart::Background,
+        [0.5, 0.0],
+        [1.0, 1.0],
+        None,
+    );
+    let mut stats = RenderFrameWork::default();
+    let mut commit = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, primitive| {
+        cache.begin_surface(entity);
+        cache.push_boxes(
+            SurfacePaint::UNKNOWN,
+            &[(primitive, [0.0, 0.0, 4.0, 2.0])],
+            &mut stats,
+        );
+        let committed = cache.commit_surface(|_, _| &[], &mut stats).unwrap();
+        cache.finish_frame(None);
+        committed
+    };
+
+    // Record the frames on which a persistently failing Surface retries.
+    device.borrow_mut().fail_writes = true;
+    let mut attempts = Vec::new();
+    for frame in 0..64 {
+        let created = device.borrow().created_batches.len();
+        assert!(!commit(&mut cache, &panel));
+        if device.borrow().created_batches.len() > created {
+            attempts.push(frame);
+        }
+    }
+    assert_eq!(attempts, [0, 4, 12, 28, 60]);
+
+    // A successful retry ends the back-off: the next failure waits the first interval.
+    device.borrow_mut().fail_writes = false;
+    while !commit(&mut cache, &panel) {}
+    device.borrow_mut().fail_writes = true;
+    assert!(!commit(&mut cache, &moved));
+    device.borrow_mut().fail_writes = false;
+    for _ in 1..STORAGE_RETRY_FRAMES {
+        assert!(!commit(&mut cache, &moved));
+    }
+    assert!(commit(&mut cache, &moved));
 }
 
 /// Bytes of one filled box quad.

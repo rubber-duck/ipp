@@ -816,9 +816,6 @@ pub struct GlyphFrameWork {
     pub populates: u32,
     /// Recoverable allocation or rasterization failures.
     pub failures: u32,
-    /// Missing entries left for a later frame by the per-frame population cap or
-    /// time budget.
-    capped: u32,
 }
 
 impl GlyphFrameWork {
@@ -829,7 +826,6 @@ impl GlyphFrameWork {
         self.misses = 0;
         self.populates = 0;
         self.failures = 0;
-        self.capped = 0;
     }
 
     /// Record a missing entry; queue it within the per-frame cap unless it backs off.
@@ -845,25 +841,14 @@ impl GlyphFrameWork {
 
         if self.queue.len() < MAX_POPULATES_PER_FRAME {
             self.queue.push(key);
-        } else {
-            self.capped += 1;
         }
-    }
-
-    /// Whether the per-frame cap or time budget left missing entries that a
-    /// following frame will populate; entries backing off after failures do not count.
-    pub fn population_capped(&self) -> bool {
-        self.capped > 0
     }
 
     /// Take at most `allowance` queued entries, in the order their runs published
     /// their demand; the rest wait for a later frame.
     pub fn take_queue(&mut self, allowance: usize) -> Vec<GlyphKey> {
         let mut queue = std::mem::take(&mut self.queue);
-        if queue.len() > allowance {
-            self.capped += (queue.len() - allowance) as u32;
-            queue.truncate(allowance);
-        }
+        queue.truncate(allowance);
 
         queue
     }
@@ -1037,6 +1022,34 @@ impl GlyphBatchRenderCache {
         }
     }
 
+    /// Keep a Surface whose cache image is reused, and record the entries its runs
+    /// still miss, so population reaches text the image drew analytically and the
+    /// image can refine to atlas text.
+    pub fn keep_waiting_surface<D: RenderDevice>(
+        &mut self,
+        entity: ipp_core::EntityId,
+        atlas: &GlyphAtlas<D>,
+        work: &mut GlyphFrameWork,
+    ) {
+        self.keep_surface(entity);
+        let Some(surface) = self.surfaces.get(&entity) else {
+            return;
+        };
+
+        let generation = atlas.residency_generation();
+        for run in surface.runs.values() {
+            if run.band.is_none() || run.resident == Some(generation) {
+                continue;
+            }
+
+            for key in &run.keys {
+                if atlas.get(key).is_none() {
+                    work.miss(atlas, *key);
+                }
+            }
+        }
+    }
+
     /// Publish one visible run's band and demand, recording entries missing from the atlas.
     ///
     /// `glyph_bounds` returns font-unit bounds for glyphs with coverage; other glyphs need
@@ -1201,6 +1214,29 @@ impl GlyphBatchRenderCache {
         }
 
         true
+    }
+
+    /// Text runs of a Surface that draw analytically only until atlas population
+    /// reaches them: each has a band and a demanded entry that is not resident, and
+    /// none of its entries backs off after a failure. Runs without a band or with a
+    /// backed-off entry stay analytic for other reasons and are not counted.
+    pub fn unpopulated_runs<D: RenderDevice>(
+        &self,
+        entity: ipp_core::EntityId,
+        atlas: &GlyphAtlas<D>,
+    ) -> u32 {
+        let Some(surface) = self.surfaces.get(&entity) else {
+            return 0;
+        };
+
+        let generation = atlas.residency_generation();
+        let waiting = surface.runs.values().filter(|run| {
+            run.band.is_some()
+                && run.resident != Some(generation)
+                && run.keys.iter().any(|key| atlas.get(key).is_none())
+                && !run.keys.iter().any(|key| atlas.population_deferred(key))
+        });
+        waiting.count() as u32
     }
 
     /// Retained batches of a prepared run as GUI storage pieces, in painter order.

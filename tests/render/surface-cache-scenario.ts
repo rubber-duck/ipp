@@ -375,9 +375,10 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     `resource arrival waited for the refresh interval: ${JSON.stringify(arrival.record)}`,
   );
   await direct("direct-arrival", DISTANCE.band1);
-  // GUI builds populate at most 32 new atlas glyphs per frame; the image drawn
-  // analytically on arrival is refined on the following frames until its text
-  // samples the atlas like direct presentation.
+  // WebGL sizes glyph population from a fixed per-glyph estimate that covers
+  // the terminal's glyphs, so the arrival repaint already samples the atlas
+  // like direct presentation. Text still waiting for population would refine
+  // only at the refresh cadence.
   comparisons.arrival = matched("direct-arrival", "cache-arrival");
 
   // Continuous edits at the ordinary cap: no starvation and no excess.

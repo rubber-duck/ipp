@@ -43,10 +43,15 @@
 //! image incomplete and records the missing resources. Direct presentation
 //! skips the same primitives, so the image stays current until one of them
 //! becomes resident; the first frame that sees it resident repaints regardless
-//! of the refresh interval. Analytic glyph fallback draws, so it is complete;
-//! when the glyph atlas deferred entries past its per-frame population bound,
-//! the image is refined on the next frame instead, until its text samples the
-//! atlas as direct presentation does.
+//! of the refresh interval. Analytic glyph fallback draws, so it is complete.
+//! A repaint that drew text runs analytically only because atlas population has
+//! not reached their entries yet records how many; direct presentation draws
+//! the same runs analytically until then. Once a plan reports fewer such runs,
+//! the image is refined at its refresh cadence, so population progress by any
+//! Surface never repaints an image faster than its cap, and text that stays
+//! analytic for other reasons (no atlas band, or entries backing off after a
+//! failure) never refines. Paint changes follow the ordinary rules above,
+//! including the switch to direct presentation for animated paint.
 //!
 //! Resolution is the band's texel density times the content size, scaled
 //! uniformly to fit `min(device limit, SURFACE_CACHE_MAX_DIMENSION)`. The
@@ -198,6 +203,9 @@ pub(crate) struct SurfaceCacheInput {
     pub interaction: bool,
     /// A resource the image's last repaint skipped is resident now.
     pub missing_resident: bool,
+    /// Fewer of the Surface's text runs wait for atlas population than when its
+    /// image was last repainted, so some can now sample the atlas.
+    pub text_populated: bool,
     /// Inside the camera frustum this frame.
     pub visible: bool,
     /// Camera-to-anchor distance in metres.
@@ -237,8 +245,9 @@ struct SurfaceCachePaint {
     resource_revision: u64,
     /// No primitive was skipped for a missing resource or missing GPU data.
     complete: bool,
-    /// Text was drawn analytically while atlas population was deferred.
-    refine: bool,
+    /// Text runs drawn analytically because atlas population had not reached
+    /// their entries yet.
+    unpopulated: u32,
 }
 
 struct SurfaceCacheImage<T> {
@@ -516,13 +525,18 @@ impl<T> SurfaceTextureCache<T> {
             _ if resized => true,
             None => true,
             Some(painted) if painted.resource_revision != input.resource_revision => true,
-            // A skipped resource arrived, or deferred glyphs are being populated:
-            // repaint now, whatever the cadence.
+            // A skipped resource arrived: repaint now, whatever the cadence.
             Some(painted) if !painted.complete && input.missing_resident => true,
-            Some(painted) if painted.refine => true,
             // Up to date. An incomplete image matches direct presentation, which
-            // skips the same primitives, until a missing resource arrives.
-            Some(painted) if painted.paint_revision == input.paint_revision => false,
+            // skips the same primitives, until a missing resource arrives. Text
+            // drawn analytically while it waited for atlas population refines at
+            // the refresh cadence once some of it can sample the atlas.
+            Some(painted) if painted.paint_revision == input.paint_revision => {
+                painted.unpopulated > 0
+                    && input.text_populated
+                    && time - entry.painted_at
+                        >= input.policy.refresh_interval_at(entry.band) - 1e-9
+            }
             // Out-of-date content may stay on screen only while it was on screen.
             Some(_) if !shown => true,
             Some(_) => {
@@ -746,15 +760,17 @@ impl<T> SurfaceTextureCache<T> {
 
     /// Record a completed repaint. `missing` lists the resources whose
     /// primitives were skipped because they were not resident; the image is
-    /// repainted as soon as a plan reports one of them resident. `refine`
-    /// repaints it on the next planned frame.
+    /// repainted as soon as a plan reports one of them resident. `unpopulated`
+    /// counts text runs drawn analytically while they waited for atlas
+    /// population; the image refines at its refresh cadence once a plan reports
+    /// that fewer runs wait.
     pub(crate) fn repainted(
         &mut self,
         world: WorldId,
         entity: EntityId,
         time: f64,
         missing: &[AssetKey],
-        refine: bool,
+        unpopulated: u32,
     ) {
         let Some(entry) = self.entries.get_mut(&(world, entity)) else {
             return;
@@ -764,7 +780,7 @@ impl<T> SurfaceTextureCache<T> {
             paint_revision: entry.revisions.0,
             resource_revision: entry.revisions.1,
             complete: missing.is_empty(),
-            refine,
+            unpopulated,
         });
         entry.missing.clear();
         entry.missing.extend_from_slice(missing);
@@ -776,6 +792,17 @@ impl<T> SurfaceTextureCache<T> {
             entry.repaints = entry.repaints.saturating_add(1);
             self.counts.repaints += 1;
         }
+    }
+
+    /// Text runs the Surface's current image drew analytically while they waited
+    /// for atlas population; zero without an image. The caller compares them with
+    /// the runs waiting now in the next plan.
+    #[cfg(any(test, feature = "gui"))]
+    pub(crate) fn unpopulated(&self, world: WorldId, entity: EntityId) -> u32 {
+        self.entries
+            .get(&(world, entity))
+            .and_then(|entry| entry.painted)
+            .map_or(0, |painted| painted.unpopulated)
     }
 
     /// Resources the Surface's current image skipped; empty for a complete

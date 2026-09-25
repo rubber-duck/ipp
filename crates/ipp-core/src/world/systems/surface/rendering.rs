@@ -109,8 +109,9 @@ pub struct SurfaceRenderResource {
 pub enum SurfacePrimitiveIdentity {
     /// Raw authored Surface item, stable within its component collection.
     Authored(SurfaceItemId),
-    /// GUI-generated output for one live node. The node lifetime fences reuse:
-    /// removing and recreating a node never retargets an older primitive.
+    /// GUI-generated output for one live node. The root incarnation and node
+    /// identities that are never reused within it fence reuse: removing and
+    /// recreating a node or root never retargets an older primitive.
     #[cfg(feature = "gui")]
     Gui(GuiPrimitiveId),
 }
@@ -1084,10 +1085,6 @@ impl From<PositionedGlyph> for SurfaceGlyph {
 #[cfg(test)]
 #[path = "gui_output_tests.rs"]
 mod gui_output_tests;
-
-#[cfg(all(test, feature = "gui"))]
-#[path = "gui_shape_sampling.rs"]
-mod gui_shape_sampling;
 
 #[cfg(test)]
 mod tests {

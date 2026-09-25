@@ -65,6 +65,7 @@ fn input(index: u64, distance: f32, paint: u64, resource: u64) -> SurfaceCacheIn
         resource_revision: resource,
         interaction: false,
         missing_resident: false,
+        text_populated: false,
         visible: true,
         distance,
     }
@@ -104,7 +105,7 @@ impl Store {
         for input in inputs {
             match self.cache.action(world, input.entity) {
                 Some(SurfaceCacheAction::Repaint) => {
-                    self.cache.repainted(world, input.entity, time, &[], false);
+                    self.cache.repainted(world, input.entity, time, &[], 0);
                     self.cache.presented(world, input.entity, time);
                 }
                 Some(SurfaceCacheAction::Reuse) => {
@@ -279,7 +280,7 @@ fn incomplete_images_repaint_when_a_missing_resource_becomes_resident() {
         .unwrap();
     store
         .cache
-        .repainted(WORLD, entity(1), 0.0, &[key(7), key(9)], false);
+        .repainted(WORLD, entity(1), 0.0, &[key(7), key(9)], 0);
     store.cache.presented(WORLD, entity(1), 0.0);
     store
         .cache
@@ -311,9 +312,7 @@ fn incomplete_images_keep_coalescing_paint_edits() {
         .cache
         .plan(WORLD, 0.0, 4096, &inputs, &mut store.targets)
         .unwrap();
-    store
-        .cache
-        .repainted(WORLD, entity(1), 0.0, &[key(7)], false);
+    store.cache.repainted(WORLD, entity(1), 0.0, &[key(7)], 0);
     store.cache.presented(WORLD, entity(1), 0.0);
     store
         .cache
@@ -673,23 +672,55 @@ fn device_limits_cap_the_image_size() {
 }
 
 #[test]
-fn refined_images_repaint_on_the_next_frame_until_refinement_ends() {
+fn text_waiting_for_population_refines_at_the_refresh_cadence_once_populated() {
     let mut store = Store::new();
     let inputs = [input(1, 5.0, 1, 1)];
     store
         .cache
         .plan(WORLD, 0.0, 4096, &inputs, &mut store.targets)
         .unwrap();
-    store.cache.repainted(WORLD, entity(1), 0.0, &[], true);
+    store.cache.repainted(WORLD, entity(1), 0.0, &[], 2);
+    store.cache.presented(WORLD, entity(1), 0.0);
+    store
+        .cache
+        .finish_frame(WORLD, 0.0, true, &mut store.targets);
+    assert_eq!(store.cache.unpopulated(WORLD, entity(1)), 2);
+
+    // Population progress refines the image, but not before its refresh interval.
+    let populated = [SurfaceCacheInput {
+        text_populated: true,
+        ..inputs[0]
+    }];
+    assert_eq!(store.frame(0.05, &populated), counts(0, 1, 0, 0, 0));
+    assert_eq!(store.frame(0.1, &populated), counts(1, 0, 0, 0, 0));
+
+    // The helper's repaint drew every run from the atlas: refinement ends.
+    assert_eq!(store.cache.unpopulated(WORLD, entity(1)), 0);
+    assert_eq!(store.frame(1.0, &populated), counts(0, 1, 0, 0, 0));
+}
+
+#[test]
+fn text_still_waiting_for_population_never_repaints_an_up_to_date_image() {
+    let mut store = Store::new();
+    let inputs = [input(1, 5.0, 1, 1)];
+    store
+        .cache
+        .plan(WORLD, 0.0, 4096, &inputs, &mut store.targets)
+        .unwrap();
+    store.cache.repainted(WORLD, entity(1), 0.0, &[], 1);
     store.cache.presented(WORLD, entity(1), 0.0);
     store
         .cache
         .finish_frame(WORLD, 0.0, true, &mut store.targets);
 
-    // Even with a frozen clock the next frame repaints; the helper's repaint
-    // completes the refinement, after which the image is reused.
-    assert_eq!(store.frame(0.0, &inputs), counts(1, 0, 0, 0, 0));
-    assert_eq!(store.frame(0.0, &inputs), counts(0, 1, 0, 0, 0));
+    // Other Surfaces keep the population queue busy, but none of this Surface's
+    // runs is populated: its image matches direct presentation and is reused.
+    for step in 1..=20 {
+        assert_eq!(
+            store.frame(f64::from(step) * 0.05, &inputs),
+            counts(0, 1, 0, 0, 0)
+        );
+    }
 }
 
 /// Frames 1/30 s apart with a 60 Hz cap: every changed frame is due for a repaint.

@@ -1269,13 +1269,13 @@ fn population_queue_is_bounded_per_frame_and_resumes_next_frame() {
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
     assert_eq!(world.work.misses, ids.len() as u32);
     assert_eq!(world.populate(&mut atlas, 4), MAX_POPULATES_PER_FRAME);
-    assert!(world.work.population_capped());
+    assert_eq!(world.cache.unpopulated_runs(run.entity, &atlas), 1);
     assert!(!world.draw(&atlas, &run).0);
 
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
     assert_eq!(world.work.misses, 8);
     assert_eq!(world.populate(&mut atlas, 4), 8);
-    assert!(!world.work.population_capped());
+    assert_eq!(world.cache.unpopulated_runs(run.entity, &atlas), 0);
     assert!(world.draw(&atlas, &run).0);
 }
 
@@ -1292,9 +1292,10 @@ fn population_allowance_defers_the_rest_of_the_queue() {
         world.populate_within(&mut atlas, 4, MIN_POPULATES_PER_FRAME),
         32
     );
-    assert!(
-        world.work.population_capped(),
-        "deferred entries count as capped"
+    assert_eq!(
+        world.cache.unpopulated_runs(run.entity, &atlas),
+        1,
+        "deferred entries leave the run waiting"
     );
     assert!(!world.draw(&atlas, &run).0);
 

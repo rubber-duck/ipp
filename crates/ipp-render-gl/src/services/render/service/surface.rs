@@ -59,7 +59,7 @@ impl<D: RenderDevice> RenderService<D> {
     ///
     /// Primitives whose resource or GPU data is not resident are skipped and
     /// their resources listed in `surface_missing`, which this call resets
-    /// together with `surface_analytic_text`.
+    /// together with `surface_analytic_text` and `surface_gui_unretained`.
     pub(super) fn draw_surface_primitives(
         &mut self,
         world: &WorldContext<'_>,
@@ -72,6 +72,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "gui")]
         {
             self.surface_analytic_text = false;
+            self.surface_gui_unretained = false;
         }
 
         // Unchanged paint lets retained work skip hashing its inputs.
@@ -363,6 +364,12 @@ impl<D: RenderDevice> RenderService<D> {
     /// Boxes and text runs whose atlas entries are all resident become retained
     /// batches; consecutive batches form one [`SurfaceOp::Gui`] range whatever their
     /// clips. Every other visible primitive becomes a [`SurfaceOp::Primitive`].
+    ///
+    /// When the Surface has no usable storage after a recoverable allocation or write
+    /// failure, or while it backs off from one, its boxes are skipped for the frame and
+    /// counted as one failed draw, its text draws analytically and
+    /// `surface_gui_unretained` is set. Other Surfaces and the rest of the frame are
+    /// unaffected.
     #[cfg(feature = "gui")]
     fn prepare_gui_work(
         &mut self,
@@ -454,14 +461,33 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         let glyphs = glyphs.as_deref();
-        cache.commit_surface(
+        let committed = cache.commit_surface(
             |identity, batch| {
                 glyphs.map_or(&[], |glyphs| {
                     glyphs.batch_vertices(item.entity, identity, batch)
                 })
             },
             stats,
-        )
+        )?;
+        if committed {
+            return Ok(());
+        }
+
+        self.surface_gui_unretained = true;
+        stats.failed_draw();
+        ops.clear();
+        for (index, primitive) in item.primitives.iter().enumerate() {
+            let Some(clip) = ipp_core::primitive_effective_clip(primitive.style(), item.clip_size)
+            else {
+                continue;
+            };
+
+            if !matches!(primitive, ipp_core::SurfaceRenderPrimitive::Box { .. }) {
+                ops.push(SurfaceOp::Primitive(index, clip));
+            }
+        }
+
+        Ok(())
     }
 
     /// Draw committed GUI batches `range` of the current Surface.
@@ -494,8 +520,9 @@ impl<D: RenderDevice> RenderService<D> {
     /// Runs drawn this frame update their bands and demand and queue missing entries;
     /// a repainted cache image selects bands from its own projection and size, so
     /// camera movement within one cache resolution never changes glyph quality.
-    /// Culled Surfaces and reused images keep theirs. Unchanged runs only hash their
-    /// inputs.
+    /// Culled Surfaces and reused images keep theirs; a reused image whose text still
+    /// waits for atlas population queues its missing entries, so it can refine.
+    /// Unchanged runs only hash their inputs.
     #[cfg(feature = "gui")]
     pub(super) fn prepare_glyph_demand(
         &mut self,
@@ -526,7 +553,13 @@ impl<D: RenderDevice> RenderService<D> {
                 &frustum,
             ) {
                 super::surface_cache::SurfaceRaster::Skip => {
-                    cache.keep_surface(item.entity);
+                    let reused = self.surface_cache.action(world.id(), item.entity)
+                        == Some(super::super::surface_cache::SurfaceCacheAction::Reuse);
+                    if reused && self.surface_cache.unpopulated(world.id(), item.entity) > 0 {
+                        cache.keep_waiting_surface(item.entity, atlas, work);
+                    } else {
+                        cache.keep_surface(item.entity);
+                    }
                     continue;
                 }
                 super::surface_cache::SurfaceRaster::Draw(mvp, viewport) => (mvp, viewport),

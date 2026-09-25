@@ -851,9 +851,10 @@ export async function exerciseGuiLifecycle(
     "A GuiRoot coexists with raw Surface items",
   );
 
-  // Each root owns its density. Authored lanes are metres, so a 1 x 0.5 m
-  // box spans (U, U/2) logical units; writes, insertion values and overlays
-  // all reflow only their own root, and invalid values are rejected.
+  // Each root owns its density. Authored lanes are logical units, so the
+  // 1 x 0.5 box keeps its logical bounds while the root filling the 4 x 3 m
+  // Surface spans (4U, 3U); writes, insertion values and overlays all reflow
+  // only their own root, and invalid values are rejected.
   const densityRoot = async (alias: number, units?: number) => {
     const densityRef = { kind: "alias", alias } as const;
     const densityEntity = aliasId(
@@ -899,9 +900,10 @@ export async function exerciseGuiLifecycle(
   const boxBounds = async (densityEntity: bigint) => {
     await client.waitForFrame();
     const tree = await client.semanticSnapshot({ entity: densityEntity });
+    const root = tree.nodes.find((node) => node.id === 1);
     const box = tree.nodes.find((node) => node.id === 2);
-    expect(box, "Density panel omitted its box");
-    return box.bounds.join();
+    expect(root && box, "Density panel omitted its root or box");
+    return `${root.bounds.join()}|${box.bounds.join()}`;
   };
   const densityValue = async (densityEntity: bigint) => {
     const snapshot = (await client.inspect()).entities.find(
@@ -923,14 +925,14 @@ export async function exerciseGuiLifecycle(
   const plainDensity = await densityRoot(90);
   const denseDensity = await densityRoot(91, 2);
   expect(
-    (await boxBounds(plainDensity)) === "0,0,1,0.5" &&
-      (await boxBounds(denseDensity)) === "0,0,2,1",
+    (await boxBounds(plainDensity)) === "0,0,4,3|0,0,1,0.5" &&
+      (await boxBounds(denseDensity)) === "0,0,8,6|0,0,1,0.5",
     "Per-root densities did not scale evaluated bounds independently",
   );
   successfulBatch(await client.batch([densityWrite(plainDensity, 0.5)]));
   expect(
-    (await boxBounds(plainDensity)) === "0,0,0.5,0.25" &&
-      (await boxBounds(denseDensity)) === "0,0,2,1",
+    (await boxBounds(plainDensity)) === "0,0,2,1.5|0,0,1,0.5" &&
+      (await boxBounds(denseDensity)) === "0,0,8,6|0,0,1,0.5",
     "A density write did not reflow only its own root",
   );
   for (const units of [0, -1]) {
@@ -949,7 +951,7 @@ export async function exerciseGuiLifecycle(
     ]),
   );
   expect(
-    (await boxBounds(denseDensity)) === "0,0,4,2" &&
+    (await boxBounds(denseDensity)) === "0,0,16,12|0,0,1,0.5" &&
       (await densityValue(denseDensity)) === "2,4",
     "A density overlay did not reflow the root over its authored value",
   );
@@ -962,7 +964,7 @@ export async function exerciseGuiLifecycle(
     ]),
   );
   expect(
-    (await boxBounds(denseDensity)) === "0,0,2,1" &&
+    (await boxBounds(denseDensity)) === "0,0,8,6|0,0,1,0.5" &&
       (await densityValue(denseDensity)) === "2,2",
     "Releasing a density overlay did not restore the authored value",
   );
@@ -986,12 +988,12 @@ export async function exerciseGuiLifecycle(
     (item) => item.component === restored.components.GuiRoot!.id,
   )?.fields.units_per_metre;
   await restored.waitForFrame();
-  const restoredBox = (
+  const restoredRoot = (
     await restored.semanticSnapshot({ entity: restoredDensity.id })
-  ).nodes.find((node) => node.id === 2);
+  ).nodes.find((node) => node.id === 1);
   expect(
-    restoredUnits === 0.5 && restoredBox?.bounds.join() === "0,0,0.5,0.25",
-    `Restored density ${String(restoredUnits)} evaluated ${String(restoredBox?.bounds)}`,
+    restoredUnits === 0.5 && restoredRoot?.bounds.join() === "0,0,2,1.5",
+    `Restored density ${String(restoredUnits)} evaluated ${String(restoredRoot?.bounds)}`,
   );
   const restoredSlider = after.nodes.find((node) => node.id === 3)!;
   expect(

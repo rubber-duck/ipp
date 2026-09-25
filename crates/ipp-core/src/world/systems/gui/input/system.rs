@@ -2063,10 +2063,9 @@ impl GuiInputSystem {
         else {
             return base_text.len() as u32;
         };
-        let units = view.map(|view| view.units_per_metre).unwrap_or(1.0);
         // Pointer mapping shares the retained accumulated visual scale, so
         // presses land on the same geometry that paint and hit testing use.
-        let scale = font_size * units * evaluated.acc_scale[0];
+        let scale = font_size * evaluated.acc_scale[0];
         if !scale.is_finite() || scale == 0.0 {
             return base_text.len() as u32;
         }
@@ -2804,14 +2803,14 @@ fn slider_nudge(
 }
 
 /// Retained text measurement for geometry queries, fenced to `revision`.
-/// Returns the layout, metres-per-em scale, logical units factor and content
-/// origin, or None while the font is pending or the revision moved.
+/// Returns the layout, logical units per em and content origin, or None
+/// while the font is pending or the revision moved.
 fn retained_text_metrics(
     layout: &GuiLayoutSystem,
     entity: EntityId,
     node: GuiNodeId,
     revision: u32,
-) -> Option<(crate::systems::surface::TextLayout, f32, f32, [f32; 2])> {
+) -> Option<(crate::systems::surface::TextLayout, f32, [f32; 2])> {
     let view = layout.view(entity)?;
     let evaluated = view.nodes.iter().find(|evaluated| evaluated.node == node)?;
     let GuiEvaluatedContent::TextInput {
@@ -2826,12 +2825,10 @@ fn retained_text_metrics(
     if *measured_revision != revision {
         return None;
     }
-    let units = view.units_per_metre;
-    let scale = font_size * units;
-    if !scale.is_finite() || scale <= 0.0 {
+    if !font_size.is_finite() || *font_size <= 0.0 {
         return None;
     }
-    Some((layout.clone(), *font_size, units, evaluated.content_origin))
+    Some((layout.clone(), *font_size, evaluated.content_origin))
 }
 
 /// Logical zero-width caret pen for a retained revision, or None.
@@ -2842,10 +2839,8 @@ fn text_caret_rect(
     caret: u32,
     revision: u32,
 ) -> Option<[f32; 4]> {
-    let (measured, font_size, units, origin) =
-        retained_text_metrics(layout, entity, node, revision)?;
+    let (measured, scale, origin) = retained_text_metrics(layout, entity, node, revision)?;
     let pen = measured.caret_position(caret)?;
-    let scale = font_size * units;
     Some([
         origin[0] + pen.position[0] * scale,
         origin[1] + pen.position[1] * scale,
@@ -2863,12 +2858,10 @@ fn text_selection_rects(
     end: u32,
     revision: u32,
 ) -> Vec<[f32; 4]> {
-    let Some((measured, font_size, units, origin)) =
-        retained_text_metrics(layout, entity, node, revision)
+    let Some((measured, scale, origin)) = retained_text_metrics(layout, entity, node, revision)
     else {
         return Vec::new();
     };
-    let scale = font_size * units;
     measured
         .selection_rects(start, end)
         .into_iter()
@@ -3238,7 +3231,7 @@ impl GuiInputSystem {
                 }
             }
         };
-        let (measured, _, _, origin) =
+        let (measured, _, origin) =
             retained_text_metrics(layout, entity, target.node, committed_revision)?;
         let pen = measured.caret_position(caret)?;
         let key = assets.find_source(
@@ -3270,7 +3263,8 @@ impl GuiInputSystem {
             return None;
         }
         let provisional_caret = provisional.caret_position(composed.caret_end)?;
-        let scale = *font_size * units;
+        let scale = *font_size;
+        let metres_per_em = *font_size / units;
         let shift = self.ancestor_shift(view, &root, entity, target.node);
         let clip = self.scrolled_clip(view, entity, target.node);
         let origin = [origin[0] + shift[0], origin[1] + shift[1]];
@@ -3285,8 +3279,8 @@ impl GuiInputSystem {
             .map(|glyph| SurfaceGlyph {
                 glyph_id: glyph.glyph_id,
                 position: [
-                    (pen_ems[0] + glyph.position[0]) * font_size,
-                    (pen_ems[1] + glyph.position[1]) * font_size,
+                    (pen_ems[0] + glyph.position[0]) * metres_per_em,
+                    (pen_ems[1] + glyph.position[1]) * metres_per_em,
                 ],
                 color: None,
             })
@@ -3310,7 +3304,7 @@ impl GuiInputSystem {
                 }),
             },
             font: font.clone(),
-            font_size: *font_size,
+            font_size: metres_per_em,
             glyphs,
         };
         let caret_height = provisional_caret.height * scale;
@@ -7623,7 +7617,7 @@ impl crate::WorldContext<'_> {
 
     /// Logical caret pen `[x, y, 0, height]` for one text input, or None.
     /// Reuses the retained measurement (independent headless metrics scaled by
-    /// `font_size * units_per_metre` from `content_origin`); predicted carets
+    /// the logical `font_size` from `content_origin`); predicted carets
     /// past the retained revision have no rect until the commit reflows.
     pub fn gui_text_caret_rect(&self, entity: EntityId, node: GuiNodeId) -> Option<[f32; 4]> {
         let (caret, _, revision) = self.gui_text_caret_parts(entity, node)?;

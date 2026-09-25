@@ -5,6 +5,7 @@ import {
   count,
   intersectionOverUnion,
   mask,
+  maskBounds,
   pixelDifference,
   type RgbaFrame,
 } from "./retained-gui-images.js";
@@ -91,7 +92,7 @@ const ATLAS_LIMITS = { maxPages: 3, idlePagePublications: 0xffff_ffff };
 const isText = (r: number, g: number, b: number) =>
   g > 160 && r > 120 && b > 120;
 
-/** Scenario-owned GUI shape geometry in Surface metres. */
+/** Scenario-owned GUI shape geometry in logical units (metres at density 1). */
 const GUI_SHAPE = {
   width: 1.6,
   height: 1.2,
@@ -624,26 +625,31 @@ async function exerciseRetainedControls(
 
   // Mixed content: gradient shape with glow, atlas glyphs and a curve drawing.
   const mixed = await panel("mixed", "gui-mixed");
-  const classify = (select: (r: number, g: number, b: number) => boolean) =>
-    count(mask(mixed.pixels, select));
-  const content = {
-    gradient: classify((r, _g, b) => r > 200 && b < 90),
-    glyphs: classify((r, g, b) => g > 200 && g - r > 60 && g - b > 40),
+  const classes = {
+    gradient: (r: number, _g: number, b: number) => r > 200 && b < 90,
+    glyphs: (r: number, g: number, b: number) =>
+      g > 200 && g - r > 60 && g - b > 40,
     // The icon's #2468a0 evenodd frame.
-    curve: classify((r, g, b) => b > 120 && b - r > 80 && g < 140),
+    curve: (r: number, g: number, b: number) =>
+      b > 120 && b - r > 80 && g < 140,
   };
-  for (const [name, pixels] of Object.entries(content))
+  const content: Record<string, number> = {};
+  for (const [name, select] of Object.entries(classes)) {
+    const pixels = count(mask(mixed.pixels, select));
+    content[name] = pixels;
     assert.ok(
       pixels > 200,
       `mixed GUI content lacks ${name}: ${pixels} pixels`,
     );
-  // Density is a per-root unit scale: a write reflows the root into twice
-  // the logical extent, while the metre-denominated panel completes a frame
-  // with the same paint.
+  }
+  // Density maps logical units to Surface metres: authored lengths stay
+  // logical, so a write keeps the root's logical bounds and paints the whole
+  // panel (shape, border, radii, glow, glyphs and curve) at half size about
+  // the Surface's top-left corner.
   const denseBounds = await call<number[]>("guiPanelDensity", [2]);
   assert.deepEqual(
     denseBounds.map((value) => Math.round(value * 1000) / 1000),
-    [0, 0, 7.6, 4.8],
+    [0, 0, 3.8, 2.4],
     `density 2 root bounds: ${JSON.stringify(denseBounds)}`,
   );
   const { frame: denseFrame } = await settle("gui-mixed-density");
@@ -651,21 +657,55 @@ async function exerciseRetainedControls(
     Number(denseFrame.statistics!.gui!.guiBatches) > 0,
     "gui-mixed-density: retained GUI batches",
   );
-  const density = compareFrames(
-    mixed.pixels,
-    driver.pixels("gui-mixed-density"),
-    12,
-  );
-  assert.ok(
-    density.changedPixels <= 20,
-    `a density change must keep metre-denominated paint: ${JSON.stringify(density)}`,
-  );
+  const dense = driver.pixels("gui-mixed-density");
+  // The 3.8 x 2.4 m Surface is centred in the orthographic view.
+  const origin = [
+    mixed.frame.width / 2 - 1.9 * mixed.pixelsPerMetre,
+    mixed.frame.height / 2 - 1.2 * mixed.pixelsPerMetre,
+  ] as const;
+  const density: Record<string, unknown> = {};
+  for (const [name, select] of Object.entries(classes)) {
+    const full = mask(mixed.pixels, select);
+    const half = mask(dense, select);
+    const ratio = count(half) / count(full);
+    assert.ok(
+      ratio > 0.15 && ratio < 0.35,
+      `density 2 must quarter the ${name} area: ${count(half)} of ${count(full)} pixels`,
+    );
+    const before = maskBounds(full, mixed.frame.width)!;
+    const after = maskBounds(half, dense.width);
+    assert.ok(after, `density 2 lost the ${name} content`);
+    density[name] = { ratio, before, after };
+    after.forEach((lane, index) => {
+      const expected =
+        origin[index % 2]! + (before[index]! - origin[index % 2]!) / 2;
+      assert.ok(
+        Math.abs(lane - expected) <= 3,
+        `density 2 ${name} bounds ${JSON.stringify(after)} must halve ${JSON.stringify(before)} about ${JSON.stringify(origin)}`,
+      );
+    });
+  }
   assert.deepEqual(
     (await call<number[]>("guiPanelDensity", [1])).map(
       (value) => Math.round(value * 1000) / 1000,
     ),
     [0, 0, 3.8, 2.4],
   );
+  const { frame: restoredFrame } = await settle("gui-mixed-density-restored");
+  assert.ok(
+    Number(restoredFrame.statistics!.gui!.guiBatches) > 0,
+    "gui-mixed-density-restored: retained GUI batches",
+  );
+  const restored = compareFrames(
+    mixed.pixels,
+    driver.pixels("gui-mixed-density-restored"),
+    12,
+  );
+  assert.ok(
+    restored.changedPixels <= 20,
+    `restoring density 1 must restore the original paint: ${JSON.stringify(restored)}`,
+  );
+  density.restored = restored;
   const withoutGlow = await panel(
     "mixed-without-glow",
     "gui-mixed-without-glow",

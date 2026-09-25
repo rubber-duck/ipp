@@ -387,29 +387,29 @@ pub struct GuiThemePartRow {
     pub align_x: Option<f32>,
     /// Drawing or bitmap source.
     pub asset: Option<AssetSource>,
-    /// Per-axis corner radii in local Surface metres.
+    /// Per-axis corner radii in logical units.
     pub corner_radius: Option<[f32; 2]>,
-    /// Border width in local Surface metres.
+    /// Border width in logical units.
     pub border_width: Option<f32>,
     /// Straight linear RGBA border colour.
     pub border_color: Option<[f32; 4]>,
     /// 0 solid, 1 linear gradient, 2 radial gradient.
     pub fill_mode: Option<f32>,
-    /// Gradient start point (or radial centre) in local shape metres.
+    /// Gradient start point (or radial centre) in local shape logical units.
     pub gradient_start: Option<[f32; 2]>,
-    /// Gradient end point in local shape metres.
+    /// Gradient end point in local shape logical units.
     pub gradient_end: Option<[f32; 2]>,
     /// Gradient stop 0 colour.
     pub gradient_color0: Option<[f32; 4]>,
     /// Gradient stop 1 colour.
     pub gradient_color1: Option<[f32; 4]>,
-    /// Radial gradient radius in local shape metres.
+    /// Radial gradient radius in local shape logical units.
     pub gradient_radius: Option<f32>,
     /// Glow colour.
     pub glow_color: Option<[f32; 4]>,
     /// Glow intensity multiplier.
     pub glow_intensity: Option<f32>,
-    /// Outward glow radius in local Surface metres.
+    /// Outward glow radius in logical units.
     pub glow_radius: Option<f32>,
     /// Glow falloff exponent.
     pub glow_falloff: Option<f32>,

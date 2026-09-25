@@ -689,34 +689,143 @@ fn scroll_view_clips_content_and_reports_extents() {
     assert!(view.hit_test([1.0, 0.5]).is_some());
 }
 
+/// Authored lengths are logical units at every density: the root extent
+/// follows `U` while explicit sizes, padding and text keep their logical
+/// geometry, flex space grows with the root, and paint divides every length
+/// by `U` once so the content shrinks on the Surface as `U` grows.
 #[test]
-fn units_per_metre_scales_root_and_metre_lanes() {
+fn authored_lengths_stay_logical_across_densities() {
+    use crate::systems::surface::SurfaceRenderPrimitive;
+
     let font = test_font();
     let resolver = TestResolver::with_font(&font);
     let mut tree = TreeBuilder::new();
-    // Explicit lanes are local metres; at 100 units per metre a 0.02 m box
-    // spans 2 logical units on a 400x200 logical root.
     let root = tree.add(
         None,
         GuiNodeData::Container(GuiContainerKind::Column),
         text_style(),
     );
-    let child = tree.add(
+    let boxed = tree.add(
         Some(root),
         GuiNodeData::Container(GuiContainerKind::SizedBox),
-        sized(0.02, 0.01),
+        GuiNodeStyle {
+            background_color: Some([0.2, 0.3, 0.4, 1.0]),
+            ..sized(1.0, 0.5)
+        },
+    );
+    let row = tree.add(
+        Some(root),
+        GuiNodeData::Container(GuiContainerKind::Row),
+        GuiNodeStyle {
+            padding: Some([0.1, 0.1, 0.1, 0.1]),
+            ..text_style()
+        },
+    );
+    let label = tree.add(Some(row), GuiNodeData::Text("AV".to_owned()), text_style());
+    let spacer = tree.add(
+        Some(row),
+        GuiNodeData::Container(GuiContainerKind::Padding),
+        GuiNodeStyle {
+            flex: Some(1.0),
+            ..Default::default()
+        },
     );
     let root_tree = tree.build();
 
     let mut cache = GuiLayoutCache::default();
-    let req = GuiLayoutRequest {
-        units_per_metre: 100.0,
-        ..request(&root_tree, 1)
-    };
-    let view = cache.evaluate(entity(), &req, &resolver);
+    let reference = cache
+        .evaluate(entity(), &request(&root_tree, 1), &resolver)
+        .surface_primitives();
+    for (tick, units) in [(2, 1.0), (3, 2.0), (4, 0.5)] {
+        let req = GuiLayoutRequest {
+            units_per_metre: units,
+            ..request(&root_tree, tick)
+        };
+        let view = cache.evaluate(entity(), &req, &resolver);
 
-    assert_eq!(view.root_bounds, [0.0, 0.0, 400.0, 200.0]);
-    assert_rect(node_by_id(view, child).rect, [0.0, 0.0, 2.0, 1.0]);
+        // The 4x2 m Surface spans (4U, 2U) logical units.
+        assert_eq!(view.root_bounds, [0.0, 0.0, 4.0 * units, 2.0 * units]);
+        assert_rect(node_by_id(view, boxed).rect, [0.0, 0.0, 1.0, 0.5]);
+        // "AV" is 1.2 em wide and one line tall inside 0.1 padding.
+        assert_rect(node_by_id(view, label).rect, [0.1, 0.6, 2.0 * ADV_A, LINE]);
+        // The flex spacer takes what the root width leaves after padding
+        // and the label.
+        let spacer = node_by_id(view, spacer).rect;
+        assert_rect(
+            [spacer[0], spacer[1], spacer[2], 0.0],
+            [0.1 + 2.0 * ADV_A, 0.6, 4.0 * units - 0.2 - 2.0 * ADV_A, 0.0],
+        );
+
+        // Hit regions follow paint: the box covers content [0, 1/U].
+        let hit = view.hit_test_content([0.5 / units, 0.25 / units]).unwrap();
+        assert_eq!(hit.node, boxed);
+        assert_rect(
+            [hit.position[0], hit.position[1], 0.0, 0.0],
+            [0.5, 0.25, 0.0, 0.0],
+        );
+        assert_ne!(
+            view.hit_test_content([1.5 / units, 0.25 / units])
+                .map(|hit| hit.node),
+            Some(boxed)
+        );
+
+        // Paint equals the density-1 paint with every length divided by U.
+        let paint = view.surface_primitives();
+        assert_eq!(paint.len(), reference.len());
+        for (painted, expected) in paint.iter().zip(&reference) {
+            assert_eq!(painted.style().identity, expected.style().identity);
+            let position = painted.style().position;
+            let expected_position = expected.style().position;
+            assert_rect(
+                [position[0], position[1], 0.0, 0.0],
+                [
+                    expected_position[0] / units,
+                    expected_position[1] / units,
+                    0.0,
+                    0.0,
+                ],
+            );
+            match (painted, expected) {
+                (
+                    SurfaceRenderPrimitive::Box {
+                        size,
+                        ..
+                    },
+                    SurfaceRenderPrimitive::Box {
+                        size: expected_size,
+                        ..
+                    },
+                ) => assert_eq!(*size, expected_size.map(|lane| lane / units)),
+                (
+                    SurfaceRenderPrimitive::Glyphs {
+                        font_size,
+                        glyphs,
+                        ..
+                    },
+                    SurfaceRenderPrimitive::Glyphs {
+                        font_size: expected_size,
+                        glyphs: expected_glyphs,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(*font_size, expected_size / units);
+                    for (glyph, expected) in glyphs.iter().zip(expected_glyphs) {
+                        assert_eq!(glyph.glyph_id, expected.glyph_id);
+                        assert_rect(
+                            [glyph.position[0], glyph.position[1], 0.0, 0.0],
+                            [
+                                expected.position[0] / units,
+                                expected.position[1] / units,
+                                0.0,
+                                0.0,
+                            ],
+                        );
+                    }
+                }
+                other => panic!("unexpected paint {other:?}"),
+            }
+        }
+    }
 }
 
 #[test]
@@ -815,12 +924,12 @@ fn content_point_converts_through_units() {
     let root = tree.add(
         None,
         GuiNodeData::Container(GuiContainerKind::Stack),
-        sized(0.02, 0.02),
+        sized(2.0, 2.0),
     );
     let child = tree.add(
         Some(root),
         GuiNodeData::Container(GuiContainerKind::SizedBox),
-        sized(0.01, 0.01),
+        sized(1.0, 1.0),
     );
     let root_tree = tree.build();
 
@@ -829,9 +938,9 @@ fn content_point_converts_through_units() {
         units_per_metre: 100.0,
         ..request(&root_tree, 1)
     };
-    // At 100 units per metre the 0.01 m box spans 1 logical unit, so the
-    // content-metre point [0.005, 0.005] lands inside it while
-    // [0.015, 0.015] lands on the filling root.
+    // At 100 units per metre the 1-unit box covers 0.01 m of content, so
+    // the content-metre point [0.005, 0.005] lands inside it while
+    // [0.015, 0.015] lands on the 2-unit root.
     let view = cache.evaluate(entity(), &req, &resolver);
     assert_rect(node_by_id(view, child).rect, [0.0, 0.0, 1.0, 1.0]);
     let hit = view.hit_test_content([0.005, 0.005]).unwrap();

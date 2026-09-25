@@ -21,17 +21,17 @@ use crate::{DynamicPropertyKind, DynamicValue, ErrorReason};
 pub struct GuiNodeStyleRow {
     /// Effective interactivity; false skips hit testing and activation.
     pub enabled: bool,
-    /// Explicit width in local metres.
+    /// Explicit width in logical units.
     pub width: Option<f32>,
-    /// Explicit height in local metres.
+    /// Explicit height in logical units.
     pub height: Option<f32>,
-    /// Minimum width in local metres.
+    /// Minimum width in logical units.
     pub min_width: Option<f32>,
-    /// Minimum height in local metres.
+    /// Minimum height in logical units.
     pub min_height: Option<f32>,
-    /// Maximum width in local metres.
+    /// Maximum width in logical units.
     pub max_width: Option<f32>,
-    /// Maximum height in local metres.
+    /// Maximum height in logical units.
     pub max_height: Option<f32>,
     /// Main-axis share of a parent Row or Column's remaining space.
     pub flex: Option<f32>,
@@ -45,11 +45,11 @@ pub struct GuiNodeStyleRow {
     pub background_color: Option<[f32; 4]>,
     /// Content opacity (0.0..=1.0).
     pub opacity: f32,
-    /// Font size in local metres per em.
+    /// Font size in logical units per em.
     pub font_size: f32,
     /// Bound asset reference (font, drawing, or image).
     pub asset: Option<AssetSource>,
-    /// Visual translation in local metres; never reflows.
+    /// Visual translation in logical units; never reflows.
     pub position: [f32; 2],
     /// Visual axis-aligned scale; never reflows.
     pub scale: [f32; 2],
@@ -436,7 +436,7 @@ pub(crate) fn validate_node_style_property(
 /// ordinary numeric property.
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
 pub struct GuiNodeDataRow {
-    /// Image display size in local metres; positive.
+    /// Image display size in logical units; positive.
     pub image_size: Option<[f32; 2]>,
     /// Committed checkbox state.
     pub checked: Option<bool>,

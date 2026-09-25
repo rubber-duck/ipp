@@ -146,10 +146,49 @@ fn box_paint(
         .surface_primitives()
 }
 
-/// Authored lanes are metres, so density rescales the logical layout (root
-/// and node rectangles, hit positions) while paint and hit regions stay
-/// together on the same Surface content: the 1 m box spans `U` logical
-/// units, still covers content `[0, 1]` and paints exactly as `paint`.
+/// Density-1 box paint mapped to a density `units`: positions and every box
+/// length divide by the density once, because authored lengths are logical
+/// units. The root clip is the Surface rectangle at every density.
+fn paint_at_density(
+    paint: &[crate::systems::surface::SurfaceRenderPrimitive],
+    units: f32,
+) -> Vec<crate::systems::surface::SurfaceRenderPrimitive> {
+    use crate::systems::surface::SurfaceRenderPrimitive;
+
+    paint
+        .iter()
+        .map(|primitive| {
+            let SurfaceRenderPrimitive::Box {
+                style,
+                size,
+                corner_radius,
+                border_width,
+                border_color,
+                fill,
+                glow,
+            } = primitive
+            else {
+                panic!("box panel paints boxes only: {primitive:?}");
+            };
+            let mut style = *style;
+            style.position = style.position.map(|lane| lane / units);
+            SurfaceRenderPrimitive::Box {
+                style,
+                size: size.map(|lane| lane / units),
+                corner_radius: corner_radius.map(|lane| lane / units),
+                border_width: border_width / units,
+                border_color: *border_color,
+                fill: *fill,
+                glow: *glow,
+            }
+        })
+        .collect()
+}
+
+/// Authored lanes are logical units, so density rescales the root extent
+/// while the 1x1 box keeps its logical rectangle: paint and hit regions
+/// shrink together on the Surface, covering content `[0, 1/U]`, and paint
+/// equals the density-1 `paint` divided by `U`.
 fn assert_box_at_density(
     host: &mut HostRuntime,
     world: WorldId,
@@ -169,16 +208,17 @@ fn assert_box_at_density(
         .iter()
         .find(|node| node.node == GuiNodeId(2))
         .unwrap();
-    assert_eq!(node.rect, [0.0, 0.0, units, units]);
+    assert_eq!(node.rect, [0.0, 0.0, 1.0, 1.0]);
 
-    let hit = view.hit_test_content([0.75, 0.75]).unwrap();
+    let hit = view.hit_test_content([0.75 / units, 0.75 / units]).unwrap();
     assert_eq!(hit.node, GuiNodeId(2));
-    assert_eq!(hit.position, [0.75 * units, 0.75 * units]);
+    assert_eq!(hit.position, [0.75, 0.75]);
     assert_ne!(
-        view.hit_test_content([1.25, 0.25]).map(|hit| hit.node),
+        view.hit_test_content([1.25 / units, 0.25 / units])
+            .map(|hit| hit.node),
         Some(GuiNodeId(2))
     );
-    assert_eq!(view.surface_primitives(), paint);
+    assert_eq!(view.surface_primitives(), paint_at_density(paint, units));
 }
 
 #[test]

@@ -364,7 +364,7 @@ pub(crate) fn scroll_bar_primitives(
                 glow: None,
             };
             primitives.push(match appearance {
-                Some(appearance) => apply_appearance_to_primitive(&base, &appearance),
+                Some(appearance) => apply_appearance_to_primitive(&base, &appearance, units),
                 None => base,
             });
         }

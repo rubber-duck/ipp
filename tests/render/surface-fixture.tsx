@@ -361,7 +361,7 @@ const PANEL_COLOR: Color = [0.02, 0.03, 0.05, 1];
 export async function guiPanel(config: {
   variant: "mixed" | "mixed-without-glow" | "filled" | "sparse" | "empty";
   control?: boolean;
-  /** Shape size, border and corner radius in Surface metres. */
+  /** Shape size, border and corner radius in logical units (metres at the default density). */
   shape: {
     width: number;
     height: number;

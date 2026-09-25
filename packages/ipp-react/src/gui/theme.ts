@@ -32,7 +32,8 @@ export type GuiThemePartName = (typeof GUI_THEME_PARTS)[number];
 export type GuiThemeState = "idle" | "hovered" | "pressed" | "disabled";
 export type GuiThemeVariant = "checked" | "unchecked";
 
-/** Two-stop linear or radial gradient in local shape space. Stops are
+/** Two-stop linear or radial gradient in local shape space, with points and
+ * radius in logical units like every authored GUI length. Stops are
  * static material properties: transitions animate the part colour, not the
  * stops, and a missing stop takes the colour of the resolved state. */
 export interface GuiThemeGradient {
@@ -44,7 +45,8 @@ export interface GuiThemeGradient {
   readonly color1?: readonly [number, number, number, number] | undefined;
 }
 
-/** Localized glow around the outer shape boundary. Glow properties inherit
+/** Localized glow around the outer shape boundary; `radius` is in logical
+ * units. Glow properties inherit
  * from less specific parts independently of the fill; a state removes an
  * inherited glow with `intensity: 0`. */
 export interface GuiThemeGlow {
@@ -72,7 +74,9 @@ export interface GuiThemePartStyle {
    * both ends. Other parts ignore it. */
   readonly alignX?: number | undefined;
   readonly asset?: GuiAssetSource | undefined;
+  /** Per-axis corner radii in logical units. */
   readonly cornerRadius?: readonly [number, number] | undefined;
+  /** Border width in logical units. */
   readonly borderWidth?: number | undefined;
   readonly borderColor?: readonly [number, number, number, number] | undefined;
   readonly gradient?: GuiThemeGradient | undefined;

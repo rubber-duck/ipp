@@ -2,15 +2,18 @@
 import type {
   AssetWorldClient,
   GuiInspectResponse,
+  GuiTextFocusState,
   GuiWorldClient,
   SurfaceWorldClient,
   WorldPersistenceHostClient,
 } from "@ipp/client";
 import {
   aliasId,
+  cameraClient,
   componentFields,
   createEntity,
   insertComponent,
+  ORTHOGRAPHIC_CAMERA,
   successfulBatch,
 } from "../camera-fixtures.js";
 
@@ -997,5 +1000,372 @@ export async function exerciseGuiLifecycle(
     nodes: ids(after),
     denseStyleRows: denseRows.size,
     denseNameBytes,
+  };
+}
+
+/** Wait until the World's only asset, a TextInput font, has loaded: text
+ * inputs take focus only against a ready font. */
+export async function loadedFont(client: GuiTestClient): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    const resources = (await client.inspect()).resources;
+    if (resources.some((item) => item.status === "loaded")) return;
+    expect(attempt < 200, "The TextInput font never loaded");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/** Completed RGBA frame of the environment's presentation, top row first. */
+export interface GuiFrame {
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: ArrayBuffer;
+}
+
+/** Capture the next completed frame of a World with an attached canvas. */
+export type GuiFrameCapture = (client: GuiTestClient) => Promise<GuiFrame>;
+
+/** Pixels whose channels differ by more than `tolerance` between frames. */
+function changedPixels(a: GuiFrame, b: GuiFrame, tolerance = 2): number {
+  expect(
+    a.width === b.width && a.height === b.height,
+    "Compared frames differ in size",
+  );
+  const left = new Uint8Array(a.pixels);
+  const right = new Uint8Array(b.pixels);
+  let changed = 0;
+  for (let offset = 0; offset < left.length; offset += 4)
+    for (let channel = 0; channel < 3; channel += 1)
+      if (
+        Math.abs(left[offset + channel]! - right[offset + channel]!) > tolerance
+      ) {
+        changed += 1;
+        break;
+      }
+  return changed;
+}
+
+/** Pixels that differ from the frame's top-left background pixel. */
+function contentPixels(frame: GuiFrame): number {
+  const pixels = new Uint8Array(frame.pixels);
+  let content = 0;
+  for (let offset = 0; offset < pixels.length; offset += 4)
+    for (let channel = 0; channel < 3; channel += 1)
+      if (Math.abs(pixels[offset + channel]! - pixels[channel]!) > 2) {
+        content += 1;
+        break;
+      }
+  return content;
+}
+
+/** Capture until two consecutive completed frames agree, so glyph and
+ * atlas work from earlier frames has settled. */
+async function settledFrame(
+  client: GuiTestClient,
+  capture: GuiFrameCapture,
+): Promise<GuiFrame> {
+  let previous = await capture(client);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const next = await capture(client);
+    if (changedPixels(previous, next, 0) === 0) return next;
+    previous = next;
+  }
+  throw new Error("GUI presentation did not settle");
+}
+
+/** Camera of {@link activatePanelCamera}: distance and vertical field of view. */
+const PANEL_CAMERA = { distance: 5, fovY: ORTHOGRAPHIC_CAMERA.fov_y } as const;
+
+/** Normalized top-left viewport point of a logical point on the centred
+ * 4x3 panel, seen by the panel camera in a frame of this aspect (one
+ * logical unit per metre). */
+function panelViewportPoint(
+  frame: GuiFrame,
+  [x, y]: [number, number],
+): [number, number] {
+  const halfHeight = PANEL_CAMERA.distance * Math.tan(PANEL_CAMERA.fovY / 2);
+  const halfWidth = (halfHeight * frame.width) / frame.height;
+  return [0.5 * (1 + (x - 2) / halfWidth), 0.5 * (1 - (1.5 - y) / halfHeight)];
+}
+
+/** Author a perspective camera facing the Surface front from 5 m on +Z. */
+async function activatePanelCamera(client: GuiTestClient) {
+  const camera = { kind: "alias", alias: 70 } as const;
+  const id = aliasId(
+    await client.batch([
+      createEntity(70, "gui-restore-camera"),
+      insertComponent(client, "Transform", camera, {
+        z: PANEL_CAMERA.distance,
+      }),
+      insertComponent(client, "Camera", camera, {
+        ...ORTHOGRAPHIC_CAMERA,
+        projection: 0,
+      }),
+    ]),
+    70,
+  );
+  cameraClient(client).sendCommand({
+    type: "CameraActivateCommand",
+    entity: id,
+  });
+}
+
+/**
+ * Save a World while a TextInput holds focus, a selection and an open
+ * composition and a checkbox holds a pointer press, then restore it: the
+ * restored World keeps the structure, committed values and part overrides,
+ * holds no focus, capture, selection or composition, and takes only fresh
+ * handles. With `capture`, the restored panel's completed frame matches the
+ * frame of the same committed state before any interaction, while the
+ * interacting frame differs from both.
+ *
+ * The 4x3 panel stacks a checkbox, a TextInput and a slider, one unit each.
+ */
+export async function exerciseGuiTransientRestore(
+  host: WorldPersistenceHostClient<GuiTestClient>,
+  fontBytes: ArrayBuffer,
+  capture?: GuiFrameCapture,
+) {
+  const client = await host.createWorld({ symbolicId: "gui-transient" });
+  const font = await client.createAsset(17, fontBytes);
+  const ref = { kind: "alias", alias: 1 } as const;
+  const entity = aliasId(
+    await client.batch([
+      createEntity(1, "gui-transient-panel"),
+      insertComponent(client, "Transform", ref),
+      insertComponent(client, "Surface", ref, { width: 4, height: 3 }),
+      insertComponent(client, "GuiRoot", ref),
+    ]),
+    1,
+  );
+  const { rootIncarnation } = await client.inspectGui({ entity });
+  const row = { width: 4, height: 1 } as const;
+  await client.editGuiBatch([
+    {
+      action: "insert",
+      entity,
+      rootIncarnation,
+      id: 1,
+      index: 0,
+      data: { kind: "container", containerKind: "column" },
+      style: { width: 4, height: 3 },
+    },
+    {
+      action: "insert",
+      entity,
+      rootIncarnation,
+      id: 2,
+      parent: 1,
+      index: 0,
+      data: { kind: "checkbox" },
+      values: { checked: true },
+      style: row,
+    },
+    {
+      action: "insert",
+      entity,
+      rootIncarnation,
+      id: 3,
+      parent: 1,
+      index: 1,
+      data: { kind: "textInput", text: "ab", placeholder: "" },
+      style: { ...row, fontSize: 0.6, asset: font },
+    },
+    {
+      action: "insert",
+      entity,
+      rootIncarnation,
+      id: 4,
+      parent: 1,
+      index: 2,
+      data: { kind: "slider" },
+      values: { value: 0.75, min: 0, max: 1, step: 0 },
+      style: row,
+    },
+    {
+      action: "updatePart",
+      handle: client.createGuiNodeHandle(entity, rootIncarnation, 2),
+      part: "background",
+      patch: { color: [0.9, 0.2, 0.1, 1] },
+    },
+  ]);
+  if (capture) await activatePanelCamera(client);
+  // Programmatic focus is fenced against evaluated layout with a ready font.
+  await loadedFont(client);
+  await client.waitForFrame();
+  const committed = capture ? await settledFrame(client, capture) : undefined;
+  // Without a camera, pointers address panel logical units; through the
+  // active camera they are normalized viewport points projected onto the
+  // panel.
+  const checkboxPoint = committed
+    ? panelViewportPoint(committed, [2, 0.5])
+    : ([2, 0.5] as [number, number]);
+
+  // Interaction state: a held press capturing pointer 1 on the checkbox,
+  // then focus, selection and composition on the TextInput.
+  const handle = (id: number) =>
+    client.createGuiNodeHandle(entity, rootIncarnation, id);
+  const states: (GuiTextFocusState | null)[] = [];
+  const stop = client.subscribeGuiObservations((batch) => {
+    if (batch.textFocus !== undefined) states.push(batch.textFocus);
+  });
+  // A press focuses its control, so the checkbox press comes first and
+  // keeps capturing pointer 1 while focus moves to the TextInput.
+  const press = await client.submitGuiInput({
+    kind: "pointerDown",
+    pointer: 1,
+    position: checkboxPoint,
+    button: "primary",
+  });
+  const focus = await client.submitGuiInput({
+    kind: "focus",
+    handle: handle(3),
+  });
+  await client.submitGuiInput({ kind: "setTextSelection", start: 0, end: 1 });
+  await client.submitGuiInput({
+    kind: "composition",
+    text: "zz",
+    caretStart: 2,
+    caretEnd: 2,
+  });
+  expect(
+    focus.unhandled === undefined && press.unhandled === undefined,
+    `Interaction before save was not routed: ${JSON.stringify([focus.unhandled, press.unhandled])}`,
+  );
+  const deadline = Date.now() + 10000;
+  while (states.at(-1)?.composition?.text !== "zz") {
+    expect(Date.now() < deadline, "The TextInput published no composition");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  stop();
+  const interacting = capture ? await settledFrame(client, capture) : undefined;
+  const before = await client.inspectGui({ entity });
+
+  const bytes = await host.saveWorld();
+  await host.detachWorld();
+  const restored = await host.loadWorld(bytes, {
+    symbolicId: "gui-transient-restored",
+  });
+  const panel = (await restored.inspect()).entities.find(
+    (item) => item.metadata.symbolicId === "gui-transient-panel",
+  );
+  expect(panel, "Restored World omitted the transient panel");
+  const after = await restored.inspectGui({ entity: panel.id });
+  const values = (response: GuiInspectResponse) =>
+    JSON.stringify(response.nodes.map((node) => [node.id, node.controlValue]));
+  expect(
+    values(after) === values(before),
+    `Restored committed values ${values(after)} differ from ${values(before)}`,
+  );
+  const partOverride = (
+    (await guiProperties(restored, panel.id)).fields.part_state as
+      | { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
+      | undefined
+  )?.rows;
+  expect(
+    [...(partOverride?.values() ?? [])].some((row) => row.node === 2),
+    "Restored World lost the checkbox part override",
+  );
+
+  // No focus, capture, selection or composition survived the save.
+  const restoredStates: (GuiTextFocusState | null)[] = [];
+  const restoredStop = restored.subscribeGuiObservations((batch) => {
+    if (batch.textFocus !== undefined) restoredStates.push(batch.textFocus);
+  });
+  await restored.waitForFrame();
+  const snapshot = await restored.semanticSnapshot({ entity: panel.id });
+  const release = await restored.submitGuiInput({
+    kind: "pointerUp",
+    pointer: 1,
+    position: checkboxPoint,
+    button: "primary",
+  });
+  const commit = await restored.submitGuiInput({ kind: "commitComposition" });
+  const typed = await restored.submitGuiInput({ kind: "text", text: "x" });
+  const unchanged = await restored.inspectGui({ entity: panel.id });
+  expect(
+    snapshot.focused === undefined &&
+      release.unhandled?.kind === "noCapture" &&
+      commit.unhandled?.kind === "noFocus" &&
+      typed.unhandled?.kind === "noFocus" &&
+      values(unchanged) === values(before),
+    `Restored World kept interaction state: ${JSON.stringify({ focused: snapshot.focused, release: release.unhandled, commit: commit.unhandled, typed: typed.unhandled, values: values(unchanged) })}`,
+  );
+
+  // Handles from the saved session are rejected; fresh handles work, and
+  // focusing the restored TextInput starts with a collapsed selection and
+  // no composition.
+  const staleFocus = await restored
+    .submitGuiInput({ kind: "focus", handle: handle(3) })
+    .then(
+      (reply) => reply.unhandled?.kind ?? "handled",
+      () => "rejected",
+    );
+  expect(
+    staleFocus !== "handled",
+    "A handle from the saved session focused the restored TextInput",
+  );
+  await rejects(
+    restored.editGui({
+      action: "update",
+      handle: handle(2),
+      patch: { style: { opacity: 0.5 } },
+    }),
+    "A handle from the saved session edited the restored World",
+  );
+  const fresh = await restored.submitGuiInput({
+    kind: "focus",
+    handle: restored.createGuiNodeHandle(panel.id, after.rootIncarnation, 3),
+  });
+  expect(fresh.unhandled === undefined, "A fresh handle did not focus");
+  const restoredDeadline = Date.now() + 10000;
+  while (restoredStates.at(-1)?.node !== 3) {
+    expect(
+      Date.now() < restoredDeadline,
+      "The restored TextInput published no text focus",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  restoredStop();
+  const refocused = restoredStates.at(-1)!;
+  expect(
+    refocused.text === "ab" &&
+      refocused.composition === undefined &&
+      refocused.selectionStart === refocused.selectionEnd,
+    `Refocused restored TextInput kept transient text state: ${JSON.stringify(refocused, (_, value) => (typeof value === "bigint" ? `${value}` : value))}`,
+  );
+
+  // The restored frame shows the committed values and part override exactly
+  // as before any interaction; the interacting frame differs from both.
+  let frames: Record<string, number> | undefined;
+  if (capture) {
+    await restored.submitGuiInput({ kind: "blur" });
+    const camera = (await restored.inspect()).entities.find(
+      (item) => item.metadata.symbolicId === "gui-restore-camera",
+    );
+    expect(camera, "Restored World omitted the camera");
+    cameraClient(restored).sendCommand({
+      type: "CameraActivateCommand",
+      entity: camera.id,
+    });
+    await restored.waitForFrame();
+    const restoredFrame = await settledFrame(restored, capture);
+    const interactionPixels = changedPixels(committed!, interacting!);
+    const restoredPixels = changedPixels(committed!, restoredFrame);
+    const panelPixels = contentPixels(restoredFrame);
+    expect(
+      panelPixels > 1000 && interactionPixels > 50 && restoredPixels === 0,
+      `Restored frame does not match the committed frame: ${JSON.stringify({ panelPixels, interactionPixels, restoredPixels })}`,
+    );
+    frames = { panelPixels, interactionPixels, restoredPixels };
+  }
+  await host.detachWorld();
+  return {
+    nodes: ids(after),
+    values: values(after),
+    restoredIncarnation: String(after.rootIncarnation),
+    release: release.unhandled?.kind,
+    commit: commit.unhandled?.kind,
+    staleFocus,
+    frames: frames ?? "no presentation in this environment",
   };
 }

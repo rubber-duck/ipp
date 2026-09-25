@@ -11,7 +11,7 @@ import {
   insertComponent,
   successfulBatch,
 } from "../camera-fixtures.js";
-import type { GuiTestClient } from "./gui-lifecycle.js";
+import { type GuiTestClient, loadedFont } from "./gui-lifecycle.js";
 
 function expect(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -1196,12 +1196,7 @@ async function exerciseGuiRemoval(
     ]);
     // Programmatic focus is fenced against evaluated layout with a ready
     // font.
-    for (let attempt = 0; ; attempt += 1) {
-      const resources = (await client.inspect()).resources;
-      if (resources.some((item) => item.status === "loaded")) break;
-      expect(attempt < 200, "The TextInput font never loaded");
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    await loadedFont(client);
     await client.waitForFrame();
   };
   let { rootIncarnation } = await client.inspectGui({ entity });

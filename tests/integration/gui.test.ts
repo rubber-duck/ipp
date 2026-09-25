@@ -7,6 +7,7 @@ import type { WorldPersistenceHostClient } from "@ipp/client";
 import { runNativeEnvironment } from "./environment.js";
 import {
   exerciseGuiLifecycle,
+  exerciseGuiTransientRestore,
   type GuiTestClient,
 } from "./scenarios/gui-lifecycle.js";
 import { exerciseGuiInput } from "./scenarios/gui-input.js";
@@ -57,6 +58,29 @@ test("GUI roots, node identity and committed values cross a real native connecti
       assert.equal(result.failedBatchApplied, 1);
       assert.equal(result.largeBatchApplied, 18);
       assert.equal(result.failedLargeBatchApplied, 18);
+
+      // The native Host has no attached canvas here; the worker driver
+      // captures the restored frame.
+      const restoreHost = await env.track<
+        WorldPersistenceHostClient<GuiTestClient>
+      >(
+        contract.IppHostClient.connectWebSocket(env.url, {
+          signal: env.signal,
+        }),
+      );
+      const font = await readFile(
+        resolve(workspace, "target/font-assets/shure-tech-mono.ippf"),
+      );
+      const restored = await env.execute("gui transient restore", {}, () =>
+        exerciseGuiTransientRestore(
+          restoreHost,
+          font.buffer.slice(
+            font.byteOffset,
+            font.byteOffset + font.byteLength,
+          ) as ArrayBuffer,
+        ),
+      );
+      env.evidence.record("gui transient restore", restored);
     },
   );
 });

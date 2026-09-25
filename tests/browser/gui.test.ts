@@ -285,6 +285,51 @@ test("GUI roots, node identity and committed values cross a real worker connecti
       assert.equal(result.failedBatchApplied, 1);
       assert.equal(result.largeBatchApplied, 18);
       assert.equal(result.failedLargeBatchApplied, 18);
+
+      const restored = await env.execute("gui transient restore", {}, () =>
+        env.page.evaluate(async (urls) => {
+          const contract = await import(urls.generated);
+          const { exerciseGuiTransientRestore } = await import(
+            `${urls.origin}/dist/tests/integration/scenarios/gui-lifecycle.js`
+          );
+          const canvas = document.createElement("canvas");
+          canvas.width = 240;
+          canvas.height = 180;
+          const font = await (
+            await fetch(
+              `${urls.origin}/target/font-assets/shure-tech-mono.ippf`,
+            )
+          ).arrayBuffer();
+          const host = await contract.IppHostClient.connectWorker(
+            urls.workerScript,
+            urls.wasm,
+            { canvas: canvas.transferControlToOffscreen() },
+          );
+          try {
+            return await exerciseGuiTransientRestore(
+              host,
+              font,
+              async (client: {
+                presentation: {
+                  capture(): Promise<{
+                    width: number;
+                    height: number;
+                    pixels: ArrayBuffer;
+                  }>;
+                };
+              }) => {
+                const { width, height, pixels } =
+                  await client.presentation.capture();
+                return { width, height, pixels };
+              },
+            );
+          } finally {
+            await host.close();
+          }
+        }, env.urls),
+      );
+      env.evidence.record("gui transient restore", restored);
+      assert.equal(restored.frames.restoredPixels, 0);
     },
   );
 });

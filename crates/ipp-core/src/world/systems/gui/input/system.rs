@@ -55,9 +55,7 @@
 
 use super::super::system::{check_control_value, commit_control_value, resolve_control_effective};
 use super::super::tree::GuiNodeDataRow;
-use super::super::tree::nodes::{
-    GuiContainerKind, GuiControlValue, GuiNodeData, GuiNodeHandle, GuiNodeId,
-};
+use super::super::tree::nodes::{GuiControlValue, GuiNodeData, GuiNodeHandle, GuiNodeId};
 use super::super::{
     GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiHit, GuiLayoutSystem, GuiRoot,
     GuiScrollBarCursor, GuiSkinCursors, GuiSystem,
@@ -462,6 +460,23 @@ pub enum GuiInputEffectKind {
         node: GuiNodeId,
         /// Accumulated offset in logical units.
         offset: [f32; 2],
+    },
+    /// The item range a VirtualList wants declared changed: its visible
+    /// items widened by the overscan, published when the offset, viewport,
+    /// item properties or measurements move it, on attach and after restore.
+    /// Runtime-originated, so its session is zero.
+    VirtualRangeChanged {
+        /// Panel entity.
+        entity: EntityId,
+        /// VirtualList node.
+        node: GuiNodeId,
+        /// First wanted item index.
+        first: u32,
+        /// One past the last wanted item index; equal to `first` when empty.
+        last: u32,
+        /// Publication revision per list, starting at 1 and monotonic while
+        /// the list's root incarnation lives.
+        revision: u32,
     },
 }
 
@@ -910,10 +925,10 @@ enum ScrollDragStep {
 
 /// Input-owned scroll state with enough provenance to publish invalidation.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ScrollCursor {
-    offset: [f32; 2],
-    session: u64,
-    source_tick: u64,
+pub(super) struct ScrollCursor {
+    pub(super) offset: [f32; 2],
+    pub(super) session: u64,
+    pub(super) source_tick: u64,
 }
 
 /// Ordered GUI input routing pass. See the module documentation for the
@@ -967,8 +982,11 @@ pub struct GuiInputSystem {
     envelopes: Vec<PendingEnvelope>,
     /// Predicted control state chaining same-tick envelopes.
     predicted: BTreeMap<GuiInputTarget, PredictedControl>,
-    /// Input-owned scroll offsets in logical units, never reflowed.
-    scroll_offsets: BTreeMap<GuiInputTarget, ScrollCursor>,
+    /// Input-owned scroll offsets in logical units, never reflowed. A
+    /// VirtualList's offset follows its persisted anchor.
+    pub(super) scroll_offsets: BTreeMap<GuiInputTarget, ScrollCursor>,
+    /// VirtualList anchors awaiting persistence and published ranges.
+    pub(super) virtual_scroll: super::virtual_scroll::GuiVirtualScroll,
     /// Routed scroll offsets chaining same-tick scroll envelopes: each
     /// ScrollView's committed offset plus the deltas already queued for it.
     /// Dropped when those envelopes apply or cancel.
@@ -976,7 +994,7 @@ pub struct GuiInputSystem {
     /// Revision of input-owned scroll offsets. Bumped only when an applied
     /// scroll actually moves an offset, so paint can refresh on scroll
     /// without reflowing layout.
-    scroll_revision: u64,
+    pub(super) scroll_revision: u64,
     /// Transient caret/selection per text input, never reflowed.
     text_carets: BTreeMap<GuiInputTarget, TextCursor>,
     /// Active provisional IME composition, never committed until explicit commit.
@@ -992,7 +1010,7 @@ pub struct GuiInputSystem {
     /// Last frame observed, fencing session-replacement records.
     last_tick: u64,
     /// Routed effects awaiting the frame report.
-    pending_effects: Vec<GuiInputEffect>,
+    pub(super) pending_effects: Vec<GuiInputEffect>,
     /// Routed cancellations awaiting the frame report.
     pending_cancellations: Vec<GuiInputCancellation>,
     /// Routed conflicts awaiting the frame report.
@@ -1067,6 +1085,7 @@ impl SystemFactory for GuiInputSystemFactory {
             envelopes: Vec::new(),
             predicted: BTreeMap::new(),
             scroll_offsets: BTreeMap::new(),
+            virtual_scroll: Default::default(),
             scroll_predicted: BTreeMap::new(),
             scroll_revision: 0,
             text_carets: BTreeMap::new(),
@@ -1130,7 +1149,7 @@ fn recheck_hit<'a>(
 
 impl GuiInputSystem {
     /// Borrow the retained layout pass for routing.
-    fn layout<'a>(
+    pub(super) fn layout<'a>(
         &self,
         access: &'a SystemRuntimeAccess<'a>,
     ) -> Result<&'a GuiLayoutSystem, ErrorReason> {
@@ -2267,10 +2286,7 @@ impl GuiInputSystem {
             let Some(live) = root.nodes().node(id) else {
                 break;
             };
-            if matches!(
-                live.data,
-                GuiNodeData::Container(GuiContainerKind::ScrollView)
-            ) {
+            if matches!(live.data, GuiNodeData::Container(kind) if kind.is_scrollable()) {
                 chain.push(id);
             }
             current = live.parent;
@@ -2311,10 +2327,8 @@ impl GuiInputSystem {
             let Some(live) = root.nodes().node(id) else {
                 break;
             };
-            if matches!(
-                live.data,
-                GuiNodeData::Container(GuiContainerKind::ScrollView)
-            ) && let Some(record) = view.nodes.iter().find(|record| record.node == id)
+            if matches!(live.data, GuiNodeData::Container(kind) if kind.is_scrollable())
+                && let Some(record) = view.nodes.iter().find(|record| record.node == id)
                 && let Some(cursor) = self.scroll_offsets.get(&GuiInputTarget {
                     entity,
                     root_incarnation: view.root_incarnation,
@@ -5647,7 +5661,7 @@ impl GuiInputSystem {
 /// re-enter), and the layer's hidden producer originals are refreshed so
 /// later producer reads restore exact authored values. When producer and
 /// overlay disagree the overlay still wins.
-fn stage_producer_root(
+pub(super) fn stage_producer_root(
     access: &mut SystemRuntimeAccess<'_>,
     entity: EntityId,
     root: GuiRoot,
@@ -6061,6 +6075,7 @@ impl GuiInputSystem {
         for envelope in envelopes {
             self.apply_envelope(access, tick, envelope, &mut remaining);
         }
+        self.persist_virtual_anchors(access);
     }
 
     /// Clear cursors still pointing at one fully fenced target.
@@ -6297,9 +6312,12 @@ impl GuiInputSystem {
                 );
                 // Clamp-to-edge no-ops leave the stored offset untouched and
                 // never bump; dropped outer-edge remainder never reaches an
-                // envelope, so this is the only bump site.
+                // envelope, so this is the only routed bump site; a
+                // VirtualList's anchor sync bumps after layout, and its
+                // moved offset persists as an anchor below.
                 if moved {
                     self.scroll_revision = self.scroll_revision.saturating_add(1);
+                    self.virtual_scroll.offset_moved(target);
                 }
                 self.pending_effects.push(GuiInputEffect {
                     session: envelope.session,
@@ -6643,6 +6661,7 @@ impl System for GuiInputSystem {
             && let Some(layout) = context.dependency(binding)
         {
             self.revalidate_retained_targets(context.world.world, layout, tick);
+            self.sync_virtual_lists(context.world.world, layout, tick);
         } else {
             let targets: Vec<_> = self.retained_targets().into_iter().collect();
             for target in targets {
@@ -7650,3 +7669,7 @@ mod text_tests;
 #[cfg(test)]
 #[path = "traversal_tests.rs"]
 mod traversal_tests;
+
+#[cfg(test)]
+#[path = "virtual_scroll_tests.rs"]
+mod virtual_scroll_tests;

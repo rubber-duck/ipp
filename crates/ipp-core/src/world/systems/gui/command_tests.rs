@@ -50,7 +50,10 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
         }
         | GuiCommand::UpdatePart {
             ..
-        } => unreachable!("the random edits author themes directly"),
+        }
+        | GuiCommand::ScrollToIndex {
+            ..
+        } => unreachable!("the random edits author neither themes nor scroll anchors"),
     }
 
     let mut next = root.clone();
@@ -107,7 +110,10 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
         }
         | GuiCommand::UpdatePart {
             ..
-        } => unreachable!("the random edits author themes directly"),
+        }
+        | GuiCommand::ScrollToIndex {
+            ..
+        } => unreachable!("the random edits author neither themes nor scroll anchors"),
     }
     next.validate_complete()?;
     Ok(next)

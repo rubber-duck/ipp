@@ -616,7 +616,7 @@ fn external_replacement_publishes_a_committed_observation_marked_external() {
     }
     assert_eq!(observations.len(), 1, "{observations:?}");
     let bytes = &observations[0];
-    assert_eq!(bytes[29], 3);
+    assert_eq!(bytes[29], 4);
     assert_eq!(&bytes[30..34], &1u32.to_le_bytes());
     assert_eq!(bytes[34], 1);
     assert_eq!(&bytes[35..43], &SESSION.to_le_bytes());

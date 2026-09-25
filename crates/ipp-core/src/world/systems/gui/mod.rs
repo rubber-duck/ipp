@@ -47,7 +47,11 @@
 //! system exposes no clipboard verbs and accepts text only through routed
 //! `Text` edits. Touch arbitration reuses routing state (one press per
 //! control, capture retention, no tap on an off-target release); scroll
-//! offsets stay input-owned and never reflow layout. Frames with no ingress still validate
+//! offsets stay input-owned and never reflow layout. A VirtualList's offset
+//! follows its persisted anchor (first visible item and offset into it),
+//! which scrolling and `ScrollToIndex` move; its children's order keys are
+//! their item indices, and the input system publishes its wanted item range
+//! as `VirtualRangeChanged`. Frames with no ingress still validate
 //! retained focus/capture/hover/caret targets proportionally to active cursors;
 //! when no cursor changes, publication and retained views stay untouched.
 //!
@@ -120,5 +124,5 @@ pub use tree::{
     GuiNodeStyleRow, GuiNodeTree, GuiNodeTreeProperty, GuiNodeTreeRow, GuiNodes, GuiPartChannel,
     GuiPartId, GuiPartPatch, GuiPartProperty, GuiPartRow, GuiPartRowProperty, GuiPartVariant,
     GuiRoot, GuiRootRowProperty, GuiThemePartRow, GuiTreeIndex, MAX_GUI_NODE_ID,
-    MAX_GUI_TEXT_BYTES,
+    MAX_GUI_TEXT_BYTES, MAX_VIRTUAL_ITEMS,
 };

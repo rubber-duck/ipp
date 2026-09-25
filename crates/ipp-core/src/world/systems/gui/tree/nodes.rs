@@ -60,6 +60,17 @@ pub enum GuiContainerKind {
     SizedBox = 5,
     /// Scrollable viewport.
     ScrollView = 6,
+    /// Scrollable viewport over an authored item count, placing each child
+    /// at its item index.
+    VirtualList = 7,
+}
+
+impl GuiContainerKind {
+    /// Whether this container scrolls its content through input-owned
+    /// offsets, scroll bars and viewport clips: ScrollView and VirtualList.
+    pub const fn is_scrollable(self) -> bool {
+        matches!(self, Self::ScrollView | Self::VirtualList)
+    }
 }
 
 /// Node kind: one code space covering every [`GuiNodeData`] variant, container
@@ -96,11 +107,14 @@ pub enum GuiNodeKind {
     /// Single-line text input; the row's `text` is its authored text and
     /// `committed_text` its committed value.
     TextInput = 13,
+    /// Virtualized scrollable list; its children's order keys are their
+    /// item indices.
+    VirtualList = 14,
 }
 
 impl GuiNodeKind {
     /// Number of kind codes.
-    pub const COUNT: u32 = 14;
+    pub const COUNT: u32 = 15;
 
     /// Every kind in code order; `ALL[i] as u32 == i`.
     pub const ALL: [Self; Self::COUNT as usize] = [
@@ -118,6 +132,7 @@ impl GuiNodeKind {
         Self::Checkbox,
         Self::Slider,
         Self::TextInput,
+        Self::VirtualList,
     ];
 
     /// Kind of a row code, or None for an unknown code.
@@ -144,6 +159,7 @@ impl GuiNodeKind {
             Self::Align => GuiContainerKind::Align,
             Self::SizedBox => GuiContainerKind::SizedBox,
             Self::ScrollView => GuiContainerKind::ScrollView,
+            Self::VirtualList => GuiContainerKind::VirtualList,
             _ => return None,
         })
     }
@@ -175,13 +191,14 @@ impl From<GuiContainerKind> for GuiNodeKind {
             GuiContainerKind::Align => Self::Align,
             GuiContainerKind::SizedBox => Self::SizedBox,
             GuiContainerKind::ScrollView => Self::ScrollView,
+            GuiContainerKind::VirtualList => Self::VirtualList,
         }
     }
 }
 
 /// Node kind with its authored strings. Kind-specific scalars (image size,
-/// checkbox and slider values and slider range) live in the root's
-/// `node_data` rows; see [`GuiNodeDataRow`].
+/// checkbox and slider values, slider range and VirtualList items and
+/// anchor) live in the root's `node_data` rows; see [`GuiNodeDataRow`].
 ///
 /// Commands and inspection own their strings (`S = String`); readers borrow
 /// them from the root's tree rows (`S = &str`).

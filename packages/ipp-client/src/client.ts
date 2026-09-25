@@ -291,14 +291,28 @@ export abstract class ClientBase implements Client {
 
   /** Observe committed GUI effects with their conflicts, cancellations and
    * supplier-private unhandled inputs. Each host chunk arrives as one batch;
-   * unhandled inputs naming another session are dropped on receipt. */
+   * unhandled inputs naming another session are dropped on receipt. A new
+   * listener first receives the latest text focus and the latest wanted
+   * range of every VirtualList, which the runtime publishes only when they
+   * change. */
   subscribeGuiObservations(
     listener: (batch: import("./gui-types.js").GuiObservationBatch) => void,
   ): () => void {
     if (this.stopped) throw new Error("Client is closed");
-    if (this.latestGuiTextFocus !== undefined) {
+    if (
+      this.latestGuiTextFocus !== undefined ||
+      this.latestVirtualRanges.size > 0
+    ) {
       try {
-        listener({ effects: [], textFocus: this.latestGuiTextFocus });
+        listener({
+          effects: [],
+          ...(this.latestVirtualRanges.size === 0
+            ? {}
+            : { virtualRanges: [...this.latestVirtualRanges.values()] }),
+          ...(this.latestGuiTextFocus === undefined
+            ? {}
+            : { textFocus: this.latestGuiTextFocus }),
+        });
       } catch (error) {
         try {
           globalThis.reportError?.(error);
@@ -315,10 +329,13 @@ export abstract class ClientBase implements Client {
   ): void {
     if (batch.textFocus !== undefined)
       this.latestGuiTextFocus = batch.textFocus;
+    for (const range of batch.virtualRanges ?? [])
+      this.latestVirtualRanges.set(`${range.entity}:${range.node}`, range);
     for (const listener of [...this.guiObservationListeners]) {
       try {
         listener({
           effects: [...batch.effects],
+          virtualRanges: [...(batch.virtualRanges ?? [])],
           conflicts: [...(batch.conflicts ?? [])],
           cancellations: [...(batch.cancellations ?? [])],
           unhandled: [...(batch.unhandled ?? [])],
@@ -403,6 +420,11 @@ export abstract class ClientBase implements Client {
     | import("./gui-types.js").GuiTextFocusState
     | null
     | undefined;
+  /** Latest wanted range per VirtualList, keyed `entity:node`. */
+  private readonly latestVirtualRanges = new Map<
+    string,
+    import("./gui-types.js").GuiVirtualRangeChangedEffect
+  >();
   private stopped = false;
   private readonly timeoutMs: number;
   private readonly logger: DiagnosticLogger;
@@ -683,6 +705,7 @@ export abstract class ClientBase implements Client {
       if (response.body.kind === "guiObservations") {
         this.publishGuiObservations({
           effects: [...response.body.observations.effects],
+          virtualRanges: [...(response.body.observations.virtualRanges ?? [])],
           conflicts: [...(response.body.observations.conflicts ?? [])],
           cancellations: [...(response.body.observations.cancellations ?? [])],
           unhandled: [],
@@ -1452,6 +1475,7 @@ export abstract class ClientBase implements Client {
     if (this.latestGuiTextFocus !== undefined)
       this.publishGuiObservations({ effects: [], textFocus: null });
     this.latestGuiTextFocus = undefined;
+    this.latestVirtualRanges.clear();
     this.guiObservationListeners.clear();
     this.assetSources.close(error);
     this.runtimeFailures.clear();

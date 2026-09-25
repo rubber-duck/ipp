@@ -399,6 +399,7 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
         root_bounds: [0.0, 0.0, 10.0, 10.0],
         units_per_metre: 1.0,
         nodes: vec![record],
+        virtual_lists: Default::default(),
         diagnostics: Vec::new(),
         remeasure_count: 0,
         reflow_count: 0,

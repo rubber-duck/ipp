@@ -11,7 +11,7 @@ use ipp_core::systems::gui::{
 };
 
 /// GUI edit framing version; see the `gui-edit` wire convention.
-const GUI_EDIT_VERSION: u8 = 4;
+const GUI_EDIT_VERSION: u8 = 5;
 /// GUI inspection response framing version.
 const GUI_INSPECT_VERSION: u8 = 2;
 
@@ -144,6 +144,11 @@ impl Reader<'_> {
                     patch,
                 }
             }
+            9 => GuiCommand::ScrollToIndex {
+                node: r.gui_node_handle()?,
+                index: r.u32()?,
+                offset: r.f32()?,
+            },
             _ => return Err(ProtocolError::Malformed("GUI edit action")),
         };
         Ok(command)
@@ -466,6 +471,7 @@ impl Reader<'_> {
                 4 => GuiContainerKind::Align,
                 5 => GuiContainerKind::SizedBox,
                 6 => GuiContainerKind::ScrollView,
+                7 => GuiContainerKind::VirtualList,
                 _ => return Err(ProtocolError::Malformed("GUI container kind")),
             }),
             2 => GuiNodeData::Text(self.string()?),

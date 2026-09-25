@@ -1050,7 +1050,7 @@ export interface GuiFrame {
 export type GuiFrameCapture = (client: GuiTestClient) => Promise<GuiFrame>;
 
 /** Pixels whose channels differ by more than `tolerance` between frames. */
-function changedPixels(a: GuiFrame, b: GuiFrame, tolerance = 2): number {
+export function changedPixels(a: GuiFrame, b: GuiFrame, tolerance = 2): number {
   expect(
     a.width === b.width && a.height === b.height,
     "Compared frames differ in size",
@@ -1084,7 +1084,7 @@ function contentPixels(frame: GuiFrame): number {
 
 /** Capture until two consecutive completed frames agree, so glyph and
  * atlas work from earlier frames has settled. */
-async function settledFrame(
+export async function settledFrame(
   client: GuiTestClient,
   capture: GuiFrameCapture,
 ): Promise<GuiFrame> {
@@ -1103,7 +1103,7 @@ const PANEL_CAMERA = { distance: 5, fovY: ORTHOGRAPHIC_CAMERA.fov_y } as const;
 /** Normalized top-left viewport point of a logical point on the centred
  * 4x3 panel, seen by the panel camera in a frame of this aspect (one
  * logical unit per metre). */
-function panelViewportPoint(
+export function panelViewportPoint(
   frame: GuiFrame,
   [x, y]: [number, number],
 ): [number, number] {
@@ -1113,7 +1113,7 @@ function panelViewportPoint(
 }
 
 /** Author a perspective camera facing the Surface front from 5 m on +Z. */
-async function activatePanelCamera(client: GuiTestClient) {
+export async function activatePanelCamera(client: GuiTestClient) {
   const camera = { kind: "alias", alias: 70 } as const;
   const id = aliasId(
     await client.batch([

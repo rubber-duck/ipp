@@ -334,6 +334,75 @@ test("GUI roots, node identity and committed values cross a real worker connecti
   );
 });
 
+test("a 100000-item VirtualList scrolls, clips and restores through a real worker connection", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const build: BrowserBuildConfiguration = {
+    name: "headless-gui",
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    exportWasm: resolve(profile, "export.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+  await runBrowserEnvironment(
+    "gui",
+    {
+      workspace,
+      build,
+      mismatchBuild: build,
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/browser",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const result = await env.execute("gui virtual list", {}, () =>
+        env.page.evaluate(async (urls) => {
+          const contract = await import(urls.generated);
+          const { exerciseGuiVirtualList } = await import(
+            `${urls.origin}/dist/tests/integration/scenarios/gui-virtual-list.js`
+          );
+          const canvas = document.createElement("canvas");
+          canvas.width = 240;
+          canvas.height = 180;
+          const host = await contract.IppHostClient.connectWorker(
+            urls.workerScript,
+            urls.wasm,
+            { canvas: canvas.transferControlToOffscreen() },
+          );
+          try {
+            return await exerciseGuiVirtualList(
+              host,
+              async (client: {
+                presentation: {
+                  capture(): Promise<{
+                    width: number;
+                    height: number;
+                    pixels: ArrayBuffer;
+                  }>;
+                };
+              }) => {
+                const { width, height, pixels } =
+                  await client.presentation.capture();
+                return { width, height, pixels };
+              },
+            );
+          } finally {
+            await host.close();
+          }
+        }, env.urls),
+      );
+      env.evidence.record("gui virtual list", result);
+      assert.deepEqual(result.attached, [0, 10]);
+      assert.equal(result.frames.header, 0);
+    },
+  );
+});
+
 test("GUI pointer, keyboard and text input routes through a real worker connection", {
   timeout: 60000,
 }, async (context) => {
@@ -1338,6 +1407,194 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
       // at the start.
       await env.page.mouse.click(...page(235, 20));
       await expectThumb("bar-track-paged", 0, 108);
+
+      const canvasCount = await env.page.evaluate(
+        async (url) => (await import(url)).closeScrollCanvas(),
+        fixture,
+      );
+      assert.equal(canvasCount, 0);
+    },
+  );
+});
+
+test("a mounted React VirtualList declares its wanted range and scrolls in completed WebGL frames", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const build: BrowserBuildConfiguration = {
+    name: "headless-gui",
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    exportWasm: resolve(profile, "export.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+  await runBrowserEnvironment(
+    "gui-virtual-list",
+    {
+      workspace,
+      build,
+      mismatchBuild: build,
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/browser",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const fixture = `${env.urls.origin}/target/react-build/gui-scroll-fixture.js`;
+      await env.page.evaluate(
+        async ({ fixture, runtime }) =>
+          (await import(fixture)).mountVirtualListCanvas(runtime),
+        {
+          fixture,
+          runtime: {
+            generatedModuleUrl: env.urls.generated,
+            workerScriptUrl: env.urls.workerScript,
+            wasmUrl: env.urls.wasm,
+            timeoutMs: 20_000,
+            logLevel: "off",
+          },
+        },
+      );
+      const bounds = await env.page.locator("#scroll-gui-canvas").boundingBox();
+      assert.ok(bounds, "VirtualList canvas has no layout box");
+      const page = (x: number, y: number) =>
+        [bounds.x + x, bounds.y + y] as const;
+      type Rgb = readonly [number, number, number];
+      // Item fills lead their other lanes by far more than 80 in display
+      // values; the list background and the bar skin are told apart too.
+      const hue = (rgb: Rgb): string => {
+        const [r, g, b] = rgb;
+        const lead = (a: number, ...rest: number[]) =>
+          rest.every((other) => a > other + 80);
+        if (lead(r, b) && lead(g, b) && Math.abs(r - g) < 40) return "yellow";
+        if (lead(r, g) && lead(b, g) && Math.abs(r - b) < 40) return "magenta";
+        if (lead(g, r) && lead(b, r) && Math.abs(g - b) < 40) return "cyan";
+        if (Math.min(r, g, b) > 200) return "white";
+        if (lead(r, g, b)) return "red";
+        if (lead(g, r, b)) return "green";
+        if (lead(b, r, g)) return "blue";
+        if (Math.max(r, g, b) - Math.min(r, g, b) < 20 && r > 40) return "gray";
+        return `other(${rgb.join(",")})`;
+      };
+      const fills = ["red", "green", "blue", "yellow"];
+      const frame = async (label: string, points: [number, number][]) => {
+        const captured = await env.page.evaluate(
+          async ({ url, points }) => (await import(url)).scrollFrame(points),
+          { url: fixture, points },
+        );
+        assert.equal(captured.failedDrawCalls, 0);
+        await writeFile(
+          resolve(env.evidence.directory, `${label}.png`),
+          Buffer.from(
+            captured.dataUrl.slice("data:image/png;base64,".length),
+            "base64",
+          ),
+        );
+        const hues = captured.samples.map((rgb: Rgb) => hue(rgb));
+        env.evidence.record(label, hues);
+        return hues as string[];
+      };
+      // Retry until a frame shows `expected` at `points`, 60 px per unit.
+      const expectItems = async (
+        label: string,
+        expected: () => Promise<[number, string][]>,
+      ) => {
+        const deadline = performance.now() + 5_000;
+        for (;;) {
+          const wanted = await expected();
+          const hues = await frame(
+            label,
+            wanted.map(([y]) => [60, Math.round(y * 60)]),
+          );
+          const colours = wanted.map(([, colour]) => colour);
+          if (JSON.stringify(hues) === JSON.stringify(colours)) return;
+          assert.ok(
+            performance.now() < deadline,
+            `${label}: ${hues.join(",")} not ${colours.join(",")}`,
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        }
+      };
+
+      // The first range declares items 0..4, measured 0.5, 1, 0.5, 1 and
+      // 0.5 units tall instead of the 0.75 estimate.
+      await expectItems("virtual-initial", async () => [
+        [0.25, "red"],
+        [1, "green"],
+        [1.75, "blue"],
+        [2.5, "yellow"],
+      ]);
+
+      // Two 100 px wheel notches scroll half a unit: item 1 now starts at
+      // the top and item 4 fills the bottom.
+      await env.page.mouse.move(...page(60, 90));
+      await env.page.mouse.wheel(0, 200);
+      await expectItems("virtual-wheeled", async () => [
+        [0.5, "green"],
+        [1.25, "blue"],
+        [2, "yellow"],
+        [2.75, "red"],
+      ]);
+
+      // Dragging the 18 px thumb half its 162 px travel scrolls to the middle
+      // of 100000 items; the list then declares the items there and paints
+      // each by its index, placed from the persisted anchor.
+      await env.page.mouse.move(...page(235, 9));
+      await env.page.mouse.down();
+      await env.page.mouse.move(...page(235, 90), { steps: 6 });
+      await env.page.mouse.up();
+      const thumb = await frame(
+        "virtual-thumb",
+        Array.from({ length: 30 }, (_, row) => [235, 3 + row * 6]),
+      );
+      const covered = thumb.flatMap((colour, row) =>
+        colour === "magenta" ? [3 + row * 6] : [],
+      );
+      assert.ok(
+        covered.length > 0 &&
+          Math.abs(covered[0]! - 81) <= 10 &&
+          Math.abs(covered.at(-1)! - 99) <= 10,
+        `virtual-thumb: thumb rows ${covered} not 81..99`,
+      );
+      const semantics = async () =>
+        env.page.evaluate(
+          async (url) => (await import(url)).virtualListSemantics(),
+          fixture,
+        );
+      await expectItems("virtual-middle", async () => {
+        const node = await semantics();
+        const { anchorIndex, anchorOffset } = node.virtualList!;
+        const wanted: [number, string][] = [];
+        let top = -anchorOffset;
+        for (let index = anchorIndex; top < 3; index += 1) {
+          const height = index % 2 === 0 ? 0.5 : 1;
+          const centre = top + height / 2;
+          if (centre > 0.3 && centre < 2.7)
+            wanted.push([centre, fills[index % 4]!]);
+          top += height;
+        }
+        return wanted;
+      });
+      const node = await semantics();
+      const ranges = await env.page.evaluate(
+        async (url) => (await import(url)).virtualListRanges(),
+        fixture,
+      );
+      env.evidence.record("virtual-ranges", { ranges, node });
+      assert.ok(
+        node.virtualList!.anchorIndex > 40_000 &&
+          node.virtualList!.anchorIndex < 60_000 &&
+          node.virtualList!.loadedLast - node.virtualList!.loadedFirst <= 8,
+        `virtual-middle: ${JSON.stringify(node.virtualList)}`,
+      );
+      assert.ok(
+        ranges.at(-1)!.first <= node.virtualList!.anchorIndex &&
+          ranges.at(-1)!.last > node.virtualList!.anchorIndex,
+        `virtual-middle: last range ${JSON.stringify(ranges.at(-1))}`,
+      );
 
       const canvasCount = await env.page.evaluate(
         async (url) => (await import(url)).closeScrollCanvas(),

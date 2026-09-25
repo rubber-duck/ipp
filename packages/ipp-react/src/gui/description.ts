@@ -35,6 +35,9 @@ export interface GuiDescribedNode {
   readonly onAction: GuiActionListener | undefined;
   readonly onActionCapture: GuiActionListener | undefined;
   readonly theme?: GuiControlTheme | undefined;
+  /** Item index of a VirtualList item: the node's placement under its list,
+   * in place of its sibling position. */
+  readonly itemIndex?: number | undefined;
 }
 
 /** One declared GuiRoot and its node subtree. */
@@ -110,6 +113,7 @@ export function guiRootSignature(nodes: readonly GuiDescribedNode[]): string {
       guiNodeSignature(node),
       styleSignature(node.style),
       node.theme ?? null,
+      node.itemIndex ?? null,
     ]),
   );
 }
@@ -129,9 +133,19 @@ export function guiNodeSignature(node: GuiNodeDeclaration): unknown {
       return [data.kind, data.placeholder];
     case "image":
       return [data.kind, [...(values.imageSize ?? [])]];
+    case "container":
+      return data.containerKind === "virtualList"
+        ? [data, virtualListItems(values)]
+        : data;
     default:
       return data;
   }
+}
+
+/** A VirtualList's authored item properties; the anchor is runtime-owned
+ * scroll state and never part of rerender equality. */
+function virtualListItems(values: GuiNodeValues): unknown {
+  return [values.itemCount, values.itemExtent, values.overscan, values.axis];
 }
 
 function equalTuples(
@@ -156,7 +170,10 @@ export function equalGuiNode(
     case "container":
       return (
         b.data.kind === "container" &&
-        a.data.containerKind === b.data.containerKind
+        a.data.containerKind === b.data.containerKind &&
+        (a.data.containerKind !== "virtualList" ||
+          JSON.stringify(virtualListItems(a.values)) ===
+            JSON.stringify(virtualListItems(b.values)))
       );
     case "text":
       return b.data.kind === "text" && a.data.text === b.data.text;

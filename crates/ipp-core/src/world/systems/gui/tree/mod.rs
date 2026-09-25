@@ -23,7 +23,7 @@ pub use component::{GuiRoot, GuiRootRowProperty};
 pub use controls::GuiControlState;
 pub use node_rows::{
     GuiNodeDataProperty, GuiNodeDataRow, GuiNodePropertyRef, GuiNodeRowProperty,
-    GuiNodeStyleChange, GuiNodeStyleProperty, GuiNodeStyleRow,
+    GuiNodeStyleChange, GuiNodeStyleProperty, GuiNodeStyleRow, MAX_VIRTUAL_ITEMS,
 };
 pub use node_tree::{GuiNode, GuiNodeTree, GuiNodeTreeProperty, GuiNodeTreeRow, GuiNodes};
 pub use nodes::{

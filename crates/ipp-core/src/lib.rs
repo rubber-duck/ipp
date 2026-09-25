@@ -88,7 +88,7 @@ pub use systems::gui::{
     GuiNodeStyleProperty, GuiNodeStyleRow, GuiNodes, GuiPanelResolution, GuiPointerButton,
     GuiResourceResolver, GuiRoot, GuiSystem, GuiSystemFactory, GuiTextCompositionState,
     GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
-    MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, resolve_panel_hit,
+    MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, MAX_VIRTUAL_ITEMS, resolve_panel_hit,
 };
 
 #[cfg(all(feature = "gui", feature = "diagnostics"))]
@@ -98,7 +98,8 @@ pub use systems::gui::{GuiLayoutStatistics, GuiLayoutWork};
 pub use systems::gui::semantics::{
     GuiSemanticAction, GuiSemanticActionCommand, GuiSemanticActionError, GuiSemanticActionKind,
     GuiSemanticActionRequest, GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole,
-    GuiSemanticScroll, GuiSemanticSnapshotQuery, GuiSemanticTree, action_command,
+    GuiSemanticScroll, GuiSemanticSnapshotQuery, GuiSemanticTree, GuiSemanticVirtualList,
+    action_command,
 };
 
 pub use systems::camera::{CameraMotion, CameraStateChange, CameraStatePatch, PreparedCamera};

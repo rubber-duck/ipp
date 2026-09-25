@@ -234,6 +234,9 @@ fn scope_gui_command(
         }
         | GuiCommand::RemoveTheme {
             ..
+        }
+        | GuiCommand::ScrollToIndex {
+            ..
         } => None,
     };
     if let Some(asset) = asset {

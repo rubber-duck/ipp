@@ -54,7 +54,10 @@ import {
   GUI_SLIDER_HOST_TYPE,
   GUI_TEXT_HOST_TYPE,
   GUI_TEXT_INPUT_HOST_TYPE,
+  GUI_VIRTUAL_ITEM_HOST_TYPE,
+  GUI_VIRTUAL_LIST_HOST_TYPE,
   guiNodeFor,
+  virtualListNode,
   guiStyleFor,
   isGuiHostType,
   isGuiLeafHostType,
@@ -64,6 +67,7 @@ import {
   type GuiNodeProps,
   type GuiRootProps,
   type GuiNodeRef,
+  type GuiRangeChangeListener,
 } from "./gui/components.js";
 import {
   guiRootSignature,
@@ -160,6 +164,8 @@ export interface GuiRetainedNodeCallbacks {
   readonly onScalarCommit: GuiScalarCommitListener | undefined;
   readonly onTextCommit: GuiTextCommitListener | undefined;
   readonly onSubmit: GuiTextSubmitListener | undefined;
+  /** A VirtualList's wanted-range observer. */
+  readonly onRangeChange?: GuiRangeChangeListener | undefined;
 }
 
 /** Described GUI node with its JS-only callback seam attached. This remains
@@ -579,6 +585,28 @@ export class ReactWorldTree {
         allowed.add("onTextCommit");
         allowed.add("onSubmit");
         break;
+      case GUI_VIRTUAL_LIST_HOST_TYPE:
+        virtualListNode(gui as { itemCount?: number; itemExtent?: number });
+        if (
+          gui.onRangeChange !== undefined &&
+          typeof gui.onRangeChange !== "function"
+        )
+          throw new Error("GUI VirtualList onRangeChange must be a function");
+        allowed.add("itemCount");
+        allowed.add("itemExtent");
+        allowed.add("overscan");
+        allowed.add("axis");
+        allowed.add("onRangeChange");
+        break;
+      case GUI_VIRTUAL_ITEM_HOST_TYPE:
+        if (
+          !Number.isInteger(gui.itemIndex) ||
+          (gui.itemIndex as number) < 0 ||
+          (gui.itemIndex as number) > 0xffffffff
+        )
+          throw new Error("GUI VirtualList item index must be a u32 integer");
+        allowed.add("itemIndex");
+        break;
       default:
         break;
     }
@@ -647,6 +675,9 @@ export class ReactWorldTree {
         nodes: GuiDescribedNodeWithCallbacks[];
       }
     >();
+    // VirtualLists place children by item index, so only their own item
+    // wrappers may sit directly inside them.
+    const virtualLists = new Set<number>();
     const visit = (
       instance: ReactWorldInstance,
       parent?: number,
@@ -696,6 +727,13 @@ export class ReactWorldTree {
           throw new Error("GUI nodes must be inside a GuiRoot");
         const record = guiRoots.get(guiRoot);
         if (!record) throw new Error("Missing GUI root declaration");
+        const inList = guiParent !== undefined && virtualLists.has(guiParent);
+        if (inList !== (instance.type === GUI_VIRTUAL_ITEM_HOST_TYPE))
+          throw new Error(
+            "VirtualList children are declared only through its renderItem",
+          );
+        if (instance.type === GUI_VIRTUAL_LIST_HOST_TYPE)
+          virtualLists.add(instance.identity);
         const nodeProps = props as unknown as GuiNodeProps & {
           text?: string | undefined;
           size?: readonly [number, number] | undefined;
@@ -706,6 +744,12 @@ export class ReactWorldTree {
           max?: number | undefined;
           step?: number | undefined;
           placeholder?: string | undefined;
+          itemCount?: number | undefined;
+          itemExtent?: number | undefined;
+          overscan?: number | undefined;
+          axis?: "horizontal" | "vertical" | undefined;
+          itemIndex?: number | undefined;
+          onRangeChange?: GuiRangeChangeListener | undefined;
         };
         // Control listeners are validated with their control props and held
         // JS-only on the described node (see GuiRetainedNodeCallbacks): they
@@ -727,6 +771,7 @@ export class ReactWorldTree {
           onScalarCommit: controlListeners.onScalarCommit,
           onTextCommit: controlListeners.onTextCommit,
           onSubmit: controlListeners.onSubmit,
+          onRangeChange: nodeProps.onRangeChange,
         };
         const described: GuiDescribedNodeWithCallbacks = {
           identity: instance.identity,
@@ -738,6 +783,9 @@ export class ReactWorldTree {
           onAction: callbacks.onAction,
           onActionCapture: callbacks.onActionCapture,
           ...(nodeProps.theme === undefined ? {} : { theme: nodeProps.theme }),
+          ...(nodeProps.itemIndex === undefined
+            ? {}
+            : { itemIndex: nodeProps.itemIndex }),
           callbackSeam: callbacks,
         };
         record.nodes.push(described);

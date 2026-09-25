@@ -297,7 +297,20 @@ fn gui_root_exposes_node_style_rows_by_offset() {
     );
 }
 
-const DATA_NAMES: [&str; 6] = ["image_size", "checked", "value", "min", "max", "step"];
+const DATA_NAMES: [&str; 12] = [
+    "image_size",
+    "checked",
+    "value",
+    "min",
+    "max",
+    "step",
+    "item_count",
+    "item_extent",
+    "overscan",
+    "axis",
+    "anchor_index",
+    "anchor_offset",
+];
 
 /// Real offsets of the exposed rows fields: `node_style`, `node_data`,
 /// `theme_parts`, `part_state`, then `node_tree`.
@@ -317,7 +330,7 @@ fn slider() -> GuiNodeDataRow {
 }
 
 /// Every node kind with the data row its authored scalars produce.
-fn kinds() -> [(GuiNodeData, GuiNodeDataRow); 8] {
+fn kinds() -> [(GuiNodeData, GuiNodeDataRow); 9] {
     [
         (
             GuiNodeData::Container(GuiContainerKind::Column),
@@ -340,6 +353,10 @@ fn kinds() -> [(GuiNodeData, GuiNodeDataRow); 8] {
                 placeholder: "p".into(),
             },
             GuiNodeDataRow::default(),
+        ),
+        (
+            GuiNodeData::Container(GuiContainerKind::VirtualList),
+            GuiNodeDataRow::virtual_list(1_000, 0.5, 2, 1),
         ),
     ]
 }
@@ -384,11 +401,15 @@ fn node_data_offsets_use_the_second_region() {
     assert_eq!(base, 0x2000_0000);
     assert_eq!(
         GuiRoot::node_data_offset(GuiNodeId(1), GuiNodeDataProperty::ImageSize),
-        Some(base + 6)
+        Some(base + 12)
     );
     assert_eq!(
         GuiRoot::node_data_offset(GuiNodeId(3), GuiNodeDataProperty::Step),
-        Some(base + 3 * 6 + 5)
+        Some(base + 3 * 12 + 5)
+    );
+    assert_eq!(
+        GuiRoot::node_data_offset(GuiNodeId(3), GuiNodeDataProperty::AnchorOffset),
+        Some(base + 3 * 12 + 11)
     );
 
     for id in [1, 9, 65_536] {
@@ -712,4 +733,67 @@ fn patch_style_changes_round_trip_by_property() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn virtual_list_properties_validate_their_ranges_and_keep_the_anchor() {
+    use GuiNodeDataProperty as P;
+
+    let accepted = [
+        (P::ItemCount, DynamicValue::U32(MAX_VIRTUAL_ITEMS)),
+        (P::ItemExtent, DynamicValue::F32(0.25)),
+        (P::Overscan, DynamicValue::U32(40)),
+        (P::Axis, DynamicValue::U32(0)),
+        (P::AnchorIndex, DynamicValue::U32(7)),
+        (P::AnchorOffset, DynamicValue::F32(0.0)),
+    ];
+    for (property, value) in accepted {
+        assert_eq!(validate_node_data_property(property, &value), Ok(()));
+        assert!(property.command_owned());
+        assert!(property.used_by(GuiNodeKind::VirtualList));
+        assert!(!property.used_by(GuiNodeKind::ScrollView));
+    }
+    let refused = [
+        (P::ItemCount, DynamicValue::U32(MAX_VIRTUAL_ITEMS + 1)),
+        (P::ItemExtent, DynamicValue::F32(0.0)),
+        (P::ItemExtent, DynamicValue::F32(f32::INFINITY)),
+        (P::Axis, DynamicValue::U32(2)),
+        (P::AnchorOffset, DynamicValue::F32(-0.5)),
+    ];
+    for (property, value) in refused {
+        assert!(validate_node_data_property(property, &value).is_err());
+    }
+
+    let mut placeholder = GuiNodeDataRow::default();
+    placeholder.conform(GuiNodeKind::VirtualList);
+    assert_eq!(placeholder, GuiNodeDataRow::virtual_list(0, 1.0, 0, 1));
+    assert_eq!(placeholder.validate_for(GuiNodeKind::VirtualList), Ok(()));
+
+    // An ordinary edit replaces the item properties but keeps the anchor,
+    // which scroll input and scroll-to-index own.
+    let mut root = GuiRoot::default();
+    root.insert_node(
+        GuiNodeId(1),
+        None,
+        0,
+        GuiNodeData::Container(GuiContainerKind::VirtualList),
+        GuiNodeDataRow::virtual_list(10, 1.0, 0, 1),
+        &GuiNodeStyle::default(),
+    )
+    .unwrap();
+    root.set_virtual_anchor(GuiNodeId(1), 6, 0.5).unwrap();
+    root.update_node(
+        GuiNodeId(1),
+        &GuiNodePatch {
+            values: Some(GuiNodeDataRow::virtual_list(20, 2.0, 3, 0)),
+            ..GuiNodePatch::default()
+        },
+    )
+    .unwrap();
+    let row = root.data_row(GuiNodeId(1)).unwrap();
+    assert_eq!(row.item_count, Some(20));
+    assert_eq!(row.item_extent, Some(2.0));
+    assert_eq!(row.axis, Some(0));
+    assert_eq!((row.anchor_index, row.anchor_offset), (Some(6), Some(0.5)));
+    assert!(root.set_virtual_anchor(GuiNodeId(1), 1, -1.0).is_err());
 }

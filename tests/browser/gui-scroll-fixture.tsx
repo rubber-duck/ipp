@@ -1,7 +1,12 @@
-/** Mounted nested ScrollViews: React DOM -> IppCanvas -> generated worker client -> WebGL frames. */
+/** Mounted nested ScrollViews and a React VirtualList: React DOM ->
+ * IppCanvas -> generated worker client -> WebGL frames. */
 import { useCallback, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { CameraWorldClient } from "@ipp/client";
+import type {
+  CameraWorldClient,
+  GuiSemanticNode,
+  GuiWorldClient,
+} from "@ipp/client";
 import {
   Camera,
   Entity,
@@ -13,7 +18,9 @@ import {
   GuiRoot,
   ScrollView,
   SizedBox,
+  VirtualList,
   type GuiControlTheme,
+  type GuiVirtualRange,
 } from "../../packages/ipp-react/src/gui.js";
 import {
   IppCanvas,
@@ -66,6 +73,48 @@ let handle: IppCanvasHandle | undefined;
 let cameraReady = false;
 let commits = 0;
 let errors: string[] = [];
+let ranges: GuiVirtualRange[] = [];
+
+/** Items of the mounted VirtualList: estimate, count and per-index fills. */
+export const VIRTUAL_LIST = {
+  count: 100_000,
+  estimate: 0.75,
+  /** Even items are half a unit tall, odd items one unit. */
+  heights: [0.5, 1],
+  /** Fills by index modulo four: red, green, blue, yellow. */
+  colors: [
+    [0.8, 0.1, 0.1, 1],
+    [0.1, 0.8, 0.1, 1],
+    [0.1, 0.1, 0.8, 1],
+    [0.8, 0.8, 0.1, 1],
+  ],
+} as const;
+
+/** A 4x3 VirtualList over 100000 items estimated at 0.75 units whose
+ * declared items measure 0.5 or 1 unit, with the opaque scroll bar skin. */
+function virtualListPanel(): ReactElement {
+  return (
+    <Column width={4} height={3}>
+      <VirtualList
+        width={4}
+        height={3}
+        itemCount={VIRTUAL_LIST.count}
+        itemExtent={VIRTUAL_LIST.estimate}
+        overscan={1}
+        backgroundColor={SCROLL_COLORS.outer}
+        theme={scrollBarTheme}
+        onRangeChange={(range) => ranges.push(range)}
+        renderItem={(index) => (
+          <SizedBox
+            width={4}
+            height={VIRTUAL_LIST.heights[index % 2]}
+            backgroundColor={VIRTUAL_LIST.colors[index % 4]}
+          />
+        )}
+      />
+    </Column>
+  );
+}
 
 async function activateCamera(next: IppCanvasHandle): Promise<void> {
   const client = next.client as CameraWorldClient;
@@ -115,10 +164,53 @@ async function activateCamera(next: IppCanvasHandle): Promise<void> {
  * track's inner edge: x 3.75..3.85, with a 4/3-unit thumb.
  * Wheel input keeps the relay's default step of 0.25 units per notch.
  */
+function nestedScrollPanel(): ReactElement {
+  return (
+    <Column width={4} height={3}>
+      <ScrollView
+        width={4}
+        height={3}
+        backgroundColor={SCROLL_COLORS.outer}
+        theme={scrollBarTheme}
+      >
+        <Column width={4}>
+          <ScrollView
+            width={4}
+            height={2}
+            backgroundColor={SCROLL_COLORS.inner}
+            theme={innerScrollBarTheme}
+          >
+            <Column width={4}>
+              <SizedBox
+                width={4}
+                height={2}
+                backgroundColor={SCROLL_COLORS.first}
+              />
+              <SizedBox
+                width={4}
+                height={1}
+                backgroundColor={SCROLL_COLORS.second}
+              />
+            </Column>
+          </ScrollView>
+          <SizedBox
+            width={2}
+            height={2}
+            backgroundColor={SCROLL_COLORS.narrow}
+          />
+          <SizedBox width={4} height={1} backgroundColor={SCROLL_COLORS.last} />
+        </Column>
+      </ScrollView>
+    </Column>
+  );
+}
+
 function Application({
   runtime,
+  panel,
 }: {
   readonly runtime: CanvasRuntimeConfiguration;
+  readonly panel: () => ReactElement;
 }): ReactElement {
   const ready = useCallback((next: IppCanvasHandle) => {
     handle = next;
@@ -149,48 +241,7 @@ function Application({
         <Entity id="scroll-panel">
           <Transform />
           <Surface width={4} height={3} />
-          <GuiRoot>
-            <Column width={4} height={3}>
-              <ScrollView
-                width={4}
-                height={3}
-                backgroundColor={SCROLL_COLORS.outer}
-                theme={scrollBarTheme}
-              >
-                <Column width={4}>
-                  <ScrollView
-                    width={4}
-                    height={2}
-                    backgroundColor={SCROLL_COLORS.inner}
-                    theme={innerScrollBarTheme}
-                  >
-                    <Column width={4}>
-                      <SizedBox
-                        width={4}
-                        height={2}
-                        backgroundColor={SCROLL_COLORS.first}
-                      />
-                      <SizedBox
-                        width={4}
-                        height={1}
-                        backgroundColor={SCROLL_COLORS.second}
-                      />
-                    </Column>
-                  </ScrollView>
-                  <SizedBox
-                    width={2}
-                    height={2}
-                    backgroundColor={SCROLL_COLORS.narrow}
-                  />
-                  <SizedBox
-                    width={4}
-                    height={1}
-                    backgroundColor={SCROLL_COLORS.last}
-                  />
-                </Column>
-              </ScrollView>
-            </Column>
-          </GuiRoot>
+          <GuiRoot>{panel()}</GuiRoot>
         </Entity>
       </World>
     </IppCanvas>
@@ -211,18 +262,54 @@ async function until(predicate: () => boolean, message: string): Promise<void> {
 export async function mountScrollCanvas(
   runtime: CanvasRuntimeConfiguration,
 ): Promise<void> {
+  await mount(runtime, nestedScrollPanel);
+}
+
+/** Mount the VirtualList panel and wait for its first commit. */
+export async function mountVirtualListCanvas(
+  runtime: CanvasRuntimeConfiguration,
+): Promise<void> {
+  await mount(runtime, virtualListPanel);
+}
+
+/** Wanted ranges the mounted VirtualList observed, oldest first. */
+export function virtualListRanges(): readonly GuiVirtualRange[] {
+  return [...ranges];
+}
+
+/** The mounted VirtualList's semantic node: its scroll and anchor. */
+export async function virtualListSemantics(): Promise<GuiSemanticNode> {
+  const current = handle;
+  if (current === undefined) throw new Error("scroll fixture is not mounted");
+  const client = current.client as unknown as GuiWorldClient;
+  const panel = (await client.inspect()).entities.find(
+    (entity) => entity.metadata.symbolicId === "scroll-panel",
+  );
+  if (panel === undefined) throw new Error("scroll panel is missing");
+  const node = (await client.semanticSnapshot({ entity: panel.id })).nodes.find(
+    (item) => item.role === "virtualList",
+  );
+  if (node === undefined) throw new Error("VirtualList has no semantic node");
+  return node;
+}
+
+async function mount(
+  runtime: CanvasRuntimeConfiguration,
+  panel: () => ReactElement,
+): Promise<void> {
   await closeScrollCanvas();
   cameraReady = false;
   commits = 0;
   errors = [];
+  ranges = [];
   const host = document.createElement("div");
   host.id = "scroll-gui-host";
   document.body.replaceChildren(host);
   root = createRoot(host);
-  root.render(<Application runtime={runtime} />);
+  root.render(<Application runtime={runtime} panel={panel} />);
   await until(
     () => handle !== undefined && commits > 0 && cameraReady,
-    `mounted ScrollView panel did not acknowledge: ${errors.join("; ")}`,
+    `mounted scroll panel did not acknowledge: ${errors.join("; ")}`,
   );
   await handle!.flush();
 }

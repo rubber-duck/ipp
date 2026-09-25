@@ -1192,7 +1192,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
 
     #[cfg(feature = "gui")]
     {
-        let mut edit = vec![4];
+        let mut edit = vec![5];
         edit.extend(1u32.to_le_bytes());
         edit.push(4);
         edit.extend(7u64.to_le_bytes());
@@ -2630,7 +2630,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         // One committed button press: version, effect count, kind, head
         // (session, ticks, entity, node, empty path), then empty
         // conflict and cancellation counts.
-        let mut observations = vec![3u8];
+        let mut observations = vec![4u8];
         observations.extend(1u32.to_le_bytes());
         observations.push(0);
         observations.extend(7u64.to_le_bytes());
@@ -2678,17 +2678,18 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             &mut covered,
         );
 
-        // One semantic snapshot: version, panel identity, two nodes (the
-        // container a focus scope), then the observed focus. Names and values are whole bounded strings;
+        // One semantic snapshot: version, panel identity, two nodes (a
+        // VirtualList focus scope with its scroll and items), then the
+        // observed focus. Names and values are whole bounded strings;
         // oversize values reject instead of publishing a misleading prefix.
-        let mut snapshot = vec![2u8];
+        let mut snapshot = vec![3u8];
         snapshot.extend(42u64.to_le_bytes());
         snapshot.extend(3u64.to_le_bytes());
         snapshot.extend(12u64.to_le_bytes());
         snapshot.extend(2u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.extend(0u32.to_le_bytes());
-        snapshot.push(8);
+        snapshot.push(9);
         snapshot.push(0);
         snapshot.push(0);
         snapshot.extend(0u32.to_le_bytes());
@@ -2700,6 +2701,11 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         for lane in [0.0f32, 2.0, 0.0, 4.0] {
             snapshot.extend(lane.to_le_bytes());
         }
+        snapshot.push(1);
+        for value in [100u32, 2, 5, 3] {
+            snapshot.extend(value.to_le_bytes());
+        }
+        snapshot.extend(0.5f32.to_le_bytes());
         snapshot.extend(2u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.push(4);
@@ -2713,6 +2719,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         }
         snapshot.extend([1, 1, 1, 0]);
         snapshot.push(1);
+        snapshot.push(0);
         snapshot.push(0);
         snapshot.push(0);
         snapshot.push(1);
@@ -2730,7 +2737,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                         ipp_core::GuiSemanticNode {
                             id: ipp_core::GuiNodeId(1),
                             parent: None,
-                            role: ipp_core::GuiSemanticRole::ScrollView,
+                            role: ipp_core::GuiSemanticRole::VirtualList,
                             name: None,
                             value: ipp_core::GuiControlValue::None,
                             revision: 0,
@@ -2743,6 +2750,13 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             scroll: Some(ipp_core::GuiSemanticScroll {
                                 offset: [0.0, 2.0],
                                 max_offset: [0.0, 4.0],
+                            }),
+                            virtual_list: Some(ipp_core::GuiSemanticVirtualList {
+                                item_count: 100,
+                                loaded_first: 2,
+                                loaded_last: 5,
+                                anchor_index: 3,
+                                anchor_offset: 0.5,
                             }),
                         },
                         ipp_core::GuiSemanticNode {
@@ -2759,6 +2773,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             focus_scope: false,
                             actions: vec![ipp_core::GuiSemanticActionKind::Press],
                             scroll: None,
+                            virtual_list: None,
                         },
                     ],
                     focused: Some(ipp_core::GuiSemanticFocus {

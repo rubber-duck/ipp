@@ -29,13 +29,17 @@ import type {
   GuiNodeData,
   GuiObservationBatch,
   GuiUnhandledObservation,
+  GuiVirtualRangeChangedEffect,
 } from "@ipp/client";
 import {
   dispatchGuiAction,
   resolveGuiActionPath,
   type GuiActionListeners,
 } from "./description.js";
-import type { GuiActionListener } from "./components.js";
+import type {
+  GuiActionListener,
+  GuiRangeChangeListener,
+} from "./components.js";
 
 /** Controls that carry committed values and event callbacks. */
 export type GuiControlKind = "button" | "checkbox" | "slider" | "textInput";
@@ -408,6 +412,18 @@ function matchControlCallback(
   }
 }
 
+function deliverRange(
+  listener: GuiRangeChangeListener,
+  range: GuiVirtualRangeChangedEffect,
+  onError?: (error: Error) => void,
+): void {
+  try {
+    listener({ first: range.first, last: range.last });
+  } catch (error) {
+    onError?.(errorOf(error));
+  }
+}
+
 /** Non-effect observation listeners. A throwing listener is isolated
  * through the resolution `onError` without breaking later deliveries. */
 export interface GuiObservationSink {
@@ -488,9 +504,57 @@ export function dispatchGuiObservations(
  */
 export class GuiEffectSubscriptions {
   private readonly records = new Map<string, GuiControlListenerRecord>();
+  /** VirtualList range observers by `entity:node`, with the latest range fed
+   * for each list. A range can arrive before its list is acknowledged, so
+   * the latest one waits for its observer. */
+  private readonly ranges = new Map<
+    string,
+    {
+      listener?: GuiRangeChangeListener | undefined;
+      latest?: GuiVirtualRangeChangedEffect | undefined;
+    }
+  >();
 
   private key(entity: bigint, rootIncarnation: bigint, node: number): string {
     return `${entity}:${rootIncarnation}:${node}`;
+  }
+
+  /** Retain one VirtualList's range observer and deliver the latest range
+   * already fed for it. */
+  subscribeRange(
+    entity: bigint,
+    node: number,
+    listener: GuiRangeChangeListener | undefined,
+    onError?: (error: Error) => void,
+  ): void {
+    const key = `${entity}:${node}`;
+    const entry = this.ranges.get(key) ?? {};
+    const fresh = entry.listener === undefined && listener !== undefined;
+    entry.listener = listener;
+    this.ranges.set(key, entry);
+    if (fresh && entry.latest !== undefined)
+      deliverRange(listener!, entry.latest, onError);
+  }
+
+  /** Deliver wanted ranges in arrival order, which is publication order:
+   * the client replays its latest ranges only to a new subscriber, before
+   * any later one. Revisions are not compared because a replaced root
+   * incarnation restarts them for the same entity and node. */
+  feedRanges(
+    ranges: readonly GuiVirtualRangeChangedEffect[],
+    onError?: (error: Error) => void,
+  ): number {
+    let delivered = 0;
+    for (const range of ranges) {
+      const key = `${range.entity}:${range.node}`;
+      const entry = this.ranges.get(key) ?? {};
+      entry.latest = range;
+      this.ranges.set(key, entry);
+      if (entry.listener === undefined) continue;
+      deliverRange(entry.listener, range, onError);
+      delivered += 1;
+    }
+    return delivered;
   }
 
   /** Retain (or replace) the acknowledged record for one node identity. */
@@ -505,12 +569,14 @@ export class GuiEffectSubscriptions {
 
   /** Drop one node's record when its node is removed. */
   unsubscribe(entity: bigint, rootIncarnation: bigint, node: number): boolean {
+    this.ranges.delete(`${entity}:${node}`);
     return this.records.delete(this.key(entity, rootIncarnation, node));
   }
 
   /** Drop every record on root unmount. */
   clear(): void {
     this.records.clear();
+    this.ranges.clear();
   }
 
   get size(): number {
@@ -550,13 +616,15 @@ export class GuiEffectSubscriptions {
     );
   }
 
-  /** Dispatch one ordered observation batch through retained records. */
+  /** Dispatch one ordered observation batch through retained records;
+   * VirtualList ranges reach their list observers first. */
   feedObservations(
     batch: GuiObservationBatch,
     parentOf: GuiCallbackResolution["parentOf"],
     sink: GuiObservationSink = {},
     rootListeners?: GuiRootListenerResolver,
   ): GuiObservationSummary {
+    this.feedRanges(batch.virtualRanges ?? [], sink.onError);
     return dispatchGuiObservations(
       batch,
       this.resolution(parentOf, sink.onError, rootListeners),

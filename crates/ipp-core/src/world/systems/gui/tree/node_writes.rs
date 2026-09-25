@@ -15,8 +15,8 @@ use super::node_rows::{
 };
 use super::node_tree::{GuiNodeTreeProperty, GuiNodeTreeRow, place_among};
 use super::nodes::{
-    GuiControlValue, GuiNodeData, GuiNodeId, GuiNodePatch, GuiNodeStyle, MAX_NODE_ID, MAX_NODES,
-    valid_node_data,
+    GuiControlValue, GuiNodeData, GuiNodeId, GuiNodeKind, GuiNodePatch, GuiNodeStyle, MAX_NODE_ID,
+    MAX_NODES, valid_node_data,
 };
 use super::tree_index::GuiTreeIndex;
 use crate::components::rows::SchemaRow;
@@ -149,7 +149,9 @@ impl GuiRoot {
     }
 
     /// Order-key writes placing `node` at `index` among the indexed children
-    /// of `parent`: renumbered siblings first, then the node's key.
+    /// of `parent`: renumbered siblings first, then the node's key. A
+    /// VirtualList child's key is its item index, so `index` names the item
+    /// and no sibling changes.
     fn placement_writes(
         &self,
         tree: &GuiTreeIndex,
@@ -158,6 +160,11 @@ impl GuiRoot {
         index: usize,
         writes: &mut Vec<FieldWrite>,
     ) -> Result<u32, ErrorReason> {
+        if self.tree_row(parent).and_then(GuiNodeTreeRow::node_kind)
+            == Some(GuiNodeKind::VirtualList)
+        {
+            return u32::try_from(index).map_err(|_| ErrorReason::InvalidValue);
+        }
         let siblings = self.indexed_siblings(tree, parent, Some(node));
         let (key, renumbered) = place_among(&siblings, index.min(siblings.len()));
         for (sibling, order) in renumbered {
@@ -338,5 +345,31 @@ impl GuiRoot {
             value,
             tree_u32(id, GuiNodeTreeProperty::Revision, commit.revision)?,
         ])
+    }
+}
+
+impl GuiRoot {
+    /// Writes anchoring a VirtualList at `index`, clamped to its last item,
+    /// `offset` logical units into it.
+    pub(in crate::world::systems::gui) fn scroll_to_index_writes(
+        &self,
+        id: GuiNodeId,
+        index: u32,
+        offset: f32,
+    ) -> Result<Vec<FieldWrite>, ErrorReason> {
+        let row = self.tree_row(id).ok_or(ErrorReason::InvalidValue)?;
+        let values = self.data_row(id).ok_or(ErrorReason::InvalidValue)?;
+        if row.node_kind() != Some(GuiNodeKind::VirtualList) || !offset.is_finite() || offset < 0.0
+        {
+            return Err(ErrorReason::InvalidValue);
+        }
+
+        let index = index.min(values.item_count.unwrap_or(0).saturating_sub(1));
+        let mut target = values.clone();
+        target.anchor_index = Some(index);
+        target.anchor_offset = Some(offset);
+        let mut writes = Vec::new();
+        data_writes(id, values, &target, &mut writes);
+        Ok(writes)
     }
 }

@@ -14,6 +14,7 @@ import "./gui-declaration.test.js";
 import "./gui-diff.test.js";
 import "./gui-commits.test.js";
 import "./gui-effects.test.js";
+import "./gui-virtual-list.test.js";
 import {
   createElement,
   Fragment,

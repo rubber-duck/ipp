@@ -101,7 +101,7 @@ fn encode_gui_semantic_snapshot_inner(tree: &GuiSemanticTree) -> Result<Vec<u8>,
         return Err(ProtocolError::Malformed("GUI semantic entity"));
     }
     let mut w = Writer(Vec::new());
-    w.u8(2)?;
+    w.u8(3)?;
     w.u64(tree.entity.to_bits())?;
     w.u64(tree.root_incarnation)?;
     w.u64(tree.evaluation_tick)?;
@@ -138,6 +138,7 @@ fn write_semantic_node(w: &mut Writer, node: &GuiSemanticNode) -> Result<(), Pro
         GuiSemanticRole::Slider => 6,
         GuiSemanticRole::TextInput => 7,
         GuiSemanticRole::ScrollView => 8,
+        GuiSemanticRole::VirtualList => 9,
     })?;
     match &node.name {
         None => w.u8(0)?,
@@ -189,6 +190,17 @@ fn write_semantic_node(w: &mut Writer, node: &GuiSemanticNode) -> Result<(), Pro
             for lane in scroll.offset.into_iter().chain(scroll.max_offset) {
                 w.f32(lane)?;
             }
+        }
+    }
+    match &node.virtual_list {
+        None => w.u8(0)?,
+        Some(list) => {
+            w.u8(1)?;
+            w.u32(list.item_count)?;
+            w.u32(list.loaded_first)?;
+            w.u32(list.loaded_last)?;
+            w.u32(list.anchor_index)?;
+            w.f32(list.anchor_offset)?;
         }
     }
     Ok(())

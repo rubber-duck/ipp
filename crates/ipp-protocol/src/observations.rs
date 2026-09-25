@@ -1,7 +1,7 @@
 //! Unsolicited GUI observation publication.
 //!
-//! Committed control effects and text submissions with their conflicts and
-//! cancellations broadcast as committed state; unhandled inputs go only to
+//! Committed control effects, text submissions and VirtualList wanted ranges
+//! with their conflicts and cancellations broadcast as committed state; unhandled inputs go only to
 //! their supplying session so raw input stays private. Messages chunk like Resources: at most 128
 //! records within the transport budget, order preserved, each record in
 //! exactly one message.
@@ -45,6 +45,7 @@ pub fn gui_observation_bodies(report: &WorldUpdateReport, session: u64) -> Vec<R
                 GuiInputEffectKind::ButtonPressed { .. }
                     | GuiInputEffectKind::ControlCommitted { .. }
                     | GuiInputEffectKind::Submitted { .. }
+                    | GuiInputEffectKind::VirtualRangeChanged { .. }
             )
         })
         .cloned()
@@ -141,6 +142,9 @@ fn effect_size(effect: &GuiInputEffect) -> usize {
             text,
             ..
         } => return 128 + 4 * path.len() + text.len(),
+        GuiInputEffectKind::VirtualRangeChanged {
+            ..
+        } => return 64,
         _ => return 0,
     };
     128 + 4 * path.len()
@@ -218,7 +222,7 @@ pub(crate) fn encode_gui_observations_inner(
         return Err(ProtocolError::Limit("gui observations"));
     }
     let mut w = Writer(Vec::new());
-    w.u8(3)?;
+    w.u8(4)?;
     w.count(effects.len(), GUI_OBSERVATIONS_PER_MESSAGE)?;
     for effect in effects {
         write_effect(&mut w, effect)?;
@@ -322,6 +326,29 @@ pub(crate) fn encode_gui_unhandled_inner(
 }
 
 fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolError> {
+    // A range is runtime-originated: it carries no session, and it names its
+    // list by entity and node, the identity the client declared.
+    if let GuiInputEffectKind::VirtualRangeChanged {
+        entity,
+        node,
+        first,
+        last,
+        revision,
+    } = &effect.kind
+    {
+        if entity.to_bits() == 0 || node.0 == 0 || first > last {
+            return Err(ProtocolError::Malformed("gui virtual range"));
+        }
+        w.u8(3)?;
+        w.u64(effect.source_tick)?;
+        w.u64(effect.effect_tick)?;
+        w.u64(entity.to_bits())?;
+        w.u32(node.0)?;
+        w.u32(*first)?;
+        w.u32(*last)?;
+        w.u32(*revision)?;
+        return Ok(());
+    }
     if effect.session == 0 {
         return Err(ProtocolError::Malformed("gui observation session"));
     }

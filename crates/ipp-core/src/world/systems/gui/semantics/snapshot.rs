@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use super::types::{
     GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole, GuiSemanticScroll, GuiSemanticTree,
-    actions_for_role, name_for_data, role_for_data,
+    GuiSemanticVirtualList, actions_for_role, name_for_data, role_for_data,
 };
 use crate::{
     EntityId, GuiEvaluatedContent, GuiEvaluatedView, GuiInputEffectKind, GuiInspectResponse,
@@ -76,9 +76,13 @@ pub fn build_tree_with_input(
         } else {
             Vec::new()
         };
+        let scrollable = matches!(
+            role,
+            GuiSemanticRole::ScrollView | GuiSemanticRole::VirtualList
+        );
         let scroll = evaluated
             .get(&inspected.id)
-            .filter(|node| role == GuiSemanticRole::ScrollView && node.available)
+            .filter(|node| scrollable && node.available)
             .map(|node| GuiSemanticScroll {
                 offset: scroll_offsets
                     .get(&inspected.id)
@@ -100,6 +104,19 @@ pub fn build_tree_with_input(
             focus_scope: inspected.style.focus_scope,
             actions,
             scroll,
+            virtual_list: (role == GuiSemanticRole::VirtualList).then(|| {
+                let (loaded_first, loaded_last) = view
+                    .virtual_lists
+                    .get(&inspected.id)
+                    .map_or((0, 0), |list| list.loaded_range());
+                GuiSemanticVirtualList {
+                    item_count: inspected.values.item_count.unwrap_or(0),
+                    loaded_first,
+                    loaded_last,
+                    anchor_index: inspected.values.anchor_index.unwrap_or(0),
+                    anchor_offset: inspected.values.anchor_offset.unwrap_or(0.0),
+                }
+            }),
         });
     }
     let focused = focus.filter(|focus| nodes.iter().any(|node| node.id == focus.id));
@@ -115,6 +132,9 @@ pub fn build_tree_with_input(
 fn evaluated_role_hint(id: GuiNodeId, view: &GuiEvaluatedView) -> Option<GuiSemanticRole> {
     let node = view.nodes.iter().find(|node| node.node == id)?;
     let role = match &node.content {
+        GuiEvaluatedContent::Container if view.virtual_lists.contains_key(&id) => {
+            GuiSemanticRole::VirtualList
+        }
         GuiEvaluatedContent::Container if node.content_extents.is_some() => {
             GuiSemanticRole::ScrollView
         }
@@ -147,8 +167,9 @@ fn evaluated_role_hint(id: GuiNodeId, view: &GuiEvaluatedView) -> Option<GuiSema
 /// Nodes whose semantic identity, structure, state or supported actions changed.
 ///
 /// Added and removed nodes are reported by their presence in exactly one
-/// tree. Evaluated bounds, scroll positions and the tree evaluation tick
-/// are intentionally excluded, so pure movement never appears here. Focus is diffed separately
+/// tree. A VirtualList's item count and loaded range count as structure.
+/// Evaluated bounds, scroll positions (including a VirtualList anchor) and
+/// the tree evaluation tick are intentionally excluded, so pure movement never appears here. Focus is diffed separately
 /// by comparing [`GuiSemanticTree::focused`].
 pub fn changed_nodes(old: &GuiSemanticTree, new: &GuiSemanticTree) -> Vec<GuiNodeId> {
     let mut changes = Vec::new();
@@ -188,6 +209,12 @@ fn semantic_node_changed(previous: &GuiSemanticNode, current: &GuiSemanticNode) 
         || previous.available != current.available
         || previous.focus_scope != current.focus_scope
         || previous.actions != current.actions
+        || previous
+            .virtual_list
+            .map(|list| (list.item_count, list.loaded_first, list.loaded_last))
+            != current
+                .virtual_list
+                .map(|list| (list.item_count, list.loaded_first, list.loaded_last))
 }
 
 /// Whether one committed effect should refresh a semantic snapshot.

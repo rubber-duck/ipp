@@ -159,7 +159,7 @@ impl SystemRuntimeAccess<'_> {
                 });
                 result = std::mem::replace(&mut result, Ok(())).and(resolved);
             });
-        result = result.and(staged.prepare_changes(&self.world.components, self.world.limits));
+        result = result.and(staged.prepare_changes());
         staged.record_component_observations(&self.world.components);
         self.world.state = staged.entities_state;
         result

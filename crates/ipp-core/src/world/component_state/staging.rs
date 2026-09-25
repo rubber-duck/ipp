@@ -132,13 +132,8 @@ impl WorldMutationState {
     }
 
     /// Validate each component this operation affected and defer its copy to
-    /// commit. The unused parameters follow the operation pipeline in
-    /// [`crate::world::mutation`].
-    pub(in crate::world) fn prepare_changes(
-        &mut self,
-        _components: &registry::ComponentStorage,
-        _limits: WorldLimits,
-    ) -> Result<(), ErrorReason> {
+    /// commit.
+    pub(in crate::world) fn prepare_changes(&mut self) -> Result<(), ErrorReason> {
         let mut result = Ok(());
         for key in std::mem::take(&mut self.entities_state.dirty) {
             self.entities_state.prepared.remove(&key);

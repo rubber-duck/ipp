@@ -163,6 +163,50 @@ mod tests {
     }
 
     #[test]
+    fn text_row_properties_carry_a_bounded_byte_limit() {
+        use super::export_reader::read_rows_layout;
+
+        let layout = |hint: u8, bound: Option<u32>| {
+            let mut bytes = 0x1000_0000u32.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&2u16.to_le_bytes());
+            bytes.extend_from_slice(&5u32.to_le_bytes());
+            bytes.extend_from_slice(b"label");
+            bytes.extend_from_slice(&[13, 1, hint]);
+            if let Some(bound) = bound {
+                bytes.extend_from_slice(&bound.to_le_bytes());
+            }
+            bytes.extend_from_slice(&6u32.to_le_bytes());
+            bytes.extend_from_slice(b"weight");
+            bytes.extend_from_slice(&[1, 0, 0]);
+            bytes
+        };
+        let read = |bytes: &[u8]| {
+            read_rows_layout(
+                &mut Reader {
+                    bytes,
+                    at: 0,
+                },
+                1,
+            )
+        };
+
+        let parsed = read(&layout(0, Some(256))).unwrap();
+        assert_eq!(parsed.properties[0].kind, 13);
+        assert_eq!(parsed.properties[0].max_bytes, Some(256));
+        assert_eq!(parsed.properties[1].max_bytes, None);
+        assert!(read(&layout(0, Some(65_536))).is_ok());
+
+        for invalid in [
+            layout(0, Some(0)),      // empty bound
+            layout(0, Some(65_537)), // beyond one string value
+            layout(1, Some(8)),      // rotation requires Vec4
+            layout(0, None),         // missing bound
+        ] {
+            assert!(read(&invalid).is_err());
+        }
+    }
+
+    #[test]
     fn template_conditions_nest_and_reject_malformed_directives() {
         let capabilities = Capabilities {
             builtin_assets: true,

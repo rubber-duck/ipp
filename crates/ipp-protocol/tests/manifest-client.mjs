@@ -52,7 +52,12 @@ function rowsTable(nextSlot, entries) {
     for (const property of ROWS_FIXTURE_PROPERTIES) {
       const value = values[property.name];
       if (value === undefined) continue;
-      if (property.kind === "asset") {
+      if (property.kind === "text") {
+        const text =
+          value instanceof Uint8Array ? value : new TextEncoder().encode(value);
+        u32(text.length);
+        bytes.push(...text);
+      } else if (property.kind === "asset") {
         const source = new TextEncoder().encode(value.source);
         bytes.push(value.kind & 0xff, value.kind >> 8);
         u32(value.variant);
@@ -75,11 +80,12 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
   assert.deepEqual(scalar.fields.items.rows, {
     regionBase: 0x10000000,
     properties: ROWS_FIXTURE_PROPERTIES.map(
-      ({ name, kind, optional, hint }) => ({
+      ({ name, kind, optional, hint, maxBytes }) => ({
         name,
         kind,
         optional,
         hint,
+        ...(maxBytes === undefined ? {} : { maxBytes }),
       }),
     ),
   });
@@ -92,9 +98,11 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
     /rotation\?: readonly \[number, number, number, number\] \| null;/,
   );
   assert.match(source, /weight\?: number;\n/);
+  assert.match(source, /label\?: string;\n/);
+  assert.match(source, /label\?: string \| null;\n/);
 
   // Property addresses: region base + slot * property count + property index.
-  const rotation = 0x10000000 + 3 * 7 + 2;
+  const rotation = 0x10000000 + 3 * 8 + 2;
   assert.equal(codec.rowFieldOffset(scalar, "items", 3, "rotation"), rotation);
   assert.equal(codec.Scalar.itemsOffset(3, "rotation"), rotation);
   assert.throws(
@@ -103,7 +111,7 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
   );
   assert.throws(() => codec.Scalar.itemsOffset(-1, "weight"), /row slot/);
   assert.throws(
-    () => codec.Scalar.itemsOffset(Math.floor(0x10000000 / 7), "weight"),
+    () => codec.Scalar.itemsOffset(Math.floor(0x10000000 / 8), "weight"),
     /row slot/,
   );
   assert.equal("setItems" in codec.Scalar, false);
@@ -114,17 +122,18 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
     rotation: null,
     weight: 2,
     texture: { kind: 4, source: "a.png", variant: 1 },
+    label: "hé✓ok",
   });
   assert.deepEqual(
     commands.map((command) => command.field),
     [
       {
-        offset: 0x10000000 + 21,
+        offset: 0x10000000 + 24,
         value: { kind: "dynamic", value: { kind: "f32", value: 2 } },
       },
       { offset: rotation, value: { kind: "unset" } },
       {
-        offset: 0x10000000 + 25,
+        offset: 0x10000000 + 28,
         value: {
           kind: "dynamic",
           value: {
@@ -133,7 +142,21 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
           },
         },
       },
+      // Text is a string value; "hé✓ok" is exactly the 8-byte bound.
+      { offset: 0x10000000 + 31, value: { kind: "string", value: "hé✓ok" } },
     ],
+  );
+  assert.deepEqual(
+    codec.Scalar.patchItems(entity, 3, { label: null })[0].field,
+    { offset: 0x10000000 + 31, value: { kind: "unset" } },
+  );
+  assert.throws(
+    () => codec.Scalar.patchItems(entity, 3, { label: "hé✓ok!" }),
+    /exceeds 8 bytes/,
+  );
+  assert.throws(
+    () => codec.Scalar.patchItems(entity, 3, { label: 7 }),
+    /requires text/,
   );
   assert.throws(
     () => codec.Scalar.patchItems(entity, 3, { weight: null }),
@@ -157,7 +180,10 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
       requestId: 3n,
       body: {
         kind: "batch",
-        batch: { id: 9n, operations: commands.slice(0, 2) },
+        batch: {
+          id: 9n,
+          operations: [...commands.slice(0, 2), commands[3]],
+        },
       },
     }),
     layout("request-batch", {
@@ -174,7 +200,7 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
           }),
           component: scalar.id,
           field: field(
-            0x10000000 + 21,
+            0x10000000 + 24,
             layout("value-dynamic", {
               tag: tag("VALUE_DYNAMIC"),
               value: new Uint8Array([1, 0, 0, 0, 64]),
@@ -193,6 +219,21 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
             layout("value-unset", { tag: tag("VALUE_UNSET") }),
           ),
         }),
+        layout("command-set", {
+          tag: tag("COMMAND_SET"),
+          entity: layout("reference-handle", {
+            tag: tag("REF_HANDLE"),
+            handle: 41n,
+          }),
+          component: scalar.id,
+          field: field(
+            0x10000000 + 31,
+            layout("value-string", {
+              tag: tag("VALUE_STRING"),
+              value: "hé✓ok",
+            }),
+          ),
+        }),
       ],
     }).bytes,
   );
@@ -208,6 +249,7 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
         rotation: [0, 0, 0, 1],
         texture: { kind: 4, source: "é.png", variant: 2 },
         count: 9,
+        label: "é✓",
       },
     ],
   ]);
@@ -227,6 +269,7 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
     texture: { kind: 4, source: "é.png", variant: 2 },
     delta: 7,
     count: 9,
+    label: "é✓",
   });
   for (const malformed of [
     rowsTable(1, [[1, { weight: 1, enabled: true, delta: 0 }]]),
@@ -235,6 +278,15 @@ test("schema rows fields generate typed row helpers and decode inspected tables"
       [1, { weight: 1, enabled: true, delta: 0 }],
     ]),
     rowsTable(2, [[1, { weight: 1, delta: 0 }]]),
+    rowsTable(2, [
+      [1, { weight: 1, enabled: true, delta: 0, label: "ninebytes" }],
+    ]),
+    rowsTable(2, [
+      [
+        1,
+        { weight: 1, enabled: true, delta: 0, label: new Uint8Array([0xff]) },
+      ],
+    ]),
     new Uint8Array([...table, 0]),
     table.slice(0, table.length - 1),
   ])

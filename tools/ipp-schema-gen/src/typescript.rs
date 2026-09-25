@@ -79,7 +79,7 @@ function freezeContract<T>(value: T): T {\n\
                 for property in &rows.properties {
                     write!(
                         out,
-                        " {{ name: {}, kind: {}, optional: {}, hint: {} }},",
+                        " {{ name: {}, kind: {}, optional: {}, hint: {}",
                         js_string(&property.name),
                         js_string(row_property_kind(property.kind)),
                         property.optional,
@@ -90,6 +90,10 @@ function freezeContract<T>(value: T): T {\n\
                         }),
                     )
                     .unwrap();
+                    if let Some(max_bytes) = property.max_bytes {
+                        write!(out, ", maxBytes: {max_bytes}").unwrap();
+                    }
+                    out.push_str(" },");
                 }
                 out.push_str(" ] }");
             }
@@ -342,6 +346,7 @@ fn row_property_kind(kind: u8) -> &'static str {
         6 => "vec3",
         7 => "vec4",
         12 => "asset",
+        13 => "text",
         _ => unreachable!("export reader accepts only row property kinds"),
     }
 }
@@ -354,6 +359,7 @@ fn row_value_type(kind: u8) -> &'static str {
         6 => "readonly [number, number, number]",
         7 => "readonly [number, number, number, number]",
         12 => "RowAssetValue",
+        13 => "string",
         _ => unreachable!("export reader accepts only row property kinds"),
     }
 }

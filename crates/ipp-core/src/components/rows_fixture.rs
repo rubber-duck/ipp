@@ -6,7 +6,7 @@ use super::rows::{Rows, SchemaRow};
 use crate::services::asset_management::AssetSource;
 use ipp_schema_derive::SchemaComponent;
 
-/// Nine properties, so the presence mask spans two bytes.
+/// Ten properties, so the presence mask spans two bytes; `label` is bounded text.
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
 pub struct RowsFixtureItem {
     pub weight: f32,
@@ -19,6 +19,8 @@ pub struct RowsFixtureItem {
     pub delta: i32,
     pub size: Option<[f32; 2]>,
     pub mark: Option<f32>,
+    #[schema(text = 16)]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]

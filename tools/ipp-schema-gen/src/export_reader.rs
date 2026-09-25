@@ -174,6 +174,12 @@ pub(super) const ROWS_KIND: u8 = 8;
 /// Offset span of one rows region; region `k` starts at `(k + 1)` spans.
 const ROW_REGION_SPAN: u32 = 0x1000_0000;
 
+/// `DynamicPropertyKind::Text`, the bounded row-only text kind.
+pub(super) const ROW_TEXT_KIND: u8 = 13;
+
+/// Largest text row bound: one string field value.
+const MAX_ROW_TEXT_BYTES: u32 = 65_536;
+
 /// Read the region base and ordered row layout that follow a rows field's kind.
 /// `ordinal` is the 1-based position among the component's rows fields.
 pub(super) fn read_rows_layout(r: &mut Reader<'_>, ordinal: u32) -> Result<RowsLayout, String> {
@@ -203,16 +209,32 @@ pub(super) fn read_rows_layout(r: &mut Reader<'_>, ordinal: u32) -> Result<RowsL
             1 => true,
             _ => return Err("row property hint".into()),
         };
-        // DynamicPropertyKind F32..Vec4 and Asset; matrices are not row properties.
-        if !(matches!(kind, 1..=7 | 12)) || (rotation && kind != 7) || !names.insert(name.clone()) {
+        // DynamicPropertyKind F32..Vec4, Asset and Text; matrices are not row properties.
+        if !(matches!(kind, 1..=7 | 12 | ROW_TEXT_KIND))
+            || (rotation && kind != 7)
+            || !names.insert(name.clone())
+        {
             return Err("row property layout".into());
         }
+
+        // Text properties follow their hint with a nonzero UTF-8 byte bound.
+        let max_bytes = if kind == ROW_TEXT_KIND {
+            let bound = r.u32()?;
+            if bound == 0 || bound > MAX_ROW_TEXT_BYTES {
+                return Err("row text bound".into());
+            }
+
+            Some(bound)
+        } else {
+            None
+        };
 
         properties.push(RowProperty {
             name,
             kind,
             optional,
             rotation,
+            max_bytes,
         });
     }
 

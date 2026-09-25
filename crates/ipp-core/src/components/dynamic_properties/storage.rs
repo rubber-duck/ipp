@@ -179,8 +179,13 @@ impl DynamicProperties {
     }
 
     /// Define or update an authored property. Retyping creates a fresh identity.
+    /// Text is row-only and never becomes a dynamic property.
     pub fn set(&mut self, name: &str, value: DynamicValue) -> Result<u32, FieldError> {
         Self::validate_name(name)?;
+        if value.kind() == DynamicPropertyKind::Text {
+            return Err(FieldError::WrongType);
+        }
+
         value.validate()?;
         if let Some(descriptor) = self.descriptors.get(name)
             && descriptor.kind == value.kind()

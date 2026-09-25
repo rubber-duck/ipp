@@ -14,6 +14,13 @@
 //! slot is never reused within a component incarnation. Bindings hold
 //! `(component binding, slot, property)`, never a pointer into the table.
 //!
+//! Properties are scalars, vectors, asset references or bounded text. A text
+//! property is `String` or `Option<String>` declaring `#[schema(text = N)]`, its
+//! UTF-8 byte bound of at most [`MAX_ROW_TEXT_BYTES`]; the layout and target
+//! contract carry the bound. Row text travels as a string field value at its
+//! property address and as [`DynamicValue::Text`] inside the row API; it is
+//! never a dynamic property or an animation target.
+//!
 //! Dead slots are tracked in memory only; the table encoding carries
 //! [`Rows::next_slot`] and the live rows. A decoded table therefore has no dead
 //! slots. That is sound because decoding a table (restore or a whole-table write)
@@ -32,6 +39,9 @@ pub const ROW_REGION_SPAN: u32 = 0x1000_0000;
 
 /// Maximum rows fields per component; region seven ends at the dynamic bit.
 pub const MAX_ROW_FIELDS: usize = 7;
+
+/// Largest byte bound a text row property may declare: one string field value.
+pub const MAX_ROW_TEXT_BYTES: u32 = 65_536;
 
 /// First property address of rows field `field` (0-based among rows fields).
 pub const fn row_region_base(field: usize) -> u32 {
@@ -139,6 +149,9 @@ pub struct RowProperty {
     pub optional: bool,
     /// Interpretation hint.
     pub hint: RowPropertyHint,
+    /// UTF-8 byte bound of a [`DynamicPropertyKind::Text`] property; zero for
+    /// every other kind.
+    pub max_bytes: u32,
 }
 
 /// Ordered property layout of one row type; the order defines property indices.
@@ -159,7 +172,8 @@ impl RowsLayout {
         self.properties.len().div_ceil(8)
     }
 
-    /// Stream the property count and, per property, name, kind tag, optional flag and hint.
+    /// Stream the property count and, per property, name, kind tag, optional
+    /// flag and hint, followed by a `u32` byte bound for text properties only.
     pub fn write(&self, sink: &mut impl ContractSink) {
         sink.write(&(self.properties.len() as u16).to_le_bytes());
         for property in self.properties {
@@ -169,6 +183,10 @@ impl RowsLayout {
                 u8::from(property.optional),
                 property.hint as u8,
             ]);
+
+            if property.kind == DynamicPropertyKind::Text {
+                sink.write(&property.max_bytes.to_le_bytes());
+            }
         }
     }
 }
@@ -180,10 +198,11 @@ pub trait SchemaRow: Default {
     const LAYOUT: RowsLayout;
 
     /// Copy one property. `Ok(None)` is an absent optional property. Numeric
-    /// reads do not allocate; asset reads clone the source.
+    /// reads do not allocate; asset and text reads clone their strings.
     fn property(&self, index: u32) -> Result<Option<DynamicValue>, FieldError>;
 
-    /// Replace one property after checking its kind and value.
+    /// Replace one property after checking its kind and value, including a text
+    /// property's byte bound.
     fn set_property(&mut self, index: u32, value: DynamicValue) -> Result<(), FieldError>;
 
     /// Clear an optional property; required properties reject the write.
@@ -211,6 +230,11 @@ pub trait RowPropertyValue: Sized {
     fn asset(&self) -> Option<&AssetSource> {
         None
     }
+
+    /// Heap bytes owned by the value.
+    fn heap_bytes(&self) -> usize {
+        0
+    }
 }
 
 /// A required (`T`) or optional (`Option<T>`) row property field.
@@ -232,6 +256,9 @@ pub trait RowPropertyField {
 
     /// Borrow a present asset selection.
     fn asset(&self) -> Option<&AssetSource>;
+
+    /// Heap bytes owned by a present value.
+    fn heap_bytes(&self) -> usize;
 }
 
 macro_rules! row_value {
@@ -281,6 +308,41 @@ impl RowPropertyValue for AssetSource {
     fn asset(&self) -> Option<&AssetSource> {
         Some(self)
     }
+
+    fn heap_bytes(&self) -> usize {
+        self.uri.capacity()
+    }
+}
+
+/// Text rows accept any UTF-8 string here; the derive adds the declared byte
+/// bound through [`check_row_text`].
+impl RowPropertyValue for String {
+    const KIND: DynamicPropertyKind = DynamicPropertyKind::Text;
+
+    fn to_dynamic(&self) -> DynamicValue {
+        DynamicValue::Text(self.clone())
+    }
+
+    fn from_dynamic(value: DynamicValue) -> Result<Self, FieldError> {
+        match value {
+            DynamicValue::Text(value) => Ok(value),
+            _ => Err(FieldError::WrongType),
+        }
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.capacity()
+    }
+}
+
+/// Reject text longer than `max_bytes` UTF-8 bytes; other values pass to the
+/// property's own kind check. Called by `#[derive(SchemaRow)]` before every
+/// write to a `#[schema(text = N)]` property.
+pub fn check_row_text(value: &DynamicValue, max_bytes: u32) -> Result<(), FieldError> {
+    match value {
+        DynamicValue::Text(text) if text.len() > max_bytes as usize => Err(FieldError::TextTooLong),
+        _ => Ok(()),
+    }
 }
 
 impl<T: RowPropertyValue> RowPropertyField for T {
@@ -303,6 +365,10 @@ impl<T: RowPropertyValue> RowPropertyField for T {
 
     fn asset(&self) -> Option<&AssetSource> {
         RowPropertyValue::asset(self)
+    }
+
+    fn heap_bytes(&self) -> usize {
+        RowPropertyValue::heap_bytes(self)
     }
 }
 
@@ -327,6 +393,10 @@ impl<T: RowPropertyValue> RowPropertyField for Option<T> {
 
     fn asset(&self) -> Option<&AssetSource> {
         self.as_ref().and_then(RowPropertyValue::asset)
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.as_ref().map_or(0, RowPropertyValue::heap_bytes)
     }
 }
 
@@ -520,36 +590,51 @@ impl<R: SchemaRow> Rows<R> {
         row_address(relative, R::LAYOUT.property_count()).is_some()
     }
 
-    /// Read a region-relative property: `Dynamic` when present, `Unset` for an
-    /// absent optional property, and an error for a dead or unallocated slot.
+    /// Read a region-relative property: `String` for present text, `Dynamic` for
+    /// any other present value, `Unset` for an absent optional property, and an
+    /// error for a dead or unallocated slot.
     pub fn row_field(&self, relative: u32) -> Result<FieldValue, FieldError> {
         let address =
             row_address(relative, R::LAYOUT.property_count()).ok_or(FieldError::UnknownField)?;
-        Ok(self
-            .property(address.slot, address.property)?
-            .map_or(FieldValue::Unset, FieldValue::Dynamic))
+        Ok(match self.property(address.slot, address.property)? {
+            Some(DynamicValue::Text(text)) => FieldValue::String(text),
+            Some(value) => FieldValue::Dynamic(value),
+            None => FieldValue::Unset,
+        })
     }
 
-    /// Write a region-relative property: `Dynamic` replaces it and `Unset` clears
-    /// an optional property. Dead and unallocated slots reject every write.
+    /// Write a region-relative property: `String` replaces text, `Dynamic`
+    /// replaces any other kind and `Unset` clears an optional property. Dead and
+    /// unallocated slots reject every write.
     pub fn set_row_field(&mut self, relative: u32, value: FieldValue) -> Result<(), FieldError> {
         let address =
             row_address(relative, R::LAYOUT.property_count()).ok_or(FieldError::UnknownField)?;
+        let text =
+            R::LAYOUT.properties[address.property as usize].kind == DynamicPropertyKind::Text;
+
         match value {
-            FieldValue::Dynamic(value) => self.set_property(address.slot, address.property, value),
+            FieldValue::String(value) if text => {
+                self.set_property(address.slot, address.property, DynamicValue::Text(value))
+            }
+            FieldValue::Dynamic(value) if value.kind() != DynamicPropertyKind::Text => {
+                self.set_property(address.slot, address.property, value)
+            }
             FieldValue::Unset => self.clear_property(address.slot, address.property),
             _ => Err(FieldError::WrongType),
         }
     }
 
-    /// Check a region-relative address and operation kind without an instance.
-    /// Value kinds are checked against the layout by the write itself.
+    /// Check a region-relative address and operation kind without an instance:
+    /// text properties take `String`, other properties `Dynamic`, and optional
+    /// ones `Unset`. Value kinds and text bounds are checked by the write itself.
     pub fn validate_row_field(relative: u32, kind: FieldKind) -> Result<(), FieldError> {
         let address =
             row_address(relative, R::LAYOUT.property_count()).ok_or(FieldError::UnknownField)?;
         let property = R::LAYOUT.properties[address.property as usize];
+        let text = property.kind == DynamicPropertyKind::Text;
         match kind {
-            FieldKind::Dynamic => Ok(()),
+            FieldKind::Dynamic if !text => Ok(()),
+            FieldKind::String if text => Ok(()),
             FieldKind::Unset if property.optional => Ok(()),
             _ => Err(FieldError::WrongType),
         }
@@ -598,8 +683,9 @@ impl<R: SchemaRow> Rows<R> {
     /// then per live row in ascending slot order a `u32` slot, a presence mask of
     /// [`RowsLayout::mask_bytes`] bytes (bit `i % 8` of byte `i / 8` marks
     /// property `i`), and the present values in layout order. Values carry no
-    /// tag: 4-byte F32/I32/U32/Bool (0 or 1), 8/12/16-byte vectors, and assets
-    /// as `u16` type, `u32` variant, `u32` source length and UTF-8 source.
+    /// tag: 4-byte F32/I32/U32/Bool (0 or 1), 8/12/16-byte vectors, assets as
+    /// `u16` type, `u32` variant, `u32` source length and UTF-8 source, and text
+    /// as `u32` byte length and UTF-8 bytes within the property's bound.
     pub fn encode(&self) -> Vec<u8> {
         let layout = R::LAYOUT;
         let mut bytes = Vec::with_capacity(8 + self.rows.len() * (4 + layout.mask_bytes()));
@@ -744,7 +830,8 @@ pub fn encode_row<R: SchemaRow>(row: &R, bytes: &mut Vec<u8>) {
 
 /// Decode and validate one row written by [`encode_row`], consuming it from
 /// `bytes`. Required properties must be present; undeclared mask bits,
-/// non-finite values and invalid asset sources are rejected.
+/// non-finite values, invalid asset sources and invalid or over-long text are
+/// rejected.
 pub fn decode_row<R: SchemaRow>(bytes: &mut &[u8]) -> Result<R, FieldError> {
     let layout = R::LAYOUT;
     let mask = take(bytes, layout.mask_bytes())?;
@@ -796,15 +883,20 @@ pub fn encode_row_value(value: &DynamicValue, bytes: &mut Vec<u8>) {
             bytes.extend((asset.uri.len() as u32).to_le_bytes());
             bytes.extend(asset.uri.as_bytes());
         }
+        DynamicValue::Text(text) => {
+            bytes.extend((text.len() as u32).to_le_bytes());
+            bytes.extend(text.as_bytes());
+        }
         value => {
-            for lane in value.floats().expect("row values are numeric or assets") {
+            for lane in value.floats().expect("numeric row value") {
                 bytes.extend(lane.to_le_bytes());
             }
         }
     }
 }
 
-/// Decode and validate one untagged row property value of `kind`.
+/// Decode and validate one untagged row property value of `kind`. Text is
+/// checked for UTF-8 here and against its byte bound by the row write.
 pub fn decode_row_value(
     kind: DynamicPropertyKind,
     bytes: &mut &[u8],
@@ -839,6 +931,16 @@ pub fn decode_row_value(
                 uri: uri.into(),
                 variant,
             })
+        }
+        DynamicPropertyKind::Text => {
+            let length = take_u32(bytes)? as usize;
+            if length > MAX_ROW_TEXT_BYTES as usize {
+                return Err(FieldError::TextTooLong);
+            }
+
+            let text =
+                std::str::from_utf8(take(bytes, length)?).map_err(|_| FieldError::WrongType)?;
+            DynamicValue::Text(text.into())
         }
         DynamicPropertyKind::Mat2 | DynamicPropertyKind::Mat3 | DynamicPropertyKind::Mat4 => {
             return Err(FieldError::WrongType);

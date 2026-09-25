@@ -1,3 +1,4 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { writeFile } from "node:fs/promises";
@@ -661,7 +662,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
             .state === "ready",
       );
       const coldDirect = await g.capture("gui-demo-cold-direct");
-      assert.equal(coldDirect.frame.backend.failedDrawCalls, 0);
+      assert.equal(coldDirect.frame.failedDrawCalls, 0);
       assertCameraFov(coldDirect.inspection, (21 * Math.PI) / 180);
       const backdrop = await g.call<number[][]>(
         "sampleViewerCapture",
@@ -1105,8 +1106,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
         3,
         "waveform geometry must not expand into hundreds of GUI nodes",
       );
-      assert.ok(Number(overview.frame.backend.guiBatches) > 0);
-      assert.ok(Number(overview.frame.backend.glyphPages) > 0);
+      assert.ok(Number(overview.frame.statistics!.gui!.guiBatches) > 0);
+      assert.ok(Number(overview.frame.statistics!.gui!.glyphPages) > 0);
       const glyphTexts = initial.detailed.nodes.flatMap(({ data }) =>
         data.kind === "text" ? [data.text] : [],
       );
@@ -1122,7 +1123,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "three skins, waveform and projector motion clips must all be resident",
       );
       assert.ok(overview.frame.drawCalls > 0 && overview.frame.triangles > 0);
-      assert.equal(overview.frame.backend.failedDrawCalls, 0);
+      assert.equal(overview.frame.failedDrawCalls, 0);
       assert.ok(overview.summary.coverage > 0.08);
       assert.deepEqual(overview.inspection.renderDiagnostics, []);
 
@@ -1426,7 +1427,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         ),
         fullPage: true,
       });
-      assert.equal(obliqueFrame.frame.backend.failedDrawCalls, 0);
+      assert.equal(obliqueFrame.frame.failedDrawCalls, 0);
       assert.ok(
         (
           await g.difference(
@@ -1670,7 +1671,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       });
       assert.deepEqual(transform(await g.inspect()), cameraBeforeControls);
       const controlsFrame = await g.capture("gui-demo-controls-active");
-      assert.equal(controlsFrame.frame.backend.failedDrawCalls, 0);
+      assert.equal(controlsFrame.frame.failedDrawCalls, 0);
       const checkboxPaint = await g.call<{ changedPixels: number }>(
         "compareViewerCaptureRegion",
         "gui-demo-overview",
@@ -1830,7 +1831,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       assert.ok(skinDifference.changedPixels > 1_000);
       assert.ok(skinDifference.meanAbsoluteChannelDifference > 1);
-      assert.equal(emberFrame.frame.backend.failedDrawCalls, 0);
+      assert.equal(emberFrame.frame.failedDrawCalls, 0);
       assert.deepEqual(emberFrame.inspection.renderDiagnostics, []);
 
       // Neon reskins the same controls through shape-material lanes instead
@@ -1874,7 +1875,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       assert.ok(neonDifference.changedPixels > 1_000);
       assert.ok(neonDifference.meanAbsoluteChannelDifference > 1);
-      assert.equal(neonFrame.frame.backend.failedDrawCalls, 0);
+      assert.equal(neonFrame.frame.failedDrawCalls, 0);
       assert.deepEqual(neonFrame.inspection.renderDiagnostics, []);
 
       // Detailed Neon regions. Every rectangle derives from evaluated bounds
@@ -2349,7 +2350,7 @@ const CACHE_COMPARISON = {
 interface CacheObservation {
   readonly label: string;
   readonly record: SurfaceCacheRecord | undefined;
-  readonly backend: Record<string, unknown>;
+  readonly statistics: RenderStatisticsSnapshot | undefined;
   readonly repaints: number;
   readonly allocations: number;
   readonly reuses: number;
@@ -2430,24 +2431,23 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
           "gui-demo",
         );
         const { frame } = await g.capture(label);
-        const backend = frame.backend;
-        const records = backend.surfaceCaches as
-          | readonly SurfaceCacheRecord[]
-          | undefined;
-        assert.ok(records, "Surface cache diagnostics are unavailable");
+        const statistics = frame.statistics;
+        const surfaces = statistics?.surfaces;
+        assert.ok(surfaces, "Surface cache diagnostics are unavailable");
+        const records = surfaces.surfaceCaches;
         const observation = {
           label,
           record:
             entity === undefined
               ? undefined
               : records.find((entry) => entry.entity === entity),
-          backend,
-          repaints: Number(backend.totalSurfaceCacheRepaints),
-          allocations: Number(backend.totalSurfaceCacheAllocations),
-          reuses: Number(backend.totalSurfaceCacheReuses),
-          direct: Number(backend.totalSurfaceCacheDirect),
+          statistics,
+          repaints: surfaces.totalSurfaceCacheRepaints,
+          allocations: surfaces.totalSurfaceCacheAllocations,
+          reuses: surfaces.totalSurfaceCacheReuses,
+          direct: surfaces.totalSurfaceCacheDirect,
         };
-        const { ingress: _ingress, ...stats } = backend;
+        const { ingress: _ingress, ...stats } = statistics!;
         await record(label, { ...stats, records });
         return observation;
       };
@@ -2476,13 +2476,16 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         assert.equal(observation.record?.height, height);
         assert.equal(observation.record?.residentBytes, 4 * width * height);
         // A warm frame composites the unchanged image: no raster or upload work.
-        assert.equal(observation.backend.surfaceCacheReuses, 1);
-        assert.equal(observation.backend.surfaceCacheRepaints, 0);
-        assert.equal(observation.backend.surfaceCacheDirect, 0);
-        assert.equal(observation.backend.surfaceCacheAllocations, 0);
-        assert.equal(observation.backend.uploadedBytes, 0);
+        assert.equal(observation.statistics!.surfaces!.surfaceCacheReuses, 1);
+        assert.equal(observation.statistics!.surfaces!.surfaceCacheRepaints, 0);
+        assert.equal(observation.statistics!.surfaces!.surfaceCacheDirect, 0);
         assert.equal(
-          observation.backend.surfaceCacheResidentBytes,
+          observation.statistics!.surfaces!.surfaceCacheAllocations,
+          0,
+        );
+        assert.equal(observation.statistics!.frame.uploadedBytes, 0);
+        assert.equal(
+          observation.statistics!.surfaces!.surfaceCacheResidentBytes,
           4 * width * height,
         );
       };
@@ -2519,9 +2522,9 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
           `${name}-direct`,
           (entry) => entry === undefined,
         );
-        assert.equal(direct.backend.surfaceCacheEntries, 0);
-        assert.equal(direct.backend.surfaceCacheResidentBytes, 0);
-        assert.equal(direct.backend.surfaceCacheDirect, 0);
+        assert.equal(direct.statistics!.surfaces!.surfaceCacheEntries, 0);
+        assert.equal(direct.statistics!.surfaces!.surfaceCacheResidentBytes, 0);
+        assert.equal(direct.statistics!.surfaces!.surfaceCacheDirect, 0);
         const bounds = await panelBounds();
         const [expected, actual] = await Promise.all(
           [direct.label, cached.label].map((label) =>
@@ -2608,9 +2611,9 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       );
       assert.equal(near.record?.band, 0);
       assert.equal(near.record?.residentBytes, 0);
-      assert.equal(near.backend.surfaceCacheDirect, 1);
-      assert.equal(near.backend.surfaceCacheRepaints, 0);
-      assert.equal(near.backend.surfaceCacheResidentBytes, 0);
+      assert.equal(near.statistics!.surfaces!.surfaceCacheDirect, 1);
+      assert.equal(near.statistics!.surfaces!.surfaceCacheRepaints, 0);
+      assert.equal(near.statistics!.surfaces!.surfaceCacheResidentBytes, 0);
       await record("authored-distance", authoredDistance);
 
       // Cold band-one frame: one allocation and one repaint, then reuse.
@@ -2759,9 +2762,9 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
         "surface-cache-hover",
         (entry) => entry?.mode === "interaction",
       );
-      assert.equal(hovered.backend.surfaceCacheDirect, 1);
-      assert.equal(hovered.backend.surfaceCacheReuses, 0);
-      assert.equal(hovered.backend.surfaceCacheRepaints, 0);
+      assert.equal(hovered.statistics!.surfaces!.surfaceCacheDirect, 1);
+      assert.equal(hovered.statistics!.surfaces!.surfaceCacheReuses, 0);
+      assert.equal(hovered.statistics!.surfaces!.surfaceCacheRepaints, 0);
       const heldHover = await observe("surface-cache-hover-held");
       assert.equal(heldHover.record?.mode, "interaction");
       assert.equal(cacheDelta(hovered, heldHover).repaints, 0);
@@ -2777,9 +2780,9 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
       await g.call("releaseGalleryGuiTransform");
       await g.navigate("shapes");
       const released = await observeUntil("surface-cache-released", () => true);
-      assert.deepEqual(released.backend.surfaceCaches, []);
-      assert.equal(released.backend.surfaceCacheEntries, 0);
-      assert.equal(released.backend.surfaceCacheResidentBytes, 0);
+      assert.deepEqual(released.statistics!.surfaces!.surfaceCaches, []);
+      assert.equal(released.statistics!.surfaces!.surfaceCacheEntries, 0);
+      assert.equal(released.statistics!.surfaces!.surfaceCacheResidentBytes, 0);
       await record("summary", {
         aurora,
         ember,

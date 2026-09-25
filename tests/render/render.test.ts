@@ -1,3 +1,4 @@
+import type { IngressStatistics, RenderStatisticsSnapshot } from "@ipp/client";
 import { responseGate } from "../browser/response-gate.js";
 import { invoke, writeDataUrl, recordCapture } from "./evidence.js";
 import assert from "node:assert/strict";
@@ -80,8 +81,8 @@ for (const variant of ["development", "production"] as const) {
               requireVisible(override.summary, "React material override");
               assert.equal(override.drawCalls, 1);
               assert.equal(override.triangles, 12);
-              assert.equal(override.backend.totalUploadedBytes, 648);
-              const ingress = ingressCounters(override.backend);
+              assert.equal(override.statistics!.frame.totalUploadedBytes, 648);
+              const ingress = ingressCounters(override.statistics);
               assert.ok(ingress.messages > 0);
               assert.equal(ingress.partsMessages, 0);
               assert.equal(ingress.transferredAssetBytes, 0);
@@ -564,7 +565,7 @@ for (const variant of ["development", "production"] as const) {
           );
 
           return {
-            backend: override.backend,
+            statistics: override.statistics,
             session: override.session,
             firstTick: override.tick,
             finalTick: reactOwnedUnmounted.tick,
@@ -1297,33 +1298,12 @@ function assertTransformRotation(
   }
 }
 
-function ingressCounters(backend: Readonly<Record<string, unknown>>): {
-  readonly messages: number;
-  readonly wasmCopyBytes: number;
-  readonly partsMessages: number;
-  readonly transferredAssetBytes: number;
-} {
-  const ingress = backend.ingress;
-  if (typeof ingress !== "object" || ingress === null) {
-    throw new Error("capture backend omitted ingress counters");
-  }
-  const counters = ingress as Readonly<Record<string, unknown>>;
-  for (const name of [
-    "messages",
-    "wasmCopyBytes",
-    "partsMessages",
-    "transferredAssetBytes",
-  ]) {
-    if (typeof counters[name] !== "number") {
-      throw new Error(`capture backend ingress.${name} is not numeric`);
-    }
-  }
-  return counters as {
-    readonly messages: number;
-    readonly wasmCopyBytes: number;
-    readonly partsMessages: number;
-    readonly transferredAssetBytes: number;
-  };
+function ingressCounters(
+  statistics: RenderStatisticsSnapshot | undefined,
+): IngressStatistics {
+  const ingress = statistics?.ingress;
+  if (!ingress) throw new Error("capture statistics omitted ingress counters");
+  return ingress;
 }
 
 function approximately(value: number): number {
@@ -1362,7 +1342,9 @@ interface CaptureReport {
   readonly drawCalls: number;
   readonly triangles: number;
   readonly contextGeneration: number;
-  readonly backend: Readonly<Record<string, unknown>>;
+  readonly failedDrawCalls: number;
+  readonly invalidCamera: boolean;
+  readonly statistics?: RenderStatisticsSnapshot | undefined;
   readonly summary: ReturnType<
     typeof import("./image-assertions.js").summarizeImage
   >;

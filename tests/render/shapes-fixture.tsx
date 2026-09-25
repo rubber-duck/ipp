@@ -1,3 +1,5 @@
+import type { RenderStatisticsSnapshot } from "@ipp/client";
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { activateFixtureCamera } from "../integration/camera-fixtures.js";
 import type { Client } from "@ipp/client";
 import type {
@@ -263,7 +265,9 @@ export interface ShapeCaptureReport {
   readonly triangles: number;
   readonly rotationY: number;
   readonly contextGeneration: number;
-  readonly backend: Readonly<Record<string, unknown>>;
+  readonly failedDrawCalls: number;
+  readonly invalidCamera: boolean;
+  readonly statistics?: RenderStatisticsSnapshot | undefined;
   readonly summary: ImageSummary;
   readonly inspection: ShapeInspection;
   readonly resourceCount: number;
@@ -538,7 +542,9 @@ export async function captureShapeFrame(
     triangles: frame.triangles,
     rotationY: state.rotationY,
     contextGeneration: frame.contextGeneration,
-    backend: frame.backend,
+    failedDrawCalls: frame.failedDrawCalls,
+    invalidCamera: frame.invalidCamera,
+    statistics: frame.statistics,
     summary: summarizeImage(frame),
     inspection,
     resourceCount: runtimeInspection.resources.length,
@@ -807,9 +813,9 @@ export async function recoverShapeContext(
   const state = requireActive();
   const before = requireCapture(state, beforeLabel);
   const resourceCountBefore = (await state.client.inspect()).resources.length;
-  state.presentation.loseContext();
+  presentationTesting(state.presentation).loseContext();
   await compositorBarrier();
-  state.presentation.restoreContext();
+  presentationTesting(state.presentation).restoreContext();
   const after = await captureShapeFrame(afterLabel);
   if (after.contextGeneration <= before.contextGeneration) {
     throw new Error(

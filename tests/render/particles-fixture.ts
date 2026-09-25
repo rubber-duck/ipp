@@ -1,4 +1,5 @@
 /** Real generated-worker particle scenarios; launch/capture transport stays in the environment. */
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import type {
   RenderWorldClient,
   FrameCapture,
@@ -158,11 +159,11 @@ export function equal(a: string, b: string) {
 }
 
 export async function recover() {
-  client.presentation!.loseContext();
+  presentationTesting(client.presentation!).loseContext();
   await new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-  client.presentation!.restoreContext();
+  presentationTesting(client.presentation!).restoreContext();
 }
 
 export async function mesh(customVertex = false) {

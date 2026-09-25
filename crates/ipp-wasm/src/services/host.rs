@@ -127,7 +127,7 @@ impl HostServices for WasmHostServices {
 
     #[cfg(all(feature = "render", target_arch = "wasm32"))]
     fn progress_assets(&mut self, host: &mut HostRuntime) {
-        self.presentation.progress_assets(host);
+        self.presentation.progress_resources(host);
     }
 
     #[cfg(all(feature = "render", target_arch = "wasm32"))]

@@ -11,12 +11,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import {
-  MAX_CAPTURE_DIMENSION,
-  type Client,
-  type GuiWorldClient,
-  type LogLevel,
-} from "@ipp/client";
+import type { Client, GuiWorldClient, LogLevel } from "@ipp/client";
 import {
   CanvasWorldSession,
   asError,
@@ -365,17 +360,28 @@ export function IppCanvas({
     let cssWidth = canvas.clientWidth;
     let cssHeight = canvas.clientHeight;
     let detached = false;
+    const presentation = session?.client.presentation;
     const resize = () => {
       if (detached || session?.isClosing) return;
       if (cssWidth <= 0 || cssHeight <= 0) return;
+      // The drawing buffer follows CSS size × display density, bounded by
+      // the device limits the worker reports once the renderer attaches.
+      // Until then the worker applies the same bound to this request.
+      const limits = presentation?.viewportLimits;
       const ratio = Math.min(
         window.devicePixelRatio,
-        MAX_CAPTURE_DIMENSION / cssWidth,
-        MAX_CAPTURE_DIMENSION / cssHeight,
+        limits ? limits.maxWidth / cssWidth : Number.POSITIVE_INFINITY,
+        limits ? limits.maxHeight / cssHeight : Number.POSITIVE_INFINITY,
       );
       const next = {
-        width: Math.max(1, Math.round(cssWidth * ratio)),
-        height: Math.max(1, Math.round(cssHeight * ratio)),
+        width: Math.min(
+          limits?.maxWidth ?? Number.POSITIVE_INFINITY,
+          Math.max(1, Math.round(cssWidth * ratio)),
+        ),
+        height: Math.min(
+          limits?.maxHeight ?? Number.POSITIVE_INFINITY,
+          Math.max(1, Math.round(cssHeight * ratio)),
+        ),
       };
       if (
         next.width === dimensions.current.width &&
@@ -383,8 +389,9 @@ export function IppCanvas({
       )
         return;
       dimensions.current = next;
-      session?.client.presentation!.resize(next.width, next.height);
+      presentation?.resize(next.width, next.height);
     };
+    const unsubscribeLimits = presentation?.onViewportLimits(resize);
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       cssWidth = entry.contentRect.width;
@@ -412,6 +419,7 @@ export function IppCanvas({
       observer.disconnect();
       density.removeEventListener("change", densityChanged);
       window.removeEventListener("resize", resize);
+      unsubscribeLimits?.();
     };
     const unsubscribe = session?.onClosing(detach);
     return () => {

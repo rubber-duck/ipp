@@ -98,6 +98,7 @@ impl WasmHostBoundary {
         self.reserve_input(len, None)
     }
 
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn resource_buffered_bytes(&self) -> usize {
         self.host
             .as_ref()

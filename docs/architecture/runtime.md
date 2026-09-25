@@ -150,7 +150,7 @@ V1 constraint direction is non-iterative scalar drivers, local copies/limits and
 
 ## Diagnostic logging
 
-Diagnostics are separate from outcomes/events and may compile out. Hosts select sinks/levels. Log lifecycle and command boundaries with identities and committed effects; filter before formatting. Frame/draw/evaluation hot paths stay quiet at every level. Never dump payloads or credentials. [Host configuration](../development/building.md#diagnostic-output) owns setup.
+Diagnostics are separate from outcomes/events and may compile out. Hosts select sinks/levels. Log lifecycle and command boundaries with identities and committed effects; filter before formatting. Frame/draw/evaluation hot paths stay quiet at every level. Never dump payloads or credentials. Render, resource and ingress statistics are optional diagnostics that may compile out, are read on demand, and never become a readiness or verification contract. [Host configuration](../development/building.md#diagnostic-output) owns setup.
 
 ## Particles
 

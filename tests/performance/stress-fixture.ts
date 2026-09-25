@@ -478,7 +478,7 @@ export async function capture(label: string) {
     png: canvas.toDataURL(),
     draws: frame.drawCalls,
     triangles: frame.triangles,
-    backend: frame.backend,
+    device: frame.statistics?.device ?? null,
     foreground,
   };
 }

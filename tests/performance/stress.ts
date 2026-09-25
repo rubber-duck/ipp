@@ -131,10 +131,10 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
           draws: number;
           triangles: number;
           foreground: number;
-          backend: Record<string, unknown>;
+          device: Readonly<Record<string, unknown>> | null;
         }>("capture", label);
         if (process.env.IPP_BROWSER_ANGLE)
-          verifyHardwareRenderer(result.backend.unmaskedRenderer);
+          verifyHardwareRenderer(result.device?.unmaskedRenderer);
         await writeDataUrl(
           join(environment.evidence.directory, label + ".png"),
           result.png,

@@ -34,7 +34,11 @@ import type {
 } from "./types.js";
 import type { WorldDescriptor } from "./host-protocol.js";
 import type { MessageTransport } from "./transport.js";
-import type { ClientPresentation } from "./presentation.js";
+import {
+  bindTestingChannel,
+  testingChannel,
+  type ClientPresentation,
+} from "./presentation.js";
 import { DiagnosticLogger, logLevelValue, type LogLevel } from "./logging.js";
 
 export type { LogLevel } from "./logging.js";
@@ -436,17 +440,26 @@ export abstract class ClientBase implements Client {
   get presentation(): ClientPresentation | undefined {
     const host = this.transport.presentation;
     if (!host) return undefined;
-    return {
-      capture: (afterTick = this.observedTick) => {
-        if (this.stopped) return Promise.reject(new Error("Client is closed"));
-        return host.capture(this.sessionId, afterTick, this.timeoutMs);
-      },
-      resize: (width, height) => host.resize(width, height),
-      loseContext: () => host.loseContext(),
-      restoreContext: () => host.restoreContext(),
-      setGlyphAtlasLimits: (limits) => host.setGlyphAtlasLimits(limits),
-      setSurfaceCacheBudget: (bytes) => host.setSurfaceCacheBudget(bytes),
-    };
+    return bindTestingChannel(
+      {
+        capture: (afterTick = this.observedTick) => {
+          if (this.stopped)
+            return Promise.reject(new Error("Client is closed"));
+          return host.frame(this.sessionId, afterTick, this.timeoutMs, true);
+        },
+        frame: (afterTick = this.observedTick) => {
+          if (this.stopped)
+            return Promise.reject(new Error("Client is closed"));
+          return host.frame(this.sessionId, afterTick, this.timeoutMs, false);
+        },
+        resize: (width, height) => host.resize(width, height),
+        get viewportLimits() {
+          return host.viewportLimits;
+        },
+        onViewportLimits: (listener) => host.onViewportLimits(listener),
+      } satisfies ClientPresentation,
+      (message) => testingChannel(host)(message),
+    );
   }
 
   get world(): WorldDescriptor | undefined {

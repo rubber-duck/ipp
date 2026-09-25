@@ -149,8 +149,10 @@ pub extern "C" fn ipp_resource_chunk(session: u64, id: u64, len: usize) -> u32 {
     BOUNDARY.with_borrow_mut(|boundary| boundary.asset_chunk(session, id, len))
 }
 
-/// Application-owned source pipes retained in Rust, excluding decoder/GPU storage.
+/// Application-owned source pipes retained in Rust, excluding decoder/GPU
+/// storage. An ingress statistic of `diagnostics` builds.
 // SAFETY: Unique symbol; scalar observation without borrowed storage escaping.
+#[cfg(feature = "diagnostics")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_resource_buffered_bytes() -> usize {
     BOUNDARY.with_borrow(|boundary| boundary.resource_buffered_bytes())

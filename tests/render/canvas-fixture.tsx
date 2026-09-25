@@ -1,3 +1,4 @@
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import {
   type CanvasRuntimeInput,
   type TransferObservation,
@@ -28,7 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot, type Root as ReactDomRoot } from "react-dom/client";
-import type { FrameCapture } from "@ipp/client";
+import type { FrameCapture, ViewportLimits } from "@ipp/client";
 import type { Command, EntitySnapshot } from "@ipp/client";
 import { Entity, Transform, UnlitMaterial } from "@ipp/react";
 import {
@@ -129,6 +130,8 @@ export interface CanvasLayoutObservation {
   readonly attributeWidth: number;
   readonly attributeHeight: number;
   readonly devicePixelRatio: number;
+  /** Device limits the worker reported after attach, if any. */
+  readonly viewportLimits: ViewportLimits | null;
   readonly transfers: TransferObservation;
 }
 
@@ -386,8 +389,8 @@ export async function setCanvasContextLost(
   lost: boolean,
 ): Promise<void> {
   const client = requireHandle(id).client;
-  if (lost) client.presentation!.loseContext();
-  else client.presentation!.restoreContext();
+  if (lost) presentationTesting(client.presentation!).loseContext();
+  else presentationTesting(client.presentation!).restoreContext();
   await client.inspect();
 }
 
@@ -415,6 +418,8 @@ export async function observeCanvasLayout(
     attributeWidth: canvas.width,
     attributeHeight: canvas.height,
     devicePixelRatio: window.devicePixelRatio,
+    viewportLimits:
+      requireHandle(id).client.presentation?.viewportLimits ?? null,
     transfers: transferObservation(),
   };
 }

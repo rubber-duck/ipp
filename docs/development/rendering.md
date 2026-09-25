@@ -25,7 +25,7 @@ flowchart LR
     worker --> image["Completed GPU readback and visible capture"]
 ```
 
-Rust owns rendering; the bridge supplies WebGL against a transferred OffscreenCanvas. Activate a [Camera](cameras-and-picking.md) explicitly. Drawing-buffer size follows CSS × device density, proportionally capped at 2048 per dimension. See [current scope](building.md#toolchain-and-scope) for supported rendering features.
+Rust owns rendering; the bridge supplies WebGL against a transferred OffscreenCanvas. Activate a [Camera](cameras-and-picking.md) explicitly. Drawing-buffer size follows CSS × device density, scaled down proportionally to the attached device's largest viewport, renderbuffer and texture size; the worker reports those limits after attach through `presentation.viewportLimits`. See [current scope](building.md#toolchain-and-scope) for supported rendering features.
 
 ## Maintained rendering evidence
 
@@ -33,7 +33,7 @@ The [suite registry](../../tools/pipeline/suites.json) selects real browser scen
 
 [Render lifecycle tests](../../tests/render/render.test.ts) pair acknowledged state/events with completed images. [Prepared geometry](../../tests/render/ready-geometry.test.ts) gates real HTTP loads to verify that old selections remain visible until a replacement is ready, and that failure/cancellation preserves usable state. [Viewer tests](../../tests/render/viewer.test.ts) drive the actual packaged application. Detailed cases and image tolerances belong in those tests.
 
-`client.presentation.capture(afterTick)` waits for a sufficiently recent completed frame and returns top-left RGBA8; it does not advance time. A capture completes with the next frame rendered at or after the requested tick, so while an open command batch withholds presentation or the Host is paused, request it after the batch ends or observe the presented tick with `waitForFrame`. Acknowledgement and resource readiness alone do not prove visible output. Runners retain logs, session/tick metadata and images under `target/integration-artifacts/`, and clean up owned browsers, workers, servers and connections under the [testing policy](integration-testing.md).
+`client.presentation.frame(afterTick)` resolves with a completed frame's summary (tick, size, draw calls, triangles, failed draws, invalid camera, context generation) without reading pixels; use it as a render-readiness barrier after resources load. `client.presentation.capture(afterTick)` additionally reads back the full drawing buffer as top-left RGBA8, which finishes pending GPU work and copies width × height × 4 bytes, so reserve it for image evidence. Neither advances time. `diagnostics` builds attach typed renderer, device and ingress `statistics` to captures; they are measurements, never readiness signals. Loss simulation and renderer budget overrides live in `@ipp/client/testing` and require a `diagnostics` build. A frame or capture completes with the next frame rendered at or after the requested tick, so while an open command batch withholds presentation or the Host is paused, request it after the batch ends or observe the presented tick with `waitForFrame`. Acknowledgement and resource readiness alone do not prove visible output. Runners retain logs, session/tick metadata and images under `target/integration-artifacts/`, and clean up owned browsers, workers, servers and connections under the [testing policy](integration-testing.md).
 
 ## Asset loading and recovery
 

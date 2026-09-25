@@ -24,7 +24,7 @@ Batches apply in order without rollback. A semantic failure returns its scope an
 
 `batch()` automatically pages large edits through the shared [command writer](src/command-pages.ts), pipelines a bounded window, and resolves with aggregated outcomes after completion. The explicit `beginBatch()`, `batchChunk()` and `endBatch()` operations support producers whose logical batch spans multiple writes. Buffer length never implies completion. The first buffer holds that World’s evaluation and unrelated commands until termination or the Host’s two-second deadline. `onBatchAborted()` reports expiry; applied effects remain available for correction. See the [client methods](src/client.ts) for correlation and per-buffer outcomes.
 
-Acknowledgement, resource readiness and completed rendering are distinct. Clients observe Host progress without advancing time. Inspection pages are independent observations, not an atomic World snapshot; completed images belong to the presentation boundary.
+Acknowledgement, resource readiness and completed rendering are distinct. Clients observe Host progress without advancing time. Inspection pages are independent observations, not an atomic World snapshot; completed frames belong to the presentation boundary. `presentation.frame` observes a completed frame without readback; `capture` reads its pixels back and, in `diagnostics` builds only, typed statistics. Integration tests reach loss simulation and renderer budget overrides through the separate `@ipp/client/testing` entry point ([testing.ts](src/testing.ts)), which production presentation does not expose.
 
 ## Host connections and World files
 

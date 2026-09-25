@@ -1,3 +1,4 @@
+import { presentationTesting } from "../../packages/ipp-client/src/testing.js";
 import { settledAsset } from "../integration/asset-fixtures.js";
 import { clientAssetSource } from "../../packages/ipp-client/src/asset-sources.js";
 import type {
@@ -146,7 +147,9 @@ export async function capture(label: string, draws = 2) {
         tick: frame.tick,
         drawCalls: frame.drawCalls,
         triangles: frame.triangles,
-        backend: frame.backend,
+        failedDrawCalls: frame.failedDrawCalls,
+        invalidCamera: frame.invalidCamera,
+        statistics: frame.statistics,
         summary: summarizeImage(frame),
         resources: (await c.inspect()).resources,
       };
@@ -222,8 +225,8 @@ export async function applyInvalidPose() {
 export async function recover(draws = 2) {
   const presentation = current().presentation!;
   const previous = await presentation.capture();
-  presentation.loseContext();
-  presentation.restoreContext();
+  presentationTesting(presentation).loseContext();
+  presentationTesting(presentation).restoreContext();
   const deadline = performance.now() + 10_000;
   while (performance.now() < deadline) {
     const next = await presentation.capture();

@@ -6,7 +6,7 @@
 
 Feature delivery includes a maintained harness exercising the real runtime, generated client, production transport/codecs, owned assets and renderer wherever they participate. Unit tests supplement this evidence; mocks cannot prove the replaced integration. Limit doubles to a specific fault boundary or external service and state the limits.
 
-Use [focused validation](workflow.md#validation) during development. Only an explicit merge-to-main/push request triggers agent-run full regression; one owner validates the combined result. Reuse valid evidence.
+Use [focused validation](workflow.md#validation) during development. A merge-to-main/push request triggers core regression plus affected groups or suites; full regression is explicitly on demand. One owner validates the combined result. Core coverage does not replace real browser/rendering or other subsystem evidence when those paths change. Reuse valid evidence.
 
 Every strategy names runnable environments, real participants, fixtures, observations and extension points. Harnesses live outside core and exercise production artifacts; disposable demonstrations do not qualify.
 

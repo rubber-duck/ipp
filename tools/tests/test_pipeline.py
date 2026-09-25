@@ -21,12 +21,14 @@ from pipeline.artifacts import source_identity, workspace_lock
 from pipeline.catalog import (
     GLES_CHECKS,
     PROFILES,
+    REGRESSION_GROUPS,
     SUITES,
     catalog,
     regression_ids,
+    regression_group_ids,
     suite_ids,
 )
-from pipeline.cli import make_plan, parser
+from pipeline.cli import list_selections, make_plan, parser
 from pipeline.environment import Requirement, probe
 from pipeline.model import ROOT, Plan, Task, select
 from pipeline.operations import validate_catalog
@@ -99,9 +101,9 @@ class PlanningTests(unittest.TestCase):
         self.assertNotIn("build:blender-fixtures", retained_ids)
         with self.assertRaises(ValueError):
             plan("benchmark", "native", "--scene", "retained-gui")
-        for profile in ("repository", "native", "integration"):
+        for full in (False, True):
             tasks = catalog("/example/egl")
-            regression = select(tasks, regression_ids(tasks, profile))
+            regression = select(tasks, regression_ids(tasks, full=full))
             self.assertFalse(
                 any(
                     "performance-" in task.id or task.id.startswith("benchmark:")
@@ -222,10 +224,10 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("needs: [build, retained-gui]", jobs["deploy"])
         self.assertFalse(any("retained-gui" in line for line in jobs["build"]))
 
-    def test_every_suite_and_ci_selection_resolves(self):
+    def test_every_suite_and_full_selection_resolves(self):
         validate_catalog()
         tasks = catalog("/example/egl")
-        full = select(tasks, regression_ids(tasks, "integration"))
+        full = select(tasks, regression_ids(tasks, full=True))
         self.assertEqual(len(full), len({task.id for task in full}))
         ids = [task.id for task in full]
         for name in SUITES:
@@ -587,17 +589,146 @@ class PlanningTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid source root"):
                     validate_catalog()
 
-    def test_native_ci_does_not_need_node_or_browser(self):
-        selected = plan("regression", "--profile", "native")
+    def test_focused_native_checks_do_not_need_node_or_browser(self):
+        selected = plan(
+            "check",
+            "workspace",
+            "clippy-default",
+            "clippy-minimal",
+            "clippy-expanded",
+            "--suite",
+            "runner",
+        )
         self.assertEqual(
             {r for task in selected.tasks for r in task.requirements}, {"rust"}
         )
-        self.assertEqual(selected.coverage, "native")
+        self.assertEqual(selected.coverage, "focused")
 
-    def test_full_profile_does_not_silently_omit_gles(self):
-        selected = plan("regression")
-        self.assertEqual(selected.coverage, "integration")
+    def test_full_flag_does_not_silently_omit_gles(self):
+        selected = plan("regression", "--full")
+        self.assertEqual(selected.coverage, "full")
         self.assertTrue(any("gles" in task.requirements for task in selected.tasks))
+
+    def test_default_core_keeps_real_native_coverage_without_optional_environments(
+        self,
+    ):
+        selected = plan("regression")
+        ids = {task.id for task in selected.tasks}
+        self.assertEqual(selected.coverage, "core")
+        self.assertTrue(
+            {
+                "check:repository",
+                "check:workspace",
+                "check:typecheck",
+                "check:clippy-default",
+                "test:rust:default",
+                "test:runner:pipeline",
+                "build:native",
+                "build:client",
+                "build:typescript",
+                "test:dist/tests/integration/integration.test.js",
+            }.issubset(ids)
+        )
+        self.assertTrue(set(suite_ids(["client"])).issubset(ids))
+        requirements = {r for task in selected.tasks for r in task.requirements}
+        self.assertFalse(
+            requirements & {"wasm", "browser", "blender", "blender-wheels", "gles"}
+        )
+        self.assertNotIn("test:rust:expanded", ids)
+        self.assertNotIn("test:rust:minimal", ids)
+        self.assertFalse(ids & set(suite_ids(["scaling"])))
+
+    def test_groups_compose_with_core_and_share_prerequisites(self):
+        selected = plan(
+            "regression", "--group", "gui", "--group", "rendering", "--group", "gui"
+        )
+        ids = [task.id for task in selected.tasks]
+        self.assertEqual(selected.coverage, "core+gui+rendering")
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(set(plan("regression").requested).issubset(ids))
+        self.assertTrue(
+            set(suite_ids(["gui", "surfaces", "retained-gui", "render"])).issubset(ids)
+        )
+        self.assertEqual(ids.count("build:typescript"), 1)
+        self.assertNotIn("test:rust:expanded", ids)
+        self.assertNotIn("test:dist/tests/integration/scaling.test.js", ids)
+
+    def test_groups_keep_all_full_checks_reachable_and_benchmarks_separate(self):
+        tasks = catalog("/example/egl")
+        grouped = regression_group_ids(list(REGRESSION_GROUPS))
+        covered = set(regression_ids(tasks)) | set(grouped)
+        self.assertEqual(covered, set(regression_ids(tasks, full=True)))
+        for group in REGRESSION_GROUPS:
+            with self.subTest(group=group):
+                selected = plan("regression", "--group", group)
+                self.assertFalse(
+                    any(task.id.startswith("benchmark:") for task in selected.tasks)
+                )
+        selected = plan("regression", "--group", "gles")
+        self.assertTrue(any("gles" in task.requirements for task in selected.tasks))
+
+    def test_new_checks_need_an_on_demand_group_or_core_assignment(self):
+        tasks = catalog()
+        tasks["check:new"] = Task(
+            "check:new", "New check", (sys.executable, "-c", "pass")
+        )
+        with patch("pipeline.operations.catalog", return_value=tasks):
+            with self.assertRaisesRegex(ValueError, "Assign checks/suites.*check:new"):
+                validate_catalog()
+
+    def test_focused_selections_and_explicit_full_flag_are_not_ignored(self):
+        focused = plan("regression", "--suite", "runner")
+        self.assertEqual(focused.requested, ("test:runner:pipeline",))
+        self.assertEqual(focused.coverage, "partial-regression")
+        selected = plan("regression", "--full", "--suite", "browser")
+        ids = {task.id for task in selected.tasks}
+        self.assertIn("test:rust:default", ids)
+        self.assertTrue(set(suite_ids(["browser"])).issubset(ids))
+        self.assertEqual(selected.coverage, "full")
+        self.assertEqual(
+            set(selected.requested), set(regression_ids(catalog(), full=True))
+        )
+        grouped = plan("regression", "--group", "browser", "--suite", "runner")
+        self.assertIn("test:rust:default", grouped.requested)
+        listed = list_selections(parser().parse_args(["regression", "--list"]))
+        self.assertEqual(listed["default"], "core")
+        self.assertEqual(set(listed["groups"]), set(REGRESSION_GROUPS))
+        self.assertIn("--full", listed)
+        self.assertNotIn("profiles", listed)
+
+    def test_retry_groups_only_add_selected_work_and_preserve_egl_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "summary.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "root": str(ROOT),
+                        "coverage": "full",
+                        "eglDirectory": "/example/egl",
+                        "steps": [
+                            {"id": "check:catalog", "status": "passed"},
+                            {"id": "check:repository", "status": "failed"},
+                        ],
+                    }
+                )
+            )
+            for args in (
+                ("retry", str(report)),
+                ("regression", "--retry", str(report)),
+            ):
+                with self.subTest(args=args):
+                    selected = plan(*args, "--group", "gles")
+                    self.assertEqual(selected.coverage, "partial-regression")
+                    self.assertIn("check:repository", selected.requested)
+                    self.assertNotIn("check:catalog", selected.requested)
+                    self.assertNotIn("test:rust:default", selected.requested)
+                    gles = next(
+                        t for t in selected.tasks if t.id == "check:gles-particles"
+                    )
+                    self.assertIn("/example/egl", gles.command)
+            with self.assertRaisesRegex(ValueError, "retry cannot select --full"):
+                plan("regression", "--retry", str(report), "--full")
 
     def test_unknown_steps_cycles_and_invalid_outputs_fail_before_execution(self):
         with self.assertRaisesRegex(ValueError, "Unknown task"):

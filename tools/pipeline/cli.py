@@ -12,11 +12,12 @@ import threading
 
 from .artifacts import source_identity
 from .catalog import (
-    CI_PROFILES,
     PROFILES,
+    REGRESSION_GROUPS,
     SUITES,
     catalog,
     operation,
+    regression_group_ids,
     regression_ids,
     suite_ids,
 )
@@ -71,12 +72,33 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--suite", action="append", default=[])
     regression = commands.add_parser(
         "regression",
-        help="run an explicitly selected validation profile or focused steps",
+        help="run core regression, add on-demand groups, or select focused steps",
     )
     common(regression)
-    regression.add_argument("--profile", choices=CI_PROFILES, default="integration")
-    regression.add_argument("--only", action="append", default=[])
-    regression.add_argument("--suite", action="append", default=[])
+    regression.add_argument(
+        "--full",
+        action="store_true",
+        help="run every maintained check and suite, excluding benchmarks (default: core)",
+    )
+    regression.add_argument(
+        "--group",
+        choices=REGRESSION_GROUPS,
+        action="append",
+        default=[],
+        help="add to core; with --retry, add only the group; repeat to combine",
+    )
+    regression.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="select a task ID; repeat to combine",
+    )
+    regression.add_argument(
+        "--suite",
+        action="append",
+        default=[],
+        help="select a named suite; repeat to combine",
+    )
     regression.add_argument("--retry", type=Path)
 
     retry = commands.add_parser(
@@ -86,6 +108,13 @@ def parser() -> argparse.ArgumentParser:
     retry.add_argument("report", type=Path)
     retry.add_argument("--only", action="append", default=[])
     retry.add_argument("--suite", action="append", default=[])
+    retry.add_argument(
+        "--group",
+        choices=REGRESSION_GROUPS,
+        action="append",
+        default=[],
+        help="add affected groups to unfinished steps without adding core",
+    )
 
     doctor = commands.add_parser("doctor", help="read-only prerequisite diagnosis")
     common(doctor)
@@ -201,7 +230,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
         elif args.command == "test":
             if not args.names:
                 raise ValueError(
-                    "Name focused suites, e.g. test cameras; use regression for an explicit full run."
+                    "Name focused suites, e.g. test cameras; use regression for core checks or regression --full for a full run."
                 )
             requested = suite_ids(args.names)
         else:
@@ -224,6 +253,11 @@ def make_plan(args: argparse.Namespace) -> Plan:
     elif args.command in ("regression", "retry"):
         requested = [*args.only, *suite_ids(args.suite)]
         retry = args.report if args.command == "retry" else args.retry
+        full = args.command == "regression" and args.full
+        if retry and full:
+            raise ValueError(
+                "A retry cannot select --full; add affected --group/--only/--suite selections."
+            )
         if retry:
             unfinished, previous = retry_ids(retry.resolve())
             requested.extend(unfinished)
@@ -232,21 +266,29 @@ def make_plan(args: argparse.Namespace) -> Plan:
                 tasks = catalog(args.egl_dir)
             if previous.get("source") != source_identity(ROOT):
                 notes.append(
-                    "Source differs from the previous run. Old passing steps are not revalidated; add affected --only/--suite selections."
+                    "Source differs from the previous run. Old passing steps are not revalidated; add affected --group/--only/--suite selections."
                 )
-        if not requested:
-            if retry:
-                return Plan(
-                    args.command,
-                    (),
-                    (),
-                    "partial-regression",
-                    (*notes, "Previous report has no unfinished steps."),
-                )
-            requested = regression_ids(tasks, args.profile)
-            coverage = args.profile
-        else:
-            coverage = "partial-regression"
+        # --only/--suite alone and retries stay focused. Groups add to core.
+        coverage = "partial-regression"
+        if full:
+            requested = [*regression_ids(tasks, full=True), *requested]
+            coverage = "full"
+        elif not retry and (args.group or not (args.only or args.suite)):
+            requested = [*regression_ids(tasks), *requested]
+            coverage = "core"
+            if args.only or args.suite:
+                coverage = "partial-regression"
+            elif args.group:
+                coverage += "+" + "+".join(dict.fromkeys(args.group))
+            notes.append(
+                "Core covers the routine gate; add affected --group selections. Use --full for complete regression."
+            )
+        requested.extend(regression_group_ids(args.group))
+        for name in dict.fromkeys(args.group):
+            notes.append(f"Group {name}: {REGRESSION_GROUPS[name].description}")
+        if retry and not requested:
+            notes.append("Previous report has no unfinished steps.")
+            return Plan(args.command, (), (), coverage, tuple(notes))
     elif args.command == "format":
         if args.paths and len(args.language) != 1:
             raise ValueError("Explicit paths require one --language")
@@ -398,7 +440,14 @@ def list_selections(args: argparse.Namespace) -> dict:
             if name.startswith("build:")
         }
     if args.command in ("regression", "retry", "check"):
-        return {"profiles": CI_PROFILES, "steps": list(tasks)}
+        return {
+            "default": "core",
+            "--full": "Every maintained check and suite, excluding benchmarks",
+            "groups": {
+                name: group.description for name, group in REGRESSION_GROUPS.items()
+            },
+            "steps": list(tasks),
+        }
     if args.command == "benchmark":
         return {
             "native": "Release GLES timing and optional allocation instrumentation",

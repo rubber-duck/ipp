@@ -121,54 +121,89 @@ pub(crate) fn delete_forward(text: &str, caret: u32, anchor: Option<u32>) -> Opt
 /// Nearest legal caret offset to an em pen `x` on a measured layout.
 /// Ties prefer the later offset so a centred single glyph keeps an
 /// append-style caret at the end.
+///
+/// Produces the pen positions of [`TextLayout::caret_position`] for every
+/// boundary in one merged pass. Measured lines and their glyphs follow
+/// source order (basic-LTR subset), so the first line starting at, and the
+/// first line ending at or after, each ascending boundary only move forward,
+/// as does the first glyph starting at or after it.
 pub(crate) fn caret_offset_at_x(layout: &TextLayout, x_ems: f32) -> u32 {
+    let lines = &layout.lines;
+    let glyphs = &layout.glyphs;
+    let mut starting_line = 0;
+    let mut ending_line = 0;
+    let mut glyph = 0;
     let mut best = 0_u32;
     let mut best_dist = f32::INFINITY;
+
     for boundary in layout.grapheme_boundaries.iter().copied() {
-        let Some(caret) = layout.caret_position(boundary) else {
-            continue;
+        while starting_line < lines.len() && lines[starting_line].source_range[0] < boundary {
+            record_step();
+            starting_line += 1;
+        }
+
+        let caret_x = if lines
+            .get(starting_line)
+            .is_some_and(|line| line.source_range[0] == boundary)
+        {
+            0.0
+        } else {
+            while ending_line < lines.len() && lines[ending_line].source_range[1] < boundary {
+                record_step();
+                ending_line += 1;
+            }
+
+            // A boundary between lines (a consumed break or wrap space) has
+            // no caret geometry.
+            let Some(line) = lines.get(ending_line) else {
+                continue;
+            };
+            let [start, end] = line.source_range;
+            if start >= boundary {
+                continue;
+            }
+
+            if boundary == end {
+                line.width
+            } else {
+                let [first, last] = line.glyph_range.map(|index| index as usize);
+                glyph = glyph.max(first);
+                while glyph < last && glyphs[glyph].source_range[0] < boundary {
+                    record_step();
+                    glyph += 1;
+                }
+
+                if glyph < last {
+                    glyphs[glyph].position[0]
+                } else {
+                    line.width
+                }
+            }
         };
-        let dist = (caret.position[0] - x_ems).abs();
+
+        record_step();
+        let dist = (caret_x - x_ems).abs();
         if dist < best_dist || (dist == best_dist && boundary > best) {
             best_dist = dist;
             best = boundary;
         }
     }
+
     best
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn combining_mark_is_one_grapheme() {
-        let text = "a\u{301}";
-        assert_eq!(grapheme_boundaries(text), vec![0, 3]);
-        assert!(is_boundary(text, 0));
-        assert!(!is_boundary(text, 1));
-        assert!(is_boundary(text, 3));
-        assert_eq!(prev_boundary(text, 3), Some(0));
-        assert_eq!(prev_boundary(text, 0), None);
-        assert_eq!(next_boundary(text, 0), Some(3));
-    }
-
-    #[test]
-    fn backspace_deletes_whole_grapheme() {
-        let text = "a\u{301}";
-        let outcome = backspace(text, 3, None).unwrap();
-        assert_eq!(outcome.text, "");
-        assert_eq!(outcome.caret, 0);
-        assert!(backspace("", 0, None).is_none());
-    }
-
-    #[test]
-    fn insert_snaps_caret_in_new_text() {
-        let outcome = insert_at("ae", 1, 1, "V");
-        assert_eq!(outcome.text, "aVe");
-        assert_eq!(outcome.caret, 2);
-        let replaced = insert_at("aVe", 0, 1, "e");
-        assert_eq!(replaced.text, "eVe");
-        assert_eq!(replaced.caret, 1);
-    }
+thread_local! {
+    /// Line, glyph and boundary steps taken by [`caret_offset_at_x`].
+    static CARET_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+
+#[inline]
+fn record_step() {
+    #[cfg(test)]
+    CARET_STEPS.set(CARET_STEPS.get() + 1);
+}
+
+#[cfg(test)]
+#[path = "text_edit_tests.rs"]
+mod tests;

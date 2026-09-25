@@ -713,20 +713,23 @@ class PlanningTests(unittest.TestCase):
                     }
                 )
             )
-            for args in (
-                ("retry", str(report)),
-                ("regression", "--retry", str(report)),
-            ):
-                with self.subTest(args=args):
-                    selected = plan(*args, "--group", "gles")
-                    self.assertEqual(selected.coverage, "partial-regression")
-                    self.assertIn("check:repository", selected.requested)
-                    self.assertNotIn("check:catalog", selected.requested)
-                    self.assertNotIn("test:rust:default", selected.requested)
-                    gles = next(
-                        t for t in selected.tasks if t.id == "check:gles-particles"
-                    )
-                    self.assertIn("/example/egl", gles.command)
+            with patch.dict(os.environ):
+                # The recorded directory must win without an ambient default.
+                os.environ.pop("IPP_EGL_LIBRARY_DIR", None)
+                for args in (
+                    ("retry", str(report)),
+                    ("regression", "--retry", str(report)),
+                ):
+                    with self.subTest(args=args):
+                        selected = plan(*args, "--group", "gles")
+                        self.assertEqual(selected.coverage, "partial-regression")
+                        self.assertIn("check:repository", selected.requested)
+                        self.assertNotIn("check:catalog", selected.requested)
+                        self.assertNotIn("test:rust:default", selected.requested)
+                        gles = next(
+                            t for t in selected.tasks if t.id == "check:gles-particles"
+                        )
+                        self.assertIn("/example/egl", gles.command)
             with self.assertRaisesRegex(ValueError, "retry cannot select --full"):
                 plan("regression", "--retry", str(report), "--full")
 

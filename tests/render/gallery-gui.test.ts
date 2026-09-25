@@ -166,13 +166,13 @@ function dynamicProperty(
 
 /**
  * Node animated by a GuiRoot `node_style.position` offset. The row layout is
- * region 0 (base 0x1000_0000) with 20 properties, position at index 15;
+ * region 0 (base 0x1000_0000) with 21 properties, position at index 15;
  * offsets of other properties name no position driver.
  */
 function drivenNode(offset: number): number | undefined {
   const relative = offset - 0x1000_0000;
-  if (relative < 0 || relative % 20 !== 15) return undefined;
-  return Math.floor(relative / 20);
+  if (relative < 0 || relative % 21 !== 15) return undefined;
+  return Math.floor(relative / 21);
 }
 
 /** Effective node style row of the node a waveform controller animates. */

@@ -365,8 +365,7 @@ pub enum GuiInputEffectKind {
     ScrollChanged {
         /// Panel entity.
         entity: EntityId,
-        /// Scrolled node: the consuming ScrollView, or the hit node for
-        /// non-scrollable content.
+        /// Consuming ScrollView.
         node: GuiNodeId,
         /// Accumulated offset in logical units.
         offset: [f32; 2],
@@ -475,6 +474,10 @@ pub enum GuiUnhandledReason {
     NotFocusable,
     /// Another session owns the single active input context.
     NotOwner,
+    /// No ScrollView consumed the scroll movement: the point has no eligible
+    /// ScrollView ancestry, or every ScrollView in it already sits at its
+    /// edge in the scroll's direction. Scene controls may take the scroll.
+    ScrollUnconsumed,
 }
 
 /// Control behaviour of one routed node.
@@ -575,8 +578,7 @@ enum EnvelopeKind {
     },
     /// Input-owned scroll accumulation for one ScrollView, already
     /// clamped against its evaluated extents at routing and re-clamped at
-    /// application. Deltas on non-scrollable hits accumulate unbounded on
-    /// the hit node as before, without reflowing layout.
+    /// application.
     Scroll {
         /// Consumed delta in logical units.
         delta: [f32; 2],
@@ -3724,9 +3726,11 @@ impl GuiInputSystem {
     /// extents, pass the remainder outward and queue one envelope per
     /// ScrollView that consumed movement. A scroll that moves content
     /// disarms held button/checkbox taps on the same panel and session, so
-    /// scroll-starts never toggle. Without a ScrollView ancestor the delta
-    /// accumulates on the hit node without reflow, preserving the legacy
-    /// input-owned sink for non-scrollable content.
+    /// scroll-starts never toggle. A scroll no ScrollView consumes, over
+    /// non-scrollable content or at every edge, is reported unhandled once
+    /// so scene controls can take it; a remainder left after partial
+    /// consumption drops at the outermost edge instead, because the input
+    /// was handled.
     #[allow(clippy::too_many_arguments)]
     fn route_scroll(
         &mut self,
@@ -3778,33 +3782,16 @@ impl GuiInputSystem {
             }
         };
         let chain = Self::scroll_chain(&root, hit);
-        if chain.is_empty() {
-            self.push_envelope(
-                tick,
-                PendingEnvelope {
-                    session,
-                    epoch: self.owner_epoch,
-                    source_tick: tick,
-                    target: Some(target),
-                    pointer: None,
-                    press_seq: None,
-                    cancel_on_miss: false,
-                    kind: EnvelopeKind::Scroll {
-                        delta,
-                    },
-                },
-            );
-            return;
-        }
         let Some(view) = layout.view(entity) else {
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
             return;
         };
-        let consumed = self.consume_scroll(view, entity, &chain, delta, session, tick);
-        // Leftover remainder drops at the outer edge: movement clamps.
-        if consumed {
-            self.cancel_held_taps_for_scroll(sim, session, tick, entity);
+        if !self.consume_scroll(view, entity, &chain, delta, session, tick) {
+            self.unhandled(session, tick, input, GuiUnhandledReason::ScrollUnconsumed);
+            return;
         }
+        // Leftover remainder drops at the outer edge: movement clamps.
+        self.cancel_held_taps_for_scroll(sim, session, tick, entity);
     }
 
     /// Routed offset of one ScrollView: its committed offset plus every
@@ -5442,8 +5429,8 @@ impl GuiInputSystem {
                     .map_or(GuiTargetStatus::Ineligible, |layout| {
                         evaluated_status(access.world, layout, &target)
                     });
-                let root = match status {
-                    GuiTargetStatus::Eligible(root) => root,
+                match status {
+                    GuiTargetStatus::Eligible(_) => {}
                     GuiTargetStatus::Removed => {
                         self.cancel_envelope(
                             tick,
@@ -5462,54 +5449,34 @@ impl GuiInputSystem {
                         );
                         return;
                     }
-                };
-                // ScrollView targets clamp authoritatively against current
-                // extents, so same-tick chains converge on the bound instead
-                // of overshooting it. Non-scrollable hits keep the legacy
-                // unbounded input-owned sink without reflowing layout.
-                let scrollable = root.nodes().node(target.node).is_some_and(|live| {
-                    matches!(
-                        live.data,
-                        GuiNodeData::Container(GuiContainerKind::ScrollView)
-                    )
-                });
-                let (offset, moved) = if scrollable {
-                    let current = self
-                        .scroll_offsets
-                        .get(&target)
-                        .map(|cursor| cursor.offset)
-                        .unwrap_or([0.0, 0.0]);
-                    let max = self
-                        .layout(&*access)
-                        .ok()
-                        .and_then(|layout| layout.view(target.entity))
-                        .map(|view| Self::scroll_max(view, target.node))
-                        .unwrap_or([f32::INFINITY, f32::INFINITY]);
-                    let next = [
-                        (current[0] + delta[0]).clamp(0.0, max[0]),
-                        (current[1] + delta[1]).clamp(0.0, max[1]),
-                    ];
-                    self.scroll_offsets.insert(
-                        target,
-                        ScrollCursor {
-                            offset: next,
-                            session: envelope.session,
-                            source_tick: envelope.source_tick,
-                        },
-                    );
-                    (next, next != current)
-                } else {
-                    let entry = self.scroll_offsets.entry(target).or_insert(ScrollCursor {
-                        offset: [0.0, 0.0],
+                }
+                // Targets clamp authoritatively against current extents, so
+                // same-tick chains converge on the bound instead of
+                // overshooting it; routing only queues ScrollView targets.
+                let current = self
+                    .scroll_offsets
+                    .get(&target)
+                    .map(|cursor| cursor.offset)
+                    .unwrap_or([0.0, 0.0]);
+                let max = self
+                    .layout(&*access)
+                    .ok()
+                    .and_then(|layout| layout.view(target.entity))
+                    .map(|view| Self::scroll_max(view, target.node))
+                    .unwrap_or([f32::INFINITY, f32::INFINITY]);
+                let offset = [
+                    (current[0] + delta[0]).clamp(0.0, max[0]),
+                    (current[1] + delta[1]).clamp(0.0, max[1]),
+                ];
+                let moved = offset != current;
+                self.scroll_offsets.insert(
+                    target,
+                    ScrollCursor {
+                        offset,
                         session: envelope.session,
                         source_tick: envelope.source_tick,
-                    });
-                    entry.offset[0] += delta[0];
-                    entry.offset[1] += delta[1];
-                    entry.session = envelope.session;
-                    entry.source_tick = envelope.source_tick;
-                    (entry.offset, delta != [0.0, 0.0])
-                };
+                    },
+                );
                 // Clamp-to-edge no-ops leave the stored offset untouched and
                 // never bump; dropped outer-edge remainder never reaches an
                 // envelope, so this is the only bump site.

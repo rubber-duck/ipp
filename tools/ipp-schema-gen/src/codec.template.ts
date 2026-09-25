@@ -1525,6 +1525,7 @@ export function decodeResponse(
       else if (reason === 5) unhandled = { kind: "noCapture" };
       else if (reason === 6) unhandled = { kind: "notFocusable" };
       else if (reason === 7) unhandled = { kind: "notOwner" };
+      else if (reason === 8) unhandled = { kind: "scrollUnconsumed" };
       else return fail("GUI input routing reason");
       if (reason !== 2 && blocker !== undefined)
         fail("GUI input routing blocker");

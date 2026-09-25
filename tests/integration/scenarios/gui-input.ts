@@ -379,12 +379,17 @@ export async function exerciseGuiInput(
     `Composition commit missed or duplicated: ${JSON.stringify(field.controlValue)}`,
   );
 
-  // Scroll admits at the same logical point without reflowing layout.
-  await client.submitGuiInput({
+  // No ScrollView sits under the panel's controls: the wheel is reported
+  // unhandled for scene controls instead of scrolling anything.
+  const unscrolled = await client.submitGuiInput({
     kind: "scroll",
     position: at,
     delta: [0, -4],
   });
+  expect(
+    unscrolled.unhandled?.kind === "scrollUnconsumed",
+    `A wheel over non-scrollable content was handled: ${JSON.stringify(unscrolled.unhandled)}`,
+  );
 
   await host.detachWorld();
   await exerciseGuiScrolling(host);
@@ -591,5 +596,19 @@ async function exerciseGuiScrolling(
   expect(
     !(await checked(7)),
     "A checkbox below the moved inner viewport was still hittable",
+  );
+
+  // Scrolling toward the start passes the inner view (already at 0) and
+  // returns the outer view to 0; once every view sits at its edge the same
+  // wheel is reported unhandled so scene controls can take it.
+  const toStart = await wheel([0, -2]);
+  expect(
+    toStart.unhandled === undefined,
+    "A partially consumed wheel was reported unhandled",
+  );
+  const atEdge = await wheel([0, -2]);
+  expect(
+    atEdge.unhandled?.kind === "scrollUnconsumed",
+    `A wheel at every ScrollView edge was handled: ${JSON.stringify(atEdge.unhandled)}`,
   );
 }

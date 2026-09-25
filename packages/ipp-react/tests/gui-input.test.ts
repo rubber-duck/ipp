@@ -215,7 +215,7 @@ test("correlated replies gate identical consecutive pointer gestures", async () 
   sink.close?.();
 });
 
-test("only no-panel routing dispositions enter scene controls", async () => {
+test("only no-panel misses and unconsumed scrolls enter scene controls", async () => {
   const submitter = gatedSubmitter();
   const gate = createGuiUnhandledInputGate();
   const sink = createGuiInputSink(submitter, { unhandledInputGate: gate });
@@ -241,6 +241,20 @@ test("only no-panel routing dispositions enter scene controls", async () => {
     unhandled: { kind: "noPanelHit" },
   });
   assert.equal(await scroll, true);
+
+  // A wheel no ScrollView consumed reaches scene controls; one a ScrollView
+  // handled does not.
+  sink.send({ kind: "scroll", position: [0.5, 0.5], delta: [0, 16] });
+  const unconsumed = gate.scroll(new AbortController().signal);
+  submitter.pending[2]!.resolve({
+    tick: 5n,
+    unhandled: { kind: "scrollUnconsumed" },
+  });
+  assert.equal(await unconsumed, true);
+  sink.send({ kind: "scroll", position: [0.5, 0.5], delta: [0, 16] });
+  const consumed = gate.scroll(new AbortController().signal);
+  submitter.pending[3]!.resolve({ tick: 6n });
+  assert.equal(await consumed, false);
 
   sink.send({
     kind: "pointerDown",

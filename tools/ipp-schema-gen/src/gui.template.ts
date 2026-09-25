@@ -1156,6 +1156,8 @@ function readGuiUnhandledObservation(r: Reader): GuiUnhandledObservation {
     return { session, tick, input, reason: { kind: "notFocusable" } };
   if (reason === 6)
     return { session, tick, input, reason: { kind: "notOwner" } };
+  if (reason === 7)
+    return { session, tick, input, reason: { kind: "scrollUnconsumed" } };
   return fail("GUI unhandled reason");
 }
 

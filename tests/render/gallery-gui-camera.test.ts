@@ -475,11 +475,16 @@ test("GUI demo routing owns panel gestures and admits background camera gestures
       );
 
       edge = await panelEdge();
+      // No ScrollView consumes a wheel over the PULSE button, so the
+      // runtime reports it unhandled and the camera zooms over the panel.
       const pulse = await point("button", "PULSE");
       const beforePanelWheel = transform(await g.inspect());
       await g.page.mouse.move(pulse.clientX, pulse.clientY);
       await g.page.mouse.wheel(0, 120);
-      assert.deepEqual(transform(await g.settle()), beforePanelWheel);
+      await g.waitFor((inspection) =>
+        cameraChanged(beforePanelWheel, inspection),
+      );
+      edge = await panelEdge();
 
       const beforeOutsideWheel = transform(await g.inspect());
       await g.page.mouse.move(...edge.outside);

@@ -548,7 +548,8 @@ export type GuiUnhandledReason =
   | { readonly kind: "noFocus" }
   | { readonly kind: "noCapture" }
   | { readonly kind: "notFocusable" }
-  | { readonly kind: "notOwner" };
+  | { readonly kind: "notOwner" }
+  | { readonly kind: "scrollUnconsumed" };
 
 /** Authoritative routing disposition for one correlated GUI input. */
 export interface GuiInputRoutingOutcome {

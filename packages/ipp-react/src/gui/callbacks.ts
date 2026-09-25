@@ -483,7 +483,8 @@ export type GuiUnhandledReason =
   | { readonly kind: "noFocus" }
   | { readonly kind: "noCapture" }
   | { readonly kind: "notFocusable" }
-  | { readonly kind: "notOwner" };
+  | { readonly kind: "notOwner" }
+  | { readonly kind: "scrollUnconsumed" };
 
 /** One well-formed input that reached no GUI target, for scene controls.
  * The complete input is preserved verbatim so scene fallback observes the

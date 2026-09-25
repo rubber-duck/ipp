@@ -392,6 +392,7 @@ fn write_response(response: &Response, w: &mut Writer) -> Result<(), ProtocolErr
                 Some(ipp_core::GuiUnhandledReason::NoCapture) => (5, None),
                 Some(ipp_core::GuiUnhandledReason::NotFocusable) => (6, None),
                 Some(ipp_core::GuiUnhandledReason::NotOwner) => (7, None),
+                Some(ipp_core::GuiUnhandledReason::ScrollUnconsumed) => (8, None),
             };
             w.u16(reason)?;
             w.u8(u8::from(blocker.is_some()))?;

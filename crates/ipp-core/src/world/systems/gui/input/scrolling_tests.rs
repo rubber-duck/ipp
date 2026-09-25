@@ -8,51 +8,42 @@ use crate::{
 };
 
 #[test]
-fn scroll_then_pointer_shares_one_snapshot_without_reflow() {
+fn wheel_over_non_scrollable_content_is_unhandled_without_phantom_scroll() {
     let mut fixture = setup();
     insert_nodes(&mut fixture, true, false);
     let at = node_centre(&mut fixture, GuiNodeId(2));
     let panel = fixture.panel;
-    // Scroll alone never reflows: offsets stay input-owned while routing
-    // shares the retained snapshot.
     let before = world(&mut fixture).gui_layout_view(panel).unwrap();
-    {
+    assert_eq!(world(&mut fixture).gui_scroll_revision(), 0);
+
+    // No ScrollView sits under the point: the wheel reports unhandled
+    // exactly once for scene controls and moves no offset.
+    let routed = {
         let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(
-                SESSION,
-                GuiInputCommand::Scroll {
-                    panel: None,
-                    position: at,
-                    delta: [0.0, 2.0],
-                    blockers: Vec::new(),
-                    panel_distance: None,
-                },
-            )
+            .enqueue_gui_input_command(SESSION, scroll_command(at, [0.0, 5.0]))
             .unwrap();
-        context.step(0.0).unwrap();
-    }
+        context.step(0.0).unwrap()
+    };
+    let reasons: Vec<_> = routed
+        .gui_unhandled_inputs
+        .iter()
+        .map(|unhandled| unhandled.reason.clone())
+        .collect();
+    assert_eq!(reasons, vec![GuiUnhandledReason::ScrollUnconsumed]);
     let report = world(&mut fixture).step(0.0).unwrap();
+    assert!(scroll_offsets_of(&routed).is_empty());
+    assert!(scroll_offsets_of(&report).is_empty());
+    assert!(report.gui_unhandled_inputs.is_empty());
+    assert_eq!(world(&mut fixture).gui_scroll_revision(), 0);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        [0.0, 0.0]
+    );
     let after = world(&mut fixture).gui_layout_view(panel).unwrap();
     assert_eq!(before.layout_revision, after.layout_revision);
     assert_eq!(before.reflow_count, after.reflow_count);
-    let scroll = report
-        .gui_input_effects
-        .iter()
-        .find_map(|effect| match &effect.kind {
-            GuiInputEffectKind::ScrollChanged {
-                offset,
-                ..
-            } => Some(*offset),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(scroll, [0.0, 2.0]);
-    // Scroll offsets stay input-owned: layout never observes them.
-    assert_eq!(
-        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
-        [0.0, 2.0]
-    );
+
     // A routed toggle refreshes retained paint/state without geometry work.
     {
         let mut context = world(&mut fixture);
@@ -61,13 +52,7 @@ fn scroll_then_pointer_shares_one_snapshot_without_reflow() {
         }
         context.step(0.0).unwrap();
     }
-    let report = world(&mut fixture).step(0.0).unwrap();
-    assert!(
-        report
-            .gui_input_effects
-            .iter()
-            .any(|effect| matches!(effect.kind, GuiInputEffectKind::ControlCommitted { .. }))
-    );
+    world(&mut fixture).step(0.0).unwrap();
     let toggled = world(&mut fixture).gui_layout_view(panel).unwrap();
     assert_eq!(toggled.layout_revision, after.layout_revision);
     assert_eq!(toggled.reflow_count, after.reflow_count);
@@ -86,11 +71,87 @@ fn scroll_then_pointer_shares_one_snapshot_without_reflow() {
         }
         other => panic!("expected checkbox, got {other:?}"),
     }
-    // The input-owned scroll offset survives the commit reflow.
+}
+
+#[test]
+fn scroll_at_every_edge_is_unhandled_once() {
+    let mut fixture = setup();
+    insert_nested_scroll(&mut fixture);
+    // Scrolling toward the start at rest: neither ScrollView can consume.
+    let routed = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, -3.0]))
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert_eq!(routed.gui_unhandled_inputs.len(), 1);
     assert_eq!(
-        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        routed.gui_unhandled_inputs[0].reason,
+        GuiUnhandledReason::ScrollUnconsumed
+    );
+    let report = world(&mut fixture).step(0.0).unwrap();
+    assert!(scroll_offsets_of(&report).is_empty());
+    assert_eq!(world(&mut fixture).gui_scroll_revision(), 0);
+
+    // Partial consumption is handled: the remainder past the outer edge
+    // drops without an unhandled record.
+    let routed = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, 20.0]))
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert!(routed.gui_unhandled_inputs.is_empty());
+    world(&mut fixture).step(0.0).unwrap();
+    // At both far edges the same wheel is unhandled again.
+    let routed = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, scroll_command([5.0, 1.0], [0.0, 1.0]))
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert_eq!(routed.gui_unhandled_inputs.len(), 1);
+}
+
+#[test]
+fn removing_a_scrolled_view_resets_its_offset() {
+    let mut fixture = setup();
+    insert_nested_scroll(&mut fixture);
+    let panel = fixture.panel;
+    let root_incarnation = incarnation(&mut fixture);
+    scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 2.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
         [0.0, 2.0]
     );
+    let revision = world(&mut fixture).gui_scroll_revision();
+
+    let report = {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_command(
+                SESSION,
+                GuiCommand::RemoveNode {
+                    handle: crate::GuiNodeHandle::new(
+                        SESSION,
+                        panel,
+                        root_incarnation,
+                        GuiNodeId(4),
+                    ),
+                },
+            )
+            .unwrap();
+        context.step(0.0).unwrap()
+    };
+    assert_eq!(scroll_offsets_of(&report), vec![(GuiNodeId(4), [0.0, 0.0])]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 0.0]
+    );
+    assert!(world(&mut fixture).gui_scroll_revision() > revision);
 }
 
 #[test]

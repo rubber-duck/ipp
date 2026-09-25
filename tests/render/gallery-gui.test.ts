@@ -1,9 +1,11 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
+import { guiNodeStyleOffset } from "@ipp/client";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { writeFile } from "node:fs/promises";
 import test from "node:test";
 import type {
+  ComponentDescriptor,
   GuiInspectResponse,
   GuiSemanticNode,
   GuiSemanticRole,
@@ -127,7 +129,7 @@ function textBounds(state: GalleryGuiState, text: string) {
 
 const guiEnvironment = {
   ...galleryEnvironment,
-  evidenceParent: resolve("target/reviews/gui-demo"),
+  evidenceParent: resolve("target/integration-artifacts/gallery-gui"),
 };
 
 function guiEntity(inspection: Inspection) {
@@ -164,37 +166,6 @@ function dynamicProperty(
   return value;
 }
 
-/**
- * Node animated by a GuiRoot `node_style.position` offset. The row layout is
- * region 0 (base 0x1000_0000) with 21 properties, position at index 15;
- * offsets of other properties name no position driver.
- */
-function drivenNode(offset: number): number | undefined {
-  const relative = offset - 0x1000_0000;
-  if (relative < 0 || relative % 21 !== 15) return undefined;
-  return Math.floor(relative / 21);
-}
-
-/** Effective node style row of the node a waveform controller animates. */
-function drivenNodeStyle(
-  inspection: Inspection,
-  controller: { description: { drivers: readonly { property: unknown }[] } },
-): Record<string, unknown> {
-  const property = controller.description.drivers[0]!.property as {
-    offsets?: readonly number[];
-  };
-  const node = drivenNode(property.offsets?.[0] ?? -1);
-  assert.ok(node !== undefined, "waveform driver targets no node position");
-  // The browser helper hands rows tables over as records keyed by slot.
-  const table = fieldsWith(inspection, "gui-demo", "node_style")
-    .node_style as unknown as {
-    rows: Readonly<Record<number, Record<string, unknown>>>;
-  };
-  const row = table.rows[node];
-  assert.ok(row, `waveform node ${node} has no style row`);
-  return row;
-}
-
 function animationFor(inspection: Inspection, symbolicId: string) {
   const target = sceneEntity(inspection, symbolicId).id;
   const controller = inspection.controllers?.find((candidate) =>
@@ -204,25 +175,78 @@ function animationFor(inspection: Inspection, symbolicId: string) {
   return controller;
 }
 
-function waveformAnimation(inspection: Inspection, pulse = false) {
-  const target = sceneEntity(inspection, "gui-demo").id;
-  const controller = inspection.controllers?.find(
-    ({ description }) =>
-      description.drivers.length === 1 &&
-      description.looping === !pulse &&
-      description.drivers.every((driver) => driver.target === target) &&
-      description.drivers.some(
-        (driver) =>
-          "offsets" in driver.property &&
-          driver.property.offsets?.length === 1 &&
-          drivenNode(driver.property.offsets[0]!) !== undefined,
-      ),
-  );
-  assert.ok(
-    controller,
-    `missing GUI waveform ${pulse ? "pulse" : "scan"} animation`,
-  );
-  return controller;
+/**
+ * Waveform scan and pulse probes. Their controllers animate one GuiRoot
+ * `node_style.position` each; driver offsets map back to nodes through the
+ * generated row offsets of the connected contract, never a restated layout.
+ */
+function waveformProbes(guiRoot: ComponentDescriptor) {
+  const first = guiNodeStyleOffset(guiRoot, 1, "position");
+  const stride = guiNodeStyleOffset(guiRoot, 2, "position") - first;
+
+  /** Node whose position this offset names; other offsets name no node. */
+  const drivenNode = (offset: number): number | undefined => {
+    const relative = offset - first;
+    if (relative < 0 || relative % stride !== 0) return undefined;
+    return relative / stride + 1;
+  };
+
+  const animation = (inspection: Inspection, pulse = false) => {
+    const target = sceneEntity(inspection, "gui-demo").id;
+    const controller = inspection.controllers?.find(
+      ({ description }) =>
+        description.drivers.length === 1 &&
+        description.looping === !pulse &&
+        description.drivers.every((driver) => driver.target === target) &&
+        description.drivers.some(
+          (driver) =>
+            "offsets" in driver.property &&
+            driver.property.offsets?.length === 1 &&
+            drivenNode(driver.property.offsets[0]!) !== undefined,
+        ),
+    );
+    assert.ok(
+      controller,
+      `missing GUI waveform ${pulse ? "pulse" : "scan"} animation`,
+    );
+    return controller;
+  };
+
+  /** Effective node style row of the node a waveform controller animates. */
+  const style = (
+    inspection: Inspection,
+    pulse: boolean,
+  ): Record<string, unknown> => {
+    const property = animation(inspection, pulse).description.drivers[0]!
+      .property as { offsets?: readonly number[] };
+    const node = drivenNode(property.offsets?.[0] ?? -1);
+    assert.ok(node !== undefined, "waveform driver targets no node position");
+
+    // The browser helper hands rows tables over as records keyed by slot.
+    const table = fieldsWith(inspection, "gui-demo", "node_style")
+      .node_style as unknown as {
+      rows: Readonly<Record<number, Record<string, unknown>>>;
+    };
+    const row = table.rows[node];
+    assert.ok(row, `waveform node ${node} has no style row`);
+    return row;
+  };
+
+  return {
+    animation,
+
+    /** Effective horizontal position of the scan (or pulse) waveform node. */
+    x(inspection: Inspection, pulse = false): number {
+      const position = style(inspection, pulse).position;
+      assert.ok(Array.isArray(position) && position.length === 2);
+      return (position as readonly number[])[0]!;
+    },
+
+    /** Effective opacity of the scan (or pulse) waveform node. */
+    opacity(inspection: Inspection, pulse = false): number {
+      return Number(style(inspection, pulse).opacity);
+    },
+  };
 }
 
 function waveformViewport(state: GalleryGuiState) {
@@ -236,22 +260,6 @@ function waveformViewport(state: GalleryGuiState) {
   );
   assert.ok(node, "missing retained waveform viewport");
   return node;
-}
-
-function waveformX(inspection: Inspection, pulse = false): number {
-  const position = drivenNodeStyle(
-    inspection,
-    waveformAnimation(inspection, pulse),
-  ).position;
-  assert.ok(Array.isArray(position) && position.length === 2);
-  return (position as readonly number[])[0]!;
-}
-
-/** Effective opacity of the scan (or pulse) waveform node. */
-function waveformOpacity(inspection: Inspection, pulse = false): number {
-  return Number(
-    drivenNodeStyle(inspection, waveformAnimation(inspection, pulse)).opacity,
-  );
 }
 
 function assertNoScanner(inspection: Inspection): void {
@@ -365,6 +373,9 @@ test("Gallery runs a real GUI demo and cleans it up", {
           return undefined;
         },
       });
+      const waveform = waveformProbes(
+        await g.call<ComponentDescriptor>("galleryGuiRootDescriptor"),
+      );
       const waveformEvidence: Record<string, unknown> = {};
       const recordWaveform = async (name: string, value: unknown) => {
         waveformEvidence[name] = value;
@@ -793,11 +804,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const loadingFrame = await g.capturePending("gui-demo-loading");
       assertNoScanner(loadingFrame.inspection);
       assert.notEqual(
-        waveformAnimation(loadingFrame.inspection).state,
+        waveform.animation(loadingFrame.inspection).state,
         "playing",
       );
       assert.notEqual(
-        waveformAnimation(loadingFrame.inspection, true).state,
+        waveform.animation(loadingFrame.inspection, true).state,
         "playing",
       );
       assert.notEqual(
@@ -868,7 +879,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       assert.ok(essentialResources.every(({ status }) => status === "loaded"));
 
       assertNoScanner(resourcesReady);
-      assert.notEqual(waveformAnimation(resourcesReady).state, "playing");
+      assert.notEqual(waveform.animation(resourcesReady).state, "playing");
       const prepared = await g.call<GalleryGuiState>("galleryGuiState", false);
       assert.ok(
         prepared.semantic.nodes
@@ -1058,11 +1069,11 @@ test("Gallery runs a real GUI demo and cleans it up", {
           1,
         "the projector did not leave its offscreen staging position",
       );
-      assert.equal(waveformAnimation(overviewInspection).state, "playing");
+      assert.equal(waveform.animation(overviewInspection).state, "playing");
       assertNoScanner(overviewInspection);
-      const initialWaveform = waveformAnimation(overviewInspection);
+      const initialWaveform = waveform.animation(overviewInspection);
       await g.waitFor((inspection) => {
-        const time = waveformAnimation(inspection).time;
+        const time = waveform.animation(inspection).time;
         return (time - initialWaveform.time + 2.4) % 2.4 > 0.45;
       });
       await g.capture("gui-waveform-advancing");
@@ -1197,7 +1208,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         return value.kind === "bool" && value.value === false;
       });
       await g.waitFor(
-        (inspection) => waveformAnimation(inspection).state === "paused",
+        (inspection) => waveform.animation(inspection).state === "paused",
       );
 
       // SCAN standby enables UPLINK; the skin transition returns its part
@@ -1263,7 +1274,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "Host-owned dust drift did not change the visible projection volume",
       );
 
-      const pausedWaveform = waveformAnimation(await g.inspect());
+      const pausedWaveform = waveform.animation(await g.inspect());
       assert.equal(pausedWaveform.id, initialWaveform.id);
       await g.capture("gui-waveform-paused");
       assert.ok(
@@ -1276,7 +1287,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "the SCAN curve moved while paused",
       );
       assert.equal(
-        waveformAnimation(await g.inspect()).time,
+        waveform.animation(await g.inspect()).time,
         pausedWaveform.time,
       );
       await g.call("controlGalleryAnimation", pausedWaveform.id, {
@@ -1290,7 +1301,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       });
       const loopEnd = await g.capture("gui-waveform-loop-end");
       assert.ok(
-        waveformX(loopEnd.inspection) < -3.5,
+        waveform.x(loopEnd.inspection) < -3.5,
         "SCAN must travel left through the second authored tile",
       );
       const seamDifference = await waveformDifference(
@@ -1299,8 +1310,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       await recordWaveform("seam", {
         difference: seamDifference,
-        position: waveformX(loopEnd.inspection),
-        controller: waveformAnimation(loopEnd.inspection),
+        position: waveform.x(loopEnd.inspection),
+        controller: waveform.animation(loopEnd.inspection),
       });
       // Clipped curve endpoints and subpixel coverage can differ between tiles.
       // Bound both the affected area and total contrast, not raw pixel density.
@@ -1379,7 +1390,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         `SCAN must paint two smooth sine cycles across the graph: ${JSON.stringify(sineExtrema)}`,
       );
       assert.equal(
-        waveformAnimation(await g.inspect()).id,
+        waveform.animation(await g.inspect()).id,
         initialWaveform.id,
         "gain replaced the waveform scan controller",
       );
@@ -1446,13 +1457,13 @@ test("Gallery runs a real GUI demo and cleans it up", {
           document.querySelector("#gui-command")?.textContent === "Pulse sent",
       );
       const pulsing = await g.waitFor((inspection) => {
-        const controller = waveformAnimation(inspection, true);
+        const controller = waveform.animation(inspection, true);
         return controller.state === "playing" && controller.time > 0.32;
       });
-      const activeWavePulse = waveformAnimation(pulsing, true);
+      const activeWavePulse = waveform.animation(pulsing, true);
       assert.equal(activeWavePulse.state, "playing");
       assert.equal(
-        waveformAnimation(pulsing).state,
+        waveform.animation(pulsing).state,
         "paused",
         "PULSE resumed disabled SCAN",
       );
@@ -1466,7 +1477,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         time: 0.6,
       });
       const pulseFrame = await g.capture("gui-waveform-pulse-active");
-      const capturedWavePulse = waveformAnimation(pulseFrame.inspection, true);
+      const capturedWavePulse = waveform.animation(pulseFrame.inspection, true);
       assert.ok(
         !pulseFrame.inspection.entities.some(
           ({ metadata }) => metadata.symbolicId === "gui-projector-pulse",
@@ -1481,8 +1492,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await recordWaveform("pulse", {
         started: activeWavePulse,
         controller: capturedWavePulse,
-        scan: waveformAnimation(pulseFrame.inspection),
-        opacity: waveformOpacity(pulseFrame.inspection, true),
+        scan: waveform.animation(pulseFrame.inspection),
+        opacity: waveform.opacity(pulseFrame.inspection, true),
       });
       assert.ok(
         (
@@ -1501,15 +1512,15 @@ test("Gallery runs a real GUI demo and cleans it up", {
         `manual pulse must join a visible baseline on both sides: ${JSON.stringify(baselineSignal)}`,
       );
       assert.ok(
-        Math.abs(waveformOpacity(pulseFrame.inspection) - 0.35) < 1e-6,
+        Math.abs(waveform.opacity(pulseFrame.inspection) - 0.35) < 1e-6,
         "PULSE must preserve the visible paused sine trace",
       );
       const pulseToggle = await point("checkbox");
       await g.page.mouse.click(pulseToggle.clientX, pulseToggle.clientY);
       await g.waitFor(
         (inspection) =>
-          waveformAnimation(inspection).state === "playing" &&
-          waveformAnimation(inspection).time > 0.2,
+          waveform.animation(inspection).state === "playing" &&
+          waveform.animation(inspection).time > 0.2,
       );
       // Running SCAN disables UPLINK again; its skin transition animates the
       // background part's ordinary properties into the disabled sample.
@@ -1519,16 +1530,19 @@ test("Gallery runs a real GUI demo and cleans it up", {
       await waitForPartOpacity(current.semantic, enabledUplink, 0.45);
       const toggledPulse = await g.capture("gui-waveform-pulse-scan-toggled");
       assert.ok(
-        waveformOpacity(toggledPulse.inspection) > 0.85,
+        waveform.opacity(toggledPulse.inspection) > 0.85,
         "the moving sine must remain visible alongside PULSE",
       );
-      assert.equal(waveformAnimation(toggledPulse.inspection).state, "playing");
       assert.equal(
-        waveformAnimation(toggledPulse.inspection, true).time,
+        waveform.animation(toggledPulse.inspection).state,
+        "playing",
+      );
+      assert.equal(
+        waveform.animation(toggledPulse.inspection, true).time,
         capturedWavePulse.time,
       );
       assert.equal(
-        waveformOpacity(toggledPulse.inspection, true),
+        waveform.opacity(toggledPulse.inspection, true),
         1,
         "SCAN must preserve the independent pulse trace",
       );
@@ -1554,28 +1568,28 @@ test("Gallery runs a real GUI demo and cleans it up", {
       // the assertion cannot compare samples from opposite sides of a tick.
       const advancedPulse = await g.waitFor(
         (inspection) =>
-          waveformAnimation(inspection, true).time >
+          waveform.animation(inspection, true).time >
             capturedWavePulse.time + 0.12 &&
-          waveformX(inspection, true) <
-            waveformX(pulseFrame.inspection, true) - 0.3,
+          waveform.x(inspection, true) <
+            waveform.x(pulseFrame.inspection, true) - 0.3,
       );
-      assert.equal(waveformAnimation(advancedPulse).state, "playing");
-      assert.equal(waveformAnimation(advancedPulse, true).state, "playing");
+      assert.equal(waveform.animation(advancedPulse).state, "playing");
+      assert.equal(waveform.animation(advancedPulse, true).state, "playing");
       assert.ok(
-        waveformX(advancedPulse, true) <
-          waveformX(pulseFrame.inspection, true) - 0.3,
+        waveform.x(advancedPulse, true) <
+          waveform.x(pulseFrame.inspection, true) - 0.3,
         "PULSE must travel right to left alongside SCAN",
       );
       await recordWaveform("direction", {
-        pulseStart: waveformX(pulseFrame.inspection, true),
-        pulseAdvanced: waveformX(advancedPulse, true),
-        scan: waveformAnimation(advancedPulse),
-        pulse: waveformAnimation(advancedPulse, true),
+        pulseStart: waveform.x(pulseFrame.inspection, true),
+        pulseAdvanced: waveform.x(advancedPulse, true),
+        scan: waveform.animation(advancedPulse),
+        pulse: waveform.animation(advancedPulse, true),
       });
-      const advancedPulseTime = waveformAnimation(advancedPulse, true).time;
+      const advancedPulseTime = waveform.animation(advancedPulse, true).time;
       await g.page.mouse.click(pulse.clientX, pulse.clientY);
       await g.waitFor((inspection) => {
-        const controller = waveformAnimation(inspection, true);
+        const controller = waveform.animation(inspection, true);
         return (
           controller.id === activeWavePulse.id &&
           controller.state === "playing" &&
@@ -1585,16 +1599,16 @@ test("Gallery runs a real GUI demo and cleans it up", {
       });
       await g.waitFor(
         (inspection) =>
-          waveformAnimation(inspection, true).state === "completed",
+          waveform.animation(inspection, true).state === "completed",
       );
-      await g.waitFor((inspection) => waveformOpacity(inspection, true) === 0);
+      await g.waitFor((inspection) => waveform.opacity(inspection, true) === 0);
       const finishedPulse = await g.capture("gui-waveform-pulse-finished");
       assert.equal(
-        waveformAnimation(finishedPulse.inspection).state,
+        waveform.animation(finishedPulse.inspection).state,
         "playing",
         "pulse completion interrupted SCAN",
       );
-      assert.equal(waveformOpacity(finishedPulse.inspection, true), 0);
+      assert.equal(waveform.opacity(finishedPulse.inspection, true), 0);
       assert.ok(
         (
           await waveformDifference(
@@ -1606,7 +1620,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       await g.page.mouse.click(pulseToggle.clientX, pulseToggle.clientY);
       await g.waitFor(
-        (inspection) => waveformAnimation(inspection).state === "paused",
+        (inspection) => waveform.animation(inspection).state === "paused",
       );
       current = await waitForGui(
         ({ semantic }) => semanticNode(semantic, "button", "UPLINK").enabled,
@@ -1760,8 +1774,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
       const projectorBeforeSkin = {
         core: dynamicProperty(sceneBeforeSkin, "gui-projector-core", "accent"),
         light: fieldsWith(sceneBeforeSkin, "gui-projector-light", "intensity"),
-        scanController: waveformAnimation(sceneBeforeSkin).id,
-        wavePulseController: waveformAnimation(sceneBeforeSkin, true).id,
+        scanController: waveform.animation(sceneBeforeSkin).id,
+        wavePulseController: waveform.animation(sceneBeforeSkin, true).id,
       };
       const callsignBeforeSkin = semanticNode(
         identityBeforeSkin,
@@ -1811,12 +1825,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "Ember did not recolor the projector light",
       );
       assert.equal(
-        waveformAnimation(emberFrame.inspection).id,
+        waveform.animation(emberFrame.inspection).id,
         projectorBeforeSkin.scanController,
         "reskin replaced the waveform scan controller",
       );
       assert.equal(
-        waveformAnimation(emberFrame.inspection, true).id,
+        waveform.animation(emberFrame.inspection, true).id,
         projectorBeforeSkin.wavePulseController,
         "reskin replaced the waveform pulse controller",
       );
@@ -1860,12 +1874,12 @@ test("Gallery runs a real GUI demo and cleans it up", {
         "Neon did not recolor the projector cube",
       );
       assert.equal(
-        waveformAnimation(neonFrame.inspection).id,
+        waveform.animation(neonFrame.inspection).id,
         projectorBeforeSkin.scanController,
         "reskin replaced the waveform scan controller",
       );
       assert.equal(
-        waveformAnimation(neonFrame.inspection, true).id,
+        waveform.animation(neonFrame.inspection, true).id,
         projectorBeforeSkin.wavePulseController,
         "reskin replaced the waveform pulse controller",
       );
@@ -2178,8 +2192,8 @@ test("Gallery runs a real GUI demo and cleans it up", {
 
       const mountedEntity = guiEntity(await g.inspect())!;
       const mountedRoot = (await waitForGui()).semantic;
-      const mountedScan = waveformAnimation(await g.inspect());
-      const mountedWavePulse = waveformAnimation(await g.inspect(), true);
+      const mountedScan = waveform.animation(await g.inspect());
+      const mountedWavePulse = waveform.animation(await g.inspect(), true);
       const fullSceneFrame = await g.capture("gui-demo-full-before-isolation");
       const vectorButton = g.page.locator("#gui-vector-only");
       assert.equal(await vectorButton.getAttribute("aria-pressed"), "false");
@@ -2273,10 +2287,10 @@ test("Gallery runs a real GUI demo and cleans it up", {
       );
       const returnedInspection = await g.inspect();
       assertCameraFov(returnedInspection, (21 * Math.PI) / 180);
-      const returnedScanner = waveformAnimation(returnedInspection);
+      const returnedScanner = waveform.animation(returnedInspection);
       assertNoScanner(returnedInspection);
       assert.notEqual(
-        waveformAnimation(returnedInspection, true).id,
+        waveform.animation(returnedInspection, true).id,
         mountedWavePulse.id,
       );
       assert.notEqual(
@@ -2307,7 +2321,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         removedScan: mountedScan.id,
         removedPulse: mountedWavePulse.id,
         returnedScan: returnedScanner.id,
-        returnedPulse: waveformAnimation(returnedInspection, true).id,
+        returnedPulse: waveform.animation(returnedInspection, true).id,
       });
       await g.capture("gui-demo-returned");
       assert.deepEqual(g.errors, []);
@@ -2389,7 +2403,9 @@ test("Gallery GUI panel caches distant presentation within direct-rendering tole
     "GUI demo Surface cache",
     {
       ...galleryEnvironment,
-      evidenceParent: resolve("target/reviews/gui-demo-surface-cache"),
+      evidenceParent: resolve(
+        "target/integration-artifacts/gallery-gui/surface-cache",
+      ),
     },
     context.signal,
     async (scenario) => {

@@ -27,7 +27,7 @@ interface GalleryGuiState {
 
 const environment = {
   ...galleryEnvironment,
-  evidenceParent: resolve("target/reviews/gui-camera-input"),
+  evidenceParent: resolve("target/integration-artifacts/gallery-gui-camera"),
 };
 
 /** Gallery panel cache policy, restated independently of scene.tsx. */

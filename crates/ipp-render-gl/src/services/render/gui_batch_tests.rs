@@ -826,6 +826,86 @@ fn boxes_of_every_part_class_share_one_batch() {
 }
 
 #[test]
+fn text_overlay_boxes_of_one_node_keep_their_own_geometry() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let overlay = |part: GuiPrimitivePart, x: f32, width: f32| {
+        sample_box_primitive(7, part, [x, 0.0], [width, 0.1], None)
+    };
+
+    // A focused text input paints its selection highlight, then its caret bar;
+    // both belong to node 7 but keep separate retained geometry.
+    let selection = overlay(GuiPrimitivePart::Selection, 0.0, 1.5);
+    let caret = overlay(GuiPrimitivePart::Caret, 2.0, 0.01);
+    let boxes = [&selection, &caret];
+    let clip = [0.0, 0.0, 4.0, 2.0];
+    let expected: Vec<GuiVertex> = boxes
+        .iter()
+        .flat_map(|primitive| {
+            let SurfaceRenderPrimitive::Box {
+                style,
+                size,
+                corner_radius,
+                border_width,
+                border_color,
+                fill,
+                glow,
+            } = primitive
+            else {
+                unreachable!();
+            };
+            generate_box_vertices(
+                style,
+                size,
+                corner_radius,
+                *border_width,
+                border_color,
+                fill,
+                glow.as_ref(),
+                clip,
+            )
+        })
+        .collect();
+
+    let entity = ipp_core::EntityId::from_bits(1);
+    let live = BTreeSet::from([entity]);
+    let mut frame = || {
+        let mut stats = RenderFrameWork::default();
+        let before = device.borrow().draws.len();
+        cache
+            .draw_box_batch(
+                &1,
+                entity,
+                clip,
+                SurfacePaint::UNKNOWN,
+                &boxes,
+                &[0.0; 16],
+                &mut stats,
+            )
+            .unwrap();
+        cache.finish_frame(Some(&RetainedSurfaceSubmission {
+            live: &live,
+            submitted: &live,
+        }));
+        let drawn: Vec<GuiVertex> = device.borrow().draws[before..]
+            .iter()
+            .flat_map(|(_, vertices, _)| vertices.iter().copied())
+            .collect();
+        (stats, drawn)
+    };
+
+    let (cold, drawn) = frame();
+    assert_eq!(drawn, expected);
+    assert_eq!(cold.statistics.gui_rebuilds, 2);
+
+    // An unchanged overlay frame neither rebuilds nor uploads.
+    let (warm, drawn) = frame();
+    assert_eq!(drawn, expected);
+    assert_eq!(warm.statistics.gui_rebuilds, 0);
+    assert_eq!(warm.statistics.uploaded_bytes, 0);
+}
+
+#[test]
 fn unchanged_paint_revisions_skip_hashing_until_the_revision_changes() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());

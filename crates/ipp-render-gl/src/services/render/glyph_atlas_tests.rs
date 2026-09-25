@@ -702,6 +702,63 @@ fn runs_leaving_a_shown_surface_release_demand_and_batches() {
     assert_eq!(atlas.take_retired_pages(), 1);
 }
 
+#[cfg(feature = "gui")]
+#[test]
+fn committed_and_provisional_runs_of_one_node_keep_separate_batches() {
+    use ipp_core::systems::gui::GuiNodeId;
+    use ipp_core::systems::surface::{GuiPrimitiveId, GuiPrimitivePart};
+
+    let (_, mut atlas, mut world) = setup();
+    let gui_style = |part| SurfacePrimitiveStyle {
+        identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
+            root_incarnation: 1,
+            node: GuiNodeId(2),
+            part,
+        }),
+        ..style(0)
+    };
+    let label = gui_style(GuiPrimitivePart::Label);
+    let composition = gui_style(GuiPrimitivePart::Composition);
+    let committed = glyphs(&[3]);
+    let provisional = glyphs(&[5, 5]);
+    let label_run = text_run(42, &label, &committed);
+    let composition_run = text_run(42, &composition, &provisional);
+
+    // A composing text input publishes its committed and provisional runs
+    // under one node; each keeps its own demand and batches.
+    let composing = [
+        (label_run, BAND_32_HEIGHT),
+        (composition_run, BAND_32_HEIGHT),
+    ];
+    world.publish(&mut atlas, &composing, &[]);
+    assert_eq!(world.work.misses, 2);
+    world.populate(&mut atlas, 20);
+    assert!(world.draw(&atlas, &label_run).0);
+    assert!(world.draw(&atlas, &composition_run).0);
+    assert_eq!(world.batch_lengths(&label_run), [6]);
+    assert_eq!(world.batch_lengths(&composition_run), [12]);
+
+    // An unchanged composing frame rebuilds neither run.
+    world.publish(&mut atlas, &composing, &[]);
+    assert_eq!(world.work.misses, 0);
+    for run in [&label_run, &composition_run] {
+        let (drawn, warm) = world.draw(&atlas, run);
+        assert!(drawn);
+        assert_eq!(warm.statistics.gui_rebuilds, 0);
+        assert_eq!(warm.statistics.uploaded_bytes, 0);
+    }
+
+    // Ending the composition releases only the provisional run.
+    world.publish(&mut atlas, &[(label_run, BAND_32_HEIGHT)], &[]);
+    let runs = &world.cache.surfaces[&label_run.entity].runs;
+    assert_eq!(runs.len(), 1);
+    assert!(runs.contains_key(&label.identity));
+    assert!(!atlas.demand.contains_key(&key(5, 32)));
+    let (drawn, stats) = world.draw(&atlas, &label_run);
+    assert!(drawn);
+    assert_eq!(stats.statistics.gui_rebuilds, 0);
+}
+
 #[test]
 fn culled_surfaces_keep_runs_bands_and_atlas_demand() {
     let (device, mut atlas, mut world) = setup();

@@ -1,10 +1,236 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
+import type { Page } from "playwright";
 import {
   runBrowserEnvironment,
   type BrowserBuildConfiguration,
 } from "./environment.js";
+
+/** Completed-frame RGBA rows of the mounted text input, top row first. */
+interface TextInputPaint {
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: readonly number[];
+}
+
+/** Rows inside the mounted text input, clear of its focus ring. */
+const TEXT_ROWS = { top: 3, bottom: 71 } as const;
+
+function rgb(
+  paint: TextInputPaint,
+  x: number,
+  y: number,
+): readonly [number, number, number] {
+  const offset = (y * paint.width + x) * 4;
+  return [
+    paint.pixels[offset]!,
+    paint.pixels[offset + 1]!,
+    paint.pixels[offset + 2]!,
+  ];
+}
+
+/** Columns holding matching pixels on at least `rows` text rows. */
+function columns(
+  paint: TextInputPaint,
+  rows: number,
+  matches: (x: number, y: number) => boolean,
+): number[] {
+  const found: number[] = [];
+  for (let x = 0; x < paint.width; x += 1) {
+    let count = 0;
+    for (let y = TEXT_ROWS.top; y <= TEXT_ROWS.bottom; y += 1)
+      if (matches(x, y)) count += 1;
+    if (count >= rows) found.push(x);
+  }
+  return found;
+}
+
+/** Columns of the near-black caret bar over the blue control background. */
+function caretColumns(paint: TextInputPaint): number[] {
+  return columns(paint, 4, (x, y) => {
+    const [r, g, b] = rgb(paint, x, y);
+    return r < 100 && g < 100 && b < 120;
+  });
+}
+
+/** Pixels `next` tints toward the translucent selection blue over `base`. */
+function tintedPixels(base: TextInputPaint, next: TextInputPaint): number {
+  let count = 0;
+  for (let y = TEXT_ROWS.top; y <= TEXT_ROWS.bottom; y += 1)
+    for (let x = 0; x < next.width; x += 1) {
+      const [r0, g0, b0] = rgb(base, x, y);
+      const [r1, g1, b1] = rgb(next, x, y);
+      if (r1 >= r0 + 6 && g1 >= g0 + 6 && b1 >= b0 + 8) count += 1;
+    }
+  return count;
+}
+
+/** Columns where `next` paints bright label glyph coverage absent from `base`. */
+function newGlyphColumns(base: TextInputPaint, next: TextInputPaint): number[] {
+  return columns(next, 2, (x, y) => {
+    const [r] = rgb(next, x, y);
+    return r > 150 && r > rgb(base, x, y)[0] + 80;
+  });
+}
+
+/** Failure context: the paint as a coarse character map, every second
+ * column and row: `#` bright glyph coverage, `o` dark caret, `+` lighter
+ * than the control background, `-` darker, `.` background. */
+function describe(value: unknown): string {
+  const paint = value as Partial<TextInputPaint>;
+  if (paint.pixels === undefined || paint.width === undefined)
+    return JSON.stringify(value);
+  const band = paint as TextInputPaint;
+  const background = rgb(band, Math.floor(band.width / 2), TEXT_ROWS.top);
+  const lines: string[] = [];
+  for (let y = 0; y < band.height; y += 2) {
+    let line = "";
+    for (let x = 0; x < band.width; x += 2) {
+      const [r, g, b] = rgb(band, x, y);
+      const delta = r + g + b - background[0] - background[1] - background[2];
+      line +=
+        r > 180 && g > 180 && b > 180
+          ? "#"
+          : r < 100 && g < 100 && b < 120
+            ? "o"
+            : delta > 30
+              ? "+"
+              : delta < -30
+                ? "-"
+                : ".";
+    }
+    lines.push(line);
+  }
+  return `background ${background.join("/")}\n${lines.join("\n")}`;
+}
+
+/** Drive selection and IME composition on the mounted text input and assert
+ * the completed frames paint the selection highlight, the caret bar and the
+ * provisional glyphs as distinct retained work. Leaves the committed text,
+ * a collapsed end selection and no composition behind. */
+async function exerciseTextOverlayPaint(page: Page, fixture: string) {
+  const readPaint = (): Promise<TextInputPaint> =>
+    page.evaluate(async (url) => (await import(url)).textInputPaint(), fixture);
+  const readObservation = () =>
+    page.evaluate(async (url) => (await import(url)).observation(), fixture);
+  const poll = async <T>(
+    read: () => Promise<T>,
+    predicate: (value: T) => boolean,
+    message: string,
+  ): Promise<T> => {
+    const deadline = performance.now() + 5_000;
+    let value = await read();
+    while (!predicate(value) && performance.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      value = await read();
+    }
+    assert.ok(predicate(value), `${message}: ${describe(value)}`);
+    return value;
+  };
+  const select = async (
+    start: number,
+    end: number,
+    core: readonly [number, number],
+  ): Promise<void> => {
+    await page.locator("textarea").evaluate(
+      (editor, [start, end]) => {
+        const textarea = editor as HTMLTextAreaElement;
+        textarea.setSelectionRange(start!, end!, "forward");
+        textarea.dispatchEvent(new Event("select", { bubbles: true }));
+      },
+      [start, end],
+    );
+    await poll(
+      readObservation,
+      (value) =>
+        value.focusSelection?.[0] === core[0] &&
+        value.focusSelection?.[1] === core[1],
+      `selection ${core} did not reach core`,
+    );
+  };
+
+  // "a😀b" is four UTF-16 units and six UTF-8 bytes.
+  await select(4, 4, [6, 6]);
+  const collapsed = await poll(
+    readPaint,
+    (paint) => caretColumns(paint).length > 0,
+    "collapsed caret bar did not paint",
+  );
+  const caret = caretColumns(collapsed);
+  const caretEnd = Math.max(...caret);
+
+  await select(0, 4, [0, 6]);
+  const selected = await poll(
+    readPaint,
+    (paint) => tintedPixels(collapsed, paint) >= 100,
+    "selection highlight did not paint",
+  );
+  const selectedCaret = caretColumns(selected);
+  assert.ok(
+    caret.every((column) => selectedCaret.includes(column)),
+    `caret bar did not paint beside the selection: ${JSON.stringify({ caret, selectedCaret })}`,
+  );
+
+  await select(4, 4, [6, 6]);
+  await poll(
+    readPaint,
+    (paint) => tintedPixels(collapsed, paint) < 10,
+    "selection highlight did not clear",
+  );
+
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("Input.imeSetComposition", {
+      text: "ZZ",
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+    const composing = await poll(
+      readPaint,
+      (paint) =>
+        newGlyphColumns(collapsed, paint).filter((x) => x > caretEnd).length >=
+        4,
+      "provisional composition glyphs did not paint",
+    );
+    const provisional = newGlyphColumns(collapsed, composing);
+    const composingCaret = caretColumns(composing);
+    assert.ok(
+      provisional.every((x) => x >= caret[0]! - 1),
+      `provisional glyphs repainted committed text: ${JSON.stringify({ caret, provisional })}`,
+    );
+    assert.ok(
+      composingCaret.length > 0 &&
+        composingCaret.every((x) => x > caretEnd + 2),
+      `provisional caret did not replace the committed caret: ${JSON.stringify({ caret, composingCaret })}`,
+    );
+
+    // An empty composition cancels: the provisional run leaves the frame.
+    await cdp.send("Input.imeSetComposition", {
+      text: "",
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+    await poll(
+      readPaint,
+      (paint) =>
+        newGlyphColumns(collapsed, paint).length === 0 &&
+        caretColumns(paint).join() === caret.join(),
+      "cancelled composition kept painting",
+    );
+    const observation = await readObservation();
+    assert.equal(observation.text, "a😀b");
+    return {
+      caret,
+      selectedTint: tintedPixels(collapsed, selected),
+      selectedCaret,
+      provisional,
+      composingCaret,
+    };
+  } finally {
+    await cdp.detach();
+  }
+}
 
 test("GUI roots, node identity and committed values cross a real worker connection", {
   timeout: 60000,
@@ -237,6 +463,12 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       assert.equal(themeFrame.height, 180);
       assert.ok(themeFrame.drawCalls > 0);
       assert.ok(themeFrame.coloredPixels > 0);
+
+      // Text-input overlays paint through retained GUI rendering with their
+      // own identities: a selection highlight beside the caret bar, and a
+      // provisional composition run with its own glyphs.
+      const textPaint = await exerciseTextOverlayPaint(env.page, fixture);
+      env.evidence.record("text overlay paint", textPaint);
 
       // Backward DOM selection around a multibyte code point round-trips as
       // anchor=5, caret=1 in the runtime's UTF-8 coordinate space.

@@ -531,8 +531,9 @@ impl RenderSystem {
                         // Caret composition: transient text paint over the
                         // skinned, scrolled primitives. Overlays arrive
                         // scroll-shifted in content metres with the retained
-                        // node identity and clip, so they track scrolled
-                        // content exactly like the text they annotate.
+                        // node, their own overlay parts and the node clip, so
+                        // they track scrolled content exactly like the text
+                        // they annotate without sharing its identity.
                         if let Some(input) = gui_input {
                             translated.extend(input.text_caret_primitives(
                                 gui_layout,

@@ -117,8 +117,12 @@ pub enum SurfacePrimitiveIdentity {
 
 /// Stable named part of one GUI-generated Surface primitive.
 ///
-/// These names are the authored skin identities. They remain independent of
-/// painter order and generated primitive indices.
+/// The skin base parts are the authored skin identities. Transient text-input
+/// paint (caret, selection and provisional composition) has its own parts so
+/// every primitive of one node keeps a distinct identity per Surface; those
+/// parts are paint identities only and resolve their skin through `Label`.
+/// All parts remain independent of painter order and generated primitive
+/// indices.
 #[cfg(feature = "gui")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GuiPrimitivePart {
@@ -132,11 +136,18 @@ pub enum GuiPrimitivePart {
     Icon,
     /// Focus indicator painted independently of the background.
     FocusRing,
+    /// Text-input caret bar, committed or at the end of a provisional run.
+    Caret,
+    /// Text-input selection highlight, over committed text or over the
+    /// active clause of a provisional composition.
+    Selection,
+    /// Provisional composition glyph run.
+    Composition,
 }
 
 #[cfg(feature = "gui")]
 impl GuiPrimitivePart {
-    /// Stable authored skin-part name.
+    /// Stable part name; a skin base part's name is its authored skin name.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Background => "background",
@@ -144,6 +155,9 @@ impl GuiPrimitivePart {
             Self::Label => "label",
             Self::Icon => "icon",
             Self::FocusRing => "focusRing",
+            Self::Caret => "caret",
+            Self::Selection => "selection",
+            Self::Composition => "composition",
         }
     }
 }

@@ -1376,3 +1376,11 @@ mod tests;
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "command_cost_tests.rs"]
+mod command_cost_tests;
+
+#[cfg(test)]
+#[path = "tree_scaling_tests.rs"]
+mod tree_scaling_tests;

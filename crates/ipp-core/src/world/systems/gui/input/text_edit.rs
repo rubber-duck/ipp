@@ -1,8 +1,9 @@
 //! Pure single-line text-edit helpers over UTF-8 byte offsets.
 //!
-//! All caret offsets are byte offsets that must sit on grapheme boundaries
-//! (basic-LTR subset in [`crate::systems::surface`]). Insertion and deletion
-//! snap the resulting caret forward to the next boundary in the new text.
+//! All caret offsets are byte offsets that must sit on UAX #29 extended
+//! grapheme boundaries, which [`crate::systems::surface`] segments completely
+//! in GUI builds. Insertion and deletion snap the resulting caret forward to
+//! the next boundary in the new text.
 
 use crate::systems::surface::{TextLayout, grapheme_boundaries, is_grapheme_boundary};
 
@@ -124,7 +125,7 @@ pub(crate) fn delete_forward(text: &str, caret: u32, anchor: Option<u32>) -> Opt
 ///
 /// Produces the pen positions of [`TextLayout::caret_position`] for every
 /// boundary in one merged pass. Measured lines and their glyphs follow
-/// source order (basic-LTR subset), so the first line starting at, and the
+/// source order (no bidi reordering), so the first line starting at, and the
 /// first line ending at or after, each ascending boundary only move forward,
 /// as does the first glyph starting at or after it.
 pub(crate) fn caret_offset_at_x(layout: &TextLayout, x_ems: f32) -> u32 {

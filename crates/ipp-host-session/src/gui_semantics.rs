@@ -2,9 +2,10 @@
 //!
 //! Snapshots read the authoritative inspect state, the retained evaluated
 //! view and the observed input focus through the normal boundary; actions
-//! resolve against a fresh bounded snapshot and dispatch through the same
-//! validated command and input policies as any other writer. Refusals
-//! return as correlated host rejections, never as fabricated state.
+//! resolve their target through a fresh targeted lookup of the addressed node
+//! and dispatch through the same validated command and input policies as any
+//! other writer. Refusals return as correlated host rejections, never as
+//! fabricated state.
 
 use super::{HostServices, WorldSessionContext, WorldSessionReply};
 use ipp_core::{
@@ -21,13 +22,14 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             .gui_semantic_snapshot(query.entity, query.max_depth, query.limit)
     }
 
-    /// Resolve one semantic action against a fresh bounded snapshot and
-    /// dispatch it through the validated control policy.
+    /// Resolve one semantic action against a fresh semantic record of its
+    /// target and dispatch it through the validated control policy.
     ///
-    /// The snapshot bounds match inspect maxima so the addressed node is
-    /// always resolvable when present. Lifetime mismatches refuse like
-    /// unknown nodes; stale revisions refuse instead of overwriting. Every
-    /// action queues as one correlated input-system command.
+    /// The lookup starts at the addressed node, so a live node resolves
+    /// regardless of where public snapshot depth and page bounds would cut
+    /// the tree. Lifetime mismatches refuse like unknown nodes; stale
+    /// revisions refuse instead of overwriting. Every action queues as one
+    /// correlated input-system command.
     pub(crate) fn resolve_semantic_action(
         &mut self,
         request_id: u64,

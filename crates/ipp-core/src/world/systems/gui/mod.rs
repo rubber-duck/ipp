@@ -1,8 +1,11 @@
 //! Authoritative GUI tree, stable node handles and committed control values on Surfaces.
 //!
-//! `GuiRoot.nodes` stores structure plus one committed value and revision per
-//! control node. While a root incarnation is live it changes only through
-//! [`GuiCommand`]; a new incarnation (insertion or restore) may supply it whole.
+//! `GuiRoot.nodes` stores structure plus one control record per control node:
+//! its revision and, for a text input, the committed text. Committed checkbox
+//! and slider values and the slider range are `node_data` rows. While a root
+//! incarnation is live, structure and committed values change only through
+//! [`GuiCommand`]; a new incarnation (insertion or restore) may supply them
+//! whole.
 //! Node style, node data, root-owned theme parts and per-node part state are
 //! compiled rows addressed by field offset; node rows and part rows are
 //! removed with their node. Dynamic properties hold only application
@@ -51,8 +54,11 @@
 //! Caps: `MAX_NODES` nodes per tree, [`MAX_LAYOUT_DEPTH`] evaluation depth,
 //! 1024 pending input envelopes, [`MAX_GUI_TEXT_BYTES`] text bytes, and bounded
 //! 32-deep / 256-node inspection.
-//! No extra passes or systems exist for controls; animation reaches nodes
-//! only through sparse state overlays sampled by `AnimationSystem`, and hit
+//! No extra passes or systems exist for controls. `AnimationSystem` stays the
+//! sole sampler: numeric style, theme part and part-state properties are
+//! row-addressed fields that animation writes directly through prepared row
+//! destinations and that sparse state overlays address by the same offsets.
+//! Committed control values and the slider range stay command-owned. Hit
 //! testing uses retained views, never widget entities.
 //!
 //! Downstream interface (skinning, semantic readers): effective control

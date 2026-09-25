@@ -1,10 +1,10 @@
 //! Shared headless text measurement with grapheme-aware caret metrics.
 //!
-//! One implementation serves Surface label preparation, GUI layout (ipp-9nx.5)
-//! and future text editing caret/selection work (ipp-9nx.8). It is deliberately
-//! headless: it borrows an immutable [`FontAsset`](crate::services::asset_management::font::FontAsset),
-//! never touches cameras, colours, Worlds or sessions, and never synthesizes
-//! metrics for fonts that are not ready.
+//! One implementation serves Surface label preparation, GUI layout and GUI
+//! text-input caret, selection and hit mapping. It is deliberately headless:
+//! it borrows an immutable [`FontAsset`], never touches cameras, colours,
+//! Worlds or sessions, and never synthesizes metrics for fonts that are not
+//! ready.
 //!
 //! ## Units and coordinates
 //!
@@ -14,8 +14,8 @@
 //! `unitsPerMetre` factor. Keeping measurement scale-free means wrapping,
 //! kerning and advance decisions are identical at every size.
 //!
-//! Positions consume the shared top-left/Y-down Surface content convention
-//! (ipp-9nx.16): the layout origin is the top-left of the first line, +X runs
+//! Positions consume the shared top-left/Y-down Surface content convention:
+//! the layout origin is the top-left of the first line, +X runs
 //! right and +Y runs down. Each glyph origin sits on its line's alphabetic
 //! baseline, which [`TextLine::baseline`] measures down from the layout origin.
 //! Line tops, carets and selection rectangles remain line-box geometry. This

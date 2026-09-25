@@ -46,8 +46,8 @@
 //! IME composition and soft keyboards belong to platform adapters: this
 //! system exposes no clipboard verbs and accepts text only through routed
 //! `Text` edits. Touch arbitration reuses routing state (one press per
-//! control, capture retention, click-cancel on miss); scroll offsets stay
-//! input-owned and never reflow layout. Frames with no ingress still validate
+//! control, capture retention, no tap on an off-target release); scroll
+//! offsets stay input-owned and never reflow layout. Frames with no ingress still validate
 //! retained focus/capture/hover/caret targets proportionally to active cursors;
 //! when no cursor changes, publication and retained views stay untouched.
 //!

@@ -651,12 +651,9 @@ struct PendingEnvelope {
     source_tick: u64,
     /// Intended target, or None for blur.
     target: Option<GuiInputTarget>,
-    /// Pointer whose gesture produced this envelope, for click-cancel.
+    /// Pointer whose gesture produced this envelope; a pointer cancel
+    /// cancels its pending envelopes.
     pointer: Option<u32>,
-    /// Gesture sequence of the producing press, for click-cancel.
-    press_seq: Option<u64>,
-    /// Whether releasing off-target cancels this envelope.
-    cancel_on_miss: bool,
     /// Routed intent.
     kind: EnvelopeKind,
 }
@@ -821,8 +818,6 @@ struct PointerCapture {
     target: GuiInputTarget,
     /// Pressed button; releases of other buttons never complete the press.
     button: GuiPointerButton,
-    /// Gesture sequence identifying this press.
-    seq: u64,
     /// Session that pressed.
     session: u64,
     /// Frame whose snapshot established the capture.
@@ -986,8 +981,6 @@ pub struct GuiInputSystem {
     published_caret_revision: u64,
     /// Session that owned the last published focused text state.
     published_text_session: Option<u64>,
-    /// Next gesture sequence.
-    next_seq: u64,
     /// Last frame observed, fencing session-replacement records.
     last_tick: u64,
     /// Routed effects awaiting the frame report.
@@ -1073,7 +1066,6 @@ impl SystemFactory for GuiInputSystemFactory {
             caret_revision: 0,
             published_caret_revision: 0,
             published_text_session: None,
-            next_seq: 1,
             last_tick: 0,
             pending_effects: Vec::new(),
             pending_cancellations: Vec::new(),
@@ -1772,8 +1764,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: focus,
                 pointer: None,
-                press_seq: None,
-                cancel_on_miss: false,
                 kind: EnvelopeKind::Focus {
                     focus,
                     keyboard,
@@ -1836,8 +1826,6 @@ impl GuiInputSystem {
         tick: u64,
         target: GuiInputTarget,
         pointer: Option<u32>,
-        press_seq: Option<u64>,
-        cancel_on_miss: bool,
         expected_revision: u32,
         value: GuiControlValue,
     ) {
@@ -1856,8 +1844,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: Some(target),
                 pointer,
-                press_seq,
-                cancel_on_miss,
                 kind: EnvelopeKind::SetValue {
                     expected_revision,
                     value,
@@ -3554,13 +3540,11 @@ impl GuiInputSystem {
             );
             return;
         }
-        let seq = self.next_seq();
         self.captures.insert(
             pointer,
             PointerCapture {
                 target: routed.target,
                 button,
-                seq,
                 session,
                 source_tick: tick,
             },
@@ -3633,8 +3617,6 @@ impl GuiInputSystem {
                         tick,
                         routed.target,
                         Some(pointer),
-                        Some(seq),
-                        false,
                         revision,
                         value,
                     );
@@ -3643,8 +3625,8 @@ impl GuiInputSystem {
         }
     }
 
-    /// Route one pointer-up: complete taps, commit drag ends, click-cancel
-    /// press-time intents released off-target. A release of a different
+    /// Route one pointer-up: complete taps on the pressed control and commit
+    /// drag ends; a release off-target completes no tap. A release of a different
     /// button never completes the press.
     #[allow(clippy::too_many_arguments)]
     fn route_up(
@@ -3731,19 +3713,18 @@ impl GuiInputSystem {
             }
             _ => None,
         };
+        // Taps queue their click intents only here, so a release off the
+        // pressed control completes nothing. A drag released off-target
+        // still commits the values it already routed.
         let Some(position) = same else {
-            self.cancel_press_envelopes(session, tick, pointer, capture.seq);
-            // A drag released off-target still commits its routed values;
-            // only click-type intents cancel.
             if kind == ControlKind::Slider {
                 self.set_hover(session, tick, pointer, None, position);
             }
             return;
         };
-        // A target disabled mid-press completes nothing: pending click
-        // intents cancel rather than committing a stale tap.
+        // A target disabled mid-press completes nothing rather than
+        // committing a stale tap.
         if !Self::target_eligible(layout, sim, &capture.target) {
-            self.cancel_press_envelopes(session, tick, pointer, capture.seq);
             return;
         }
         self.set_hover(session, tick, pointer, Some(capture.target), position);
@@ -3757,8 +3738,6 @@ impl GuiInputSystem {
                         source_tick: tick,
                         target: Some(capture.target),
                         pointer: Some(pointer),
-                        press_seq: Some(capture.seq),
-                        cancel_on_miss: false,
                         kind: EnvelopeKind::PressButton,
                     },
                 );
@@ -3786,8 +3765,6 @@ impl GuiInputSystem {
                     tick,
                     capture.target,
                     Some(pointer),
-                    Some(capture.seq),
-                    false,
                     revision,
                     GuiControlValue::Bool(!current),
                 );
@@ -3823,8 +3800,6 @@ impl GuiInputSystem {
                         tick,
                         capture.target,
                         Some(pointer),
-                        Some(capture.seq),
-                        false,
                         revision,
                         value,
                     );
@@ -4024,8 +3999,6 @@ impl GuiInputSystem {
                         tick,
                         capture.target,
                         Some(pointer),
-                        Some(capture.seq),
-                        false,
                         revision,
                         value,
                     );
@@ -4424,8 +4397,6 @@ impl GuiInputSystem {
                         source_tick: tick,
                         target: Some(target),
                         pointer: None,
-                        press_seq: None,
-                        cancel_on_miss: false,
                         kind: EnvelopeKind::Scroll {
                             delta: consumed,
                         },
@@ -4849,8 +4820,6 @@ impl GuiInputSystem {
                         source_tick: tick,
                         target: None,
                         pointer: None,
-                        press_seq: None,
-                        cancel_on_miss: false,
                         kind: EnvelopeKind::Focus {
                             focus: None,
                             keyboard: false,
@@ -4868,8 +4837,6 @@ impl GuiInputSystem {
                             source_tick: tick,
                             target: Some(focus.target),
                             pointer: None,
-                            press_seq: None,
-                            cancel_on_miss: false,
                             kind: EnvelopeKind::PressButton,
                         },
                     );
@@ -4890,8 +4857,6 @@ impl GuiInputSystem {
                         tick,
                         focus.target,
                         None,
-                        None,
-                        false,
                         revision,
                         GuiControlValue::Bool(!current),
                     );
@@ -4937,8 +4902,6 @@ impl GuiInputSystem {
                     tick,
                     focus.target,
                     None,
-                    None,
-                    false,
                     revision,
                     GuiControlValue::Text(outcome.text.clone()),
                 );
@@ -4995,16 +4958,9 @@ impl GuiInputSystem {
                     _ => 1.0,
                 };
                 match slider_nudge(&content, &base, steps) {
-                    Some(value) => self.push_value_envelope(
-                        session,
-                        tick,
-                        focus.target,
-                        None,
-                        None,
-                        false,
-                        revision,
-                        value,
-                    ),
+                    Some(value) => {
+                        self.push_value_envelope(session, tick, focus.target, None, revision, value)
+                    }
                     None => self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable),
                 }
             }
@@ -5057,8 +5013,6 @@ impl GuiInputSystem {
                     tick,
                     focus.target,
                     None,
-                    None,
-                    false,
                     revision,
                     GuiControlValue::Scalar(value),
                 );
@@ -5099,8 +5053,6 @@ impl GuiInputSystem {
                     tick,
                     focus.target,
                     None,
-                    None,
-                    false,
                     revision,
                     GuiControlValue::Text(outcome.text.clone()),
                 );
@@ -5131,8 +5083,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: Some(target),
                 pointer: None,
-                press_seq: None,
-                cancel_on_miss: false,
                 kind: EnvelopeKind::Submit {
                     expected_revision,
                 },
@@ -5181,8 +5131,6 @@ impl GuiInputSystem {
             tick,
             *target,
             None,
-            None,
-            false,
             revision,
             GuiControlValue::Text(outcome.text.clone()),
         );
@@ -5536,8 +5484,6 @@ impl GuiInputSystem {
             tick,
             focus.target,
             None,
-            None,
-            false,
             revision,
             GuiControlValue::Text(outcome.text.clone()),
         );
@@ -5653,40 +5599,6 @@ impl GuiInputSystem {
             self.press_owners.remove(&capture.target);
         }
         self.hovers.remove(&pointer);
-    }
-
-    /// Cancel click-type envelopes of a press released off-target. Only the
-    /// pressing session's envelopes cancel; another session's identical
-    /// pointer ID never reaches them.
-    fn cancel_press_envelopes(&mut self, session: u64, tick: u64, pointer: u32, seq: u64) {
-        let mut kept = Vec::with_capacity(self.envelopes.len());
-        for envelope in self.envelopes.drain(..) {
-            if envelope.session == session
-                && envelope.pointer == Some(pointer)
-                && envelope.press_seq == Some(seq)
-                && envelope.cancel_on_miss
-                && let Some(target) = envelope.target
-            {
-                self.predicted.remove(&target);
-                self.pending_cancellations.push(GuiInputCancellation {
-                    session,
-                    source_tick: envelope.source_tick,
-                    effect_tick: tick,
-                    target: Some(target),
-                    reason: GuiInputCancelReason::GestureCancelled,
-                });
-                continue;
-            }
-            kept.push(envelope);
-        }
-        self.envelopes = kept;
-    }
-
-    /// Allocate the next gesture sequence.
-    fn next_seq(&mut self) -> u64 {
-        let seq = self.next_seq.max(1);
-        self.next_seq = seq.saturating_add(1).max(1);
-        seq
     }
 }
 
@@ -5940,8 +5852,6 @@ impl GuiInputSystem {
             source_tick: tick,
             target: Some(command.target),
             pointer: None,
-            press_seq: None,
-            cancel_on_miss: false,
             kind: envelope_kind,
         });
         Ok(())
@@ -7415,8 +7325,6 @@ impl GuiInputSystem {
                 source_tick: tick,
                 target: None,
                 pointer: None,
-                press_seq: None,
-                cancel_on_miss: false,
                 kind: EnvelopeKind::Focus {
                     focus: None,
                     keyboard: false,

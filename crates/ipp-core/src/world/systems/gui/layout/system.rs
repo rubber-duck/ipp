@@ -103,11 +103,6 @@ impl GuiLayoutSystem {
         self.cache.entities()
     }
 
-    /// Number of roots with retained output.
-    pub fn retained_roots(&self) -> usize {
-        self.cache.len()
-    }
-
     /// Effective logical units per Surface metre for one root entity: the
     /// client-set value, or [`DEFAULT_UNITS_PER_METRE`] when unset.
     pub fn units_per_metre(&self, entity: EntityId) -> f32 {
@@ -129,10 +124,11 @@ impl GuiLayoutSystem {
         Ok(())
     }
 
-    /// Evaluate one root against explicit inputs without a World. Test and
-    /// tooling seam sharing the retained cache with the scheduled pass,
-    /// which re-evaluates the root from World inputs on its next update.
-    pub fn evaluate_for_test(
+    /// Evaluate one root against explicit inputs without a World, sharing the
+    /// retained cache with the scheduled pass, which re-evaluates the root
+    /// from World inputs on its next update.
+    #[cfg(test)]
+    pub(super) fn evaluate_for_test(
         &mut self,
         entity: EntityId,
         request: &GuiLayoutRequest<'_>,

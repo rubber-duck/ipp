@@ -477,10 +477,7 @@ mod rows {
                         classes: vec![],
                     },
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::RowsFixture(fixture),
-                },
+                Command::insert_value(EntityRef::Alias(1), ComponentValue::RowsFixture(fixture)),
             ],
         );
         let entity = outcome.result.unwrap()[0].1;

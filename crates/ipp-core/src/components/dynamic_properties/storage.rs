@@ -38,6 +38,9 @@ pub struct DynamicProperties {
     next_key: u32,
 }
 
+// Hand-written only so test builds can count whole property-set copies through
+// `clone_count`; release builds clone field by field exactly like a derive. A
+// new field must be added here by hand.
 impl Clone for DynamicProperties {
     fn clone(&self) -> Self {
         #[cfg(test)]

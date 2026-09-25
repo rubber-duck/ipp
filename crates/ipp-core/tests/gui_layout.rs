@@ -58,14 +58,11 @@ fn create_panel(world: &mut WorldContext<'_>) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -253,7 +250,6 @@ fn layout_evaluates_through_world_and_feeds_preparation() {
     let view = world.gui_layout_view(entity).unwrap();
     assert_eq!(view.layout_revision, 4);
     assert_eq!(view.paint_revision, paint_before + 1);
-    assert_eq!(view.remeasure_count, 0);
     assert_rect(layout_rect(&world, entity, 2), [0.0, 0.0, 1.0, 1.0]);
 
     // An unchanged frame refreshes the tick and nothing else.
@@ -261,7 +257,6 @@ fn layout_evaluates_through_world_and_feeds_preparation() {
     let quiet = world.gui_layout_view(entity).unwrap();
     assert_eq!(quiet.layout_revision, 4);
     assert_eq!(quiet.paint_revision, paint_before + 1);
-    assert_eq!(quiet.reflow_count, 4);
 }
 
 #[test]
@@ -308,10 +303,9 @@ fn visual_lanes_move_paint_and_hit_without_reflow() {
     .unwrap();
 
     // Panel creation and two insertions each reflow; the visual edit moves
-    // rectangles and bumps paint without reflowing or remeasuring text.
+    // rectangles and bumps paint without reflowing.
     let view = world.gui_layout_view(entity).unwrap();
-    assert_eq!(view.reflow_count, 3);
-    assert_eq!(view.remeasure_count, 0);
+    assert_eq!(view.layout_revision, 3);
     assert_rect(layout_rect(&world, entity, 2), [2.0, 0.5, 1.0, 1.0]);
     assert_eq!(view.hit_test([2.5, 1.0]).unwrap().node, GuiNodeId(2));
 
@@ -350,14 +344,11 @@ fn create_scroll_panel(world: &mut WorldContext<'_>) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -482,12 +473,7 @@ fn nested_scroll_moves_paint_without_reflow() {
 
     let view = world.gui_layout_view(entity).unwrap();
     assert_eq!(view.units_per_metre, 1.0);
-    let (layout_revision, paint_revision, reflow_count, remeasure_count) = (
-        view.layout_revision,
-        view.paint_revision,
-        view.reflow_count,
-        view.remeasure_count,
-    );
+    let (layout_revision, paint_revision) = (view.layout_revision, view.paint_revision);
     let before: Vec<SurfaceRenderPrimitive> = world
         .surface_render_items()
         .iter()
@@ -515,12 +501,10 @@ fn nested_scroll_moves_paint_without_reflow() {
     assert_eq!(world.gui_input_scroll(entity, GuiNodeId(4)), [0.0, 4.0]);
     assert_eq!(world.gui_scroll_revision(), 1);
 
-    // Scrolling never reflows layout: revisions and work counts hold still.
+    // Scrolling never reflows or repaints layout: both revisions hold still.
     let view = world.gui_layout_view(entity).unwrap();
     assert_eq!(view.layout_revision, layout_revision);
     assert_eq!(view.paint_revision, paint_revision);
-    assert_eq!(view.reflow_count, reflow_count);
-    assert_eq!(view.remeasure_count, remeasure_count);
 
     // Prepared paint shows translated content under fixed viewport clips.
     let after: Vec<SurfaceRenderPrimitive> = world

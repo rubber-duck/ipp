@@ -37,14 +37,11 @@ fn create(world: &mut ipp_core::WorldContext<'_>, debug: BoundingGeometry) -> ip
                     ..EntityMetadata::default()
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value: ComponentValue::BoundingGeometry(debug),
-            },
+            Command::insert_value(
+                EntityRef::Alias(0),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(EntityRef::Alias(0), ComponentValue::BoundingGeometry(debug)),
         ],
     );
     report.outcomes[0].result.as_ref().unwrap()[0].1
@@ -369,10 +366,7 @@ fn shapes_validate_without_acquiring_assets_and_global_state_preserves_authored_
                     alias: 0,
                     metadata: EntityMetadata::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(0),
-                    value: ComponentValue::BoundingGeometry(debug),
-                },
+                Command::insert_value(EntityRef::Alias(0), ComponentValue::BoundingGeometry(debug)),
             ],
         );
         assert!(report.outcomes[0].result.is_err());

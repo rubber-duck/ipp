@@ -421,22 +421,22 @@ mod effective_observations {
                         alias: 1,
                         metadata: Default::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Scalar(Scalar {
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Scalar(Scalar {
                             value: 3.0,
                         }),
-                    },
+                    ),
                     Command::Create {
                         alias: 2,
                         metadata: Default::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(2),
-                        value: ComponentValue::Scalar(Scalar {
+                    Command::insert_value(
+                        EntityRef::Alias(2),
+                        ComponentValue::Scalar(Scalar {
                             value: 20.0,
                         }),
-                    },
+                    ),
                 ],
             })
             .unwrap();
@@ -445,14 +445,14 @@ mod effective_observations {
         world
             .enqueue(Batch {
                 id: 2,
-                operations: vec![Command::InsertComponentValue {
-                    entity: EntityRef::Handle(target),
-                    value: ComponentValue::LinearDriver(LinearDriver {
+                operations: vec![Command::insert_value(
+                    EntityRef::Handle(target),
+                    ComponentValue::LinearDriver(LinearDriver {
                         source,
                         scale: 2.0,
                         bias: 1.0,
                     }),
-                }],
+                )],
             })
             .unwrap();
         world.step(0.0).unwrap().outcomes[0]

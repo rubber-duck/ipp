@@ -118,7 +118,7 @@ fn full_edit(root: &GuiRoot, command: &GuiCommand) -> Result<GuiRoot, ErrorReaso
 /// Apply ordinary authored writes to a root the way the World applies them:
 /// field writes through the registry (tree writes sync rows, row writes are
 /// validated where they land). Every write must leave a complete valid root,
-/// as debug preparation checks after each operation.
+/// which the per-field checks guarantee without a whole-root check.
 fn apply_writes(root: &GuiRoot, commands: &[Command]) -> Result<GuiRoot, ErrorReason> {
     let mut value = crate::ComponentValue::GuiRoot(root.clone());
     for command in commands {
@@ -340,7 +340,7 @@ fn scoped_command_writes_reach_the_complete_root_result() {
             if let Ok(next) = full {
                 root = next;
                 applied += 1;
-                peak = peak.max(root.node_count());
+                peak = peak.max(root.nodes().len());
             }
         }
 

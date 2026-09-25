@@ -34,12 +34,12 @@ fn create(world: &mut WorldContext<'_>, alias: u32, value: f32) -> EntityId {
                     alias,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(alias),
-                    value: ComponentValue::Scalar(Scalar {
+                Command::insert_value(
+                    EntityRef::Alias(alias),
+                    ComponentValue::Scalar(Scalar {
                         value,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -220,12 +220,12 @@ fn removing_and_reusing_a_source_only_component_does_not_rebind_the_transition()
                     entity: EntityRef::Handle(removed),
                     component: ComponentValue::SCALAR,
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(removed),
-                    value: ComponentValue::Scalar(Scalar {
+                Command::insert_value(
+                    EntityRef::Handle(removed),
+                    ComponentValue::Scalar(Scalar {
                         value: 333.0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -284,12 +284,12 @@ fn pending_frozen_source_only_replacement_invalidates_the_held_program() {
                     entity: EntityRef::Handle(removed),
                     component: ComponentValue::SCALAR,
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(removed),
-                    value: ComponentValue::Scalar(Scalar {
+                Command::insert_value(
+                    EntityRef::Handle(removed),
+                    ComponentValue::Scalar(Scalar {
                         value: 333.0,
                     }),
-                },
+                ),
             ],
         })
         .unwrap();
@@ -316,10 +316,10 @@ fn pending_frozen_dynamic_property_reuse_does_not_write_through_old_descriptor()
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Surface(Surface::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Surface(Surface::default()),
+                ),
             ],
         })
         .unwrap();

@@ -916,8 +916,9 @@ fn frame_diagnostic_budget_rejects_overflowing_batch_and_resets_next_frame() {
     let world_id = world_host
         .create_world(WorldLimits {
             max_operations: 1100,
-            // The largest registered component determines Command's inline size.
-            max_batch_bytes: 512 * 1024,
+            // Pushed operations grow to 2048 slots, each charged at most the
+            // command inline bound, plus the inserted value and overlay payloads.
+            max_batch_bytes: 2048 * ipp_core::MAX_COMMAND_INLINE_BYTES + 64 * 1024,
             ..WorldLimits::default()
         })
         .unwrap();
@@ -1365,14 +1366,14 @@ mod gui_rows {
                         classes: Vec::new(),
                     },
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Surface(Surface::default()),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::GuiRoot(GuiRoot::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Surface(Surface::default()),
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::GuiRoot(GuiRoot::default()),
+                ),
             ],
         );
         let entity = report.outcomes[0].result.as_ref().unwrap()[0].1;

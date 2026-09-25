@@ -18,10 +18,10 @@ fn create_surface(host: &mut HostRuntime, world: ipp_core::WorldId) -> ipp_core:
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Surface(Surface::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Surface(Surface::default()),
+                ),
             ],
         })
         .unwrap();
@@ -340,10 +340,10 @@ fn snapshots_keep_the_authored_cache_policy_and_rebuild_prepared_inputs() {
         context
             .enqueue(Batch {
                 id: 2,
-                operations: vec![Command::InsertComponentValue {
-                    entity: EntityRef::Handle(entity),
-                    value: ComponentValue::SurfaceCache(policy),
-                }],
+                operations: vec![Command::insert_value(
+                    EntityRef::Handle(entity),
+                    ComponentValue::SurfaceCache(policy),
+                )],
             })
             .unwrap();
         assert!(context.step(0.0).unwrap().outcomes[0].result.is_ok());

@@ -616,10 +616,7 @@ pub fn create(world: &mut WorldContext<'_>, values: Vec<ComponentValue>) -> Enti
     operations.extend(
         values
             .into_iter()
-            .map(|value| Command::InsertComponentValue {
-                entity: EntityRef::Alias(0),
-                value,
-            }),
+            .map(|value| Command::insert_value(EntityRef::Alias(0), value)),
     );
     world
         .enqueue(Batch {
@@ -908,13 +905,13 @@ pub fn place(world: &mut WorldContext<'_>, entity: EntityId, z: f32) {
     world
         .enqueue(Batch {
             id: world.tick() + 1,
-            operations: vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Transform(Transform {
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Transform(Transform {
                     z,
                     ..Transform::default()
                 }),
-            }],
+            )],
         })
         .unwrap();
     update(world).unwrap();

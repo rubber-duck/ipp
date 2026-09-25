@@ -38,10 +38,10 @@ fn set_policy(world: &mut WorldContext<'_>, entity: EntityId, policy: Option<Sur
         .enqueue(Batch {
             id: world.tick() + 1,
             operations: vec![match policy {
-                Some(policy) => Command::InsertComponentValue {
-                    entity: EntityRef::Handle(entity),
-                    value: ComponentValue::SurfaceCache(policy),
-                },
+                Some(policy) => Command::insert_value(
+                    EntityRef::Handle(entity),
+                    ComponentValue::SurfaceCache(policy),
+                ),
                 None => Command::RemoveComponent {
                     entity: EntityRef::Handle(entity),
                     component: ComponentValue::SURFACE_CACHE,

@@ -428,13 +428,13 @@ fn references_and_durable_entity_ids_survive_allocator_reuse() {
                 Command::Delete {
                     entity: EntityRef::Handle(entities[0].id),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Handle(entities[2].id),
-                    value: ComponentValue::LinearDriver(LinearDriver {
+                Command::insert_value(
+                    EntityRef::Handle(entities[2].id),
+                    ComponentValue::LinearDriver(LinearDriver {
                         source: entities[1].id,
                         ..Default::default()
                     }),
-                },
+                ),
             ],
         })
         .unwrap();

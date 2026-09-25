@@ -20,10 +20,7 @@ fn run(world: &mut ipp_core::WorldContext<'_>, operations: Vec<Command>) -> Worl
 }
 
 fn insert(entity: EntityRef, value: ComponentValue) -> Command {
-    Command::InsertComponentValue {
-        entity,
-        value,
-    }
+    Command::insert_value(entity, value)
 }
 
 fn camera(world: &mut ipp_core::WorldContext<'_>, name: &str) -> EntityId {

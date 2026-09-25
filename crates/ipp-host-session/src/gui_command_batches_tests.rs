@@ -74,14 +74,14 @@ fn panel(host: &mut Host<Platform>) -> (EntityId, u64) {
                     alias: 1,
                     metadata: EntityMetadata::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Surface(Surface::default()),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::GuiRoot(ipp_core::GuiRoot::default()),
-                },
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Surface(Surface::default()),
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::GuiRoot(ipp_core::GuiRoot::default()),
+                ),
             ],
         })
         .unwrap();

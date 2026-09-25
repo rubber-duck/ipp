@@ -428,10 +428,10 @@ fn removing_the_node_or_root_mid_transition_withdraws_before_the_slot_is_reused(
             context
                 .enqueue(Batch {
                     id: 71 + round * 2,
-                    operations: vec![Command::InsertComponentValue {
-                        entity: EntityRef::Handle(panel),
-                        value: ComponentValue::GuiRoot(shared_skin_root(&source)),
-                    }],
+                    operations: vec![Command::insert_value(
+                        EntityRef::Handle(panel),
+                        ComponentValue::GuiRoot(shared_skin_root(&source)),
+                    )],
                 })
                 .unwrap();
             context.step(FRAME).unwrap();
@@ -470,19 +470,19 @@ fn removing_the_node_or_root_mid_transition_withdraws_before_the_slot_is_reused(
                         alias: 1,
                         metadata: EntityMetadata::default(),
                     },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::Surface({
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::Surface({
                             let mut surface = Surface::default();
                             surface.width = 10.0;
                             surface.height = 10.0;
                             surface
                         }),
-                    },
-                    Command::InsertComponentValue {
-                        entity: EntityRef::Alias(1),
-                        value: ComponentValue::GuiRoot(shared_skin_root(&source)),
-                    },
+                    ),
+                    Command::insert_value(
+                        EntityRef::Alias(1),
+                        ComponentValue::GuiRoot(shared_skin_root(&source)),
+                    ),
                 ],
             })
             .unwrap();

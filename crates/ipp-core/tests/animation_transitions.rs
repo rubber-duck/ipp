@@ -59,12 +59,12 @@ fn create(world: &mut WorldContext<'_>, value: f32) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Scalar(Scalar {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Scalar(Scalar {
                     value,
                 }),
-            },
+            ),
         ],
     )
     .result
@@ -748,10 +748,10 @@ fn rejected_source_hold_keeps_the_existing_controller_installed() {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::BoundingGeometry(BoundingGeometry::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::BoundingGeometry(BoundingGeometry::default()),
+            ),
         ],
     )
     .result
@@ -888,13 +888,13 @@ fn queued_transition_does_not_leak_its_held_source_into_same_boundary_staging() 
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(components::Transform {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(components::Transform {
                     x: 100.0,
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )
     .result

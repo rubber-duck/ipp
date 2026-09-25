@@ -667,14 +667,14 @@ mod drivers {
         }
         let failure = run(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(c),
-                value: ComponentValue::LinearDriver(LinearDriver {
+            vec![Command::insert_value(
+                EntityRef::Handle(c),
+                ComponentValue::LinearDriver(LinearDriver {
                     source: a,
                     scale: f32::NAN,
                     bias: 0.0,
                 }),
-            }],
+            )],
         )
         .result
         .unwrap_err();

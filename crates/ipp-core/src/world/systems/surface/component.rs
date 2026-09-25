@@ -217,6 +217,25 @@ impl Surface {
         <Self as ComponentLifecycle>::validate(self)
     }
 
+    /// Every item whose style is complete selects an asset of its content's
+    /// kind. Generated and overlay authoring may install structural and named
+    /// fields as separate ordered operations, so incomplete items remain
+    /// non-rendering and unchecked until their properties are present. Only a
+    /// present asset can mismatch, so the other lanes are read only then.
+    fn validate_item_assets(&self) -> Result<(), ErrorReason> {
+        for item in &self.items.values {
+            let Some(asset) = self.properties.asset(&property_name(item.id, "asset")) else {
+                continue;
+            };
+            if validate_content_asset(&item.content, Some(asset)).is_err()
+                && self.style(item.id).is_some()
+            {
+                return Err(ErrorReason::InvalidValue);
+            }
+        }
+        Ok(())
+    }
+
     /// Copy the authoritative effective style for one item.
     pub fn style(&self, id: SurfaceItemId) -> Option<SurfaceItemStyle> {
         Some(SurfaceItemStyle {
@@ -390,6 +409,15 @@ impl ComponentLifecycle for Surface {
         Some(&mut self.properties)
     }
 
+    /// A Surface is validated whole only on insertion, restoration and
+    /// evaluated replacement. The whole check reads every item's style lanes
+    /// by name, O(items) string lookups after each operation on a Surface of
+    /// up to 65,536 items; [`Self::validate_field`] instead checks the same
+    /// rules for what each write changed.
+    fn validates_after_operation() -> bool {
+        false
+    }
+
     fn validate(&self) -> Result<(), ErrorReason> {
         if !self.width.is_finite()
             || !self.height.is_finite()
@@ -399,21 +427,29 @@ impl ComponentLifecycle for Surface {
             return Err(ErrorReason::InvalidValue);
         }
         self.items.validate().map_err(field_error)?;
-        for item in &self.items.values {
-            let Some(style) = self.style(item.id) else {
-                // Generated and overlay authoring may install structural and named
-                // fields as separate ordered operations. Incomplete items remain
-                // non-rendering until their authoritative properties are present.
-                continue;
-            };
-            validate_content_asset(&item.content, style.asset.as_ref())?;
-        }
-        Ok(())
+        self.validate_item_assets()
     }
 
+    /// Each write is checked for the rules it can break: a dimension against
+    /// its range; the items against their structure and their styles' assets;
+    /// property metadata or an asset lane against every item's content. The
+    /// numeric style lanes carry no whole-Surface rule.
     fn validate_field(&self, offset: u32) -> Result<(), ErrorReason> {
-        if crate::components::dynamic_properties::is_dynamic_field(offset) {
-            return Ok(());
+        use crate::components::dynamic_properties::{DYNAMIC_METADATA, is_dynamic_field};
+
+        if offset == DYNAMIC_METADATA {
+            return self.validate_item_assets();
+        }
+        if is_dynamic_field(offset) {
+            let asset = self
+                .properties
+                .descriptor(offset)
+                .is_some_and(|descriptor| descriptor.kind == crate::DynamicPropertyKind::Asset);
+            return if asset {
+                self.validate_item_assets()
+            } else {
+                Ok(())
+            };
         }
         if offset == std::mem::offset_of!(Self, width) as u32 {
             return (self.width.is_finite() && self.width > 0.0)
@@ -425,7 +461,8 @@ impl ComponentLifecycle for Surface {
                 .then_some(())
                 .ok_or(ErrorReason::InvalidValue);
         }
-        self.items.validate().map_err(field_error)
+        self.items.validate().map_err(field_error)?;
+        self.validate_item_assets()
     }
 
     fn resource_demand(
@@ -639,6 +676,103 @@ mod tests {
         ] {
             assert!(!surface.is_removed_item_property(name), "{name}");
         }
+    }
+
+    /// Write one field as staging does; the per-field verdict must match
+    /// complete validation of the unchecked result.
+    fn write(surface: &Surface, offset: u32, value: crate::FieldValue) -> Result<(), ErrorReason> {
+        use crate::components::schema::FieldValue as SchemaValue;
+
+        let schema = match &value {
+            crate::FieldValue::Dynamic(value) => SchemaValue::Dynamic(value.clone()),
+            crate::FieldValue::Bytes(bytes) => SchemaValue::Bytes(bytes.clone()),
+            other => panic!("unexpected Surface write {other:?}"),
+        };
+        let mut unchecked = crate::ComponentValue::Surface(surface.clone());
+        let whole = match unchecked.set_field(offset, schema) {
+            Ok(()) => unchecked.validate_lifecycle(),
+            Err(_) => Err(ErrorReason::InvalidField),
+        };
+
+        let mut staged = crate::ComponentValue::Surface(surface.clone());
+        let field = crate::FieldWrite {
+            offset,
+            value,
+        };
+        let per_field = crate::components::registry::write(&mut staged, &field);
+        assert_eq!(
+            per_field.is_ok(),
+            whole.is_ok(),
+            "{field:?}: {per_field:?} vs {whole:?}"
+        );
+        per_field
+    }
+
+    #[test]
+    fn operations_check_item_assets_only_where_a_write_can_change_them() {
+        use crate::services::asset_management::AssetSource;
+        use crate::services::asset_management::drawing::DRAWING_TYPE;
+        use crate::services::asset_management::font::FONT_TYPE;
+
+        assert!(!<Surface as ComponentLifecycle>::validates_after_operation());
+        let source = |kind| AssetSource {
+            kind,
+            uri: "asset://assets/shape".into(),
+            variant: 0,
+        };
+        let mut surface = Surface::default();
+        let drawing = surface
+            .insert_item(
+                0,
+                SurfaceItemContent::Drawing,
+                SurfaceItemStyle {
+                    asset: Some(source(DRAWING_TYPE)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        surface
+            .insert_item(1, SurfaceItemContent::Label("a".into()), Default::default())
+            .unwrap();
+        surface.validate_complete().unwrap();
+
+        // An asset lane selecting the wrong kind for its item's content.
+        let asset = surface
+            .properties
+            .key(&property_name(drawing, "asset"))
+            .unwrap();
+        let wrong = crate::FieldValue::Dynamic(DynamicValue::Asset(source(FONT_TYPE)));
+        assert_eq!(
+            write(&surface, asset, wrong),
+            Err(ErrorReason::InvalidValue)
+        );
+        let right = crate::FieldValue::Dynamic(DynamicValue::Asset(source(DRAWING_TYPE)));
+        assert_eq!(write(&surface, asset, right), Ok(()));
+
+        // Item content that no longer matches its selected asset.
+        let mut retyped = surface.clone();
+        retyped.items.values[0].content = SurfaceItemContent::Label("b".into());
+        let crate::components::schema::FieldValue::Bytes(items) =
+            crate::components::schema::SchemaField::to_value(&retyped.items)
+        else {
+            unreachable!("Surface items are bytes")
+        };
+        assert_eq!(
+            write(
+                &surface,
+                Surface::items_field(),
+                crate::FieldValue::Bytes(items)
+            ),
+            Err(ErrorReason::InvalidValue)
+        );
+
+        // Numeric lanes carry no whole-Surface rule.
+        let opacity = surface
+            .properties
+            .key(&property_name(drawing, "opacity"))
+            .unwrap();
+        let value = crate::FieldValue::Dynamic(DynamicValue::F32(0.5));
+        assert_eq!(write(&surface, opacity, value), Ok(()));
     }
 
     #[test]

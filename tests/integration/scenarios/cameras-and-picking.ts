@@ -206,7 +206,7 @@ export class CameraFixture {
     check(!outcome.ok, `${name} batch must fail`);
     check(
       outcome.error.operation === 1 || outcome.error.operation === 2,
-      "Debug camera checks or the final invalid handle identify the failure",
+      "Losing the active camera is accepted, so only an invalid camera edit or the final invalid handle fails",
     );
     const created = outcome.aliases.find((entry) => entry.alias === 99);
     check(

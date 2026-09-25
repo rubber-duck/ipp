@@ -303,18 +303,12 @@ fn add(
             alias: 99,
             metadata: Default::default(),
         },
-        Command::InsertComponentValue {
-            entity: EntityRef::Alias(99),
-            value: ComponentValue::Transform(transform),
-        },
+        Command::insert_value(EntityRef::Alias(99), ComponentValue::Transform(transform)),
     ];
     commands.extend(
         values
             .into_iter()
-            .map(|value| Command::InsertComponentValue {
-                entity: EntityRef::Alias(99),
-                value,
-            }),
+            .map(|value| Command::insert_value(EntityRef::Alias(99), value)),
     );
     world.enqueue(ipp_core::Batch {
         id: world.tick() + 1,
@@ -344,10 +338,7 @@ fn replace(world: &mut WorldContext<'_>, id: EntityId, value: ComponentValue) ->
                 entity: EntityRef::Handle(id),
                 component: value.type_id(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Handle(id),
-                value,
-            },
+            Command::insert_value(EntityRef::Handle(id), value),
         ],
     )
 }
@@ -540,13 +531,13 @@ pub fn textures<D: RenderDevice>(
     save(output, "pbr-solid", &solid)?;
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(cube),
-            value: ComponentValue::BaseColorTexture(BaseColorTexture {
+        vec![Command::insert_value(
+            EntityRef::Handle(cube),
+            ComponentValue::BaseColorTexture(BaseColorTexture {
                 source: "fixture:///lit.texture".into(),
                 variant: 0,
             }),
-        }],
+        )],
     )?;
     let stats = deliver!(renderer, host, world, mesh, Some(texture))?;
     assert_eq!(

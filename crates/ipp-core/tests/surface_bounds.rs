@@ -68,24 +68,21 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(Transform {
                     x: 3.0,
                     ..Default::default()
                 }),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::MeshInstance(MeshInstance {
+            ),
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::MeshInstance(MeshInstance {
                     source: "asset://1/1".into(),
                     variant: 0,
                 }),
-            },
+            ),
         ],
     );
     let entity = world.entities()[0].id;
@@ -153,13 +150,13 @@ fn surface_bounds_follow_transform_and_dimension_changes_without_picking() {
     .unwrap();
     apply(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::BoundingGeometry(BoundingGeometry {
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::BoundingGeometry(BoundingGeometry {
                 geometry: authored,
                 ..Default::default()
             }),
-        }],
+        )],
     );
     assert!(
         world.culling_geometry(entity).is_none(),

@@ -380,20 +380,20 @@ pub fn run<D: RenderDevice>(
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Transform(Transform::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::BoundingGeometry(ipp_core::components::BoundingGeometry {
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Transform(Transform::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::BoundingGeometry(ipp_core::components::BoundingGeometry {
                     geometry: ipp_core::systems::geometry::GeometryDefinition::from(
                         ipp_core::systems::geometry::GeometryShape::default(),
                     )
                     .encode()?,
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )?;
     let patch = ipp_core::RenderStatePatch {
@@ -695,24 +695,24 @@ pub fn multiple_worlds<D: RenderDevice>(
                     alias: 1,
                     metadata: Default::default(),
                 },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::Transform(Transform {
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::Transform(Transform {
                         x,
                         ..Default::default()
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::MeshInstance(MeshInstance {
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::MeshInstance(MeshInstance {
                         source: "fixture:///shared.mesh".into(),
                         variant: 0,
                     }),
-                },
-                Command::InsertComponentValue {
-                    entity: EntityRef::Alias(1),
-                    value: ComponentValue::UnlitMaterial(UnlitMaterial::default()),
-                },
+                ),
+                Command::insert_value(
+                    EntityRef::Alias(1),
+                    ComponentValue::UnlitMaterial(UnlitMaterial::default()),
+                ),
             ],
         )?;
         worlds.push(world.id());

@@ -56,14 +56,11 @@ fn create_root(world: &mut WorldContext<'_>, surface: Surface) -> EntityId {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(surface),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(surface)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -323,10 +320,10 @@ fn reordering_preserves_identity_and_handles_are_fenced() {
     .unwrap();
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::GuiRoot(GuiRoot::default()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::GuiRoot(GuiRoot::default()),
+        )],
     )
     .unwrap();
     assert_ne!(incarnation(&world, entity), old_incarnation);
@@ -342,7 +339,7 @@ fn reordering_preserves_identity_and_handles_are_fenced() {
         )
         .is_err()
     );
-    assert_eq!(root(&world, entity).node_count(), 2);
+    assert_eq!(root(&world, entity).nodes().len(), 2);
 }
 
 #[test]
@@ -590,7 +587,6 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
             )
             .unwrap();
         world.update_for_test(0.0).unwrap();
-        assert!(world.gui_input_has_deferred());
         assert_eq!(control(&world, entity, 3), (GuiControlValue::Bool(true), 2));
         assert_eq!(root(&world, entity).next_node_id(), 4);
     }
@@ -640,7 +636,13 @@ fn world_snapshot_preserves_gui_allocator_and_values_but_excludes_input_state() 
         (GuiControlValue::Bool(true), 2)
     );
     assert!(restored.gui_input_focus().is_none());
-    assert!(!restored.gui_input_has_deferred());
+
+    // The routed toggle was not persisted: a further update applies nothing.
+    restored.update_for_test(0.0).unwrap();
+    assert_eq!(
+        control(&restored, restored_entity, 3),
+        (GuiControlValue::Bool(true), 2)
+    );
 
     let restored_incarnation = incarnation(&restored, restored_entity);
     insert(
@@ -696,10 +698,10 @@ fn structural_fields_of_a_live_root_change_only_through_gui_commands() {
     // A new incarnation may carry a complete tree and committed values, as snapshot restore does.
     submit(
         &mut world,
-        vec![Command::InsertComponentValue {
-            entity: EntityRef::Handle(entity),
-            value: ComponentValue::GuiRoot(saved.clone()),
-        }],
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::GuiRoot(saved.clone()),
+        )],
     )
     .unwrap();
     assert_eq!(
@@ -740,10 +742,10 @@ fn surface_content_has_one_owner_while_a_gui_root_is_attached() {
                 alias: 1,
                 metadata: Default::default(),
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(populated.clone()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(populated.clone()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -753,10 +755,10 @@ fn surface_content_has_one_owner_while_a_gui_root_is_attached() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(raw),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(raw),
+                ComponentValue::GuiRoot(GuiRoot::default())
+            )],
         )
         .is_err()
     );
@@ -782,10 +784,10 @@ fn surface_content_has_one_owner_while_a_gui_root_is_attached() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::Surface(populated),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Surface(populated)
+            )],
         )
         .is_err()
     );
@@ -989,12 +991,124 @@ fn removing_a_subtree_removes_node_and_part_rows() {
     )
     .unwrap();
     let root = root(&world, entity);
-    assert_eq!(root.node_count(), 1);
+    assert_eq!(root.nodes().len(), 1);
     assert!(root.part_state().is_empty());
     assert!(world.validate_gui_node_handle(&button, SESSION).is_err());
     // Identities are never reused after removal.
     assert!(insert(&mut world, entity, 2, Some(1), column(), Default::default()).is_err());
     insert(&mut world, entity, 4, Some(1), column(), Default::default()).unwrap();
+}
+
+/// A root validates each command's writes for what they change rather than
+/// the whole root after every operation; invalid edits are still rejected
+/// and leave the root as it was.
+#[test]
+fn invalid_gui_commands_are_rejected_without_changing_the_root() {
+    let (mut host, world_id) = host_world();
+    let mut world = host.world_mut(world_id).unwrap();
+    let entity = create_root(&mut world, Surface::default());
+    let root_incarnation = incarnation(&world, entity);
+    insert(&mut world, entity, 1, None, column(), Default::default()).unwrap();
+    let slider = insert(
+        &mut world,
+        entity,
+        2,
+        Some(1),
+        slider(0.5, 1.0),
+        Default::default(),
+    )
+    .unwrap();
+    let removed = insert(
+        &mut world,
+        entity,
+        3,
+        Some(1),
+        GuiNodeData::Text("x".into()),
+        GuiNodeStyle {
+            theme: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let background = GuiPartId::base(GuiPrimitivePart::Background);
+    edit(
+        &mut world,
+        GuiCommand::UpdateTheme {
+            entity,
+            root_incarnation,
+            theme: 1,
+            part: background,
+            patch: GuiPartPatch::default().set(
+                GuiPartProperty::Color,
+                DynamicValue::Vec4([0.1, 0.2, 0.3, 1.0]),
+            ),
+        },
+    )
+    .unwrap();
+    edit(
+        &mut world,
+        GuiCommand::RemoveNode {
+            handle: removed,
+        },
+    )
+    .unwrap();
+    let before = root(&world, entity);
+
+    let rejected = [
+        // A parent link to a node the tree does not hold.
+        GuiCommand::InsertNode {
+            entity,
+            root_incarnation,
+            id: GuiNodeId(4),
+            parent: Some(GuiNodeId(99)),
+            index: 0,
+            data: column(),
+            values: GuiNodeDataRow::default(),
+            style: GuiNodeStyle::default(),
+        },
+        // A move under itself would form a cycle.
+        GuiCommand::MoveNode {
+            handle: slider,
+            parent: Some(GuiNodeId(2)),
+            index: 0,
+        },
+        // Out-of-range style and data row values.
+        GuiCommand::UpdateNode {
+            handle: slider,
+            patch: GuiNodePatch {
+                opacity: Some(1.5),
+                ..Default::default()
+            },
+        },
+        GuiCommand::SetControlValue {
+            handle: slider,
+            expected_revision: 1,
+            value: GuiControlValue::Scalar(5.0),
+        },
+        // An out-of-range theme part value.
+        GuiCommand::UpdateTheme {
+            entity,
+            root_incarnation,
+            theme: 1,
+            part: background,
+            patch: GuiPartPatch::default().set(GuiPartProperty::Opacity, DynamicValue::F32(3.0)),
+        },
+        // Part rows keyed to a removed node, and theme-only motion on a node.
+        GuiCommand::UpdatePart {
+            handle: removed,
+            part: GuiPrimitivePart::Background,
+            patch: GuiPartPatch::default().set(GuiPartProperty::Opacity, DynamicValue::F32(0.5)),
+        },
+        GuiCommand::UpdatePart {
+            handle: slider,
+            part: GuiPrimitivePart::Background,
+            patch: GuiPartPatch::default().set(GuiPartProperty::Duration, DynamicValue::F32(1.0)),
+        },
+    ];
+    for command in rejected {
+        assert!(edit(&mut world, command.clone()).is_err(), "{command:?}");
+        assert_eq!(root(&world, entity), before, "{command:?}");
+    }
 }
 
 #[test]
@@ -1186,14 +1300,14 @@ fn overlays_override_gui_properties_but_not_gui_structure_or_raw_items() {
                     classes: Vec::new(),
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(Surface::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(Surface::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]
@@ -1353,10 +1467,7 @@ fn raw_items_hidden_by_an_overlay_block_gui_ownership() {
                     classes: Vec::new(),
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(raw),
-            },
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Surface(raw)),
         ],
     )
     .unwrap()[0]
@@ -1385,10 +1496,10 @@ fn raw_items_hidden_by_an_overlay_block_gui_ownership() {
     assert!(
         submit(
             &mut world,
-            vec![Command::InsertComponentValue {
-                entity: EntityRef::Handle(entity),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            }],
+            vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiRoot(GuiRoot::default())
+            )],
         )
         .is_err()
     );
@@ -1416,14 +1527,14 @@ fn gui_properties_are_validated_on_field_and_overlay_writes() {
                     classes: Vec::new(),
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::Surface(Surface::default()),
-            },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(1),
-                value: ComponentValue::GuiRoot(GuiRoot::default()),
-            },
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface(Surface::default()),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
         ],
     )
     .unwrap()[0]

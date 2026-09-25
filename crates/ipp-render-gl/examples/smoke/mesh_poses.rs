@@ -222,10 +222,7 @@ pub fn run<D: RenderDevice>(
         sz: 0.6,
         ..Default::default()
     };
-    let authored = |entity, value| Command::InsertComponentValue {
-        entity: EntityRef::Handle(entity),
-        value,
-    };
+    let authored = |entity, value| Command::insert_value(EntityRef::Handle(entity), value);
     apply(
         &mut world,
         vec![
@@ -261,10 +258,7 @@ pub fn run<D: RenderDevice>(
                     ..Default::default()
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(50),
-                value: ComponentValue::Transform(affine),
-            },
+            Command::insert_value(EntityRef::Alias(50), ComponentValue::Transform(affine)),
             Command::Create {
                 alias: 51,
                 metadata: EntityMetadata {
@@ -272,15 +266,15 @@ pub fn run<D: RenderDevice>(
                     ..Default::default()
                 },
             },
-            Command::InsertComponentValue {
-                entity: EntityRef::Alias(51),
-                value: ComponentValue::Transform(Transform {
+            Command::insert_value(
+                EntityRef::Alias(51),
+                ComponentValue::Transform(Transform {
                     x: 0.8 * 3.0f32.sqrt() / 2.0 - 0.3,
                     y: 0.15,
                     z: -0.4 - 0.6 * 3.0f32.sqrt() / 2.0,
                     ..Default::default()
                 }),
-            },
+            ),
         ],
     )?;
     let parent = world.lookup_id("affine-parent").unwrap();

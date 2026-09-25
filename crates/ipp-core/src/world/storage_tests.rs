@@ -34,14 +34,14 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
                             alias,
                             metadata: EntityMetadata::default(),
                         },
-                        Command::InsertComponentValue {
-                            entity: EntityRef::Alias(alias),
-                            value: ComponentValue::CustomMaterial(CustomMaterial {
+                        Command::insert_value(
+                            EntityRef::Alias(alias),
+                            ComponentValue::CustomMaterial(CustomMaterial {
                                 source: format!("file:///materials/{alias}.shader"),
                                 properties: properties.clone(),
                                 ..CustomMaterial::default()
                             }),
-                        },
+                        ),
                         Command::InsertComponent {
                             entity: EntityRef::Alias(alias),
                             component: ComponentValue::SCALAR,

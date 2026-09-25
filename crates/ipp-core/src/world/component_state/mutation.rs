@@ -75,7 +75,7 @@ impl WorldMutationState {
                         }
                     }
                     value.validate_lifecycle()?;
-                    self.insert_component_value(components, id, value.clone())?;
+                    self.insert_component_value(components, id, ComponentValue::clone(value))?;
                 }
                 Command::SetField {
                     entity,

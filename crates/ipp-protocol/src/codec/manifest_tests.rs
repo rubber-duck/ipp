@@ -2688,7 +2688,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         snapshot.extend(2u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.extend(0u32.to_le_bytes());
-        snapshot.push(0);
+        snapshot.push(8);
         snapshot.push(0);
         snapshot.push(0);
         snapshot.extend(0u32.to_le_bytes());
@@ -2696,6 +2696,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
             snapshot.extend(bound.to_le_bytes());
         }
         snapshot.extend([1, 1, 1, 0]);
+        snapshot.push(1);
+        for lane in [0.0f32, 2.0, 0.0, 4.0] {
+            snapshot.extend(lane.to_le_bytes());
+        }
         snapshot.extend(2u32.to_le_bytes());
         snapshot.extend(1u32.to_le_bytes());
         snapshot.push(4);
@@ -2709,6 +2713,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         }
         snapshot.extend([1, 1, 1]);
         snapshot.push(1);
+        snapshot.push(0);
         snapshot.push(0);
         snapshot.push(1);
         snapshot.extend(2u32.to_le_bytes());
@@ -2725,7 +2730,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                         ipp_core::GuiSemanticNode {
                             id: ipp_core::GuiNodeId(1),
                             parent: None,
-                            role: ipp_core::GuiSemanticRole::Container,
+                            role: ipp_core::GuiSemanticRole::ScrollView,
                             name: None,
                             value: ipp_core::GuiControlValue::None,
                             revision: 0,
@@ -2734,6 +2739,10 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             visible: true,
                             available: true,
                             actions: Vec::new(),
+                            scroll: Some(ipp_core::GuiSemanticScroll {
+                                offset: [0.0, 2.0],
+                                max_offset: [0.0, 4.0],
+                            }),
                         },
                         ipp_core::GuiSemanticNode {
                             id: ipp_core::GuiNodeId(2),
@@ -2747,6 +2756,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                             visible: true,
                             available: true,
                             actions: vec![ipp_core::GuiSemanticActionKind::Press],
+                            scroll: None,
                         },
                     ],
                     focused: Some(ipp_core::GuiSemanticFocus {

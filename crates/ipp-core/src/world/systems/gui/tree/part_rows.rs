@@ -22,12 +22,16 @@ use crate::{DynamicPropertyKind, DynamicValue, ErrorReason};
 use std::collections::BTreeMap;
 
 /// Base parts in part-index order.
-pub const GUI_BASE_PARTS: [GuiPrimitivePart; 5] = [
+pub const GUI_BASE_PARTS: [GuiPrimitivePart; 9] = [
     GuiPrimitivePart::Background,
     GuiPrimitivePart::Fill,
     GuiPrimitivePart::Label,
     GuiPrimitivePart::Icon,
     GuiPrimitivePart::FocusRing,
+    GuiPrimitivePart::ScrollTrackX,
+    GuiPrimitivePart::ScrollThumbX,
+    GuiPrimitivePart::ScrollTrackY,
+    GuiPrimitivePart::ScrollThumbY,
 ];
 
 /// Index of a base part in [`GUI_BASE_PARTS`].
@@ -38,6 +42,10 @@ pub const fn base_part_index(part: GuiPrimitivePart) -> u32 {
         GuiPrimitivePart::Label => 2,
         GuiPrimitivePart::Icon => 3,
         GuiPrimitivePart::FocusRing => 4,
+        GuiPrimitivePart::ScrollTrackX => 5,
+        GuiPrimitivePart::ScrollThumbX => 6,
+        GuiPrimitivePart::ScrollTrackY => 7,
+        GuiPrimitivePart::ScrollThumbY => 8,
     }
 }
 

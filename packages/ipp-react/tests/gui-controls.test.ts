@@ -271,6 +271,10 @@ test("themes compile to root theme part rows without resolving interaction", () 
     "label",
     "icon",
     "focusRing",
+    "scrollTrackX",
+    "scrollThumbX",
+    "scrollTrackY",
+    "scrollThumbY",
   ]);
 });
 

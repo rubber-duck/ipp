@@ -632,6 +632,9 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         const lead = (a: number, ...rest: number[]) =>
           rest.every((other) => a > other + 80);
         if (lead(r, b) && lead(g, b) && Math.abs(r - g) < 40) return "yellow";
+        if (lead(r, g) && lead(b, g) && Math.abs(r - b) < 40) return "magenta";
+        if (lead(g, r) && lead(b, r) && Math.abs(g - b) < 40) return "cyan";
+        if (Math.min(r, g, b) > 200) return "white";
         if (lead(r, g, b)) return "red";
         if (lead(g, r, b)) return "green";
         if (lead(b, r, g)) return "blue";
@@ -693,6 +696,93 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         narrow: "blue",
         low: "gray",
       });
+
+      // The outer scroll bar column, 6 px rows at x 235 inside its
+      // 3.85..4 track: the thumb rows are the magenta (or pressed white)
+      // run, whose extent follows the committed offset over the capacity.
+      const rows = Array.from({ length: 30 }, (_, row) => 3 + row * 6);
+      const thumbRows = async (label: string, thumb: string) => {
+        const frame = await env.page.evaluate(
+          async ({ url, points }) => (await import(url)).scrollFrame(points),
+          { url: fixture, points: rows.map((y) => [235, y]) },
+        );
+        assert.equal(frame.failedDrawCalls, 0);
+        await writeFile(
+          resolve(env.evidence.directory, `${label}.png`),
+          Buffer.from(
+            frame.dataUrl.slice("data:image/png;base64,".length),
+            "base64",
+          ),
+        );
+        const hues = frame.samples.map((rgb: Rgb) => hue(rgb));
+        env.evidence.record(label, hues);
+        // Rows averaging across a thumb end blend both colours; every other
+        // row is track or thumb.
+        const blended = hues.filter(
+          (colour: string) => colour !== thumb && colour !== "cyan",
+        );
+        assert.ok(
+          blended.length <= 2 &&
+            blended.every((colour: string) => colour.startsWith("other")),
+          `${label}: bar column is not only track and thumb: ${hues.join(",")}`,
+        );
+        const covered = rows.filter((_, index) => hues[index] === thumb);
+        return [covered[0], covered.at(-1)] as const;
+      };
+      // Expect the thumb run to cover [start, end) in pixels: rows sample
+      // every 6 px and average 7 px, so run ends land within 10 px.
+      const expectThumb = async (
+        label: string,
+        start: number,
+        end: number,
+        thumb = "magenta",
+      ) => {
+        const deadline = performance.now() + 5_000;
+        let span = await thumbRows(label, thumb);
+        const near = ([first, last]: readonly [
+          number | undefined,
+          number | undefined,
+        ]) =>
+          first !== undefined &&
+          last !== undefined &&
+          Math.abs(first - start) <= 10 &&
+          Math.abs(last - end) <= 10;
+        while (!near(span) && performance.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          span = await thumbRows(label, thumb);
+        }
+        assert.ok(
+          near(span),
+          `${label}: thumb rows ${span} not ${start}..${end}`,
+        );
+      };
+
+      // Outer offset 1 of 2: the 108 px thumb starts half way along its
+      // 72 px travel.
+      await expectThumb("bar-scrolled", 36, 144);
+
+      // Dragging the thumb 36 px down scrolls the outer view by one more
+      // unit with the pressed skin while held; the capture holds when the
+      // pointer leaves the bar.
+      await env.page.mouse.move(...page(235, 90));
+      await env.page.mouse.down();
+      await env.page.mouse.move(...page(150, 126), { steps: 6 });
+      await expectThumb("bar-thumb-pressed", 72, 180, "white");
+      await env.page.mouse.up();
+      await expectThumb("bar-thumb-dragged", 72, 180);
+      // Outer offset 2 leaves the narrow blue block above `narrow` and the
+      // yellow block under the lower samples.
+      await expectFrame("bar-content-after-drag", {
+        right: "gray",
+        middle: "gray",
+        narrow: "yellow",
+        low: "yellow",
+      });
+
+      // A track press above the thumb pages back by one viewport, clamped
+      // at the start.
+      await env.page.mouse.click(...page(235, 20));
+      await expectThumb("bar-track-paged", 0, 108);
 
       const canvasCount = await env.page.evaluate(
         async (url) => (await import(url)).closeScrollCanvas(),

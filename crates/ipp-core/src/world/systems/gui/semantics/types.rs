@@ -26,6 +26,8 @@ pub enum GuiSemanticRole {
     Slider,
     /// Single-line text input.
     TextInput,
+    /// Scrolling viewport over its content.
+    ScrollView,
 }
 
 /// Supported headless action kinds for one semantic node.
@@ -70,6 +72,18 @@ pub struct GuiSemanticNode {
     pub available: bool,
     /// Supported headless actions.
     pub actions: Vec<GuiSemanticActionKind>,
+    /// Committed scroll position of an evaluated ScrollView; None for other
+    /// roles and for ScrollViews layout has not evaluated.
+    pub scroll: Option<GuiSemanticScroll>,
+}
+
+/// Committed scroll position of one ScrollView in its local logical units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuiSemanticScroll {
+    /// Committed offset per axis.
+    pub offset: [f32; 2],
+    /// Largest offset per axis; zero where the content fits.
+    pub max_offset: [f32; 2],
 }
 
 /// Observed keyboard focus for one semantic snapshot.
@@ -119,6 +133,7 @@ impl GuiSemanticTree {
 /// Role for one node kind.
 pub fn role_for_data(data: &GuiNodeData) -> GuiSemanticRole {
     match data {
+        GuiNodeData::Container(crate::GuiContainerKind::ScrollView) => GuiSemanticRole::ScrollView,
         GuiNodeData::Container(_) => GuiSemanticRole::Container,
         GuiNodeData::Text(_) => GuiSemanticRole::Text,
         GuiNodeData::Drawing => GuiSemanticRole::Drawing,
@@ -164,6 +179,7 @@ pub fn actions_for_role(role: GuiSemanticRole) -> Vec<GuiSemanticActionKind> {
             vec![GuiSemanticActionKind::SetText, GuiSemanticActionKind::Focus]
         }
         GuiSemanticRole::Container
+        | GuiSemanticRole::ScrollView
         | GuiSemanticRole::Text
         | GuiSemanticRole::Drawing
         | GuiSemanticRole::Image => Vec::new(),

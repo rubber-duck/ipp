@@ -29,6 +29,7 @@ import type {
   GuiSemanticActionRequest,
   GuiSemanticFocus,
   GuiSemanticNode,
+  GuiSemanticScroll,
   GuiSemanticSnapshotQuery,
   GuiSemanticTree,
   GuiTree,
@@ -1330,6 +1331,7 @@ const GUI_SEMANTIC_ROLES = [
   "checkbox",
   "slider",
   "textInput",
+  "scrollView",
 ] as const;
 
 const GUI_SEMANTIC_ACTION_KINDS = [
@@ -1377,6 +1379,14 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
     if (action === undefined) fail("GUI semantic action kind");
     actions.push(action);
   }
+  const scrollTag = r.u8();
+  let scroll: GuiSemanticScroll | undefined;
+  if (scrollTag === 1)
+    scroll = {
+      offset: [r.f32(), r.f32()],
+      maxOffset: [r.f32(), r.f32()],
+    };
+  else if (scrollTag !== 0) fail("GUI semantic scroll option");
   return {
     id,
     ...(parentTag === 0 ? {} : { parent: parentTag }),
@@ -1389,6 +1399,7 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
     visible,
     available,
     actions,
+    ...(scroll === undefined ? {} : { scroll }),
   };
 }
 

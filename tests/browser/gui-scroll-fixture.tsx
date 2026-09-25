@@ -13,6 +13,7 @@ import {
   GuiRoot,
   ScrollView,
   SizedBox,
+  type GuiControlTheme,
 } from "../../packages/ipp-react/src/gui.js";
 import {
   IppCanvas,
@@ -35,6 +36,20 @@ export const SCROLL_COLORS = {
   narrow: [0.1, 0.1, 0.8, 1],
   last: [0.8, 0.8, 0.1, 1],
 } as const;
+
+/** Opaque scroll bar skin on the outer ScrollView, so frames classify the
+ * bar column by colour: a cyan track, a magenta thumb that turns white
+ * while pressed. */
+const scrollBarTheme: GuiControlTheme = {
+  name: "scroll-bars",
+  parts: {
+    scrollTrackY: { base: { color: [0.1, 0.8, 0.8, 1], opacity: 1 } },
+    scrollThumbY: {
+      base: { color: [0.8, 0.1, 0.8, 1], opacity: 1 },
+      pressed: { color: [0.9, 0.9, 0.9, 1] },
+    },
+  },
+};
 
 let root: Root | undefined;
 let handle: IppCanvasHandle | undefined;
@@ -84,7 +99,8 @@ async function activateCamera(next: IppCanvasHandle): Promise<void> {
  * An outer 4x3 ScrollView over 5 units of content: an inner 4x2 ScrollView
  * over 3 units (a 2-unit red block then a 1-unit green block), a narrow
  * 2x2 blue block at the left and a 1-unit yellow block. The outer view can
- * scroll by 2 and the inner view by 1.
+ * scroll by 2 and the inner view by 1. The outer vertical scroll bar spans
+ * x 3.85..4 with a 1.8-unit thumb travelling 1.2 units over that capacity.
  */
 function Application({
   runtime,
@@ -126,6 +142,7 @@ function Application({
                 width={4}
                 height={3}
                 backgroundColor={SCROLL_COLORS.outer}
+                theme={scrollBarTheme}
               >
                 <Column width={4}>
                   <ScrollView

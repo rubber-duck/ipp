@@ -1656,6 +1656,7 @@ fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
                 ipp_core::GuiSemanticActionKind::SetText,
                 ipp_core::GuiSemanticActionKind::Focus,
             ],
+            scroll: None,
         }],
         focused: Some(GuiSemanticFocus {
             id: ipp_core::GuiNodeId(5),
@@ -2197,7 +2198,7 @@ fn gui_edit_style_and_values_follow_the_row_layouts() {
     part_index_out_of_range.extend_from_slice(&42u64.to_le_bytes());
     part_index_out_of_range.extend_from_slice(&3u64.to_le_bytes());
     part_index_out_of_range.extend_from_slice(&11u32.to_le_bytes());
-    part_index_out_of_range.push(65);
+    part_index_out_of_range.push(117);
     part_index_out_of_range.extend(part_patch([0; 3], [0; 3], &[]));
     assert!(decode(part_index_out_of_range).is_err());
 
@@ -2237,6 +2238,6 @@ fn gui_edit_style_and_values_follow_the_row_layouts() {
         })
     );
     // Unknown base parts and mask bits past the 23 part properties are malformed.
-    assert!(decode(part(5, [0; 3], [0; 3], &[])).is_err());
+    assert!(decode(part(9, [0; 3], [0; 3], &[])).is_err());
     assert!(decode(part(3, [0, 0, 0x80], [0, 0, 0], &[])).is_err());
 }

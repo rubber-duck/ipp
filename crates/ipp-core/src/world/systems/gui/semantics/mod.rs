@@ -38,11 +38,12 @@ pub mod snapshot;
 pub mod types;
 
 pub use actions::{action_command, is_stale_revision};
-pub use snapshot::{build_tree, build_tree_with_focus, changed_nodes, effect_refreshes_semantics};
+pub use snapshot::{build_tree, build_tree_with_input, changed_nodes, effect_refreshes_semantics};
 pub use types::{
     GuiSemanticAction, GuiSemanticActionCommand, GuiSemanticActionError, GuiSemanticActionKind,
     GuiSemanticActionRequest, GuiSemanticFocus, GuiSemanticNode, GuiSemanticRole,
-    GuiSemanticSnapshotQuery, GuiSemanticTree, actions_for_role, name_for_data, role_for_data,
+    GuiSemanticScroll, GuiSemanticSnapshotQuery, GuiSemanticTree, actions_for_role, name_for_data,
+    role_for_data,
 };
 
 #[cfg(test)]

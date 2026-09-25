@@ -137,6 +137,7 @@ fn write_semantic_node(w: &mut Writer, node: &GuiSemanticNode) -> Result<(), Pro
         GuiSemanticRole::Checkbox => 5,
         GuiSemanticRole::Slider => 6,
         GuiSemanticRole::TextInput => 7,
+        GuiSemanticRole::ScrollView => 8,
     })?;
     match &node.name {
         None => w.u8(0)?,
@@ -179,6 +180,15 @@ fn write_semantic_node(w: &mut Writer, node: &GuiSemanticNode) -> Result<(), Pro
             GuiSemanticActionKind::SetText => 3,
             GuiSemanticActionKind::Focus => 4,
         })?;
+    }
+    match &node.scroll {
+        None => w.u8(0)?,
+        Some(scroll) => {
+            w.u8(1)?;
+            for lane in scroll.offset.into_iter().chain(scroll.max_offset) {
+                w.f32(lane)?;
+            }
+        }
     }
     Ok(())
 }

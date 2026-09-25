@@ -356,6 +356,7 @@ fn cursors_build_interaction_per_node_from_frozen_sources() {
             },
             session: 11,
         }),
+        ..GuiSkinCursors::default()
     };
     let hovered = cursors.interaction_for(skin_target(entity, 2), true);
     assert!(hovered.hovered && !hovered.pressed && !hovered.focused);
@@ -660,6 +661,7 @@ fn paint_keeps_order_identities_and_focus_border() {
             },
             session: 3,
         }),
+        ..GuiSkinCursors::default()
     };
     let skinned = skinned_primitives_for_view(&view, &root, &cursors, &MapResolver::empty());
     assert_eq!(skinned.len(), base.len() + 1);

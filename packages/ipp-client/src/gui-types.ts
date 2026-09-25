@@ -141,7 +141,11 @@ export type GuiBasePart =
   | "fill"
   | "label"
   | "icon"
-  | "focusRing";
+  | "focusRing"
+  | "scrollTrackX"
+  | "scrollThumbX"
+  | "scrollTrackY"
+  | "scrollThumbY";
 
 /** Interaction state qualifying a skin part. */
 export type GuiPartState = "idle" | "hovered" | "pressed" | "disabled";
@@ -166,6 +170,10 @@ export const GUI_BASE_PARTS: readonly GuiBasePart[] = [
   "label",
   "icon",
   "focusRing",
+  "scrollTrackX",
+  "scrollThumbX",
+  "scrollTrackY",
+  "scrollThumbY",
 ];
 
 const GUI_PART_STATES: readonly GuiPartState[] = [
@@ -179,7 +187,7 @@ const GUI_PART_STATES: readonly GuiPartState[] = [
  * each of two variants. */
 export const GUI_PART_QUALIFIERS = 13;
 
-/** Dense wire index of one part identity, below 65. */
+/** Dense wire index of one part identity, below 117. */
 export function guiPartIndex(id: GuiPartId): number {
   const base = GUI_BASE_PARTS.indexOf(id.part);
   if (base < 0) throw new RangeError(`Unknown GUI base part ${id.part}`);
@@ -704,7 +712,8 @@ export type GuiSemanticRole =
   | "button"
   | "checkbox"
   | "slider"
-  | "textInput";
+  | "textInput"
+  | "scrollView";
 
 /** Machine-actionable capability advertised by one snapshot node. */
 export type GuiSemanticActionKind =
@@ -727,6 +736,15 @@ export interface GuiSemanticNode {
   visible: boolean;
   available: boolean;
   actions: GuiSemanticActionKind[];
+  /** Committed scroll position of an evaluated ScrollView, in its local
+   * logical units. */
+  scroll?: GuiSemanticScroll;
+}
+
+/** Committed offset and largest offset of one ScrollView per axis. */
+export interface GuiSemanticScroll {
+  offset: [number, number];
+  maxOffset: [number, number];
 }
 
 /** Observed input focus within the snapshotted panel, if any. */

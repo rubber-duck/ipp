@@ -611,4 +611,77 @@ async function exerciseGuiScrolling(
     atEdge.unhandled?.kind === "scrollUnconsumed",
     `A wheel at every ScrollView edge was handled: ${JSON.stringify(atEdge.unhandled)}`,
   );
+
+  // Scroll bars: the outer view's vertical bar spans x 3.85..4 with a
+  // 1.8-unit thumb travelling 1.2 units over its capacity of 2. Semantic
+  // snapshots report both ScrollViews' positions.
+  const scrollOf = async (id: number) => {
+    const tree = await client.semanticSnapshot({ entity });
+    const node = tree.nodes.find((candidate) => candidate.id === id);
+    expect(
+      node?.role === "scrollView" && node.scroll !== undefined,
+      `ScrollView ${id} has no semantic scroll position`,
+    );
+    return node.scroll;
+  };
+  let outer = await scrollOf(2);
+  const inner = await scrollOf(4);
+  expect(
+    outer.offset[1] === 0 &&
+      outer.maxOffset[1] === 2 &&
+      inner.maxOffset[1] === 1,
+    `Unexpected scroll positions: ${JSON.stringify({ outer, inner })}`,
+  );
+  const press = async (
+    pointer: number,
+    points: readonly [number, number][],
+  ): Promise<void> => {
+    const [first, ...rest] = points;
+    const replies = [
+      await client.submitGuiInput({
+        kind: "pointerDown",
+        pointer,
+        position: first!,
+        button: "primary",
+      }),
+    ];
+    for (const position of rest)
+      replies.push(
+        await client.submitGuiInput({ kind: "pointerMove", pointer, position }),
+      );
+    replies.push(
+      await client.submitGuiInput({
+        kind: "pointerUp",
+        pointer,
+        position: points.at(-1)!,
+        button: "primary",
+      }),
+    );
+    expect(
+      replies.every((reply) => reply.unhandled === undefined),
+      "A scroll bar press was reported unhandled",
+    );
+  };
+  // A track press below the thumb pages by the 3-unit viewport, clamped
+  // to the end.
+  await press(7, [[3.92, 2.5]]);
+  outer = await scrollOf(2);
+  expect(outer.offset[1] === 2, `Track paging missed: ${outer.offset}`);
+  // Dragging the thumb (now at y 1.2..3) up by its whole travel returns
+  // the view to the start, with the pointer leaving the bar on the way.
+  await press(8, [
+    [3.92, 2],
+    [2, 1.4],
+    [2, 0.8],
+  ]);
+  outer = await scrollOf(2);
+  expect(
+    Math.abs(outer.offset[1]) < 1e-4,
+    `Thumb drag missed: ${outer.offset}`,
+  );
+  // Neither bar press toggled the checkboxes underneath.
+  expect(
+    !(await checked(7)) && (await checked(9)),
+    "A scroll bar press reached content under the bar",
+  );
 }

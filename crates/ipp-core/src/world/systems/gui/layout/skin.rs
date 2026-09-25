@@ -120,6 +120,20 @@ pub struct GuiSkinCursors {
     pub pressed: BTreeSet<GuiInputTarget>,
     /// Full-fenced keyboard focus.
     pub focus: Option<GuiInputFocus>,
+    /// Committed offsets and bar interaction of ScrollViews that scrolled or
+    /// whose scroll bars a pointer hovers or presses.
+    pub scroll_bars: BTreeMap<GuiInputTarget, GuiScrollBarCursor>,
+}
+
+/// Scroll bar paint inputs of one ScrollView.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GuiScrollBarCursor {
+    /// Committed scroll offset in local logical units.
+    pub offset: [f32; 2],
+    /// Scroll bar part a pointer hovers.
+    pub hovered: Option<GuiPrimitivePart>,
+    /// Scroll bar part a pointer presses or drags.
+    pub pressed: Option<GuiPrimitivePart>,
 }
 
 impl GuiSkinCursors {
@@ -131,6 +145,21 @@ impl GuiSkinCursors {
             pressed: self.pressed.contains(&target),
             focused: self.focus.is_some_and(|focus| focus.target == target),
         }
+    }
+
+    /// Project transient cursors onto one part of one exact live target:
+    /// scroll bar parts follow their own hover and press and disable while
+    /// they cannot scroll; every other part shares the node's interaction.
+    pub fn interaction_for_part(
+        &self,
+        target: GuiInputTarget,
+        part: GuiPrimitivePart,
+        node: &GuiEvaluatedNode,
+    ) -> GuiInteractionState {
+        if super::scroll_bars::scroll_bar_axis(part).is_some() {
+            return super::scroll_bars::scroll_bar_interaction(self, target, part, node);
+        }
+        self.interaction_for(target, node.enabled)
     }
 }
 
@@ -829,7 +858,17 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
     }
 
     let mut painted = Vec::new();
+    // Scroll bars paint above their ScrollView's whole subtree: each waits
+    // here, innermost last, until painter order leaves that subtree.
+    let mut bars: Vec<(u32, Vec<SurfaceRenderPrimitive>)> = Vec::new();
     for (index, node) in view.nodes.iter().enumerate() {
+        while bars.last().is_some_and(|(depth, _)| *depth >= node.depth) {
+            painted.extend(
+                bars.pop()
+                    .map(|(_, primitives)| primitives)
+                    .unwrap_or_default(),
+            );
+        }
         let eligible = index < MAX_SKIN_NODES
             && node.depth as usize <= MAX_SKIN_DEPTH
             && node.available
@@ -911,6 +950,15 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
                 painted.push(focus);
             }
         }
+        if eligible && node.viewport.is_some() {
+            bars.push((
+                node.depth,
+                super::scroll_bars::scroll_bar_primitives(view, root, node, cursors, overrides),
+            ));
+        }
+    }
+    while let Some((_, primitives)) = bars.pop() {
+        painted.extend(primitives);
     }
     for primitives in by_node.into_values() {
         painted.extend(primitives);
@@ -973,7 +1021,12 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 GuiPrimitivePart::Background => has_background,
                 GuiPrimitivePart::Fill => has_fill,
                 GuiPrimitivePart::Icon => has_icon,
-                GuiPrimitivePart::Label | GuiPrimitivePart::FocusRing => false,
+                GuiPrimitivePart::Label
+                | GuiPrimitivePart::FocusRing
+                | GuiPrimitivePart::ScrollTrackX
+                | GuiPrimitivePart::ScrollThumbX
+                | GuiPrimitivePart::ScrollTrackY
+                | GuiPrimitivePart::ScrollThumbY => false,
             };
             if !present && synthesis.part(part).is_some() {
                 parts.push(GuiSkinnedPart {
@@ -996,6 +1049,22 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 node,
             });
         }
+        for axis in 0..2 {
+            if !super::scroll_bars::scroll_bar_shown(root, node, axis) {
+                continue;
+            }
+            let (track, thumb) = super::scroll_bars::scroll_bar_parts(axis);
+            for part in [track, thumb] {
+                parts.push(GuiSkinnedPart {
+                    id: GuiPrimitiveId {
+                        root_incarnation: view.root_incarnation,
+                        node: node.node,
+                        part,
+                    },
+                    node,
+                });
+            }
+        }
     }
     parts
 }
@@ -1013,7 +1082,12 @@ impl SyntheticControlPlan {
             GuiPrimitivePart::Background => self.background.as_ref(),
             GuiPrimitivePart::Fill => self.fill.as_ref(),
             GuiPrimitivePart::Icon => self.icon.as_ref(),
-            GuiPrimitivePart::Label | GuiPrimitivePart::FocusRing => None,
+            GuiPrimitivePart::Label
+            | GuiPrimitivePart::FocusRing
+            | GuiPrimitivePart::ScrollTrackX
+            | GuiPrimitivePart::ScrollThumbX
+            | GuiPrimitivePart::ScrollTrackY
+            | GuiPrimitivePart::ScrollThumbY => None,
         }
     }
 }

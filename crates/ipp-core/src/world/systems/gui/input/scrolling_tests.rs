@@ -628,7 +628,8 @@ fn pure_scroll_refreshes_scrolled_paint_without_reflow() {
         view.remeasure_count,
     );
     let (model_before, primitive_before, items_before) = paint_observation(&mut fixture);
-    assert_eq!(items_before.len(), 4);
+    // Four backgrounds plus a vertical track and thumb per overflowing view.
+    assert_eq!(items_before.len(), 8);
 
     scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 4.0]);
     assert_eq!(

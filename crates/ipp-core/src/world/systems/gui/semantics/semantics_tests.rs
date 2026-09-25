@@ -366,15 +366,25 @@ fn focus_observed_only_for_present_nodes() {
     let focus = GuiSemanticFocus {
         id: GuiNodeId(5),
     };
-    let tree =
-        build_tree_with_focus(&inspect_fixture(), &view_fixture(0.0), Some(focus)).expect("tree");
+    let tree = build_tree_with_input(
+        &inspect_fixture(),
+        &view_fixture(0.0),
+        Some(focus),
+        &std::collections::BTreeMap::new(),
+    )
+    .expect("tree");
     assert_eq!(tree.focused, Some(focus));
     // Focus on an absent node never fabricates a target.
     let stale = GuiSemanticFocus {
         id: GuiNodeId(9),
     };
-    let tree =
-        build_tree_with_focus(&inspect_fixture(), &view_fixture(0.0), Some(stale)).expect("tree");
+    let tree = build_tree_with_input(
+        &inspect_fixture(),
+        &view_fixture(0.0),
+        Some(stale),
+        &std::collections::BTreeMap::new(),
+    )
+    .expect("tree");
     assert!(tree.focused.is_none());
     // Focus-only moves never appear as value changes.
     let before = build_tree(&inspect_fixture(), &view_fixture(0.0)).expect("before");

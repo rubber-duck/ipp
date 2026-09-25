@@ -132,6 +132,14 @@ pub enum GuiPrimitivePart {
     Icon,
     /// Focus indicator painted independently of the background.
     FocusRing,
+    /// ScrollView horizontal scroll bar track.
+    ScrollTrackX,
+    /// ScrollView horizontal scroll bar thumb.
+    ScrollThumbX,
+    /// ScrollView vertical scroll bar track.
+    ScrollTrackY,
+    /// ScrollView vertical scroll bar thumb.
+    ScrollThumbY,
 }
 
 #[cfg(feature = "gui")]
@@ -144,6 +152,10 @@ impl GuiPrimitivePart {
             Self::Label => "label",
             Self::Icon => "icon",
             Self::FocusRing => "focusRing",
+            Self::ScrollTrackX => "scrollTrackX",
+            Self::ScrollThumbX => "scrollThumbX",
+            Self::ScrollTrackY => "scrollTrackY",
+            Self::ScrollThumbY => "scrollThumbY",
         }
     }
 }

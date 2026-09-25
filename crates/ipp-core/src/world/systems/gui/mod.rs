@@ -85,10 +85,10 @@ pub use layout::{
     GuiControlVariant, GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiFontResolution,
     GuiHit, GuiInteractionState, GuiLayoutCache, GuiLayoutRequest, GuiLayoutSystem,
     GuiLayoutSystemFactory, GuiPanelResolution, GuiPartMotion, GuiPartStyle, GuiResourceResolver,
-    GuiSkinCursors, GuiSkinState, GuiSkinnedAppearance, MAX_LAYOUT_DEPTH, MAX_SKIN_DEPTH,
-    MAX_SKIN_NODES, apply_appearance_to_primitive, apply_asset_to_primitive, part_overrides,
-    resolve_appearance, resolve_panel_hit, resolve_state_part_motion, resolve_state_part_style,
-    skinned_primitives_for_view, theme_part_style, variant_for_content,
+    GuiScrollBarCursor, GuiSkinCursors, GuiSkinState, GuiSkinnedAppearance, MAX_LAYOUT_DEPTH,
+    MAX_SKIN_DEPTH, MAX_SKIN_NODES, apply_appearance_to_primitive, apply_asset_to_primitive,
+    part_overrides, resolve_appearance, resolve_panel_hit, resolve_state_part_motion,
+    resolve_state_part_style, skinned_primitives_for_view, theme_part_style, variant_for_content,
 };
 pub(crate) use layout::{
     appearance_with_effective_numeric, resolve_paint_appearance, skin_channels_complete,

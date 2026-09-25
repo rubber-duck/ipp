@@ -101,7 +101,9 @@
 //! through self-issued client commands.
 
 use super::super::tree::{GUI_BASE_PARTS, GuiNodeStyleRow, GuiPartId};
-use super::super::{GuiContainerKind, GuiNode, GuiNodeData, GuiNodeId, GuiNodeStyle, GuiRoot};
+use super::super::{
+    GuiContainerKind, GuiNode, GuiNodeData, GuiNodeId, GuiNodeStyle, GuiRoot, GuiTreeIndex,
+};
 use crate::EntityId;
 use crate::components::rows::SchemaRow;
 use crate::services::asset_management::font::FontAsset;
@@ -334,8 +336,10 @@ pub(crate) enum GuiConstraintError {
 /// authoritative component storage; nothing here retains component refs.
 #[derive(Clone, Copy, Debug)]
 pub struct GuiLayoutRequest<'a> {
-    /// Authoritative root-local node tree with committed values.
+    /// Authoritative root-local node rows with committed values.
     pub root: &'a GuiRoot,
+    /// Derived child order of `root`.
+    pub tree: &'a GuiTreeIndex,
     /// Surface-owned root component incarnation fencing reuse.
     pub root_incarnation: u64,
     /// Surface size in metres `[width, height]`; sets root constraints.
@@ -1043,6 +1047,7 @@ struct DeferredPlacement {
 /// slots; diagnostics replace iteration.
 struct Evaluator<'a, 'r> {
     root: &'a GuiRoot,
+    tree: &'a GuiTreeIndex,
     resolver: &'r dyn GuiResourceResolver,
     units: f32,
     diagnostics: Vec<GuiLayoutDiagnostic>,
@@ -1125,7 +1130,7 @@ fn visual_scaled(root: &GuiRoot, id: GuiNodeId, units: f32) -> ([f32; 2], [f32; 
 /// Revision of one node's committed control value; zero for nodes that were
 /// never controls.
 fn control_revision(root: &GuiRoot, id: GuiNodeId) -> u32 {
-    root.controls().get(id).map_or(0, |entry| entry.revision)
+    root.control_revision(id)
 }
 
 /// Kind-specific scalars of one node, read in place; a node without a row
@@ -1136,12 +1141,9 @@ fn node_values(root: &GuiRoot, id: GuiNodeId) -> &super::super::tree::GuiNodeDat
 }
 
 /// Effective text of a text input: the committed text, or the authored text
-/// when no record exists.
+/// when none is committed.
 fn effective_text<'a>(root: &'a GuiRoot, id: GuiNodeId, authored: &'a str) -> &'a str {
-    root.controls()
-        .get(id)
-        .and_then(|entry| entry.text.as_deref())
-        .unwrap_or(authored)
+    root.committed_text(id).unwrap_or(authored)
 }
 
 /// Clamp a settled size into pre-sanitized min/max lanes. An inverted pair
@@ -1190,7 +1192,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         };
         if depth > MAX_LAYOUT_DEPTH as u32 {
             self.push_unavailable(
-                node,
+                &node,
                 slot_final,
                 depth,
                 GuiLayoutDiagnostic::Unsupported {
@@ -1205,7 +1207,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         let (offset, scale) = visual_scaled(self.root, id, self.units);
         if scale[0] == 0.0 || scale[1] == 0.0 {
             self.push_unavailable(
-                node,
+                &node,
                 slot_final,
                 depth,
                 GuiLayoutDiagnostic::SingularTransform {
@@ -1263,7 +1265,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         ];
         let child_base = self.nodes.len();
         let outcome = self.layout_content(
-            node,
+            &node,
             &style,
             content_constraints,
             fill,
@@ -1339,7 +1341,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     #[allow(clippy::too_many_arguments)]
     fn layout_content(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         style: &GuiNodeStyle,
         constraints: Constraints,
         fill: [f32; 2],
@@ -1347,11 +1349,11 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         acc_total: [f32; 2],
         depth: u32,
     ) -> ContentOutcome {
-        match &node.data {
+        match node.data {
             GuiNodeData::Container(kind) => self.layout_container(
                 node,
                 style,
-                *kind,
+                kind,
                 constraints,
                 fill,
                 final_origin,
@@ -1644,7 +1646,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// diagnostic names the cause.
     fn push_unavailable(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         slot_final: [f32; 2],
         depth: u32,
         diagnostic: GuiLayoutDiagnostic,
@@ -1791,7 +1793,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     #[allow(clippy::too_many_arguments)]
     fn layout_container(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         style: &GuiNodeStyle,
         kind: GuiContainerKind,
         constraints: Constraints,
@@ -1922,7 +1924,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     #[allow(clippy::too_many_arguments)]
     fn layout_flex(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         horizontal: bool,
         constraints: Constraints,
         fill: [f32; 2],
@@ -1937,8 +1939,9 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         };
 
         // Classify children in tree order without measuring yet.
-        let children: Vec<(GuiNodeId, Option<f32>)> = node
-            .children
+        let children: Vec<(GuiNodeId, Option<f32>)> = self
+            .tree
+            .children(node.id)
             .iter()
             .map(|&child| (child, self.child_flex(child)))
             .collect();
@@ -2176,7 +2179,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// subtree. The stack fits outer child sizes.
     fn layout_stack(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
@@ -2186,7 +2189,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         let mut extent = [0.0f32, 0.0];
         let mut available = true;
         let mut placed: Vec<(GuiNodeId, Option<usize>, [f32; 2])> = Vec::new();
-        for &child in &node.children {
+        for &child in self.tree.children(node.id) {
             let margin = self.child_margin(child);
             let outer = [margin[3] + margin[1], margin[0] + margin[2]];
             let (size, index) = self.visit_child(
@@ -2237,14 +2240,14 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// content box; extra children are ignored with a diagnostic.
     fn layout_single(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
         acc_total: [f32; 2],
         depth: u32,
     ) -> ContentOutcome {
-        let mut children = node.children.iter();
+        let mut children = self.tree.children(node.id).iter();
         let Some(&child) = children.next() else {
             return ContentOutcome {
                 size: [fill_or_fit(0.0, fill[0]), fill_or_fit(0.0, fill[1])],
@@ -2284,7 +2287,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     #[allow(clippy::too_many_arguments)]
     fn layout_align(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         style: &GuiNodeStyle,
         constraints: Constraints,
         fill: [f32; 2],
@@ -2293,7 +2296,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
         depth: u32,
     ) -> ContentOutcome {
         let size = [fill_or_fit(0.0, fill[0]), fill_or_fit(0.0, fill[1])];
-        let mut children = node.children.iter();
+        let mut children = self.tree.children(node.id).iter();
         let Some(&child) = children.next() else {
             return ContentOutcome {
                 size,
@@ -2335,7 +2338,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// single child when present. The child observes tight box constraints.
     fn layout_sized_box(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         style: &GuiNodeStyle,
         constraints: Constraints,
         origin_final: [f32; 2],
@@ -2344,7 +2347,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     ) -> ContentOutcome {
         let explicit_w = sanitized_bound(style.width, Some(node.id), &mut self.diagnostics);
         let explicit_h = sanitized_bound(style.height, Some(node.id), &mut self.diagnostics);
-        let child = node.children.first().copied();
+        let child = self.tree.children(node.id).first().copied();
 
         // Measure the child under explicit bounds when both axes are set so
         // intrinsic content (text) can wrap; otherwise measure loose and
@@ -2380,7 +2383,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
     /// retained for the scrolling behavior that owns offsets.
     fn layout_scroll(
         &mut self,
-        node: &GuiNode,
+        node: &GuiNode<'_>,
         constraints: Constraints,
         fill: [f32; 2],
         origin_final: [f32; 2],
@@ -2398,7 +2401,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             origin_final[0] + viewport[0] * acc_total[0],
             origin_final[1] + viewport[1] * acc_total[1],
         ]);
-        let mut children = node.children.iter();
+        let mut children = self.tree.children(node.id).iter();
         let Some(&child) = children.next() else {
             return ContentOutcome {
                 size: viewport,
@@ -2574,18 +2577,24 @@ fn align_factor(value: Option<f32>, default: f32) -> f32 {
 /// live in the state/paint fingerprint so frequent interaction refreshes the
 /// evaluated payload without reflow. Text-input content remains structural
 /// because its measured text can change intrinsic size.
-fn hash_node_structure(hasher: &mut Fingerprint, root: &GuiRoot, node: &GuiNode) {
+fn hash_node_structure(
+    hasher: &mut Fingerprint,
+    root: &GuiRoot,
+    tree: &GuiTreeIndex,
+    node: &GuiNode<'_>,
+) {
     hasher.u32(node.id.0);
     hasher.u32(node.parent.map(|parent| parent.0).unwrap_or(u32::MAX));
-    hasher.u32(node.children.len() as u32);
-    for child in &node.children {
+    let children = tree.children(node.id);
+    hasher.u32(children.len() as u32);
+    for child in children {
         hasher.u32(child.0);
     }
 
-    match &node.data {
+    match node.data {
         GuiNodeData::Container(kind) => {
             hasher.u32(0);
-            hasher.u32(*kind as u32);
+            hasher.u32(kind as u32);
         }
         GuiNodeData::Text(text) => {
             hasher.u32(1);
@@ -2691,17 +2700,11 @@ fn hash_control_state(hasher: &mut Fingerprint, root: &GuiRoot, id: GuiNodeId) {
     hash_option_f32(hasher, values.min);
     hash_option_f32(hasher, values.max);
     hash_option_f32(hasher, values.step);
-    match root.controls().get(id) {
-        Some(entry) => {
+    hasher.u32(root.control_revision(id));
+    match root.committed_text(id) {
+        Some(text) => {
             hasher.u32(1);
-            hasher.u32(entry.revision);
-            match &entry.text {
-                Some(text) => {
-                    hasher.u32(1);
-                    hasher.string(text);
-                }
-                None => hasher.u32(0),
-            }
+            hasher.string(text);
         }
         None => hasher.u32(0),
     }
@@ -2796,6 +2799,7 @@ pub(super) fn take_fingerprint_passes() -> usize {
 /// Compute the four input fingerprints for one root in storage order.
 fn fingerprints(
     root: &GuiRoot,
+    tree: &GuiTreeIndex,
     surface_size: [f32; 2],
     units: f32,
     resolver: &dyn GuiResourceResolver,
@@ -2808,10 +2812,10 @@ fn fingerprints(
     let mut visual = Fingerprint::new();
     let mut paint = Fingerprint::new();
     structure.u32(root.nodes().next_node_id());
-    structure.u32(root.nodes().root_node().map(|id| id.0).unwrap_or(u32::MAX));
+    structure.u32(tree.root().map(|id| id.0).unwrap_or(u32::MAX));
     let themes = theme_hashes(root, resolver);
-    for node in root.nodes().as_slice() {
-        hash_node_structure(&mut structure, root, node);
+    for node in root.nodes().iter() {
+        hash_node_structure(&mut structure, root, tree, &node);
         let style = root.style_row(node.id).unwrap_or(&DEFAULT_STYLE_ROW);
         hash_node_layout(&mut layout, style, resolver);
         hash_node_visual(&mut visual, style);
@@ -2846,6 +2850,7 @@ fn evaluate_tree(
     ];
     let mut evaluator = Evaluator {
         root: request.root,
+        tree: request.tree,
         resolver,
         units,
         diagnostics: Vec::new(),
@@ -2856,7 +2861,7 @@ fn evaluate_tree(
         remeasured: 0,
     };
 
-    if let Some(root_id) = request.root.nodes().root_node() {
+    if let Some(root_id) = request.tree.root() {
         let margin = styled(request.root, root_id, units)
             .margin
             .unwrap_or([0.0; 4]);
@@ -3063,6 +3068,7 @@ impl GuiLayoutCache {
 
         let (struct_fp, layout_fp, visual_fp, paint_fp) = fingerprints(
             request.root,
+            request.tree,
             request.surface_size,
             request.units_per_metre,
             resolver,
@@ -3319,7 +3325,7 @@ fn refresh_paint(root: &GuiRoot, view: &mut GuiEvaluatedView) {
         };
         let values = node_values(root, node.node);
         let revision_now = control_revision(root, node.node);
-        match (&mut node.content, &live.data) {
+        match (&mut node.content, live.data) {
             (
                 GuiEvaluatedContent::Checkbox {
                     checked,

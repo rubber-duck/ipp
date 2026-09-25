@@ -266,7 +266,7 @@ impl GuiLayoutSystem {
         &mut self,
         ecs: crate::systems::SystemEcsAccess<'_>,
         assets: &crate::services::asset_management::AssetManagementService,
-        _state: &super::super::GuiSystem,
+        state: &super::super::GuiSystem,
         _animation: &crate::systems::animation::AnimationSystem,
         _surface: &crate::systems::surface::SurfaceSystem,
         _dt: f64,
@@ -317,8 +317,22 @@ impl GuiLayoutSystem {
                 continue;
             }
 
+            // The GUI System derives child order at every commit; a root it
+            // has not indexed yet is derived here for this evaluation.
+            let derived;
+            let tree = match state
+                .tree(entity)
+                .filter(|tree| tree.incarnation() == root_incarnation)
+            {
+                Some(tree) => tree,
+                None => {
+                    derived = super::super::GuiTreeIndex::new(root, root_incarnation);
+                    &derived
+                }
+            };
             let request = GuiLayoutRequest {
                 root,
+                tree,
                 root_incarnation,
                 surface_size: [surface.width, surface.height],
                 units_per_metre: root.units_per_metre,

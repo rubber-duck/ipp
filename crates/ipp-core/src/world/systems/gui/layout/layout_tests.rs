@@ -1194,7 +1194,21 @@ fn missing_committed_state_falls_back_to_authored() {
             )
             .unwrap();
     }
-    root_tree.nodes_mut().controls = Default::default();
+    for id in [2, 3] {
+        use crate::components::schema::{FieldValue, SchemaComponent};
+        use crate::systems::gui::GuiNodeTreeProperty;
+
+        let node = GuiNodeId(id);
+        let revision = GuiRoot::node_tree_offset(node, GuiNodeTreeProperty::Revision).unwrap();
+        let committed =
+            GuiRoot::node_tree_offset(node, GuiNodeTreeProperty::CommittedText).unwrap();
+        root_tree
+            .set_field(revision, FieldValue::Dynamic(crate::DynamicValue::U32(0)))
+            .unwrap();
+        if id == 3 {
+            root_tree.set_field(committed, FieldValue::Unset).unwrap();
+        }
+    }
 
     let mut cache = GuiLayoutCache::default();
     let view = cache.evaluate(entity(), &request(&root_tree, 1), &resolver);

@@ -331,33 +331,30 @@ fn scroll_start_cancels_held_checkbox_tap() {
 #[test]
 fn scroll_helpers_resolve_ancestry_and_capacity() {
     let mut root = GuiRoot::default();
-    root.nodes_mut()
-        .insert_node(
-            GuiNodeId(1),
-            None,
-            0,
-            GuiNodeData::Container(GuiContainerKind::Column),
-        )
-        .unwrap();
-    root.nodes_mut()
-        .insert_node(
-            GuiNodeId(2),
-            Some(GuiNodeId(1)),
-            0,
+    for (id, parent, data) in [
+        (1, None, GuiNodeData::Container(GuiContainerKind::Column)),
+        (
+            2,
+            Some(1),
             GuiNodeData::Container(GuiContainerKind::ScrollView),
-        )
-        .unwrap();
-    root.nodes_mut()
-        .insert_node(
-            GuiNodeId(3),
-            Some(GuiNodeId(2)),
+        ),
+        (3, Some(2), GuiNodeData::Container(GuiContainerKind::Column)),
+        (4, Some(3), GuiNodeData::Checkbox),
+    ] {
+        let values = match data {
+            GuiNodeData::Checkbox => crate::GuiNodeDataRow::checkbox(false),
+            _ => crate::GuiNodeDataRow::default(),
+        };
+        root.insert_node(
+            GuiNodeId(id),
+            parent.map(GuiNodeId),
             0,
-            GuiNodeData::Container(GuiContainerKind::Column),
+            data,
+            values,
+            &crate::GuiNodeStyle::default(),
         )
         .unwrap();
-    root.nodes_mut()
-        .insert_node(GuiNodeId(4), Some(GuiNodeId(3)), 0, GuiNodeData::Checkbox)
-        .unwrap();
+    }
     // Innermost-first ancestry, including a viewport resolving itself.
     assert_eq!(
         super::GuiInputSystem::scroll_chain(&root, GuiNodeId(4)),

@@ -1,12 +1,13 @@
 //! Compiled per-node rows of [`GuiRoot`](super::GuiRoot): node style and the
-//! scalar kind-specific node data. Both tables use slot = node id, and a node's
-//! rows are inserted and removed with the node.
+//! scalar kind-specific node data. Both tables use slot = node id, like the
+//! node's `node_tree` row, and a node's rows are inserted and removed with it.
 //!
 //! Property index is declaration order and is mirrored by
 //! [`GuiNodeStyleProperty`] and [`GuiNodeDataProperty`]; a row field offset
 //! addresses one property of one node.
 
-use super::nodes::{GuiNodeData, GuiNodePatch, GuiNodeStyle};
+use super::node_tree::GuiNodeTreeProperty;
+use super::nodes::{GuiNodeKind, GuiNodePatch, GuiNodeStyle};
 use crate::components::rows::SchemaRow;
 use crate::components::schema::FieldError;
 use crate::services::asset_management::AssetSource;
@@ -487,12 +488,12 @@ impl GuiNodeDataRow {
         }
     }
 
-    /// Keep values of properties `data`'s kind uses, fill newly used ones with
+    /// Keep values of properties `kind` uses, fill newly used ones with
     /// placeholders (unchecked, a unit image, a zero slider) and clear the
     /// rest. The result always passes [`Self::validate_for`] when the kept
     /// values do.
-    pub fn conform(&mut self, data: &GuiNodeData) {
-        let used = |property: GuiNodeDataProperty| property.used_by(data);
+    pub fn conform(&mut self, kind: GuiNodeKind) {
+        let used = |property: GuiNodeDataProperty| property.used_by(kind);
         fn keep<T: Copy>(value: &mut Option<T>, used: bool, placeholder: T) {
             *value = match (used, *value) {
                 (true, Some(value)) => Some(value),
@@ -543,11 +544,11 @@ impl GuiNodeDataRow {
             .map(|(property, _)| property)
     }
 
-    /// Whether exactly the properties of `data`'s kind are present.
-    pub fn matches_kind(&self, data: &GuiNodeData) -> bool {
+    /// Whether exactly the properties of `kind` are present.
+    pub fn matches_kind(&self, kind: GuiNodeKind) -> bool {
         GuiNodeDataProperty::ALL
             .into_iter()
-            .all(|property| self.present(property) == property.used_by(data))
+            .all(|property| self.present(property) == property.used_by(kind))
     }
 
     /// Whether one property is present.
@@ -562,10 +563,10 @@ impl GuiNodeDataRow {
         }
     }
 
-    /// Check presence for `data`'s kind, each property's range, and the
-    /// slider rule `min <= value <= max`.
-    pub fn validate_for(&self, data: &GuiNodeData) -> Result<(), ErrorReason> {
-        if !self.matches_kind(data) {
+    /// Check presence for `kind`, each property's range, and the slider rule
+    /// `min <= value <= max`.
+    pub fn validate_for(&self, kind: GuiNodeKind) -> Result<(), ErrorReason> {
+        if !self.matches_kind(kind) {
             return Err(ErrorReason::InvalidField);
         }
         self.validate_values()
@@ -654,14 +655,12 @@ impl GuiNodeDataProperty {
         !matches!(self, Self::ImageSize)
     }
 
-    /// Whether nodes of `data`'s kind carry this property.
-    pub fn used_by(self, data: &GuiNodeData) -> bool {
+    /// Whether nodes of `kind` carry this property.
+    pub fn used_by(self, kind: GuiNodeKind) -> bool {
         match self {
-            Self::ImageSize => matches!(data, GuiNodeData::Image),
-            Self::Checked => matches!(data, GuiNodeData::Checkbox),
-            Self::Value | Self::Min | Self::Max | Self::Step => {
-                matches!(data, GuiNodeData::Slider)
-            }
+            Self::ImageSize => kind == GuiNodeKind::Image,
+            Self::Checked => kind == GuiNodeKind::Checkbox,
+            Self::Value | Self::Min | Self::Max | Self::Step => kind == GuiNodeKind::Slider,
         }
     }
 }
@@ -673,6 +672,8 @@ pub enum GuiNodeRowProperty {
     Style(GuiNodeStyleProperty),
     /// A `node_data` property.
     Data(GuiNodeDataProperty),
+    /// A `node_tree` property.
+    Tree(GuiNodeTreeProperty),
 }
 
 impl GuiNodeRowProperty {
@@ -688,6 +689,7 @@ impl GuiNodeRowProperty {
                     | GuiNodeStyleProperty::FocusScope
             ),
             Self::Data(property) => !property.command_owned(),
+            Self::Tree(_) => false,
         }
     }
 }

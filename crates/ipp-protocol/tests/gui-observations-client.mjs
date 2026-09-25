@@ -86,6 +86,7 @@ const controlEffect = () =>
     u32(2),
     u8(1),
     u8(1),
+    u8(2),
   ]);
 
 const conflictRecord = () =>
@@ -272,6 +273,7 @@ test("broadcast observations decode to effects, conflicts and cancellations", ()
               node: 30,
               value: { kind: "bool", value: true },
               revision: 2,
+              source: "external",
               path: [10, 30],
               sourceTick: 11n,
               effectTick: 12n,

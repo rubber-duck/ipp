@@ -690,6 +690,7 @@ fn committed_toggle_pins_runtime_ancestor_path_and_drains_once() {
                 value,
                 revision,
                 path,
+                ..
             } => Some((
                 *entity,
                 *effect_root,

@@ -508,6 +508,12 @@ export interface GuiButtonPressedEffect {
   readonly effectTick?: bigint | undefined;
 }
 
+/**
+ * What produced a committed control value: routed user input, a semantic
+ * action, or an explicit revision-aware external replacement.
+ */
+export type GuiCommitSource = "user" | "semantic" | "external";
+
 /** Committed control outcome, mirroring core ControlCommitted. */
 export interface GuiControlCommittedEffect {
   readonly kind: "controlCommitted";
@@ -516,6 +522,8 @@ export interface GuiControlCommittedEffect {
   readonly node: number;
   readonly value: GuiControlValue;
   readonly revision: number;
+  /** What produced the commit, when the feeding publication carries it. */
+  readonly source?: GuiCommitSource | undefined;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
   readonly path?: readonly number[] | undefined;
   /** Routing frame, when the feeding publication carries ticks. */

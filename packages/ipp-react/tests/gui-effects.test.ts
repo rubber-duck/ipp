@@ -1275,3 +1275,32 @@ test("text submissions reach onSubmit with the submitted text and path", () => {
   assert.deepEqual(errors, []);
   assert.deepEqual(seen, ["submit:hello@3", "bubble:10"]);
 });
+
+test("committed control events carry their source to callbacks", () => {
+  const subs = new GuiEffectSubscriptions();
+  const seen: string[] = [];
+  subs.subscribe(EFFECT_ENTITY, EFFECT_ROOT, 40, {
+    kind: "textInput",
+    onTextCommit: (event) => void seen.push(`${event.value}:${event.source}`),
+  });
+  const commit = (value: string, source: "user" | "semantic" | "external") =>
+    ({
+      kind: "controlCommitted",
+      entity: EFFECT_ENTITY,
+      rootIncarnation: EFFECT_ROOT,
+      node: 40,
+      value: { kind: "text", value },
+      revision: 2,
+      source,
+    }) as const;
+  assert.equal(
+    isCommittedEffect({ ...commit("x", "user"), source: "other" }),
+    false,
+  );
+  const summary = subs.feed(
+    [commit("a", "user"), commit("b", "semantic"), commit("c", "external")],
+    () => new Map([[40, undefined]]),
+  );
+  assert.deepEqual(summary, { delivered: 3, skipped: 0 });
+  assert.deepEqual(seen, ["a:user", "b:semantic", "c:external"]);
+});

@@ -280,6 +280,7 @@ fn semantic_snapshot_exposes_only_observed_focus() {
             value: GuiControlValue::Bool(false),
             revision: 3,
             path: vec![GuiNodeId(3)],
+            source: crate::GuiCommitSource::External,
         }
     ));
 }

@@ -92,6 +92,14 @@ function submissionsSince(log: ObservationLog, mark: number) {
     .filter((effect) => effect.kind === "submitted");
 }
 
+/** Committed control effects published after batch `mark`. */
+function commitsSince(log: ObservationLog, mark: number) {
+  return log.batches
+    .slice(mark)
+    .flatMap((batch) => batch.effects)
+    .filter((effect) => effect.kind === "controlCommitted");
+}
+
 /** Conflict reasons published after batch `mark`. */
 function conflictsSince(log: ObservationLog, mark: number): string[] {
   return log.batches
@@ -618,6 +626,94 @@ export async function exerciseGuiInput(
     field.controlValue.kind === "text" &&
       field.controlValue.value === "123456789zz",
     `Composition commit missed or duplicated: ${JSON.stringify(field.controlValue)}`,
+  );
+
+  // Every committed control effect names its source. A user edit reports
+  // "user"; an accepted external replacement of a checkbox, slider and text
+  // input publishes the same committed effect marked "external" with the new
+  // value and revision; a semantic action reports "semantic"; a stale
+  // replacement still conflicts and publishes nothing.
+  const userCommits = commitsSince(log, 0).filter(
+    (effect) => effect.node === 3 && effect.source === "user",
+  );
+  expect(userCommits.length > 0, "Typed text published no user-sourced commit");
+  await client.editGui({
+    action: "insert",
+    entity,
+    rootIncarnation,
+    id: 4,
+    parent: 1,
+    index: 2,
+    data: { kind: "slider" },
+    values: { value: 0.25, min: 0, max: 1, step: 0 },
+    style: { width: 4, height: 0.5 },
+  });
+  const replacements = [
+    { node: 2, value: { kind: "bool", value: false } },
+    { node: 4, value: { kind: "scalar", value: 0.75 } },
+    { node: 3, value: { kind: "text", value: "external" } },
+  ] as const;
+  for (const { node, value } of replacements) {
+    const before = await inspected(client, entity, node);
+    mark = log.batches.length;
+    await client.editGui({
+      action: "setControlValue",
+      handle: handle(node),
+      expectedRevision: before.controlRevision,
+      value,
+    });
+    const published = await eventually(() => {
+      const found = commitsSince(log, mark).filter(
+        (effect) => effect.node === node,
+      );
+      return found.length > 0 ? found : undefined;
+    }, `External replacement of node ${node} published no commit`);
+    expect(
+      published.length === 1 &&
+        published[0]!.source === "external" &&
+        published[0]!.revision === before.controlRevision + 1 &&
+        JSON.stringify(published[0]!.value) === JSON.stringify(value),
+      `Unexpected external commit for node ${node}: ${JSON.stringify(published, (_, item) => (typeof item === "bigint" ? item.toString() : item))}`,
+    );
+  }
+  // The focused text refreshed from the replacement without further input.
+  await focusWhere(
+    log,
+    (state) => state?.node === 3 && state.text === "external",
+    "Replacing the focused text did not refresh the text focus",
+  );
+  const stale = await inspected(client, entity, 2);
+  mark = log.batches.length;
+  await client
+    .editGui({
+      action: "setControlValue",
+      handle: handle(2),
+      expectedRevision: stale.controlRevision - 1,
+      value: { kind: "bool", value: true },
+    })
+    .then(
+      () => {
+        throw new Error("A stale external replacement was accepted");
+      },
+      () => undefined,
+    );
+  const semantic = await inspected(client, entity, 2);
+  await client.semanticAction({
+    entity,
+    rootIncarnation,
+    node: 2,
+    expectedRevision: semantic.controlRevision,
+    action: { kind: "toggle" },
+  });
+  const semanticCommits = await eventually(() => {
+    const found = commitsSince(log, mark).filter((effect) => effect.node === 2);
+    return found.length > 0 ? found : undefined;
+  }, "A semantic toggle published no commit");
+  expect(
+    semanticCommits.length === 1 &&
+      semanticCommits[0]!.source === "semantic" &&
+      semanticCommits[0]!.revision === semantic.controlRevision + 1,
+    `A stale replacement published or the semantic source was lost: ${semanticCommits.map((effect) => effect.source).join(",")}`,
   );
 
   // Scroll admits at the same logical point without reflowing layout.

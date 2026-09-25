@@ -11,7 +11,7 @@ pub(super) mod target_policy;
 pub(super) mod text_edit;
 
 pub use system::{
-    GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
+    GuiCommitSource, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
     GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
     GuiInputSystemFactory, GuiInputTarget, GuiKey, GuiPointerButton, GuiTextCompositionState,
     GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,

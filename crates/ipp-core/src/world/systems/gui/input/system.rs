@@ -378,6 +378,8 @@ pub enum GuiInputEffectKind {
         /// Runtime logical ancestor path, root-first including the target,
         /// pinned from the live tree at application for listener dispatch.
         path: Vec<GuiNodeId>,
+        /// What produced the commit.
+        source: GuiCommitSource,
     },
     /// Enter submitted a focused single-line text input outside composition.
     Submitted {
@@ -419,6 +421,18 @@ pub enum GuiInputEffectKind {
         /// Accumulated offset in logical units.
         offset: [f32; 2],
     },
+}
+
+/// What produced one committed control value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuiCommitSource {
+    /// Routed pointer, key, text or composition input.
+    User,
+    /// A semantic action through the validated control path.
+    Semantic,
+    /// An explicit revision-aware external replacement
+    /// ([`GuiCommand::SetControlValue`](crate::GuiCommand)).
+    External,
 }
 
 /// One routed input cancelled between routing and application.
@@ -616,6 +630,8 @@ enum EnvelopeKind {
         expected_revision: u32,
         /// Value to commit.
         value: GuiControlValue,
+        /// Routed user input or a semantic action.
+        source: GuiCommitSource,
     },
     /// Completed button press.
     PressButton,
@@ -1677,6 +1693,7 @@ impl GuiInputSystem {
                 kind: EnvelopeKind::SetValue {
                     expected_revision,
                     value,
+                    source: GuiCommitSource::User,
                 },
             },
         );
@@ -4795,6 +4812,7 @@ impl GuiInputSystem {
                 EnvelopeKind::SetValue {
                     expected_revision: command.expected_revision,
                     value: GuiControlValue::Bool(!value),
+                    source: GuiCommitSource::Semantic,
                 }
             }
             crate::GuiSemanticAction::SetScalar(value) if kind == ControlKind::Slider => {
@@ -4817,6 +4835,7 @@ impl GuiInputSystem {
                 EnvelopeKind::SetValue {
                     expected_revision: command.expected_revision,
                     value,
+                    source: GuiCommitSource::Semantic,
                 }
             }
             crate::GuiSemanticAction::SetText(value) if kind == ControlKind::TextInput => {
@@ -4839,6 +4858,7 @@ impl GuiInputSystem {
                 EnvelopeKind::SetValue {
                     expected_revision: command.expected_revision,
                     value,
+                    source: GuiCommitSource::Semantic,
                 }
             }
             crate::GuiSemanticAction::Focus => EnvelopeKind::Focus {
@@ -4858,6 +4878,7 @@ impl GuiInputSystem {
         if let EnvelopeKind::SetValue {
             expected_revision,
             ref value,
+            ..
         } = envelope_kind
         {
             self.predicted.insert(
@@ -5463,8 +5484,10 @@ impl GuiInputSystem {
             EnvelopeKind::SetValue {
                 expected_revision,
                 value,
+                source,
             } => {
                 let expected_revision = *expected_revision;
+                let source = *source;
                 let Some(target) = envelope.target else {
                     return;
                 };
@@ -5574,8 +5597,19 @@ impl GuiInputSystem {
                                 value: value.clone(),
                                 revision,
                                 path,
+                                source,
                             },
                         });
+
+                        // A semantic replacement of the focused text is not
+                        // part of the native buffer's own edit chain: fence
+                        // its stamped edits and resynchronize it.
+                        if source != GuiCommitSource::User
+                            && self.focus.is_some_and(|focus| focus.target == target)
+                        {
+                            self.focus_generation = self.focus_generation.saturating_add(1).max(1);
+                            self.touch_caret();
+                        }
                     }
                     Err(reason) => {
                         self.reject_prediction(&target, remaining);
@@ -5927,7 +5961,9 @@ impl System for GuiInputSystem {
 
 impl GuiInputSystem {
     /// Observe the external replacements accepted since the last
-    /// observation, in commit order. Replacing the focused text moves the
+    /// observation, in commit order: each publishes the committed control
+    /// effect a user edit would, marked external. Replacing the focused
+    /// text moves the
     /// focus generation and republishes the text focus, so edits stamped
     /// before the replacement conflict and the native buffer resynchronizes
     /// without further input. A provisional composition stays until its
@@ -5939,6 +5975,20 @@ impl GuiInputSystem {
         let (commits, next) = gui.external_commits_since(self.external_commit_next);
         self.external_commit_next = next;
         for commit in commits {
+            self.pending_effects.push(GuiInputEffect {
+                session: commit.session,
+                source_tick: commit.tick,
+                effect_tick: commit.tick,
+                kind: GuiInputEffectKind::ControlCommitted {
+                    entity: commit.target.entity,
+                    root_incarnation: commit.target.root_incarnation,
+                    node: commit.target.node,
+                    value: commit.value.clone(),
+                    revision: commit.revision,
+                    path: commit.path.clone(),
+                    source: GuiCommitSource::External,
+                },
+            });
             if self
                 .focus
                 .is_some_and(|focus| focus.target == commit.target)
@@ -6564,6 +6614,9 @@ impl crate::WorldContext<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "commit_source_tests.rs"]
+mod commit_source_tests;
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;

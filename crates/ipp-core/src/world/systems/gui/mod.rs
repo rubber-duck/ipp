@@ -28,7 +28,11 @@
 //! session replacement cancel as [`GuiInputCancellation`], arbitration and
 //! admission losses conflict as [`GuiInputConflict`]. The authored
 //! `SetControlValue` path stays the explicit revision-aware external reset,
-//! never an input action.
+//! never an input action; an accepted replacement publishes the same
+//! `ControlCommitted` effect, marked with its [`GuiCommitSource`], and
+//! replacing the focused text moves its focus generation and republishes
+//! the native text bridge state. A stale replacement is refused and
+//! publishes nothing.
 //!
 //! Boundaries: hidden, unavailable or disabled targets are ineligible for
 //! routing and application; retained interactions are synchronously cancelled
@@ -74,7 +78,7 @@ pub(in crate::world::systems) mod test_support;
 pub mod tree;
 
 pub use input::{
-    GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
+    GuiCommitSource, GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
     GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
     GuiInputSystemFactory, GuiInputTarget, GuiKey, GuiPointerButton, GuiTextCompositionState,
     GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,

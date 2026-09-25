@@ -1097,6 +1097,8 @@ function readGuiObservationPath(r: Reader): number[] {
   return path;
 }
 
+const GUI_COMMIT_SOURCES = ["user", "semantic", "external"] as const;
+
 /** Decode one committed control outcome; transient cursors never arrive here. */
 function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
   const kind = r.u8();
@@ -1139,6 +1141,8 @@ function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
   const value = readGuiControlValue(r);
   if (value.kind !== "bool" && value.kind !== "scalar" && value.kind !== "text")
     fail("GUI observation effect value");
+  const source = GUI_COMMIT_SOURCES[r.u8()];
+  if (source === undefined) fail("GUI observation commit source");
   return {
     kind: "controlCommitted",
     entity,
@@ -1146,6 +1150,7 @@ function readGuiObservationEffect(r: Reader): GuiCommittedEffect {
     node,
     value,
     revision,
+    source,
     path,
     sourceTick,
     effectTick,

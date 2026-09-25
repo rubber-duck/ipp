@@ -15,9 +15,9 @@ use crate::codec::Writer;
 use crate::wire::error_name;
 use crate::{MAX_MESSAGE_BYTES, ProtocolError, ResponseBody};
 use ipp_core::{
-    EntityId, GuiControlValue, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
-    GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputTarget, GuiNodeId,
-    GuiTextFence, GuiTextFocusUpdate, GuiUnhandledInput, WorldUpdateReport,
+    EntityId, GuiCommitSource, GuiControlValue, GuiInputCancellation, GuiInputCommand,
+    GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputTarget,
+    GuiNodeId, GuiTextFence, GuiTextFocusUpdate, GuiUnhandledInput, WorldUpdateReport,
 };
 
 /// Wire bound for every observation text field, matching all protocol strings.
@@ -350,6 +350,7 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
             value,
             revision,
             path,
+            source,
         } => {
             w.u8(1)?;
             write_effect_head(
@@ -380,6 +381,11 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
                     return Err(ProtocolError::Malformed("gui effect value"));
                 }
             }
+            w.u8(match source {
+                GuiCommitSource::User => 0,
+                GuiCommitSource::Semantic => 1,
+                GuiCommitSource::External => 2,
+            })?;
         }
         GuiInputEffectKind::Submitted {
             entity,

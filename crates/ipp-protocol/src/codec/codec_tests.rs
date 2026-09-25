@@ -1839,6 +1839,7 @@ fn gui_observations_encode_committed_state_unsolicited() {
             value: GuiControlValue::Text("hello".into()),
             revision: 2,
             path: Vec::new(),
+            source: ipp_core::GuiCommitSource::External,
         },
     };
     let bytes = encode_response(&Response {
@@ -1853,12 +1854,13 @@ fn gui_observations_encode_committed_state_unsolicited() {
         },
     })
     .unwrap();
-    assert_eq!(bytes.len(), 109);
+    assert_eq!(bytes.len(), 110);
     assert_eq!(bytes[34], 1);
     assert_eq!(&bytes[83..87], &2u32.to_le_bytes());
     assert_eq!(bytes[87], 3);
     assert_eq!(&bytes[88..92], &5u32.to_le_bytes());
     assert_eq!(&bytes[92..97], b"hello");
+    assert_eq!(bytes[97], 2);
 
     let submitted = GuiInputEffect {
         session: 7,
@@ -1928,6 +1930,7 @@ fn gui_observation_text_encodes_whole_or_rejects() {
             value: GuiControlValue::Text(text),
             revision: 2,
             path: Vec::new(),
+            source: ipp_core::GuiCommitSource::External,
         },
     };
     let bytes = encode_response(&Response {
@@ -2000,6 +2003,7 @@ fn gui_observation_bodies_chunk_broadcast_and_filter_unhandled() {
             value: GuiControlValue::Bool(true),
             revision: 2,
             path: vec![GuiNodeId(10), GuiNodeId(node)],
+            source: ipp_core::GuiCommitSource::User,
         },
     };
     let report = WorldUpdateReport {

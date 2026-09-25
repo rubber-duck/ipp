@@ -22,6 +22,7 @@
  * already-committed data and performs no transport.
  */
 import type {
+  GuiCommitSource,
   GuiControlValue,
   GuiInputCommand,
   GuiNodeData,
@@ -59,6 +60,9 @@ export interface GuiControlEvent<T> {
   readonly node: number;
   readonly revision: number;
   readonly value: T;
+  /** What produced a committed value; absent for submissions and when the
+   * feeding publication omits it. */
+  readonly source?: GuiCommitSource | undefined;
   readonly name?: string | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
   readonly sourceTick?: bigint | undefined;
@@ -95,6 +99,8 @@ export interface GuiControlCommittedEffect {
   readonly node: number;
   readonly value: GuiControlValue;
   readonly revision: number;
+  /** What produced the commit, when the feeding publication carries it. */
+  readonly source?: GuiCommitSource | undefined;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
   readonly path?: readonly number[] | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
@@ -189,6 +195,10 @@ export function isCommittedEffect(value: unknown): value is GuiCommittedEffect {
       return (
         isU32(effect.revision) &&
         isControlValue(effect.value) &&
+        (effect.source === undefined ||
+          effect.source === "user" ||
+          effect.source === "semantic" ||
+          effect.source === "external") &&
         isEffectMetadata(effect)
       );
     case "submitted":
@@ -416,6 +426,7 @@ function matchControlCallback(
         ...base,
         revision: effect.revision,
         value: effect.value.value,
+        ...(effect.source === undefined ? {} : { source: effect.source }),
       };
       return () => listener?.(event);
     }
@@ -434,6 +445,7 @@ function matchControlCallback(
         ...base,
         revision: effect.revision,
         value: effect.value.value,
+        ...(effect.source === undefined ? {} : { source: effect.source }),
       };
       return () => listener?.(event);
     }
@@ -458,6 +470,7 @@ function matchControlCallback(
         ...base,
         revision: effect.revision,
         value: effect.value.value,
+        ...(effect.source === undefined ? {} : { source: effect.source }),
       };
       return () => listener?.(event);
     }

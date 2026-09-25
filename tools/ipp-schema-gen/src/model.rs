@@ -106,6 +106,8 @@ pub(super) struct RowProperty {
     pub(super) kind: u8,
     pub(super) optional: bool,
     pub(super) rotation: bool,
+    /// UTF-8 byte bound, present exactly for text properties (kind 13).
+    pub(super) max_bytes: Option<u32>,
 }
 
 pub(super) struct Export {

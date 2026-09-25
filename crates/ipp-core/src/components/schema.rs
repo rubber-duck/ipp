@@ -88,6 +88,8 @@ pub enum FieldError {
     WrongType,
     /// Floating point values must be finite.
     NonFinite,
+    /// Text exceeds its declared UTF-8 byte bound.
+    TextTooLong,
     /// The type has no compiled authored creation factory.
     CreationUnavailable,
 }

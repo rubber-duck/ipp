@@ -411,7 +411,7 @@ fn encode_dynamic(
             writer.u8(2)?;
             writer.u32(*value)?;
         }
-        Bool(_) | Asset(_) => return Err("Discrete frozen transition value".into()),
+        Bool(_) | Asset(_) | Text(_) => return Err("Discrete frozen transition value".into()),
         Vec2(value) => floats!(3, *value),
         Vec3(value) => floats!(4, *value),
         Vec4(value) => floats!(5, *value),
@@ -701,6 +701,7 @@ fn dynamic_kind(value: &crate::DynamicValue) -> u8 {
         Mat2(_) => 8,
         Mat3(_) => 9,
         Mat4(_) => 10,
+        Text(_) => 11,
     }
 }
 
@@ -709,7 +710,7 @@ fn dynamic_finite(value: &crate::DynamicValue) -> bool {
     match value {
         F32(value) => value.is_finite(),
         I32(_) | U32(_) => true,
-        Bool(_) | Asset(_) => false,
+        Bool(_) | Asset(_) | Text(_) => false,
         Vec2(values) => values.iter().all(|value| value.is_finite()),
         Vec3(values) => values.iter().all(|value| value.is_finite()),
         Vec4(values) => values.iter().all(|value| value.is_finite()),

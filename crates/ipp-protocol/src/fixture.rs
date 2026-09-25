@@ -41,13 +41,16 @@ struct BoundFixture {
     internal: usize,
 }
 
-/// Row properties cover a required scalar, a hinted optional Vec4 and an asset.
+/// Row properties cover a required scalar, a hinted optional Vec4, an asset and
+/// bounded text.
 #[derive(Default, ipp_core::components::rows::SchemaRow)]
 struct FixtureRow {
     weight: f32,
     #[schema(rotation)]
     rotation: Option<[f32; 4]>,
     source: Option<ipp_core::services::asset_management::AssetSource>,
+    #[schema(text = 8)]
+    label: Option<String>,
 }
 
 // The ignored pointer moves the table's real offset between targets; the region
@@ -69,6 +72,7 @@ impl Default for RowsFixture {
             1,
             FixtureRow {
                 weight: 0.5,
+                label: Some("ok".into()),
                 ..FixtureRow::default()
             },
         )
@@ -81,7 +85,7 @@ impl Default for RowsFixture {
     }
 }
 
-/// Row property addressing, slot liveness and whole-table round trips.
+/// Row property addressing, slot liveness, bounded text and whole-table round trips.
 fn check_rows() -> bool {
     use ipp_core::DynamicValue;
     use ipp_core::components::schema::FieldError;
@@ -103,6 +107,12 @@ fn check_rows() -> bool {
         || fixture.set_field(property(1, 0), FieldValue::Unset) != Err(FieldError::WrongType)
         || fixture.set_field(property(0, 0), FieldValue::Dynamic(DynamicValue::F32(1.0)))
             != Err(FieldError::UnknownField)
+        || fixture.field(property(1, 3)) != Ok(FieldValue::String("ok".into()))
+        || fixture.set_field(property(1, 3), FieldValue::String("ünï ok".into())) != Ok(())
+        || fixture.set_field(property(1, 3), FieldValue::String("ninebytes".into()))
+            != Err(FieldError::TextTooLong)
+        || fixture.set_field(property(1, 0), FieldValue::String("1".into()))
+            != Err(FieldError::WrongType)
     {
         return false;
     }
@@ -118,6 +128,7 @@ fn check_rows() -> bool {
         && restored.rows.next_slot() == 2
         && restored.rows.get(1).and_then(|row| row.rotation) == Some([0.0, 0.0, 0.0, 1.0])
         && restored.rows.get(1).map(|row| row.weight) == Some(0.5)
+        && restored.rows.get(1).and_then(|row| row.label.as_deref()) == Some("ünï ok")
         && restored
             .set_field(property(1, 1), FieldValue::Unset)
             .is_ok()

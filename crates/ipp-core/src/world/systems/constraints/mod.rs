@@ -1,4 +1,10 @@
-//! Scalar constraint declarations, strict bindings and fixed entity-slot evaluation.
+//! Scalar constraint declarations, strict bindings and dependency-ordered evaluation.
+//!
+//! Each [`LinearDriver`] binds one source Scalar. Drivers evaluate with every
+//! source before its target. A self-dependency or cycle makes its members
+//! invalid: they do not evaluate, their targets keep the underlying value, the
+//! batch still succeeds, and a Warn diagnostic names each member. Correcting
+//! any member's declaration or binding restores evaluation.
 
 mod component;
 pub use component::LinearDriver;
@@ -8,9 +14,7 @@ use crate::{
     components::registry::ComponentStorage,
     world::{WorldEntityState, WorldMutationState, WorldSimulationState},
 };
-#[cfg(debug_assertions)]
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScalarConstraintBinding {

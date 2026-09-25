@@ -329,20 +329,6 @@ fn ingress_budgets_reject_complete_batches_and_allow_world_growth() {
     let id = report.outcomes[0].result.as_ref().unwrap()[0].1;
     assert!(run(&mut world, vec![create(0, "b")]).result.is_ok());
     assert!(world.inspect(id).is_some());
-    let tiny_activation = WorldLimits {
-        max_staging_bytes: 1,
-        ..WorldLimits::default()
-    };
-    let mut host = ipp_core::HostRuntime::new();
-    let id = host.create_world(tiny_activation).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    world
-        .set_capacity_hints(ipp_core::WorldCapacityHints {
-            entities: 1024,
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(run(&mut world, vec![create(0, "reserved")]).result.is_ok());
 }
 
 #[test]
@@ -502,7 +488,6 @@ mod drivers {
             .result
             .unwrap();
         assert_eq!(values(&world, target), (10.0, 10.0));
-        assert_eq!(world.driver_bound(target), Some(false));
         run(
             &mut world,
             vec![Command::SetField {
@@ -514,7 +499,6 @@ mod drivers {
         .result
         .unwrap();
         assert_eq!(values(&world, target), (10.0, 11.0));
-        assert_eq!(world.driver_bound(target), Some(true));
         run(
             &mut world,
             vec![
@@ -528,7 +512,6 @@ mod drivers {
         .result
         .unwrap();
         assert_eq!(values(&world, target), (10.0, 10.0));
-        assert_eq!(world.driver_bound(target), Some(false));
         let replacement = world.lookup_id("replacement").unwrap();
         assert_eq!(replacement.index(), from.index());
         assert_ne!(replacement, from);
@@ -581,12 +564,10 @@ mod drivers {
         assert!(failure.result.is_err());
         assert!(world.inspect(from).unwrap().effective.is_empty());
         assert_eq!(values(&world, target), (10.0, 10.0));
-        assert_eq!(world.driver_bound(target), Some(false));
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    fn fixed_forward_chains_work_and_debug_checks_report_partial_invalid_updates() {
+    fn drivers_evaluate_in_dependency_order_and_cycles_stay_inactive_until_corrected() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default())
@@ -595,64 +576,119 @@ mod drivers {
         let a = setup(&mut world, "a", 2.0);
         let b = setup(&mut world, "b", 20.0);
         let c = setup(&mut world, "c", 30.0);
+        assert!(a.index() < b.index() && b.index() < c.index());
+
+        // b reads c, which has a later entity slot; c evaluates first.
         run(
             &mut world,
             vec![
-                driver(EntityRef::Handle(b), EntityRef::Handle(a), 2.0, 1.0),
-                driver(EntityRef::Handle(c), EntityRef::Handle(b), 3.0, 0.0),
+                driver(EntityRef::Handle(b), EntityRef::Handle(c), 2.0, 1.0),
+                driver(EntityRef::Handle(c), EntityRef::Handle(a), 3.0, 0.0),
             ],
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 15.0));
-        assert_eq!(
-            run(
-                &mut world,
-                vec![driver(EntityRef::Handle(a), EntityRef::Handle(c), 1.0, 0.0)]
-            )
-            .result
-            .unwrap_err()
-            .reason,
-            ErrorReason::UnsupportedDependency
-        );
-        assert_eq!(
-            run(
-                &mut world,
-                vec![driver(EntityRef::Handle(c), EntityRef::Handle(c), 1.0, 0.0)]
-            )
-            .result
-            .unwrap_err()
-            .reason,
-            ErrorReason::UnsupportedDependency
-        );
-        // Correct the invalid declarations explicitly before testing overflow.
+        assert_eq!(values(&world, c), (30.0, 6.0));
+        assert_eq!(values(&world, b), (20.0, 13.0));
+
+        // Closing a cycle is accepted; its members keep their underlying values.
+        run(
+            &mut world,
+            vec![driver(EntityRef::Handle(a), EntityRef::Handle(b), 1.0, 0.0)],
+        )
+        .result
+        .unwrap();
+        for _ in 0..2 {
+            assert_eq!(values(&world, a), (2.0, 2.0));
+            assert_eq!(values(&world, b), (20.0, 20.0));
+            assert_eq!(values(&world, c), (30.0, 30.0));
+            world.update_for_test(0.25).unwrap();
+        }
+
+        // Removing one member restores evaluation of the others.
         run(
             &mut world,
             vec![Command::RemoveComponent {
                 entity: EntityRef::Handle(a),
                 component: driver_id(),
             }],
-        );
-        run(
-            &mut world,
-            vec![driver(EntityRef::Handle(c), EntityRef::Handle(b), 3.0, 0.0)],
         )
         .result
         .unwrap();
-        assert_eq!(
-            run(
+        assert_eq!(values(&world, c), (30.0, 6.0));
+        assert_eq!(values(&world, b), (20.0, 13.0));
+
+        // A self-dependency is inactive, while its reader evaluates from the
+        // underlying value; correcting the source recovers the chain.
+        run(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(c),
+                component: driver_id(),
+                field: source(EntityRef::Handle(c)),
+            }],
+        )
+        .result
+        .unwrap();
+        assert_eq!(values(&world, c), (30.0, 30.0));
+        assert_eq!(values(&world, b), (20.0, 61.0));
+        run(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(c),
+                component: driver_id(),
+                field: source(EntityRef::Handle(a)),
+            }],
+        )
+        .result
+        .unwrap();
+        assert_eq!(values(&world, c), (30.0, 6.0));
+        assert_eq!(values(&world, b), (20.0, 13.0));
+
+        // Scale and bias are finite at ingress; evaluated results are not validated.
+        for offset in [
+            std::mem::offset_of!(LinearDriver, scale),
+            std::mem::offset_of!(LinearDriver, bias),
+        ] {
+            let failure = run(
                 &mut world,
                 vec![Command::SetField {
-                    entity: EntityRef::Handle(a),
-                    component: scalar_id(),
-                    field: write(f32::MAX)
-                }]
+                    entity: EntityRef::Handle(c),
+                    component: driver_id(),
+                    field: FieldWrite {
+                        offset: offset as u32,
+                        value: FieldValue::F32(f32::INFINITY),
+                    },
+                }],
             )
             .result
-            .unwrap_err()
-            .reason,
-            ErrorReason::InvalidValue
-        );
+            .unwrap_err();
+            assert_eq!(failure.reason, ErrorReason::InvalidValue);
+        }
+        let failure = run(
+            &mut world,
+            vec![Command::InsertComponentValue {
+                entity: EntityRef::Handle(c),
+                value: ComponentValue::LinearDriver(LinearDriver {
+                    source: a,
+                    scale: f32::NAN,
+                    bias: 0.0,
+                }),
+            }],
+        )
+        .result
+        .unwrap_err();
+        assert_eq!(failure.reason, ErrorReason::InvalidValue);
+        run(
+            &mut world,
+            vec![Command::SetField {
+                entity: EntityRef::Handle(a),
+                component: scalar_id(),
+                field: write(f32::MAX),
+            }],
+        )
+        .result
+        .unwrap();
         assert_eq!(values(&world, a), (f32::MAX, f32::MAX));
         assert!(values(&world, c).1.is_infinite());
         run(
@@ -665,7 +701,8 @@ mod drivers {
         )
         .result
         .unwrap();
-        assert_eq!(values(&world, c), (30.0, 15.0));
+        assert_eq!(values(&world, c), (30.0, 6.0));
+        assert_eq!(values(&world, b), (20.0, 13.0));
     }
 }
 

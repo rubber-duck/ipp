@@ -4,13 +4,6 @@ use crate::components::{Hierarchy, LookAt};
 use crate::{Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime};
 use std::time::Instant;
 
-/// Debug builds stop at 4k: debug-only commit validation makes large batch
-/// deletion quadratic there. The registered `scaling` suite runs these
-/// tests in release, where 16k stays affordable.
-#[cfg(debug_assertions)]
-const SCALING_SIZES: &[usize] = &[1_000, 4_000];
-
-#[cfg(not(debug_assertions))]
 const SCALING_SIZES: &[usize] = &[1_000, 4_000, 16_000];
 
 fn measure<T>(size: usize, shape: &str, operation: &str, f: impl FnOnce() -> T) -> T {

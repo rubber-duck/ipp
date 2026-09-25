@@ -41,12 +41,6 @@ pub use crate::systems::skinning::{Skin, SkinRuntimeState};
 pub use crate::systems::render::MeshPose;
 
 #[cfg(test)]
-mod preparation_fixture;
-
-#[cfg(test)]
-pub use preparation_fixture::{BufferCounters, PreparedBuffer};
-
-#[cfg(test)]
 mod rows_fixture;
 
 #[cfg(test)]

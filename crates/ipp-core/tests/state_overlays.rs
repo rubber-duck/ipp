@@ -918,7 +918,6 @@ fn frame_diagnostic_budget_rejects_overflowing_batch_and_resets_next_frame() {
             max_operations: 1100,
             // The largest registered component determines Command's inline size.
             max_batch_bytes: 512 * 1024,
-            max_staging_bytes: 48 * 1024 * 1024,
             ..WorldLimits::default()
         })
         .unwrap();
@@ -1016,7 +1015,6 @@ mod constraints {
             assert_eq!(values(&world, target), (Some(1.0), Some(6.0)));
         }
         ok(&mut world, vec![input.update(4.0)]);
-        assert_eq!(world.driver_bound(target), Some(true));
         assert_eq!(values(&world, target), (Some(1.0), Some(8.0)));
         ok(
             &mut world,
@@ -1031,8 +1029,7 @@ mod constraints {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    fn revealing_invalid_hidden_base_reports_failure_without_restoring_overlay() {
+    fn revealing_a_hidden_base_evaluates_drivers_without_validating_their_results() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default())
@@ -1046,10 +1043,9 @@ mod constraints {
             vec![driver(target, source, 2.0), base_write(source, f32::MAX)],
         );
         assert_eq!(values(&world, source), (Some(f32::MAX), Some(3.0)));
-        reject(&mut world, vec![overlay.clear()], ErrorReason::InvalidValue);
+        ok(&mut world, vec![overlay.clear()]);
         assert_eq!(values(&world, source), (Some(f32::MAX), Some(f32::MAX)));
         assert!(values(&world, target).1.unwrap().is_infinite());
-        assert_eq!(world.driver_bound(target), Some(true));
         ok(
             &mut world,
             vec![base_write(source, 4.0), overlay.release_owner()],
@@ -1076,21 +1072,21 @@ mod constraints {
             ErrorReason::InvalidValue,
         );
         assert_eq!(values(&world, source), (Some(4.0), Some(3.0)));
-        assert_eq!(world.driver_bound(target), Some(false));
+        assert_eq!(values(&world, target), (None, Some(1.0)));
         ok(&mut world, vec![insert(source, 4.0)]);
         assert_eq!(values(&world, source), (Some(4.0), Some(3.0)));
-        assert_eq!(world.driver_bound(target), Some(false));
+        assert_eq!(values(&world, target), (None, Some(1.0)));
         assert_eq!(values(&world, target), (None, Some(1.0)));
         ok(&mut world, vec![driver(target, source, 2.0)]);
         assert_eq!(values(&world, target), (None, Some(6.0)));
         ok(&mut world, vec![remove(source)]);
-        assert_eq!(world.driver_bound(target), Some(false));
+        assert_eq!(values(&world, target), (None, Some(1.0)));
         assert_eq!(values(&world, source), (None, Some(3.0)));
         ok(
             &mut world,
             vec![driver(target, source, 2.0), source_overlay.release_owner()],
         );
-        assert_eq!(world.driver_bound(target), Some(false));
+        assert_eq!(values(&world, target), (None, Some(1.0)));
         assert_eq!(values(&world, source), (None, None));
     }
 

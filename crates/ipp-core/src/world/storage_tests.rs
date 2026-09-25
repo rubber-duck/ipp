@@ -1,12 +1,26 @@
 //! Retention assertions exercise real lifecycle allocations, including lean builds.
 
 use super::*;
-use crate::components::{BufferCounters, PreparedBuffer};
-use std::rc::Rc;
+use crate::components::{CustomMaterial, dynamic_properties::clone_count};
+use crate::{DynamicProperties, DynamicValue};
+
+/// Addresses of a material's stable slot and of its heap-owned payloads.
+fn material_addresses(world: &crate::WorldContext<'_>, entity: EntityId) -> [usize; 2] {
+    let material = world
+        .world
+        .components
+        .custom_material(entity.index() as usize)
+        .unwrap();
+    [
+        material as *const CustomMaterial as usize,
+        material.source.as_ptr() as usize,
+    ]
+}
 
 #[test]
 fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_updates() {
-    let counters = Rc::new(BufferCounters::default());
+    let mut properties = DynamicProperties::default();
+    properties.set("seed", DynamicValue::F32(1.0)).unwrap();
     let mut host = crate::HostRuntime::new();
     let id = host.create_world(WorldLimits::default()).unwrap();
     let mut world = host.world_mut(id).unwrap();
@@ -22,10 +36,10 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
                         },
                         Command::InsertComponentValue {
                             entity: EntityRef::Alias(alias),
-                            value: ComponentValue::PreparedBuffer(PreparedBuffer {
-                                length: 4096,
-                                counters: counters.clone(),
-                                allocation: None,
+                            value: ComponentValue::CustomMaterial(CustomMaterial {
+                                source: format!("file:///materials/{alias}.shader"),
+                                properties: properties.clone(),
+                                ..CustomMaterial::default()
                             }),
                         },
                         Command::InsertComponent {
@@ -39,25 +53,13 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
         })
         .unwrap();
     let report = world.step(0.0).unwrap();
-    let entities = report.outcomes[0].result.as_ref().unwrap();
+    let entities = report.outcomes[0].result.as_ref().unwrap().clone();
     let addresses: Vec<_> = entities
         .iter()
-        .map(|(_, entity)| {
-            let buffer = world
-                .world
-                .components
-                .prepared_buffer(entity.index() as usize)
-                .unwrap();
-            assert_eq!(Rc::strong_count(buffer.allocation.as_ref().unwrap()), 1);
-            (
-                buffer as *const PreparedBuffer,
-                Rc::as_ptr(buffer.allocation.as_ref().unwrap()),
-            )
-        })
+        .map(|(_, entity)| material_addresses(&world, *entity))
         .collect();
-    // One counter reference in each live component and its owned allocation;
-    // neither an authored component nor a resolved component remains alongside it.
-    assert_eq!(Rc::strong_count(&counters), 1 + entities.len() * 2);
+    // Neither an authored component nor a resolved component remains beside
+    // the single effective value.
     assert!(
         world
             .world
@@ -68,7 +70,7 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
             .all(|layer| layer.inputs.retained_inputs().next().is_none())
     );
 
-    counters.clones.set(0);
+    clone_count::take();
     world
         .enqueue(Batch {
             id: 2,
@@ -86,21 +88,10 @@ fn ordinary_components_retain_exactly_one_payload_after_commit_and_unrelated_upd
         })
         .unwrap();
     assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
-    assert_eq!(counters.clones.get(), 0);
-    assert_eq!(Rc::strong_count(&counters), 1 + entities.len() * 2);
+    // Unrelated updates neither copy nor replace the material payloads.
+    assert_eq!(clone_count::take(), 0);
     for ((_, entity), expected) in entities.iter().zip(addresses) {
-        let buffer = world
-            .world
-            .components
-            .prepared_buffer(entity.index() as usize)
-            .unwrap();
-        assert_eq!(
-            (
-                buffer as *const PreparedBuffer,
-                Rc::as_ptr(buffer.allocation.as_ref().unwrap())
-            ),
-            expected
-        );
+        assert_eq!(material_addresses(&world, *entity), expected);
     }
     assert!(
         world

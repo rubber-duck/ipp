@@ -307,7 +307,8 @@ pub(in crate::world) fn commit_components(
     let mut cleanup = Vec::new();
     // Copy-prepared inputs staged by the batch get their single effective copy
     // before any commit observer reads prepared values.
-    let mut validation = staged.prepare_deferred_components();
+    staged.prepare_deferred_components();
+    let mut validation = Ok(());
     #[cfg(feature = "profiling")]
     let measurement = crate::profiling::Stage::fixed(crate::profiling::FixedStage::CommitValidate);
 
@@ -477,7 +478,6 @@ pub(in crate::world) fn commit_components(
     staged.changed.clear();
     staged.observed_components.clear();
     staged.observed_writes.clear();
-    staged.prepared_bytes = 0;
     world.state = staged.entities_state;
     validation
 }
@@ -508,7 +508,6 @@ impl systems::SystemRuntimeAccess<'_> {
         value: ComponentValue,
     ) -> Result<(), ErrorReason> {
         value.validate_lifecycle()?;
-        let value = value.prepare_effective(self.world.limits.max_staging_bytes)?;
         let component = value.type_id();
         let incarnation = self
             .world

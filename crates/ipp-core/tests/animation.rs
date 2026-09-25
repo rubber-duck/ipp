@@ -751,15 +751,24 @@ fn discrete_driver_binding_and_continuous_source_share_the_frozen_seek_time() {
     seek(&mut world, continuous, 1.0);
     seek(&mut world, p, 1.0);
     assert_eq!(scalar(&world, target), (0.0, 5.0));
-    #[cfg(debug_assertions)]
-    {
-        let invalid = seek(&mut world, p, 2.0);
-        assert!(invalid.playback_events.iter().any(|event| {
-            event.controller.id == p
-                && event.kind == AnimationPlaybackEventKind::Failed
-                && event.reason == Some(ErrorReason::UnsupportedDependency)
-        }));
-    }
+    // Animating the source onto the target itself makes the driver inactive
+    // without failing playback; the target keeps its underlying value.
+    let invalid = seek(&mut world, p, 2.0);
+    assert!(
+        invalid
+            .playback_events
+            .iter()
+            .all(|event| event.kind != AnimationPlaybackEventKind::Failed)
+    );
+    assert_eq!(scalar(&world, target), (0.0, 0.0));
+    let recovered = seek(&mut world, p, 1.0);
+    assert!(
+        recovered
+            .playback_events
+            .iter()
+            .all(|event| event.kind != AnimationPlaybackEventKind::Failed)
+    );
+    assert_eq!(scalar(&world, target), (0.0, 5.0));
     world
         .enqueue_playback(p, AnimationPlaybackControl::Stop)
         .unwrap();
@@ -1100,6 +1109,33 @@ fn pending_clip_waits_without_advancing_and_samples_the_saved_seek_when_ready() 
 }
 
 #[test]
+fn controller_asset_demand_is_validated_when_the_controller_is_admitted() {
+    let mut host = HostRuntime::new();
+    let id = host.create_world(WorldLimits::default()).unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    let target = create(&mut world, 7.0);
+    let clip = curve(AnimationInterpolation::Linear);
+    let valid = description(target, &clip, 1);
+    let controller = world.create_animation_controller(valid.clone()).unwrap();
+
+    // An owned asset URI whose type differs from the clip type cannot be demanded.
+    let mut invalid = valid.clone();
+    invalid.drivers[0].source = "asset://11/1".into();
+    assert_eq!(
+        world.create_animation_controller(invalid.clone()),
+        Err(ErrorReason::Capacity)
+    );
+    assert_eq!(world.animation_controllers().len(), 1);
+    assert!(world.animation_controller(controller).is_some());
+    invalid.drivers[0].source = "asset://10/not-a-number".into();
+    assert_eq!(
+        world.create_animation_controller(invalid),
+        Err(ErrorReason::Capacity)
+    );
+    assert_eq!(world.animation_controllers().len(), 1);
+}
+
+#[test]
 fn controller_descriptions_grow_while_ingress_remains_bounded() {
     let mut host = HostRuntime::new();
     let id = host
@@ -1196,14 +1232,9 @@ fn reservation_hints_have_no_estimated_byte_ceiling() {
 }
 
 #[test]
-fn bound_animation_state_does_not_consume_the_activation_budget() {
+fn producer_write_under_bound_animation_is_revealed_when_playback_stops() {
     let mut host = HostRuntime::new();
-    let id = host
-        .create_world(WorldLimits {
-            max_staging_bytes: 1,
-            ..Default::default()
-        })
-        .unwrap();
+    let id = host.create_world(WorldLimits::default()).unwrap();
     let mut world = host.world_mut(id).unwrap();
     let target = create(&mut world, 7.0);
     let clip = curve(AnimationInterpolation::Linear);

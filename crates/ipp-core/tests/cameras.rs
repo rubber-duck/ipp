@@ -95,7 +95,7 @@ fn activation_is_explicit_ordered_and_failed_activation_preserves_selection() {
 }
 
 #[test]
-fn active_deletion_and_required_removal_keep_partial_batch_changes() {
+fn active_deletion_and_required_removal_are_accepted_and_leave_the_selection_unusable() {
     for component in [
         None,
         Some(ComponentValue::CAMERA),
@@ -126,15 +126,10 @@ fn active_deletion_and_required_removal_keep_partial_batch_changes() {
                 operation,
             ],
         );
-        let error = report.outcomes[0].result.as_ref().unwrap_err();
-        assert_eq!(
-            (error.scope, error.operation, error.reason),
-            (
-                ipp_core::BatchErrorScope::Commit,
-                None,
-                ErrorReason::ActiveCamera
-            )
-        );
+        // Losing the active camera is not a batch failure: the selection stays
+        // and draws clear until a valid camera is selected again.
+        assert!(report.outcomes[0].result.is_ok(), "{report:?}");
+        assert_eq!(world.active_camera(), Some(first));
         assert!(world.inspect(second).is_none());
         if let Some(component) = component {
             assert!(
@@ -290,7 +285,7 @@ mod overlays {
     use ipp_core::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
 
     #[test]
-    fn failed_owned_camera_cleanup_keeps_applied_release() {
+    fn owned_camera_cleanup_is_accepted_and_leaves_the_selection_unusable() {
         for cleanup in 0..4 {
             let mut world_host = ipp_core::HostRuntime::new();
             let world_id = world_host
@@ -362,10 +357,7 @@ mod overlays {
                 .clone();
             {
                 let report = run(&mut world, vec![operation]);
-                assert_eq!(
-                    report.outcomes[0].result.as_ref().unwrap_err().reason,
-                    ErrorReason::ActiveCamera
-                );
+                assert!(report.outcomes[0].result.is_ok(), "{report:?}");
                 assert!(world.prepare_camera(100, 100).is_err());
                 assert_eq!(world.active_camera(), Some(entity));
             }
@@ -386,7 +378,7 @@ mod overlays {
     }
 
     #[test]
-    fn auto_fallback_preserves_active_required_components_and_final_release_rejects() {
+    fn auto_fallback_preserves_active_required_components_until_final_release() {
         let mut world_host = ipp_core::HostRuntime::new();
         let world_id = world_host
             .create_world(ipp_core::WorldLimits::default())
@@ -432,9 +424,8 @@ mod overlays {
                 owner,
             }],
         );
-        assert_eq!(
-            report.outcomes[0].result.as_ref().unwrap_err().reason,
-            ErrorReason::ActiveCamera
-        );
+        assert!(report.outcomes[0].result.is_ok());
+        assert_eq!(world.active_camera(), Some(entity));
+        assert!(world.prepare_camera(100, 100).is_err());
     }
 }

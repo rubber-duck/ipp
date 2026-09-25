@@ -32,7 +32,7 @@ One owner mutates a World. Batches apply in order; failure stops the batch and r
 
 A Host may admit a logical batch as bounded command buffers. It applies each buffer at the mutation boundary while withholding that World’s evaluation, presentation and unrelated command execution until completion. A stalled batch expires against Host monotonic time, releases the gate and reports failure without reverting applied effects. Other Worlds and shared I/O continue; asset readiness never extends the batch.
 
-Lifecycle, overlays and discrete animation write affected values directly. Temporary activation/sampling stays local to affected components; expensive consistency checks are configurable debug work. Adapters enqueue completions without World reentry. Resource readiness is independent of mutation success.
+Lifecycle, overlays and discrete animation write affected values directly. Temporary activation/sampling stays local to affected components. Admission is the same in every build: ingress validates each field write locally, whole insertions and the operation results of small multi-field components as complete values, and owning Systems validate dependencies proportionally to the declarations that changed; production runs no whole-state consistency checks. A test-only oracle asserts that committed values stay whole-valid without changing results. Adapters enqueue completions without World reentry. Resource readiness is independent of mutation success.
 
 Systems maintain dependencies from operation-local changes, separately from accumulated observations. Private restoration may defer derived indexes until typed values/references are installed; selected Systems validate before publication. Lifecycle invalidation and public batch ordering remain immediate.
 
@@ -72,7 +72,7 @@ Dynamic property identities survive value edits and unrelated additions. Removal
 
 Worlds have Host-unique editable symbolic IDs, separate runtime/durable identities and capacity hints. Rename preserves attachments; [persistence](protocol-and-schema.md#durable-world-identity-and-save-boundaries) preserves durable identities while remapping runtime handles.
 
-Hints reserve common/system storage before restoration, never limit object counts; lower hints never shrink or evict occupied storage. Retained metadata, component values and animation bindings have no estimated-byte ceilings. Default ingress has no per-batch operation/estimated-byte quota, though Hosts may configure one. Memory/identity limits, queue backpressure, activation budgets, persistence transfers and protocol framing remain separate controls.
+Hints reserve common/system storage before restoration, never limit object counts; lower hints never shrink or evict occupied storage. Retained metadata, component values and animation bindings have no estimated-byte ceilings. Default ingress has no per-batch operation/estimated-byte quota, though Hosts may configure one. Memory/identity limits, queue backpressure, persistence transfers and protocol framing remain separate controls.
 
 ## Entity lifetime
 
@@ -146,7 +146,7 @@ Interrupting a fade starts from its current composite contribution without an ap
 
 Numeric values interpolate, rotations use quaternion-aware interpolation, and discrete values use lifecycle-aware replacement. Joint tracks sample local TRS; skin bindings own joint mappings and inverse-bind matrices. Invalidation never silently retargets replacements. Property animation remains independent of skeletons/rendering; [animation](../development/animation.md) and [skinning](../development/skeletal-skinning.md) own algorithms and formats.
 
-V1 constraint direction is non-iterative scalar drivers, local copies/limits and terminal LookAt/TrackTo; no constraint may depend on LookAt output. [Current scope](../development/building.md#toolchain-and-scope) distinguishes delivered capabilities.
+V1 constraint direction is non-iterative scalar drivers, local copies/limits and terminal LookAt/TrackTo; no constraint may depend on LookAt output. Scalar drivers evaluate in dependency order, sources before targets. Self-dependencies and cycles follow the hierarchy rule without failing the batch: their members do not evaluate, keep their underlying values and are diagnosed, and correction restores evaluation. [Current scope](../development/building.md#toolchain-and-scope) distinguishes delivered capabilities.
 
 ## Diagnostic logging
 

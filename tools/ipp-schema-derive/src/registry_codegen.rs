@@ -450,22 +450,10 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
         quote! { #(#attrs)* #id => <crate::components::#component as ::ipp_core::components::schema::ComponentLifecycle>::supports_dynamic_properties(), }
     });
 
-    let activation_bytes = entries.iter().map(|e| {
+    let operation_validation = entries.iter().map(|e| {
         let attrs = &e.attrs;
         let component = &e.name;
-        quote! { #(#attrs)* Self::#component(value) => ::ipp_core::components::schema::ComponentLifecycle::activation_bytes(value), }
-    });
-
-    let deferred_preparations = entries.iter().map(|e| {
-        let attrs = &e.attrs;
-        let component = &e.name;
-        quote! { #(#attrs)* Self::#component(_) => <crate::components::#component as ::ipp_core::components::schema::ComponentLifecycle>::defers_preparation(), }
-    });
-
-    let preparations = entries.iter().map(|e| {
-        let attrs = &e.attrs;
-        let component = &e.name;
-        quote! { #(#attrs)* Self::#component(value) => ::ipp_core::components::schema::ComponentLifecycle::prepare_effective(value, max_activation_bytes).map(Self::#component), }
+        quote! { #(#attrs)* Self::#component(_) => <crate::components::#component as ::ipp_core::components::schema::ComponentLifecycle>::validates_after_operation(), }
     });
 
     let lifecycle_validation = entries.iter().map(|e| {
@@ -744,19 +732,9 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
                 match id { #(#has_fields)* _ => false }
             }
 
-            /// Prepare typed effective resources before installing an affected component.
-            pub(crate) fn prepare_effective(&self, max_activation_bytes: usize) -> Result<Self, crate::ErrorReason> {
-                match self { #(#preparations)* }
-            }
-
-            /// Whether effective preparation is an infallible copy made once per commit.
-            pub(crate) fn defers_preparation(&self) -> bool {
-                match self { #(#deferred_preparations)* }
-            }
-
-            /// Owned allocations created by effective activation, excluding exposed fields.
-            pub(crate) fn activation_bytes(&self) -> usize {
-                match self { #(#activation_bytes)* }
+            /// Whether ingress validates the complete value after each operation.
+            pub(crate) fn validates_after_operation(&self) -> bool {
+                match self { #(#operation_validation)* }
             }
 
             /// Run typed lifecycle validation without descriptive schema traversal.

@@ -156,10 +156,7 @@ impl World {
     }
 
     fn simulation_state(limits: WorldLimits) -> Result<WorldSimulationState, ErrorReason> {
-        if limits.max_operations == 0
-            || limits.max_queued_batches == 0
-            || limits.max_staging_bytes == 0
-        {
+        if limits.max_operations == 0 || limits.max_queued_batches == 0 {
             return Err(ErrorReason::Capacity);
         }
         Ok(WorldSimulationState {
@@ -179,10 +176,7 @@ impl World {
             metadata: WorldMetadata::default(),
             limits,
             capacity_hints: WorldCapacityHints::default(),
-            state: WorldEntityState {
-                activation_budget: limits.max_staging_bytes,
-                ..WorldEntityState::default()
-            },
+            state: WorldEntityState::default(),
             components: registry::ComponentStorage::default(),
             queue: VecDeque::with_capacity(64),
             command_buffers: Vec::new(),

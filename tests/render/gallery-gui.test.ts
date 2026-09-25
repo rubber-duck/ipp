@@ -993,7 +993,7 @@ test("Gallery runs a real GUI demo and cleans it up", {
         ),
         "each panel fill must paint at effective alpha 0.9",
       );
-      // The event log ScrollView nests inside the telemetry ScrollView.
+      // The event log VirtualList nests inside the telemetry ScrollView.
       telemetryScrollViews(initial);
 
       const buttons = initial.semantic.nodes.filter(
@@ -2997,12 +2997,13 @@ async function waitForGuiState(
   );
 }
 
-/** The telemetry ScrollView and the event log ScrollView nested inside it. */
+/** The telemetry ScrollView and the event log VirtualList nested inside it. */
 function telemetryScrollViews(state: GalleryGuiState) {
   const views = state.detailed.nodes.filter(
     ({ data, style }) =>
       data.kind === "container" &&
-      data.containerKind === "scrollView" &&
+      (data.containerKind === "scrollView" ||
+        data.containerKind === "virtualList") &&
       style.enabled !== false,
   );
   assert.equal(views.length, 2, "expected the telemetry and event log views");
@@ -3022,11 +3023,154 @@ function telemetryScrollViews(state: GalleryGuiState) {
   const outer = views.filter(({ id }) => !nested(id));
   assert.equal(inner.length, 1, "the event log is not nested");
   assert.equal(outer.length, 1);
+  assert.equal(
+    inner[0]!.data.kind === "container" && inner[0]!.data.containerKind,
+    "virtualList",
+  );
+  assert.equal(
+    outer[0]!.data.kind === "container" && outer[0]!.data.containerKind,
+    "scrollView",
+  );
   const pair = { outer: semantic(outer[0]!.id), inner: semantic(inner[0]!.id) };
   assert.ok(pair.outer.scroll && pair.inner.scroll, "missing scroll state");
   return pair as {
     outer: GuiSemanticNode & { scroll: NonNullable<GuiSemanticNode["scroll"]> };
     inner: GuiSemanticNode & { scroll: NonNullable<GuiSemanticNode["scroll"]> };
+  };
+}
+
+/** Event log entries restated from the demo: a Text at least 0.28 high
+ * with a 0.05 gap below it, at 0.16 type. */
+const EVENT_MIN_HEIGHT = 0.28;
+const EVENT_GAP = 0.05;
+const EVENT_FONT_SIZE = 0.16;
+
+/** Monospaced advance and line height per unit font size, measured from a
+ * single-line label. */
+interface TextMetrics {
+  readonly advance: number;
+  readonly lineHeight: number;
+}
+
+/**
+ * The event log VirtualList: its semantic scroll and item state, authored
+ * item properties, and the declared items in index order. Declared items
+ * are the list's children, each an item wrapper holding one entry Text;
+ * their index follows the loaded range, since the list orders children by
+ * item index.
+ */
+function eventLog(state: GalleryGuiState) {
+  const { outer, inner } = telemetryScrollViews(state);
+  const list = inner.virtualList;
+  assert.ok(list, "the event log has no VirtualList semantics");
+  const inspected = new Map(
+    state.detailed.nodes.map((node) => [node.id, node]),
+  );
+  const detail = inspected.get(inner.id)!;
+  const { itemCount, itemExtent, overscan } = detail.values;
+  assert.ok(
+    itemCount !== undefined &&
+      itemExtent !== undefined &&
+      overscan !== undefined,
+    "the event log has no authored item properties",
+  );
+  const items = detail.children.map((id, position) => {
+    const wrapper = inspected.get(id);
+    assert.ok(wrapper && wrapper.children.length === 1, "bad item wrapper");
+    const entry = inspected.get(wrapper.children[0]!);
+    assert.ok(entry && entry.data.kind === "text", "item is not a Text");
+    const semantic = state.semantic.nodes.find(
+      (candidate) => candidate.id === entry.id,
+    );
+    assert.ok(semantic, `event log item ${entry.id} is absent from semantics`);
+    return {
+      index: list.loadedFirst + position,
+      text: entry.data.text,
+      bounds: semantic.bounds,
+    };
+  });
+  return {
+    outer,
+    node: inner,
+    list,
+    itemCount,
+    itemExtent,
+    overscan,
+    items,
+  };
+}
+
+/**
+ * Independent event log layout: every item takes the estimate except the
+ * declared ones, which measure their greedily wrapped lines (at least the
+ * minimum height) plus the gap. Positions, content extent, capacity and the
+ * wanted range follow from those extents, the viewport and the overscan.
+ */
+function expectedEventLog(
+  log: ReturnType<typeof eventLog>,
+  metrics: TextMetrics,
+) {
+  const glyph = metrics.advance * EVENT_FONT_SIZE;
+  const line = metrics.lineHeight * EVENT_FONT_SIZE;
+  const width = log.items[0]?.bounds[2] ?? 0;
+  const columns = Math.floor(width / glyph + 1e-4);
+  const estimate = log.itemExtent;
+  const count = log.itemCount;
+  const viewport = log.node.bounds[3];
+  const first = log.items[0]?.index ?? 0;
+  const lines = log.items.map(({ text }) => wrapColumns(text, columns));
+  const extents = lines.map(
+    (wrapped) => Math.max(wrapped.length * line, EVENT_MIN_HEIGHT) + EVENT_GAP,
+  );
+  const starts = extents.map((_, at) =>
+    extents
+      .slice(0, at)
+      .reduce((sum, extent) => sum + extent, first * estimate),
+  );
+  const declaredEnd = first + extents.length;
+  const excess =
+    extents.reduce((sum, extent) => sum + extent, 0) -
+    extents.length * estimate;
+  const position = (index: number) =>
+    index < first
+      ? index * estimate
+      : index < declaredEnd
+        ? starts[index - first]!
+        : index * estimate + excess;
+  const extent = (index: number) =>
+    index >= first && index < declaredEnd ? extents[index - first]! : estimate;
+  const content = count * estimate + excess;
+  const capacity = Math.max(0, content - viewport);
+  // Item containing a main-axis offset; the log holds a few hundred items
+  // at most, so a walk from the first is enough.
+  const itemAt = (offset: number) => {
+    let index = 0;
+    while (index < count - 1 && offset >= position(index) + extent(index))
+      index += 1;
+    return index;
+  };
+  const wanted = (offset: number): [number, number] => {
+    if (count === 0) return [0, 0];
+    const firstVisible = itemAt(offset);
+    const end = offset + viewport;
+    let lastVisible = itemAt(end);
+    if (lastVisible > firstVisible && position(lastVisible) >= end)
+      lastVisible -= 1;
+    return [
+      Math.max(0, firstVisible - log.overscan),
+      Math.min(count, lastVisible + 1 + log.overscan),
+    ];
+  };
+  return {
+    glyph,
+    line,
+    columns,
+    lines,
+    extents,
+    position,
+    content,
+    capacity,
+    wanted,
   };
 }
 
@@ -3304,12 +3448,269 @@ test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input a
       assert.deepEqual(views.inner.scroll.offset, [0, 0]);
       assert.ok(views.outer.scroll.maxOffset[1] > 0.5);
       assert.ok(views.inner.scroll.maxOffset[1] > 1);
+
+      // The event log is a VirtualList over the demo's whole history that
+      // declares only its wanted range. Once the declared window follows
+      // the committed offset, the loaded range, the capacity and each
+      // declared item's position match an independent layout of the
+      // declared entries, the sidebar shows the range the list reported to
+      // React, and entries run newest first by sequence number.
+      const metrics = { advance, lineHeight };
+      const eventLogMatches = async (state: GalleryGuiState) => {
+        const log = eventLog(state);
+        const expected = expectedEventLog(log, metrics);
+        const offset = log.node.scroll.offset[1];
+        const { loadedFirst, loadedLast } = log.list;
+        const [wantedFirst, wantedLast] = expected.wanted(offset);
+        assert.equal(log.list.itemCount, log.itemCount);
+        assert.equal(
+          log.items.length,
+          loadedLast - loadedFirst,
+          "the declared children do not fill the loaded range",
+        );
+        assert.ok(
+          log.items.length < log.itemCount || log.itemCount <= 1,
+          `the event log declares all ${log.itemCount} items`,
+        );
+        assert.deepEqual(
+          [loadedFirst, loadedLast],
+          [wantedFirst, wantedLast],
+          `loaded range at offset ${offset}`,
+        );
+        assert.ok(
+          Math.abs(log.node.scroll.maxOffset[1] - expected.capacity) < 1e-3,
+          `capacity ${log.node.scroll.maxOffset[1]} is not ${expected.capacity}`,
+        );
+        for (const item of log.items)
+          assert.ok(
+            Math.abs(
+              item.bounds[1] -
+                (log.node.bounds[1] + expected.position(item.index)),
+            ) < 1e-3,
+            `item ${item.index} lies at ${item.bounds[1]}, not ${log.node.bounds[1] + expected.position(item.index)}`,
+          );
+        const sequences = log.items.map(({ text }) =>
+          Number(/^(\d+) \/\/ /.exec(text)?.[1]),
+        );
+        sequences.forEach((sequence, at) =>
+          assert.equal(sequence, sequences[0]! - at, "entries out of order"),
+        );
+        assert.equal(
+          await text("#gui-events"),
+          `items ${loadedFirst}-${loadedLast} of ${log.itemCount}`,
+        );
+        return { log, expected };
+      };
+      const settledEventLog = async (
+        name: string,
+        predicate: (log: ReturnType<typeof eventLog>) => boolean = () => true,
+      ) => {
+        const deadline = performance.now() + 15_000;
+        let failure: unknown = new Error(
+          `${name}: the event log did not settle`,
+        );
+        while (performance.now() < deadline) {
+          try {
+            const state = await waitForGuiState(g);
+            const settled = await eventLogMatches(state);
+            if (predicate(settled.log)) {
+              const { log, expected } = settled;
+              await record(name, {
+                scroll: log.node.scroll,
+                virtualList: log.list,
+                itemExtent: log.itemExtent,
+                overscan: log.overscan,
+                items: log.items.map((item, at) => ({
+                  ...item,
+                  extent: expected.extents[at],
+                  lines: expected.lines[at],
+                })),
+                capacity: expected.capacity,
+              });
+              return { state, ...settled };
+            }
+            failure = new Error(
+              `${name}: event log ${JSON.stringify(settled.log.list)} at ${JSON.stringify(settled.log.node.scroll)}`,
+            );
+          } catch (error) {
+            failure = error;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw failure;
+      };
+      const initialLog = await settledEventLog("event-log-top");
+      assert.deepEqual(
+        [initialLog.log.list.loadedFirst, initialLog.log.list.anchorIndex],
+        [0, 0],
+      );
+      assert.ok(
+        initialLog.log.itemCount >= 90 &&
+          initialLog.expected.capacity > 20 * views.inner.bounds[3],
+        "the event log history does not span many viewports",
+      );
+      assert.ok(
+        initialLog.expected.extents.some(
+          (extent) => Math.abs(extent - initialLog.log.itemExtent) > 0.05,
+        ) &&
+          new Set(initialLog.expected.lines.map(({ length }) => length)).size >
+            1,
+        "declared entries all measure like one another or the estimate",
+      );
       near(views.outer.bounds[3], 0.78, "telemetry viewport height");
       assert.ok(
         views.inner.bounds[1] + views.inner.bounds[3] >
           views.outer.bounds[1] + views.outer.bounds[3],
         "the event log must start below the telemetry fold",
       );
+
+      // Scroll bar frames: each visible thumb paints where an independent
+      // geometry calculation puts it for the committed offsets.
+      const barFrame = async (
+        frame: Awaited<ReturnType<typeof capture>>,
+        state: ReturnType<typeof telemetryScrollViews>,
+        name: string,
+        withLog: boolean,
+      ) => {
+        const [ox, oy] = state.outer.bounds;
+        const bars = {
+          outer: expectedScrollBar(state.outer, ox, oy),
+          // Nested bounds are laid out at zero ancestor scroll; the outer
+          // offset moves the event log on screen.
+          ...(withLog
+            ? {
+                inner: expectedScrollBar(
+                  state.inner,
+                  state.inner.bounds[0],
+                  state.inner.bounds[1] - state.outer.scroll.offset[1],
+                ),
+              }
+            : {}),
+        };
+        const tracks = Object.fromEntries(
+          Object.entries(bars).map(([bar, { track }]) => [
+            bar,
+            [track[0] - 0.01, track[1], track[2] + 0.01, track[3]],
+          ]),
+        ) as Record<string, LogicalRect>;
+        const ink = await g.call<Record<string, LogicalRect>>(
+          "galleryGuiInkBounds",
+          frame.label,
+          tracks,
+        );
+        const masks: Record<string, unknown> = {};
+        for (const [bar, expected] of Object.entries(bars)) {
+          const mask = await compareMask(
+            g,
+            directory,
+            `${name}-${bar}-bar`,
+            frame,
+            [
+              expected.track[0] - 0.03,
+              expected.track[1],
+              expected.track[2] + 0.03,
+              expected.track[3],
+            ],
+            [expected.thumb],
+            (pixel) => Math.max(...pixel) >= 150,
+          );
+          masks[bar] = mask;
+          const [, top, , bottom] = ink[bar]!;
+          assert.ok(
+            Math.abs(top - expected.thumb[1]) < 0.03 &&
+              Math.abs(bottom - expected.thumb[3]) < 0.03,
+            `${name} ${bar} thumb spans ${top}..${bottom}, expected ${expected.thumb[1]}..${expected.thumb[3]}`,
+          );
+          assert.ok(
+            mask.intersectionOverUnion > 0.5,
+            `${name} ${bar} thumb mask: ${JSON.stringify(mask)}`,
+          );
+        }
+        await record(name, { bars, ink, masks });
+      };
+      // Event log frames: within the part of the log the telemetry view
+      // shows, entry ink lies on the independently wrapped lines of the
+      // declared items at their offset positions, and each fully visible
+      // line paints from its left edge to its last glyph, so a wrong item,
+      // position or wrap would move or cut the ink.
+      const eventFrame = async (
+        frame: Awaited<ReturnType<typeof capture>>,
+        settled: Awaited<ReturnType<typeof settledEventLog>>,
+        name: string,
+      ) => {
+        const { log, expected } = settled;
+        const listTop = log.node.bounds[1] - log.outer.scroll.offset[1];
+        const offset = log.node.scroll.offset[1];
+        const top = Math.max(listTop, log.outer.bounds[1]);
+        const bottom = Math.min(
+          listTop + log.node.bounds[3],
+          log.outer.bounds[1] + log.outer.bounds[3],
+        );
+        const lineRects: LogicalRect[] = [];
+        const lineEnds: Record<string, number> = {};
+        const regions: Record<string, LogicalRect> = {};
+        log.items.forEach((item, at) => {
+          const x = item.bounds[0];
+          const itemTop = listTop + expected.position(item.index) - offset;
+          const lines = expected.lines[at]!;
+          // A one-line entry sits in its minimum-height box.
+          const boxHeight =
+            lines.length === 1 ? EVENT_MIN_HEIGHT : expected.line;
+          lines.forEach((content, index) => {
+            const y0 = itemTop + index * expected.line;
+            const y1 = y0 + boxHeight;
+            const clipped = [
+              x,
+              Math.max(y0, top),
+              x + content.length * expected.glyph,
+              Math.min(y1, bottom),
+            ] as LogicalRect;
+            if (clipped[3] > clipped[1]) lineRects.push(clipped);
+            if (y0 >= top && y1 <= bottom) {
+              const key = `item${item.index}-line${index}`;
+              lineEnds[key] = x + content.length * expected.glyph;
+              regions[key] = [x - 0.02, y0, x + item.bounds[2], y1];
+            }
+          });
+        });
+        assert.ok(
+          Object.keys(regions).length >= 1,
+          `${name}: no event log line is fully visible`,
+        );
+        const ink = await g.call<Record<string, LogicalRect>>(
+          "galleryGuiInkBounds",
+          frame.label,
+          regions,
+        );
+        const width = log.items[0]!.bounds[2];
+        const x = log.items[0]!.bounds[0];
+        const logMask = await compareMask(
+          g,
+          directory,
+          name,
+          frame,
+          [x - 0.03, top, x + width + 0.03, bottom],
+          lineRects,
+          (pixel) => Math.max(...pixel) >= 110,
+        );
+        await record(`${name}-frame`, { lineRects, lineEnds, ink, logMask });
+        for (const [key, end] of Object.entries(lineEnds)) {
+          const [start, , stop] = ink[key]!;
+          assert.ok(
+            start > x - 0.015 && start < x + expected.glyph,
+            `${name} ${key} ink starts at ${start}, not ${x}`,
+          );
+          assert.ok(
+            stop > end - expected.glyph && stop < end + 0.015,
+            `${name} ${key} ink ends at ${stop}, not before ${end}`,
+          );
+        }
+        assert.ok(logMask.actualPixels > 150, `${name}: no entry ink`);
+        assert.ok(
+          logMask.precision > 0.95,
+          `${name}: entry ink escaped its wrapped lines: ${JSON.stringify(logMask)}`,
+        );
+      };
 
       await g.call("faceGalleryGuiToCamera");
       try {
@@ -3375,70 +3776,6 @@ test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input a
           );
         };
 
-        // Scroll bar frames: each visible thumb paints where an independent
-        // geometry calculation puts it for the committed offsets.
-        const barFrame = async (
-          frame: typeof detail,
-          state: ReturnType<typeof telemetryScrollViews>,
-          name: string,
-          withLog: boolean,
-        ) => {
-          const [ox, oy] = state.outer.bounds;
-          const bars = {
-            outer: expectedScrollBar(state.outer, ox, oy),
-            // Nested bounds are laid out at zero ancestor scroll; the outer
-            // offset moves the event log on screen.
-            ...(withLog
-              ? {
-                  inner: expectedScrollBar(
-                    state.inner,
-                    state.inner.bounds[0],
-                    state.inner.bounds[1] - state.outer.scroll.offset[1],
-                  ),
-                }
-              : {}),
-          };
-          const tracks = Object.fromEntries(
-            Object.entries(bars).map(([bar, { track }]) => [
-              bar,
-              [track[0] - 0.01, track[1], track[2] + 0.01, track[3]],
-            ]),
-          ) as Record<string, LogicalRect>;
-          const ink = await g.call<Record<string, LogicalRect>>(
-            "galleryGuiInkBounds",
-            frame.label,
-            tracks,
-          );
-          const masks: Record<string, unknown> = {};
-          for (const [bar, expected] of Object.entries(bars)) {
-            const mask = await compareMask(
-              g,
-              directory,
-              `${name}-${bar}-bar`,
-              frame,
-              [
-                expected.track[0] - 0.03,
-                expected.track[1],
-                expected.track[2] + 0.03,
-                expected.track[3],
-              ],
-              [expected.thumb],
-              (pixel) => Math.max(...pixel) >= 150,
-            );
-            masks[bar] = mask;
-            const [, top, , bottom] = ink[bar]!;
-            assert.ok(
-              Math.abs(top - expected.thumb[1]) < 0.03 &&
-                Math.abs(bottom - expected.thumb[3]) < 0.03,
-              `${name} ${bar} thumb spans ${top}..${bottom}, expected ${expected.thumb[1]}..${expected.thumb[3]}`,
-            );
-            assert.ok(
-              mask.intersectionOverUnion > 0.5,
-              `${name} ${bar} thumb mask: ${JSON.stringify(mask)}`,
-            );
-          }
-          await record(name, { bars, ink, masks });
-        };
         await barFrame(detail, views, "settings-bars-top", false);
 
         const cameraBefore = transform(await g.inspect());
@@ -3540,6 +3877,25 @@ test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input a
           opened.outer.scroll.offset,
           "a wheel over the event log also scrolled the telemetry view",
         );
+        // The notch moves the log within its first item: the anchor keeps
+        // that item and the offset into it.
+        const wheeled = await settledEventLog("event-log-wheeled", (log) =>
+          at(log.node.scroll.offset[1], WHEEL_STEP),
+        );
+        assert.deepEqual(
+          [wheeled.log.list.anchorIndex, wheeled.log.list.loadedFirst],
+          [0, 0],
+        );
+        assert.ok(at(wheeled.log.list.anchorOffset, WHEEL_STEP));
+        await g.page.mouse.move(1, 1);
+        const wheeledFrame = await capture("settings-log-wheeled");
+        await barFrame(
+          wheeledFrame,
+          telemetryScrollViews(wheeled.state),
+          "settings-log-wheeled-bars",
+          true,
+        );
+        await eventFrame(wheeledFrame, wheeled, "settings-log-wheeled");
 
         // Dragging the log thumb past its track end scrolls it to its end.
         const logBar = (state: typeof opened) =>
@@ -3548,17 +3904,32 @@ test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input a
             state.inner.bounds[0],
             state.inner.bounds[1] - state.outer.scroll.offset[1],
           );
+        // The declared window follows to the oldest entries; measuring
+        // them keeps the offset at the end of the shortened content.
         await dragThumb(logBar(logNotched), "end");
-        const logEnd = await until(({ inner }) =>
+        await until(({ inner }) =>
           at(inner.scroll.offset[1], inner.scroll.maxOffset[1]),
         );
+        const dragged = await settledEventLog(
+          "event-log-dragged",
+          (log) =>
+            log.list.loadedLast === log.itemCount &&
+            at(log.node.scroll.offset[1], log.node.scroll.maxOffset[1]),
+        );
+        const logEnd = telemetryScrollViews(dragged.state);
         assert.deepEqual(
           logEnd.outer.scroll.offset,
           opened.outer.scroll.offset,
         );
+        assert.ok(
+          dragged.log.list.loadedFirst > 0 &&
+            dragged.log.list.anchorIndex > dragged.log.list.loadedFirst,
+          `the dragged log did not move its window: ${JSON.stringify(dragged.log.list)}`,
+        );
         await g.page.mouse.move(1, 1);
         const scrolledFrame = await capture("settings-bars-scrolled");
         await barFrame(scrolledFrame, logEnd, "settings-bars-scrolled", true);
+        await eventFrame(scrolledFrame, dragged, "settings-log-dragged");
         assert.ok(
           (await g.difference(detail.label, scrolledFrame.label))
             .changedPixels > 200,
@@ -3570,6 +3941,10 @@ test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input a
         await dragThumb(logBar(logEnd), "start");
         const logStart = await until(({ inner }) =>
           at(inner.scroll.offset[1], 0),
+        );
+        await settledEventLog(
+          "event-log-returned",
+          (log) => log.list.loadedFirst === 0 && log.list.anchorIndex === 0,
         );
         assert.deepEqual(
           logStart.outer.scroll.offset,
@@ -3855,6 +4230,53 @@ test("Gallery GUI settings panel wraps notes, nests scrolling and blocks input a
       const purgedViews = telemetryScrollViews(purged);
       assert.equal(purgedViews.inner.scroll.maxOffset[1], 0);
       assert.equal(await text("#gui-shield"), "lifted, 2 blocked");
+
+      // PURGE resets the list to its one entry and anchors it at the top.
+      await settledEventLog(
+        "event-log-purged",
+        (log) =>
+          log.itemCount === 1 &&
+          log.list.anchorIndex === 0 &&
+          log.list.anchorOffset === 0,
+      );
+      // With nothing left to scroll, a wheel notch over the log passes to
+      // the telemetry view, which reaches its end with the log in view.
+      {
+        const [ix, iy, iw] = purgedViews.inner.bounds;
+        const [over] = await projectContent(g, [
+          [ix + iw * 0.4, iy - purgedViews.outer.scroll.offset[1] + 0.15],
+        ]);
+        await g.page.mouse.move(over!.clientX, over!.clientY);
+        await g.page.mouse.wheel(0, 100);
+        await waitForGuiState(g, (state) => {
+          const { outer } = telemetryScrollViews(state);
+          return (
+            Math.abs(outer.scroll.offset[1] - outer.scroll.maxOffset[1]) < 1e-4
+          );
+        });
+        await g.page.mouse.move(1, 1);
+      }
+      const emptied = await settledEventLog(
+        "event-log-emptied",
+        (log) =>
+          log.itemCount === 1 &&
+          log.node.scroll.offset[1] === 0 &&
+          log.outer.scroll.offset[1] === log.outer.scroll.maxOffset[1],
+      );
+      assert.ok(emptied.log.items[0]!.text.endsWith("LOG PURGED"));
+      await g.call("faceGalleryGuiToCamera");
+      try {
+        const purgedFrame = await capture("settings-log-purged");
+        await barFrame(
+          purgedFrame,
+          telemetryScrollViews(emptied.state),
+          "settings-log-purged-bars",
+          true,
+        );
+        await eventFrame(purgedFrame, emptied, "settings-log-purged");
+      } finally {
+        await g.call("releaseGalleryGuiTransform");
+      }
 
       // Re-arming marks the glass again.
       await g.page.locator("#gui-shield-toggle").click();

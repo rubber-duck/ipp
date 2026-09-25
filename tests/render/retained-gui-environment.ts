@@ -38,18 +38,40 @@ export type RetainedGuiArrangement =
 
 /**
  * Both builds of an arrangement render; only the GUI build presents text
- * through retained batches.
+ * through retained batches. `features` records each build's configuration.
  */
 const BUILDS = {
   worker: [
-    { name: "render-surfaces", retained: false },
-    { name: "headless-gui", retained: true },
+    {
+      name: "render-surfaces",
+      retained: false,
+      features: ["render", "diagnostics", "surfaces", "builtin-assets"],
+    },
+    {
+      name: "headless-gui",
+      retained: true,
+      features: ["render", "diagnostics", "surfaces", "gui"],
+    },
   ],
   "native-gles": [
-    { name: "gles-surfaces", retained: false },
-    { name: "gles-gui", retained: true },
+    {
+      name: "gles-surfaces",
+      retained: false,
+      features: ["websocket", "diagnostics", "surfaces", "builtin-assets"],
+    },
+    {
+      name: "gles-gui",
+      retained: true,
+      features: ["websocket", "diagnostics", "surfaces", "gui"],
+    },
   ],
 } as const;
+
+/**
+ * Renderers that rasterize on the CPU. Their timings establish correctness in
+ * that environment only and are never frame-rate evidence.
+ */
+const SOFTWARE_RENDERERS = /swiftshader|llvmpipe|softpipe|lavapipe/i;
 
 /** Source, machine and pipeline identity that make retained evidence comparable. */
 function runIdentity(workspace: string, iterations: number) {
@@ -100,6 +122,9 @@ export async function runRetainedGui(
   const reports: Array<
     {
       build: string;
+      features: readonly string[];
+      /** Whether the device identity names a CPU rasterizer. */
+      softwareRenderer: boolean;
       evidence: string;
       hostEvidence: string | null;
       browser: string | null;
@@ -107,7 +132,7 @@ export async function runRetainedGui(
     } & RetainedGuiReport
   > = [];
   const frames = new Map<string, Map<string, RgbaFrame>>();
-  for (const { name, retained } of builds) {
+  for (const { name, retained, features } of builds) {
     const captured = new Map<string, RgbaFrame>();
     frames.set(name, captured);
     const exercise = async (
@@ -159,16 +184,21 @@ export async function runRetainedGui(
           iterations,
           options,
         );
+        const device = Object.fromEntries(
+          Object.entries(report.warm.statistics?.device ?? {}).filter(
+            ([, value]) => typeof value === "string",
+          ),
+        );
         reports.push({
           build: name,
+          features,
+          softwareRenderer: Object.values(device).some((value) =>
+            SOFTWARE_RENDERERS.test(String(value)),
+          ),
           evidence: env.evidence.directory,
           hostEvidence: null,
           browser: env.page.context().browser()?.version() ?? null,
-          device: Object.fromEntries(
-            Object.entries(report.warm.statistics?.device ?? {}).filter(
-              ([, value]) => typeof value === "string",
-            ),
-          ),
+          device,
           ...report,
         });
         await writeFile(
@@ -298,6 +328,8 @@ export async function runRetainedGui(
         // Streamed-update timings per build; definitions beside them.
         timings: reports.map(({ build, timings }) => ({ build, ...timings })),
         timingDefinitions: TIMING_DEFINITIONS,
+        timingScope:
+          "Latencies through client, transport, scheduling and readback, never frame rates; builds whose softwareRenderer is true establish correctness only.",
         // Seven per-frame cache counters of each build's warm frame, running
         // totals after the last sample, and the warm frame's cache records.
         surfaceCache: options.surfaceCache

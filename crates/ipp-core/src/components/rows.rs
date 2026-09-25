@@ -10,8 +10,9 @@
 //! as [`FieldValue::Rows`] in the table encoding documented on [`Rows::encode`].
 //!
 //! Each slot is unallocated, live or dead. Callers may insert at any
-//! unallocated slot, in any order; [`Rows::remove`] makes a slot dead, and a dead
-//! slot is never reused within a component incarnation. Bindings hold
+//! unallocated slot, in any order; [`Rows::remove`] makes one slot dead and
+//! [`Rows::remove_slots`] makes any number dead in one pass, and a dead slot is
+//! never reused within a component incarnation. Bindings hold
 //! `(component binding, slot, property)`, never a pointer into the table.
 //!
 //! Properties are scalars, vectors, asset references or bounded text. A text
@@ -542,6 +543,60 @@ impl<R: SchemaRow> Rows<R> {
         let dead = self.dead.binary_search(&slot).unwrap_err();
         self.dead.insert(dead, slot);
         Some(self.rows.remove(index).1)
+    }
+
+    /// Mark every live slot in `slots` dead in one pass and return their rows in
+    /// ascending slot order. Slots that are not live (dead, unallocated,
+    /// unaddressable or repeated) are ignored. For `n` live rows, `d` dead slots
+    /// and `k` requested slots this costs O(n + d + k log k), where removing the
+    /// same slots one at a time with [`Self::remove`] shifts the table per slot.
+    pub fn remove_slots(&mut self, slots: &[u32]) -> Vec<R> {
+        let mut removing = slots.to_vec();
+        removing.sort_unstable();
+        removing.dedup();
+        let (Some(&first), Some(&last)) = (removing.first(), removing.last()) else {
+            return Vec::new();
+        };
+
+        // Both sequences ascend, so one cursor classifies every row in range.
+        let start = self.rows.partition_point(|(slot, _)| *slot < first);
+        let end = self.rows.partition_point(|(slot, _)| *slot <= last);
+        let mut next = 0;
+        let removed: Vec<(u32, R)> = self
+            .rows
+            .extract_if(start..end, |(slot, _)| {
+                while removing.get(next).is_some_and(|candidate| candidate < slot) {
+                    next += 1;
+                }
+
+                removing.get(next) == Some(slot)
+            })
+            .collect();
+
+        // Live slots are never dead, so the extracted slots are disjoint from the record.
+        removing.clear();
+        removing.extend(removed.iter().map(|(slot, _)| *slot));
+        self.merge_dead(&removing);
+        removed.into_iter().map(|(_, row)| row).collect()
+    }
+
+    /// Merge ascending slots disjoint from the dead record into it, back to front.
+    fn merge_dead(&mut self, slots: &[u32]) {
+        let mut dead = self.dead.len();
+        let mut added = slots.len();
+        self.dead.resize(dead + added, 0);
+
+        let mut write = self.dead.len();
+        while added > 0 {
+            write -= 1;
+            if dead > 0 && self.dead[dead - 1] > slots[added - 1] {
+                self.dead[write] = self.dead[dead - 1];
+                dead -= 1;
+            } else {
+                self.dead[write] = slots[added - 1];
+                added -= 1;
+            }
+        }
     }
 
     /// Live rows in ascending slot order.

@@ -754,6 +754,120 @@ fn text_is_row_only() {
     );
 }
 
+fn tags(count: u32) -> Rows<RowsFixtureTag> {
+    let mut rows = Rows::new();
+    for value in 0..count {
+        rows.push(RowsFixtureTag {
+            value,
+        })
+        .unwrap();
+    }
+
+    rows
+}
+
+#[test]
+fn batch_removal_returns_live_rows_in_slot_order_and_kills_their_slots() {
+    let mut rows = tags(8);
+    rows.remove(1);
+    let capacity = rows.rows.capacity();
+
+    // Unsorted and repeated slots, a dead slot, an unallocated slot and an
+    // unaddressable slot: only live slots are removed.
+    let removed = rows.remove_slots(&[6, 2, 6, 1, 9, u32::MAX, 4]);
+    assert_eq!(
+        removed.iter().map(|row| row.value).collect::<Vec<_>>(),
+        [2, 4, 6]
+    );
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        rows.iter().map(|(slot, _)| slot).collect::<Vec<_>>(),
+        [0, 3, 5, 7]
+    );
+    for dead in [1, 2, 4, 6] {
+        assert_eq!(rows.slot_state(dead), RowSlotState::Dead);
+        assert_eq!(
+            rows.insert(
+                dead,
+                RowsFixtureTag {
+                    value: 0
+                }
+            ),
+            Err(FieldError::UnknownField)
+        );
+    }
+    assert_eq!(rows.slot_state(9), RowSlotState::Unallocated);
+    assert_eq!(rows.dead, [1, 2, 4, 6]);
+    assert_eq!(rows.next_slot(), 8);
+
+    // Row storage is kept for later growth; the dead record holds the new slots.
+    assert_eq!(rows.rows.capacity(), capacity);
+    assert_eq!(
+        rows.retained_bytes(),
+        capacity * std::mem::size_of::<(u32, RowsFixtureTag)>()
+            + rows.dead.capacity() * std::mem::size_of::<u32>()
+    );
+}
+
+#[test]
+fn batch_removal_handles_empty_and_complete_requests() {
+    let mut rows = tags(4);
+    assert!(rows.remove_slots(&[]).is_empty());
+    assert_eq!(rows.len(), 4);
+    assert!(rows.remove_slots(&[7, 8]).is_empty());
+    assert!(rows.dead.is_empty());
+
+    let removed = rows.remove_slots(&[3, 2, 1, 0]);
+    assert_eq!(
+        removed.iter().map(|row| row.value).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert!(rows.is_empty());
+    assert_eq!(rows.dead, [0, 1, 2, 3]);
+    assert_eq!(
+        rows.push(RowsFixtureTag {
+            value: 4
+        }),
+        Ok(4)
+    );
+    assert!(rows.remove_slots(&[0, 1, 2, 3]).is_empty());
+}
+
+#[test]
+fn batch_removal_scales_with_the_table_rather_than_per_slot() {
+    const ROWS: u32 = 16_384;
+    let half: Vec<u32> = (0..ROWS).step_by(2).collect();
+    let table = || {
+        let mut rows = Rows::<RowsFixtureItem>::new();
+        for slot in 0..ROWS {
+            rows.push(item(slot as f32)).unwrap();
+        }
+
+        rows
+    };
+
+    let mut single = table();
+    let started = std::time::Instant::now();
+    for slot in &half {
+        single.remove(*slot);
+    }
+    let per_slot = started.elapsed();
+
+    let mut batch = table();
+    let started = std::time::Instant::now();
+    let removed = batch.remove_slots(&half);
+    let batched = started.elapsed();
+
+    assert_eq!(removed.len(), half.len());
+    assert_eq!(batch, single);
+    assert_eq!(batch.dead, single.dead);
+    // Per-slot removal shifts the table once per slot; one pass is far cheaper.
+    assert!(
+        batched * 20 < per_slot,
+        "batch {batched:?} is not far below per-slot {per_slot:?}"
+    );
+}
+
 mod world {
     use super::*;
     use crate::world::WorldLimits;

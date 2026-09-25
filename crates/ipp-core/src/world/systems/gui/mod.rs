@@ -102,6 +102,8 @@ pub use layout::{
     part_overrides, resolve_appearance, resolve_panel_hit, resolve_state_part_motion,
     resolve_state_part_style, skinned_primitives_for_view, theme_part_style, variant_for_content,
 };
+#[cfg(feature = "diagnostics")]
+pub use layout::{GuiLayoutStatistics, GuiLayoutWork};
 pub(crate) use layout::{
     appearance_with_effective_numeric, resolve_paint_appearance, skin_channels_complete,
     skinned_parts_for_view, skinned_primitives_for_view_with_overrides,

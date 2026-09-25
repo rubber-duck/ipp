@@ -712,6 +712,110 @@ fn pending_font_recovers_without_authored_edits() {
     );
 }
 
+/// Diagnostics counters of the scheduled pass: an unchanged frame does no
+/// layout work, a paint-only edit neither reflows nor measures text, and a
+/// text edit reflows once and measures only its own leaf.
+#[test]
+fn layout_statistics_count_reflows_and_text_measurements() {
+    use crate::systems::gui::{GuiNodeHandle, GuiNodePatch};
+
+    let (mut host, world, panel) = setup();
+    register_font(&mut host, world);
+    let incarnation = host
+        .world_mut(world)
+        .unwrap()
+        .inspect_gui(panel, None, 1, 1)
+        .unwrap()
+        .root_incarnation;
+    let text = |id: u32, label: &str| GuiCommand::InsertNode {
+        entity: panel,
+        root_incarnation: incarnation,
+        id: GuiNodeId(id),
+        parent: Some(GuiNodeId(1)),
+        index: id - 2,
+        data: GuiNodeData::Text(label.into()),
+        values: crate::GuiNodeDataRow::default(),
+        style: GuiNodeStyle {
+            asset: Some(font_source()),
+            font_size: 0.1,
+            ..Default::default()
+        },
+    };
+    let statistics = |host: &mut HostRuntime| {
+        host.world_mut(world)
+            .unwrap()
+            .system::<GuiLayoutSystem>(GuiLayoutSystem::ID)
+            .unwrap()
+            .statistics()
+    };
+    let step = |host: &mut HostRuntime, commands: Vec<GuiCommand>| {
+        let mut context = host.world_mut(world).unwrap();
+        for command in commands {
+            context.enqueue_gui_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    };
+    step(
+        &mut host,
+        vec![
+            GuiCommand::InsertNode {
+                entity: panel,
+                root_incarnation: incarnation,
+                id: GuiNodeId(1),
+                parent: None,
+                index: 0,
+                data: GuiNodeData::Container(GuiContainerKind::Column),
+                values: crate::GuiNodeDataRow::default(),
+                style: GuiNodeStyle::default(),
+            },
+            text(2, "A"),
+            text(3, "V"),
+        ],
+    );
+    let mounted = statistics(&mut host);
+    assert!(mounted.total.reflows >= 1);
+    assert_eq!(mounted.total.text_measurements, 2);
+
+    step(&mut host, Vec::new());
+    let unchanged = statistics(&mut host);
+    assert_eq!(unchanged.latest, Default::default());
+    assert_eq!(unchanged.total, mounted.total);
+
+    let update = |id: u32, patch: GuiNodePatch| GuiCommand::UpdateNode {
+        handle: GuiNodeHandle::new(SESSION, panel, incarnation, GuiNodeId(id)),
+        patch,
+    };
+    step(
+        &mut host,
+        vec![update(
+            2,
+            GuiNodePatch {
+                color: Some([1.0, 0.0, 0.0, 1.0]),
+                ..Default::default()
+            },
+        )],
+    );
+    let painted = statistics(&mut host);
+    assert_eq!(painted.latest, Default::default());
+    assert_eq!(painted.total, mounted.total);
+
+    step(
+        &mut host,
+        vec![update(
+            3,
+            GuiNodePatch {
+                data: Some(GuiNodeData::Text("AV".into())),
+                ..Default::default()
+            },
+        )],
+    );
+    let edited = statistics(&mut host);
+    assert_eq!(edited.latest.reflows, 1);
+    assert_eq!(edited.latest.text_measurements, 1);
+    assert_eq!(edited.total.reflows, mounted.total.reflows + 1);
+    assert_eq!(edited.total.text_measurements, 3);
+}
+
 struct EmptyResolver;
 
 impl GuiResourceResolver for EmptyResolver {

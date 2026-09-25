@@ -1075,7 +1075,7 @@ struct Evaluator<'a, 'r> {
     /// Deferred placement per record, index-aligned with `nodes`.
     placements: Vec<DeferredPlacement>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "diagnostics"))]
     remeasured: u64,
 }
 
@@ -1605,7 +1605,7 @@ impl<'a, 'r> Evaluator<'a, 'r> {
             });
             return LeafOutcome::unavailable();
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "diagnostics"))]
         {
             self.remeasured += 1;
         }
@@ -2842,7 +2842,7 @@ fn evaluate_tree(
         nodes: Vec::new(),
         placements: Vec::new(),
         texts,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "diagnostics"))]
         remeasured: 0,
     };
 
@@ -2870,7 +2870,7 @@ fn evaluate_tree(
         nodes: evaluator.nodes,
         diagnostics: evaluator.diagnostics,
         texts: evaluator.texts,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "diagnostics"))]
         remeasured: evaluator.remeasured,
     }
 }
@@ -2881,7 +2881,7 @@ struct EvaluatedTree {
     diagnostics: Vec<GuiLayoutDiagnostic>,
     texts: BTreeMap<GuiNodeId, RetainedText>,
     /// Text measurements this pass performed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "diagnostics"))]
     remeasured: u64,
 }
 
@@ -2995,12 +2995,28 @@ fn translate_in_place(
     true
 }
 
+/// Cumulative layout work of diagnostics builds: reflows (layout passes that
+/// advance a root's layout revision) and text measurements (shaping calls
+/// that missed the retained measurement cache). Totals survive root removal;
+/// readers difference two samples to measure the work between them.
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GuiLayoutWork {
+    /// Root reflows.
+    pub reflows: u64,
+    /// Text measurements.
+    pub text_measurements: u64,
+}
+
 /// Retained constraint evaluation for every live GUI root. Unchanged frames
 /// do no work, paint-only edits never remeasure text, and structure or
 /// layout edits reflow with per-text cache reuse.
 #[derive(Default)]
 pub struct GuiLayoutCache {
     roots: BTreeMap<EntityId, RetainedGuiRoot>,
+    /// Work of every evaluation this cache performed.
+    #[cfg(any(test, feature = "diagnostics"))]
+    work: GuiLayoutWork,
 }
 
 impl GuiLayoutCache {
@@ -3122,6 +3138,10 @@ impl GuiLayoutCache {
                 {
                     retained.remeasure_count += tree.remeasured;
                 }
+                #[cfg(any(test, feature = "diagnostics"))]
+                {
+                    self.work.text_measurements += tree.remeasured;
+                }
 
                 retained.struct_fp = struct_fp;
                 retained.layout_fp = layout_fp;
@@ -3161,6 +3181,11 @@ impl GuiLayoutCache {
             retained.remeasure_count += tree.remeasured;
             retained.reflow_count += 1;
         }
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            self.work.reflows += 1;
+            self.work.text_measurements += tree.remeasured;
+        }
 
         retained.layout_revision += 1;
         retained.paint_revision += 1;
@@ -3189,6 +3214,12 @@ impl GuiLayoutCache {
     /// Read-only retained view for one root entity, if ever evaluated.
     pub fn view(&self, entity: EntityId) -> Option<&GuiEvaluatedView> {
         self.roots.get(&entity).map(|retained| &retained.view)
+    }
+
+    /// Cumulative reflows and text measurements across every root.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn work(&self) -> GuiLayoutWork {
+        self.work
     }
 
     /// Current paint revision for one root entity, if ever evaluated.

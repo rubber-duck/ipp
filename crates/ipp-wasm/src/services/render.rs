@@ -192,6 +192,14 @@ impl RenderSurfaceService {
                 #[cfg(feature = "diagnostics")]
                 self.statistics.accumulate(self.renderer.statistics());
 
+                #[cfg(all(feature = "gui", feature = "diagnostics"))]
+                self.statistics.record_layout(
+                    world
+                        .system::<ipp_core::GuiLayoutSystem>(ipp_core::GuiLayoutSystem::ID)
+                        .map(ipp_core::GuiLayoutSystem::statistics)
+                        .unwrap_or_default(),
+                );
+
                 #[cfg(all(feature = "surfaces", feature = "diagnostics"))]
                 {
                     self.rendered_world = Some(world.id());

@@ -91,6 +91,9 @@ pub use systems::gui::{
     MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH, resolve_panel_hit,
 };
 
+#[cfg(all(feature = "gui", feature = "diagnostics"))]
+pub use systems::gui::{GuiLayoutStatistics, GuiLayoutWork};
+
 #[cfg(feature = "gui")]
 pub use systems::gui::semantics::{
     GuiSemanticAction, GuiSemanticActionCommand, GuiSemanticActionError, GuiSemanticActionKind,

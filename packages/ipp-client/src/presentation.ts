@@ -80,6 +80,18 @@ export interface GuiRenderStatistics {
   totalGlyphPopulates: number;
   totalGlyphPopulationFailures: number;
   totalGlyphPageRetirements: number;
+  /** Root reflows of the rendered World's latest GUI layout pass. */
+  guiLayoutReflows: number;
+  /** Text measurements (retained-cache misses) of that pass. */
+  guiTextMeasurements: number;
+  /**
+   * Root reflows over the rendered World's lifetime. Unlike the other
+   * totals this follows the World, not the presentation, so compare two
+   * captures of the same World.
+   */
+  totalGuiLayoutReflows: number;
+  /** Text measurements over the rendered World's lifetime. */
+  totalGuiTextMeasurements: number;
 }
 
 export interface SurfaceRenderStatistics {

@@ -77,6 +77,10 @@ export const RETAINED_COUNTERS = [
   "totalGlyphPopulates",
   "totalGlyphPopulationFailures",
   "totalGlyphPageRetirements",
+  "guiLayoutReflows",
+  "guiTextMeasurements",
+  "totalGuiLayoutReflows",
+  "totalGuiTextMeasurements",
 ] as const;
 
 /**
@@ -610,17 +614,24 @@ async function exerciseRetainedControls(
   ) => Promise<{ frame: WorkloadFrame; attempts: number }>,
 ) {
   const { call } = driver;
-  const panel = async (variant: string, label: string, angle = 0) => {
-    const { pixelsPerMetre } = await call<{ pixelsPerMetre: number }>(
-      "guiPanel",
-      [{ variant, shape: GUI_SHAPE, angle }],
-    );
+  const panel = async (
+    variant: string,
+    label: string,
+    angle = 0,
+    text?: { text?: string; color?: readonly number[] },
+  ) => {
+    const { pixelsPerMetre, guiEdits } = await call<{
+      pixelsPerMetre: number;
+      guiEdits: { requests: number; edits: number };
+    }>("guiPanel", [
+      { variant, shape: GUI_SHAPE, angle, ...(text ? { label: text } : {}) },
+    ]);
     const { frame } = await settle(label);
     assert.ok(
       Number(frame.statistics!.gui!.guiBatches) > 0,
       `${label}: retained GUI batches`,
     );
-    return { frame, pixelsPerMetre, pixels: driver.pixels(label) };
+    return { frame, pixelsPerMetre, guiEdits, pixels: driver.pixels(label) };
   };
 
   // Mixed content: gradient shape with glow, atlas glyphs and a curve drawing.
@@ -706,6 +717,8 @@ async function exerciseRetainedControls(
     `restoring density 1 must restore the original paint: ${JSON.stringify(restored)}`,
   );
   density.restored = restored;
+
+  const work = await exerciseLayoutWork(driver, panel, restoredFrame, classes);
   const withoutGlow = await panel(
     "mixed-without-glow",
     "gui-mixed-without-glow",
@@ -806,7 +819,89 @@ async function exerciseRetainedControls(
     sparse.frame.triangles > filled.frame.triangles,
     `a sparse outline draws edge strips instead of an interior quad: ${JSON.stringify(sparseFilled.triangles)}`,
   );
-  return { content, glow, density, mirror, sparseFilled };
+  return { content, glow, density, work, mirror, sparseFilled };
+}
+
+/**
+ * GUI work counters over the real worker transport: an unchanged frame does
+ * no layout work, a paint-only edit commits one node edit and measures no
+ * text, and a local text edit commits one node edit that remeasures only
+ * that leaf. Layout totals follow the rendered World, so differences between
+ * two captures of the panel's World measure the work between them.
+ */
+async function exerciseLayoutWork(
+  driver: RetainedGuiDriver,
+  panel: (
+    variant: string,
+    label: string,
+    angle?: number,
+    text?: { text?: string; color?: readonly number[] },
+  ) => Promise<{
+    frame: WorkloadFrame;
+    guiEdits: { requests: number; edits: number };
+    pixels: RgbaFrame;
+  }>,
+  settled: WorkloadFrame,
+  classes: Record<string, (r: number, g: number, b: number) => boolean>,
+) {
+  const value = (frame: WorkloadFrame, key: string) =>
+    Number(counters(frame)[key]);
+  const since = (after: WorkloadFrame, before: WorkloadFrame) => ({
+    reflows:
+      value(after, "totalGuiLayoutReflows") -
+      value(before, "totalGuiLayoutReflows"),
+    measurements:
+      value(after, "totalGuiTextMeasurements") -
+      value(before, "totalGuiTextMeasurements"),
+  });
+
+  const unchanged = await driver.capture("gui-work-unchanged", true);
+  const idle = {
+    since: since(unchanged, settled),
+    latest: [
+      value(unchanged, "guiLayoutReflows"),
+      value(unchanged, "guiTextMeasurements"),
+    ],
+  };
+  assert.deepEqual(
+    idle,
+    { since: { reflows: 0, measurements: 0 }, latest: [0, 0] },
+    `an unchanged frame must do no layout work: ${JSON.stringify(idle)}`,
+  );
+
+  const painted = await panel("mixed", "gui-work-paint", 0, {
+    color: [1, 0.1, 0.9, 1],
+  });
+  const paint = {
+    edits: painted.guiEdits,
+    since: since(painted.frame, unchanged),
+    greenGlyphs: count(mask(painted.pixels, classes.glyphs!)),
+  };
+  assert.ok(
+    paint.edits.requests === 1 &&
+      paint.edits.edits === 1 &&
+      paint.since.measurements === 0 &&
+      paint.since.reflows === 0 &&
+      paint.greenGlyphs === 0,
+    `a paint-only edit must commit one node edit without layout or text work: ${JSON.stringify(paint)}`,
+  );
+
+  const edited = await panel("mixed", "gui-work-text", 0, {
+    text: "GUI",
+    color: [1, 0.1, 0.9, 1],
+  });
+  const text = {
+    edits: edited.guiEdits,
+    since: since(edited.frame, painted.frame),
+  };
+  assert.ok(
+    text.edits.requests === 1 &&
+      text.edits.edits === 1 &&
+      text.since.reflows >= 1 &&
+      text.since.measurements === 1,
+    `a local text edit must commit one node edit that remeasures one leaf: ${JSON.stringify(text)}`,
+  );
+  return { idle, paint, text };
 }
 
 /**

@@ -42,6 +42,20 @@ pub struct GuiLayoutSystem {
     /// not advance it, so consumers of authored (restored) input can tell a
     /// commit from an animation sample.
     commits: BTreeMap<EntityId, u64>,
+    /// Work of the latest scheduled pass, observed by diagnostics readers.
+    #[cfg(any(test, feature = "diagnostics"))]
+    latest: super::evaluation::GuiLayoutWork,
+}
+
+/// Layout work counters of diagnostics builds: the latest scheduled pass
+/// and the totals of every pass of this World.
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GuiLayoutStatistics {
+    /// Work of the latest scheduled layout pass.
+    pub latest: super::evaluation::GuiLayoutWork,
+    /// Work of every layout pass of this World.
+    pub total: super::evaluation::GuiLayoutWork,
 }
 
 crate::system_parameter!(super::super::GuiSystem);
@@ -93,6 +107,15 @@ impl GuiLayoutSystem {
             .collect()
     }
 
+    /// Reflow and text measurement counters of diagnostics builds.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn statistics(&self) -> GuiLayoutStatistics {
+        GuiLayoutStatistics {
+            latest: self.latest,
+            total: self.cache.work(),
+        }
+    }
+
     /// Entities with retained layout output, in ascending order.
     pub fn evaluated_entities(&self) -> Vec<EntityId> {
         self.cache.entities()
@@ -141,6 +164,8 @@ impl SystemFactory for GuiLayoutSystemFactory {
             stale: BTreeSet::new(),
             all_stale: true,
             commits: BTreeMap::new(),
+            #[cfg(any(test, feature = "diagnostics"))]
+            latest: Default::default(),
         }))
     }
 }
@@ -273,6 +298,8 @@ impl GuiLayoutSystem {
     ) {
         let world_id = ecs.id();
         let tick = ecs.world.tick;
+        #[cfg(any(test, feature = "diagnostics"))]
+        let before = self.cache.work();
         let resolver = SystemResolver {
             world: world_id,
             assets,
@@ -347,6 +374,15 @@ impl GuiLayoutSystem {
         self.commits.retain(|entity, _| live.contains(entity));
         self.stale.clear();
         self.all_stale = false;
+
+        #[cfg(any(test, feature = "diagnostics"))]
+        {
+            let after = self.cache.work();
+            self.latest = super::evaluation::GuiLayoutWork {
+                reflows: after.reflows - before.reflows,
+                text_measurements: after.text_measurements - before.text_measurements,
+            };
+        }
     }
 }
 

@@ -11,6 +11,12 @@
 //! words describe the last completed render. `TOTAL_*` words accumulate that
 //! counter over every completed render of this presentation service and
 //! saturate; readers compare two captures to measure work between them.
+//!
+//! The GUI layout words come from the rendered World rather than the
+//! renderer: `GUI_LAYOUT_REFLOWS` and `GUI_TEXT_MEASUREMENTS` count the work
+//! of that World's latest layout pass, and their `TOTAL_*` words are the
+//! World's own saturating totals, so comparing two captures of one World
+//! measures the layout work between them.
 
 use ipp_render_gl::RenderStatistics;
 
@@ -134,9 +140,29 @@ pub(crate) const TOTAL_SURFACE_CACHE_REUSES: usize = 32;
 pub(crate) const TOTAL_SURFACE_CACHE_DIRECT: usize = 33;
 pub(crate) const TOTAL_SURFACE_CACHE_FALLBACKS: usize = 34;
 pub(crate) const TOTAL_SURFACE_CACHE_ALLOCATIONS: usize = 35;
+#[cfg_attr(
+    not(feature = "gui"),
+    allow(dead_code, reason = "zero word of a compiled-out capability")
+)]
+pub(crate) const GUI_LAYOUT_REFLOWS: usize = 36;
+#[cfg_attr(
+    not(feature = "gui"),
+    allow(dead_code, reason = "zero word of a compiled-out capability")
+)]
+pub(crate) const GUI_TEXT_MEASUREMENTS: usize = 37;
+#[cfg_attr(
+    not(feature = "gui"),
+    allow(dead_code, reason = "zero word of a compiled-out capability")
+)]
+pub(crate) const TOTAL_GUI_LAYOUT_REFLOWS: usize = 38;
+#[cfg_attr(
+    not(feature = "gui"),
+    allow(dead_code, reason = "zero word of a compiled-out capability")
+)]
+pub(crate) const TOTAL_GUI_TEXT_MEASUREMENTS: usize = 39;
 
 /// Words in the record.
-pub(crate) const RECORD_WORDS: usize = 36;
+pub(crate) const RECORD_WORDS: usize = 40;
 
 pub(crate) const FLAG_SHADOWS: u32 = 1;
 pub(crate) const FLAG_GUI: u32 = 2;
@@ -181,6 +207,12 @@ const ACCUMULATED: [(usize, usize); 12] = [
 pub(crate) struct RenderStatisticsRecord {
     words: [u32; RECORD_WORDS],
     totals: [u32; RECORD_WORDS],
+    /// Layout words of the World of the last completed render.
+    #[cfg_attr(
+        not(feature = "gui"),
+        allow(dead_code, reason = "zero words of a compiled-out capability")
+    )]
+    layout: [u32; 4],
 }
 
 impl RenderStatisticsRecord {
@@ -188,7 +220,20 @@ impl RenderStatisticsRecord {
         Self {
             words: [0; RECORD_WORDS],
             totals: [0; RECORD_WORDS],
+            layout: [0; 4],
         }
+    }
+
+    /// Keep the GUI layout counters of the World a completed render drew.
+    #[cfg(feature = "gui")]
+    pub(crate) fn record_layout(&mut self, statistics: ipp_core::GuiLayoutStatistics) {
+        let word = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+        self.layout = [
+            word(statistics.latest.reflows),
+            word(statistics.latest.text_measurements),
+            word(statistics.total.reflows),
+            word(statistics.total.text_measurements),
+        ];
     }
 
     /// Add one completed render to the totals: a few additions per frame, only
@@ -208,6 +253,16 @@ impl RenderStatisticsRecord {
 
         for (_, total) in ACCUMULATED {
             self.words[total] = self.totals[total];
+        }
+
+        #[cfg(feature = "gui")]
+        {
+            [
+                self.words[GUI_LAYOUT_REFLOWS],
+                self.words[GUI_TEXT_MEASUREMENTS],
+                self.words[TOTAL_GUI_LAYOUT_REFLOWS],
+                self.words[TOTAL_GUI_TEXT_MEASUREMENTS],
+            ] = self.layout;
         }
 
         &self.words

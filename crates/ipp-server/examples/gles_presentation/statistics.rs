@@ -52,6 +52,9 @@ pub(super) struct StatisticsTotals {
     uploaded_bytes: u32,
     #[cfg(feature = "gui")]
     gui: [u32; 6],
+    /// Latest-pass and total layout counters of the last rendered World.
+    #[cfg(feature = "gui")]
+    layout: [u32; 4],
     surface_cache: [u32; 5],
 }
 
@@ -74,6 +77,18 @@ impl StatisticsTotals {
         {
             *total = total.saturating_add(frame);
         }
+    }
+
+    /// Keep the GUI layout counters of the World a completed render drew.
+    #[cfg(feature = "gui")]
+    pub(super) fn record_layout(&mut self, statistics: ipp_core::GuiLayoutStatistics) {
+        let word = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+        self.layout = [
+            word(statistics.latest.reflows),
+            word(statistics.latest.text_measurements),
+            word(statistics.total.reflows),
+            word(statistics.total.text_measurements),
+        ];
     }
 }
 
@@ -131,9 +146,10 @@ pub(super) fn snapshot(
             total_failures,
             total_retirements,
         ] = totals.gui;
+        let [reflows, measurements, total_reflows, total_measurements] = totals.layout;
         write!(
             json,
-            ",\"gui\":{{\"guiBatches\":{},\"guiRebuilds\":{},\"guiAllocations\":{},\"guiResidentBytes\":{},\"glyphMisses\":{},\"glyphPopulates\":{},\"glyphPopulationFailures\":{},\"glyphPageRetirements\":{},\"glyphPages\":{},\"glyphResidentBytes\":{},\"totalGuiRebuilds\":{total_rebuilds},\"totalGuiAllocations\":{total_allocations},\"totalGlyphMisses\":{total_misses},\"totalGlyphPopulates\":{total_populates},\"totalGlyphPopulationFailures\":{total_failures},\"totalGlyphPageRetirements\":{total_retirements}}}",
+            ",\"gui\":{{\"guiBatches\":{},\"guiRebuilds\":{},\"guiAllocations\":{},\"guiResidentBytes\":{},\"glyphMisses\":{},\"glyphPopulates\":{},\"glyphPopulationFailures\":{},\"glyphPageRetirements\":{},\"glyphPages\":{},\"glyphResidentBytes\":{},\"totalGuiRebuilds\":{total_rebuilds},\"totalGuiAllocations\":{total_allocations},\"totalGlyphMisses\":{total_misses},\"totalGlyphPopulates\":{total_populates},\"totalGlyphPopulationFailures\":{total_failures},\"totalGlyphPageRetirements\":{total_retirements},\"guiLayoutReflows\":{reflows},\"guiTextMeasurements\":{measurements},\"totalGuiLayoutReflows\":{total_reflows},\"totalGuiTextMeasurements\":{total_measurements}}}",
             statistics.gui_batches,
             statistics.gui_rebuilds,
             statistics.gui_allocations,

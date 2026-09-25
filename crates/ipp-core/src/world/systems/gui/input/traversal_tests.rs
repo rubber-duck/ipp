@@ -1,8 +1,9 @@
-//! Keyboard traversal: entry from no focus, reverse traversal, focus scopes
-//! and eligibility skipping.
+//! Keyboard traversal: entry from no focus, reverse traversal, focus scopes,
+//! eligibility skipping and the camera's keyboard panel order.
 
 use super::test_support::*;
 use super::*;
+use crate::components::{Camera, Transform};
 use crate::systems::surface::Surface;
 use crate::{
     Batch, Command, ComponentValue, EntityMetadata, EntityRef, GuiCommand, GuiContainerKind,
@@ -398,4 +399,286 @@ fn traversal_crosses_panels_and_entry_returns_to_the_last_focused_panel() {
     key(&mut fixture, SESSION, GuiKey::Escape);
     key(&mut fixture, SESSION, GuiKey::Tab);
     assert_eq!(focused_on(&mut fixture), Some((second, 2)));
+}
+
+/// Panel placement facing +Z at a World position.
+fn facing_front(x: f32, z: f32) -> Transform {
+    Transform {
+        x,
+        z,
+        ..Default::default()
+    }
+}
+
+/// Panel placement turned half a revolution about +Y: its front faces -Z.
+fn facing_back(x: f32, z: f32) -> Transform {
+    Transform {
+        qy: 1.0,
+        qw: 0.0,
+        ..facing_front(x, z)
+    }
+}
+
+/// Create one entity from `operations` and return it.
+fn spawn(fixture: &mut Fixture, operations: Vec<Command>) -> EntityId {
+    let mut context = world(fixture);
+    let mut full = vec![Command::Create {
+        alias: 1,
+        metadata: EntityMetadata::default(),
+    }];
+    full.extend(operations);
+    context
+        .enqueue(Batch {
+            id: context.tick() + 1,
+            operations: full,
+        })
+        .unwrap();
+    let report = context.step(0.0).unwrap();
+    report.outcomes[0].result.as_ref().unwrap()[0].1
+}
+
+/// A 4x3 panel holding a column with checkboxes 2 and 3, in creation order.
+fn placed_panel(fixture: &mut Fixture, placement: Transform) -> EntityId {
+    let panel = spawn(
+        fixture,
+        vec![
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Transform(placement)),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::Surface({
+                    let mut surface = Surface::default();
+                    surface.width = 4.0;
+                    surface.height = 3.0;
+                    surface
+                }),
+            ),
+            Command::insert_value(
+                EntityRef::Alias(1),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
+        ],
+    );
+    let root_incarnation = root_incarnation(fixture, panel);
+    let node = |id: u32, parent: Option<u32>, index: u32, data: GuiNodeData| {
+        let checkbox = matches!(data, GuiNodeData::Checkbox);
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(id),
+            parent: parent.map(GuiNodeId),
+            index,
+            data,
+            values: if checkbox {
+                GuiNodeDataRow::checkbox(false)
+            } else {
+                GuiNodeDataRow::default()
+            },
+            style: GuiNodeStyle {
+                width: Some(if checkbox {
+                    1.0
+                } else {
+                    4.0
+                }),
+                height: Some(if checkbox {
+                    1.0
+                } else {
+                    3.0
+                }),
+                ..Default::default()
+            },
+        }
+    };
+    let commands = [
+        node(1, None, 0, GuiNodeData::Container(GuiContainerKind::Column)),
+        node(2, Some(1), 0, GuiNodeData::Checkbox),
+        node(3, Some(1), 1, GuiNodeData::Checkbox),
+    ];
+    let mut context = world(fixture);
+    for command in commands {
+        context.enqueue_gui_command(SESSION, command).unwrap();
+    }
+    context.step(0.0).unwrap();
+    panel
+}
+
+/// A world of placed panels without the default fixture panel.
+fn placed_world(placements: &[Transform]) -> (Fixture, Vec<EntityId>) {
+    let mut fixture = setup();
+    let unplaced = fixture.panel;
+    {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue(Batch {
+                id: context.tick() + 1,
+                operations: vec![Command::Delete {
+                    entity: EntityRef::Handle(unplaced),
+                }],
+            })
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    let panels: Vec<_> = placements
+        .iter()
+        .map(|&placement| placed_panel(&mut fixture, placement))
+        .collect();
+    fixture.panel = panels[0];
+    (fixture, panels)
+}
+
+/// Create and activate a perspective camera looking down -Z from `placement`.
+fn activate_camera(fixture: &mut Fixture, placement: Transform) -> EntityId {
+    activate_lens(fixture, placement, Camera::default())
+}
+
+/// Create and activate a camera with `lens` looking down -Z from `placement`.
+fn activate_lens(fixture: &mut Fixture, placement: Transform, lens: Camera) -> EntityId {
+    let camera = spawn(
+        fixture,
+        vec![
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Transform(placement)),
+            Command::insert_value(EntityRef::Alias(1), ComponentValue::Camera(lens)),
+        ],
+    );
+    let mut context = world(fixture);
+    context.enqueue_camera_activate(camera).unwrap();
+    context.step(0.0).unwrap();
+    assert_eq!(context.active_camera(), Some(camera));
+    camera
+}
+
+/// Move one entity by replacing its Transform.
+fn place(fixture: &mut Fixture, entity: EntityId, placement: Transform) {
+    let mut context = world(fixture);
+    context
+        .enqueue(Batch {
+            id: context.tick() + 1,
+            operations: vec![Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::Transform(placement),
+            )],
+        })
+        .unwrap();
+    context.step(0.0).unwrap();
+}
+
+/// Tab from no focus, returning the entered panel and node, then release
+/// focus again.
+fn enter(fixture: &mut Fixture, pressed: GuiKey) -> Option<(EntityId, u32)> {
+    key(fixture, SESSION, GuiKey::Escape);
+    key(fixture, SESSION, pressed);
+    focused_on(fixture)
+}
+
+#[test]
+fn entry_takes_the_nearest_front_facing_panel_and_follows_the_camera() {
+    let (mut fixture, panels) = placed_world(&[facing_front(-6.0, 0.0), facing_front(6.0, 0.0)]);
+    let (left, right) = (panels[0], panels[1]);
+
+    // Equidistant panels tie deterministically on the lesser entity, as
+    // pointer routing breaks panel ties. No host viewport is needed for keys.
+    let camera = activate_camera(&mut fixture, facing_front(0.0, 10.0));
+    let tied = left.min(right);
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((tied, 2)));
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((tied, 2)));
+
+    // Moving the camera over the right panel makes it the entry panel, and
+    // BackTab enters that same nearest panel at its last control.
+    place(&mut fixture, camera, facing_front(6.0, 10.0));
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((right, 2)));
+    assert_eq!(enter(&mut fixture, GuiKey::BackTab), Some((right, 3)));
+
+    // With a camera, the most recently focused panel is no entry hint.
+    focus_node_on(&mut fixture, left, 3);
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((right, 2)));
+
+    // Without a camera, entry falls back to the most recently focused panel.
+    focus_node_on(&mut fixture, left, 3);
+    {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue(Batch {
+                id: context.tick() + 1,
+                operations: vec![Command::Delete {
+                    entity: EntityRef::Handle(camera),
+                }],
+            })
+            .unwrap();
+        context.step(0.0).unwrap();
+        assert!(context.active_camera_component().is_none());
+    }
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((left, 2)));
+}
+
+#[test]
+fn orthographic_view_orders_panels_by_depth_along_the_view_direction() {
+    // Off-axis panels: depth, not eye distance, decides an orthographic view.
+    let (mut fixture, panels) = placed_world(&[
+        facing_back(0.0, 8.0),
+        facing_front(0.0, 4.0),
+        facing_front(30.0, 6.0),
+    ]);
+    let (back, deeper, shallower) = (panels[0], panels[1], panels[2]);
+    activate_lens(
+        &mut fixture,
+        facing_front(0.0, 10.0),
+        Camera {
+            projection: 1,
+            ortho_height: 4.0,
+            ..Camera::default()
+        },
+    );
+
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((shallower, 2)));
+    let mut order = Vec::new();
+    for _ in 0..4 {
+        key(&mut fixture, SESSION, GuiKey::Tab);
+        order.push(focused_on(&mut fixture).unwrap());
+    }
+    assert_eq!(
+        order,
+        vec![(shallower, 3), (deeper, 2), (deeper, 3), (back, 2)]
+    );
+}
+
+#[test]
+fn back_facing_panels_follow_every_front_facing_panel_in_traversal() {
+    // A back-facing panel 2 m from the camera, a front-facing panel 10 m
+    // away and one 6 m away. Their cyclic entity order (far, near, back)
+    // differs from the view order.
+    let (mut fixture, panels) = placed_world(&[
+        facing_back(0.0, 8.0),
+        facing_front(0.0, 0.0),
+        facing_front(0.0, 4.0),
+    ]);
+    let (back, far, near) = (panels[0], panels[1], panels[2]);
+    assert!(far < near && near < back);
+    activate_camera(&mut fixture, facing_front(0.0, 10.0));
+
+    assert_eq!(enter(&mut fixture, GuiKey::Tab), Some((near, 2)));
+    assert_eq!(enter(&mut fixture, GuiKey::BackTab), Some((near, 3)));
+
+    // Continued Tab crosses the front-facing panels by distance, then
+    // reaches the back-facing one before wrapping; BackTab reverses it.
+    let mut order = Vec::new();
+    for _ in 0..6 {
+        key(&mut fixture, SESSION, GuiKey::Tab);
+        order.push(focused_on(&mut fixture).unwrap());
+    }
+    assert_eq!(
+        order,
+        vec![
+            (far, 2),
+            (far, 3),
+            (back, 2),
+            (back, 3),
+            (near, 2),
+            (near, 3),
+        ]
+    );
+    key(&mut fixture, SESSION, GuiKey::Tab);
+    key(&mut fixture, SESSION, GuiKey::BackTab);
+    assert_eq!(focused_on(&mut fixture), Some((near, 3)));
+    key(&mut fixture, SESSION, GuiKey::BackTab);
+    key(&mut fixture, SESSION, GuiKey::BackTab);
+    assert_eq!(focused_on(&mut fixture), Some((back, 3)));
 }

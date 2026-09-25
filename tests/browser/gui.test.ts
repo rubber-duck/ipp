@@ -889,7 +889,7 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
       await env.page.evaluate(
         async ({ fixture, runtime }) => {
           const mounted = await import(fixture);
-          await mounted.mountGuiCanvas(runtime);
+          await mounted.mountGuiCanvas(runtime, { keyboardPanels: true });
         },
         {
           fixture,
@@ -943,8 +943,10 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
       };
 
       // From a fresh mount no pointer ever touches the page. The document's
-      // first Tab focuses the canvas; the next enters the panel at its first
-      // control, the text input, whose native editor then owns the keys.
+      // first Tab focuses the canvas; the next enters the nearest
+      // front-facing panel at its first control, the text input, whose
+      // native editor then owns the keys. The keyboard-order panels were
+      // created first, and the back-facing one is nearer the camera.
       const fresh = await readKeyboard();
       assert.equal(fresh.focused, null);
       assert.equal(fresh.keyOwner, "other");
@@ -1006,9 +1008,14 @@ test("mounted IppCanvas operates text, checkbox, slider and button by keyboard o
       assert.equal(typed.presses, 1);
       assert.deepEqual(typed.errors, []);
 
-      // Traversal wraps at the ends: Shift+Tab from the first control
-      // reaches the last.
+      // Traversal crosses panels in view order and wraps at the ends:
+      // Shift+Tab from the first control reaches the back-facing panel,
+      // which orders after the deeper front-facing one, and Tab returns.
+      await press("Shift+Tab", "backButton", "canvas");
+      await press("Shift+Tab", "farButton", "canvas");
       await press("Shift+Tab", "button", "canvas");
+      await press("Tab", "farButton", "canvas");
+      await press("Tab", "backButton", "canvas");
       await press("Tab", "text", "editor");
 
       const teardown = await env.page.evaluate(

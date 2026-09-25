@@ -30,8 +30,11 @@
 //! entity ties. Without a camera or viewport (native and headless use),
 //! pointer events carry a GUI-logical point instead: without a distance the
 //! overlay panel counts as nearest and the topmost hit across panels is the
-//! greatest [`EntityId`](crate::EntityId). Each source input dispatches at
-//! most once. Scroll offsets stay owned by this system so scrolled content
+//! greatest [`EntityId`](crate::EntityId). Keys carry no point: keyboard
+//! traversal crosses panels, and Tab without focus enters one, in the
+//! keyboard panel order of [`GuiKey`], which the active camera's view
+//! distance decides with front-facing panels first. Each source input
+//! dispatches at most once. Scroll offsets stay owned by this system so scrolled content
 //! never reflows layout; scroll routing consumes deltas innermost-first
 //! against evaluated ScrollView extents with edge clamping and outward
 //! propagation, chaining same-tick scrolls against routed offsets that
@@ -59,6 +62,7 @@ use super::super::{
     GuiEvaluatedContent, GuiEvaluatedNode, GuiEvaluatedView, GuiHit, GuiLayoutSystem, GuiRoot,
     GuiScrollBarCursor, GuiSkinCursors, GuiSystem,
 };
+use super::keyboard_panels::{GuiKeyboardView, keyboard_panel_order};
 use super::target_policy::{
     GuiTargetStatus, GuiTargetValidity, current_target, evaluated_status, evaluated_validity,
     producer_root, producer_status, producer_validity,
@@ -107,13 +111,17 @@ pub enum GuiPointerButton {
 ///
 /// Keyboard traversal follows tree order within the innermost focus scope
 /// (a node whose `focus_scope` style property is set) containing the focused
-/// control, or across every panel in deterministic entity order when no
-/// scope contains it, and wraps at either end. Without focus, [`Self::Tab`]
-/// and [`Self::BackTab`] enter the keyboard panel: the panel that most
+/// control, or across every panel in keyboard panel order when no scope
+/// contains it, and wraps at either end. With an active camera, keyboard
+/// panel order puts front-facing panels first by World-space view distance,
+/// then back-facing panels by the same distance, with entity ties; without
+/// one it is entity order. Without focus, [`Self::Tab`] and [`Self::BackTab`]
+/// enter the keyboard panel at its first or last control: the first panel
+/// in keyboard panel order, which is the nearest front-facing panel with a
+/// camera. Only without a camera does entry prefer the panel that most
 /// recently held focus in this input context while it still has a focusable
-/// control, otherwise the first panel in traversal order. Entry acquires an
-/// unowned input context. Disabled, hidden, transparent and unavailable
-/// controls are skipped.
+/// control. Entry acquires an unowned input context. Disabled, hidden,
+/// transparent and unavailable controls are skipped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiKey {
     /// Move keyboard focus to the next control in traversal order, or enter
@@ -935,8 +943,9 @@ pub struct GuiInputSystem {
     /// focus (activation, nudging, caret) follows every source.
     focus_visible: bool,
     /// Panel and root incarnation that most recently held keyboard focus in
-    /// this context: the entry panel for traversal from no focus. A hint
-    /// revalidated against the current traversal order on use.
+    /// this context: the entry panel for traversal from no focus when no
+    /// camera orders the panels. A hint revalidated against the current
+    /// traversal order on use.
     keyboard_panel: Option<(EntityId, u64)>,
     /// Frame the focus cursor was set against.
     focus_tick: u64,
@@ -2061,14 +2070,37 @@ impl GuiInputSystem {
         super::text_edit::snap_to_boundary(base_text, offset.min(base_text.len() as u32))
     }
 
-    /// All focusable controls in deterministic tab order.
+    /// Active camera pose ordering keyboard panels, or None without an
+    /// active camera. Keys carry no viewport point, so unlike pointer
+    /// projection this needs no host viewport.
+    fn keyboard_view(
+        &self,
+        access: &SystemRuntimeAccess<'_>,
+        sim: &WorldSimulationState,
+    ) -> Option<GuiKeyboardView> {
+        let camera = access.dependency(self.camera?)?;
+        let read = camera.read(sim);
+        // The selection may outlive its entity; only a live camera orders.
+        let lens = read.active_camera_component()?;
+        GuiKeyboardView::of_camera(sim, read.active_camera()?, lens)
+    }
+
+    /// All focusable controls in deterministic tab order: panels in keyboard
+    /// panel order (view order with a camera, otherwise entity order), each
+    /// in tree order.
     fn focusables(
         &self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
     ) -> Vec<GuiInputTarget> {
+        let mut panels = layout.evaluated_entities();
+        if let Some(view) = view {
+            panels = keyboard_panel_order(sim, view, panels);
+        }
+
         let mut order = Vec::new();
-        for entity in layout.evaluated_entities() {
+        for entity in panels {
             let Some(view) = layout.view(entity) else {
                 continue;
             };
@@ -2115,10 +2147,11 @@ impl GuiInputSystem {
         &self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
         root: &GuiRoot,
         focused: &GuiInputTarget,
     ) -> Vec<GuiInputTarget> {
-        let order = self.focusables(layout, sim);
+        let order = self.focusables(layout, sim, view);
         let Some(scope) = Self::focus_scope_of(root, focused.node) else {
             return order;
         };
@@ -2163,30 +2196,35 @@ impl GuiInputSystem {
     }
 
     /// Enter keyboard traversal without focus: Tab takes the keyboard panel's
-    /// first focusable control and BackTab its last. Entry acquires an unowned
-    /// context like other context-establishing input; nothing focusable
-    /// leaves the input unhandled without acquiring.
+    /// first focusable control and BackTab its last. The keyboard panel is
+    /// the first panel in keyboard panel order; only without a camera does
+    /// the most recently focused panel take precedence. Entry acquires an
+    /// unowned context like other context-establishing input; nothing
+    /// focusable leaves the input unhandled without acquiring.
+    #[allow(clippy::too_many_arguments)]
     fn enter_traversal(
         &mut self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
         session: u64,
         tick: u64,
         input: &GuiInputCommand,
         backward: bool,
     ) {
-        let order = self.focusables(layout, sim);
+        let order = self.focusables(layout, sim, view);
         let in_panel = |target: &GuiInputTarget, (entity, incarnation): (EntityId, u64)| {
             target.entity == entity && target.root_incarnation == incarnation
         };
-        let panel = self
+        let recent = self
             .keyboard_panel
-            .filter(|panel| order.iter().any(|target| in_panel(target, *panel)))
-            .or_else(|| {
-                order
-                    .first()
-                    .map(|target| (target.entity, target.root_incarnation))
-            });
+            .filter(|_| view.is_none())
+            .filter(|panel| order.iter().any(|target| in_panel(target, *panel)));
+        let panel = recent.or_else(|| {
+            order
+                .first()
+                .map(|target| (target.entity, target.root_incarnation))
+        });
         let Some(panel) = panel else {
             self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
             return;
@@ -4751,10 +4789,12 @@ impl GuiInputSystem {
 
     /// Route one key press on the focused control.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn route_key(
         &mut self,
         layout: &GuiLayoutSystem,
         sim: &WorldSimulationState,
+        view: Option<&GuiKeyboardView>,
         session: u64,
         tick: u64,
         input: &GuiInputCommand,
@@ -4763,7 +4803,8 @@ impl GuiInputSystem {
         let Some(focus) = self.focus else {
             match key {
                 GuiKey::Tab | GuiKey::BackTab => {
-                    self.enter_traversal(layout, sim, session, tick, input, key == GuiKey::BackTab);
+                    let backward = key == GuiKey::BackTab;
+                    self.enter_traversal(layout, sim, view, session, tick, input, backward);
                 }
                 _ => self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus),
             }
@@ -4788,7 +4829,7 @@ impl GuiInputSystem {
         }
         match key {
             GuiKey::Tab | GuiKey::BackTab => {
-                let order = self.traversal_order(layout, sim, &root, &focus.target);
+                let order = self.traversal_order(layout, sim, view, &root, &focus.target);
                 let len = order.len();
                 if len == 0 {
                     self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
@@ -7147,7 +7188,11 @@ impl GuiInputSystem {
                 debug_assert!(pressed, "key releases are filtered during admission");
                 if self
                     .route_with_layout(access, |input, layout, sim| {
-                        input.route_key(layout, sim, *session, tick, command, key);
+                        // Only traversal reads the camera pose.
+                        let view = matches!(key, GuiKey::Tab | GuiKey::BackTab)
+                            .then(|| input.keyboard_view(access, sim))
+                            .flatten();
+                        input.route_key(layout, sim, view.as_ref(), *session, tick, command, key);
                     })
                     .is_err()
                 {

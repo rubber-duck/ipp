@@ -1,7 +1,7 @@
-/** Skinnable control declarations for `@ipp/react/gui` (ipp-9nx.14).
+/** Skinnable control declarations for `@ipp/react/gui`.
  *
  * Public React framework for app authors: Button, Checkbox, Slider and
- * TextInput over the frozen .10 declaration contracts. IPP keeps
+ * TextInput over the GuiRoot node declarations. IPP keeps
  * interaction and editing ownership: these components declare initial
  * structure only. Control values live runtime-side; ordinary commits never
  * emit revision-gated `setControlValue` writes and never replay initial
@@ -11,12 +11,9 @@
  * Render-time purity: element creation, validation and description perform
  * no transport. All runtime effects happen in the commit phase through the
  * generated GUI client. Callback-only changes resubmit nothing: refs and
- * callbacks are local-only and excluded from the declaration signature,
- * mirroring the frozen `guiRootSignature` rule.
- *
+ * callbacks are local-only and excluded from `guiRootSignature`.
  */
 import { createElement } from "react";
-import type { GuiNodeData, GuiNodeStyle, GuiNodeValues } from "@ipp/client";
 import {
   GUI_BUTTON_HOST_TYPE,
   GUI_CHECKBOX_HOST_TYPE,
@@ -24,7 +21,6 @@ import {
   GUI_TEXT_INPUT_HOST_TYPE,
   buttonNode,
   checkboxNode,
-  guiStyleFor,
   sliderNode,
   textInputNode,
   validateGuiNodeRef,
@@ -32,51 +28,13 @@ import {
   type GuiNodeRef,
   type GuiStyleProps,
 } from "./components.js";
-export {
-  DEFAULT_SLIDER_MAX,
-  DEFAULT_SLIDER_MIN,
-  DEFAULT_SLIDER_STEP,
-  DEFAULT_SLIDER_VALUE,
-  GUI_BUTTON_HOST_TYPE,
-  GUI_CHECKBOX_HOST_TYPE,
-  GUI_SLIDER_HOST_TYPE,
-  GUI_TEXT_INPUT_HOST_TYPE,
-  buttonNode,
-  checkboxNode,
-  sliderNode,
-  textInputNode,
-} from "./components.js";
-import { guiNodeSignature, normalizeGuiStyle } from "./description.js";
-import {
-  guiStyleWithTheme,
-  validateGuiTheme,
-  type GuiControlTheme,
-} from "./theme.js";
+import { validateGuiTheme, type GuiControlTheme } from "./theme.js";
 import type {
   GuiPressListener,
   GuiScalarCommitListener,
   GuiTextCommitListener,
   GuiToggleListener,
 } from "./callbacks.js";
-
-export type GuiControlHostType =
-  | typeof GUI_BUTTON_HOST_TYPE
-  | typeof GUI_CHECKBOX_HOST_TYPE
-  | typeof GUI_SLIDER_HOST_TYPE
-  | typeof GUI_TEXT_INPUT_HOST_TYPE;
-
-export const guiControlHostTypes: ReadonlySet<string> = new Set([
-  GUI_BUTTON_HOST_TYPE,
-  GUI_CHECKBOX_HOST_TYPE,
-  GUI_SLIDER_HOST_TYPE,
-  GUI_TEXT_INPUT_HOST_TYPE,
-]);
-
-export function isGuiControlHostType(
-  type: unknown,
-): type is GuiControlHostType {
-  return typeof type === "string" && guiControlHostTypes.has(type);
-}
 
 /** Shared lanes, refs and logical action listeners for every control. */
 export interface GuiControlBaseProps extends GuiStyleProps {
@@ -161,113 +119,6 @@ export function validateTextInputProps(props: TextInputProps): void {
   checkControlBase("TextInput", props);
   textInputNode(props);
   checkListener("TextInput", "onTextCommit", props.onTextCommit);
-}
-
-/** Pure declaration record consumed by the reconciler description pass. */
-export interface GuiControlDeclaration {
-  readonly hostType: GuiControlHostType;
-  /** Node kind and authored strings. */
-  readonly data: GuiNodeData;
-  /** Authored kind-specific scalars seeded on insertion. */
-  readonly values: GuiNodeValues;
-  /** Complete style with lane defaults filled. */
-  readonly style: GuiNodeStyle;
-  readonly nodeRef: GuiNodeRef | null;
-  readonly onAction: GuiActionListener | undefined;
-  readonly onActionCapture: GuiActionListener | undefined;
-  readonly onPress: GuiPressListener | undefined;
-  readonly onToggle: GuiToggleListener | undefined;
-  readonly onScalarCommit: GuiScalarCommitListener | undefined;
-  readonly onTextCommit: GuiTextCommitListener | undefined;
-  readonly theme?: GuiControlTheme | undefined;
-}
-
-function baseOf(
-  props: GuiControlBaseProps,
-): Pick<
-  GuiControlDeclaration,
-  "style" | "nodeRef" | "onAction" | "onActionCapture" | "theme"
-> {
-  return {
-    style: guiStyleWithTheme(guiStyleFor(props), props.theme),
-    nodeRef: props.nodeRef ?? null,
-    onAction: props.onAction,
-    onActionCapture: props.onActionCapture,
-    ...(props.theme === undefined ? {} : { theme: props.theme }),
-  };
-}
-
-const noControlCallback = {
-  onPress: undefined,
-  onToggle: undefined,
-  onScalarCommit: undefined,
-  onTextCommit: undefined,
-} as const;
-
-/** Describe one Button without transport. */
-export function describeButton(props: ButtonProps): GuiControlDeclaration {
-  validateButtonProps(props);
-  return {
-    hostType: GUI_BUTTON_HOST_TYPE,
-    ...buttonNode(props.label),
-    ...baseOf(props),
-    ...noControlCallback,
-    onPress: props.onPress,
-  };
-}
-
-/** Describe one Checkbox without transport. */
-export function describeCheckbox(props: CheckboxProps): GuiControlDeclaration {
-  validateCheckboxProps(props);
-  return {
-    hostType: GUI_CHECKBOX_HOST_TYPE,
-    ...checkboxNode(props.checked),
-    ...baseOf(props),
-    ...noControlCallback,
-    onToggle: props.onToggle,
-  };
-}
-
-/** Describe one Slider without transport. */
-export function describeSlider(props: SliderProps): GuiControlDeclaration {
-  validateSliderProps(props);
-  return {
-    hostType: GUI_SLIDER_HOST_TYPE,
-    ...sliderNode(props),
-    ...baseOf(props),
-    ...noControlCallback,
-    onScalarCommit: props.onScalarCommit,
-  };
-}
-
-/** Describe one TextInput without transport. */
-export function describeTextInput(
-  props: TextInputProps,
-): GuiControlDeclaration {
-  validateTextInputProps(props);
-  return {
-    hostType: GUI_TEXT_INPUT_HOST_TYPE,
-    ...textInputNode(props),
-    ...baseOf(props),
-    ...noControlCallback,
-    onTextCommit: props.onTextCommit,
-  };
-}
-
-/** Commit signature for one control declaration.
- *
- * Refs and every callback are local-only and excluded: changing a callback
- * alone resubmits nothing, mirroring the frozen `guiRootSignature` rule.
- */
-export function controlDeclarationSignature(
-  decl: GuiControlDeclaration,
-): string {
-  return JSON.stringify([
-    decl.hostType,
-    guiNodeSignature(decl),
-    normalizeGuiStyle(decl.style),
-    decl.theme ?? null,
-  ]);
 }
 
 /** Momentary button. Label is static structure; presses are committed effects. */

@@ -1,4 +1,4 @@
-/** P04 effect subscription coverage: real React controls through callback
+/** Effect subscription coverage: real React controls through callback
  * retention into the node-fenced listener registry, then through
  * GuiCommits acknowledgement wiring fed by client-shaped observation batches.
  *
@@ -6,49 +6,45 @@
  * reconciler tree retains their JS-only listeners, GuiCommits subscribes on
  * acknowledgement, and committed observations dispatch exactly once with
  * capture/bubble paths, conflicts, cancellations and scene-bound unhandled
- * inputs. Byte-exact wire proof lives in the protocol client suite; the host
- * publication emission is the integration owner's follow-up.
+ * inputs. Byte-exact wire proof lives in the protocol client suite.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   BatchOutcome,
   Command,
+  GuiCommittedEffect,
   GuiEdit,
   GuiInputCommand,
   GuiInspectedNode,
   GuiInspectResponse,
   GuiNodeHandle,
   GuiNodeStyle,
+  GuiObservationBatch,
 } from "@ipp/client";
 import { ENTITY_HOST_TYPE } from "../src/components.js";
 import type { ReactWorldClient } from "../src/contract.js";
 import { GuiCommits } from "../src/gui/commits.js";
 import { TestGuiCommits } from "./gui-test-commits.js";
+import { Button, Checkbox, Slider, TextInput } from "../src/gui/controls.js";
 import {
-  Button,
-  Checkbox,
   GUI_BUTTON_HOST_TYPE,
   GUI_CHECKBOX_HOST_TYPE,
-  GUI_SLIDER_HOST_TYPE,
-  GUI_TEXT_INPUT_HOST_TYPE,
-  Slider,
-  TextInput,
-} from "../src/gui/controls.js";
-import {
   GUI_COLUMN_HOST_TYPE,
   GUI_ROOT_HOST_TYPE,
+  GUI_SLIDER_HOST_TYPE,
+  GUI_TEXT_INPUT_HOST_TYPE,
+  type GuiActionEvent,
 } from "../src/gui/components.js";
 import {
   dispatchGuiObservations,
   GuiEffectSubscriptions,
   isCommittedEffect,
   type GuiCallbackResolution,
-  type GuiCommittedEffect,
   type GuiControlListenerRecord,
-  type GuiObservationBatch,
   type GuiObservationSummary,
 } from "../src/gui/callbacks.js";
+import { dispatchGuiAction } from "../src/gui/description.js";
 import {
   ReactWorldTree,
   retainedNodeCallbacks,
@@ -872,7 +868,9 @@ interface WiredControls {
 
 /** Mount a real column holding a real button and checkbox, then acknowledge
  * each node one at a time so runtime identities stay deterministic. */
-async function wiredControls(): Promise<WiredControls> {
+async function wiredControls(
+  rootProps: Record<string, unknown> = {},
+): Promise<WiredControls> {
   const producer = new CommitsProducer();
   const presses: unknown[] = [];
   const toggles: unknown[] = [];
@@ -891,7 +889,7 @@ async function wiredControls(): Promise<WiredControls> {
   const checkRef: { current: GuiNodeHandle | null } = { current: null };
   const tree = new ReactWorldTree(stubClient());
   const entity = tree.instance(ENTITY_HOST_TYPE, { id: "panel" });
-  const root = tree.instance(GUI_ROOT_HOST_TYPE, {});
+  const root = tree.instance(GUI_ROOT_HOST_TYPE, rootProps);
   const column = tree.instance(GUI_COLUMN_HOST_TYPE, {
     nodeRef: columnRef,
     onActionCapture: () => void actions.push("capture:column"),
@@ -928,6 +926,8 @@ async function wiredControls(): Promise<WiredControls> {
     identity: decl.identity,
     entity: decl.entity,
     nodeRef: decl.nodeRef,
+    onAction: decl.onAction,
+    onActionCapture: decl.onActionCapture,
     nodes: decl.nodes.slice(0, count),
     signature: `${count}`,
   });
@@ -1060,6 +1060,92 @@ test("GuiCommits dispatches committed observations into real control callbacks",
     "bubble:column",
   ]);
   assert.deepEqual(wired.errors, []);
+});
+
+test("GuiRoot action listeners are the outermost capture and bubble entries", async () => {
+  let stopRootCapture = false;
+  // Each root entry records how many node listeners ran before it.
+  const log: [string, number][] = [];
+  let nodeActions: string[] = [];
+  const wired = await wiredControls({
+    onActionCapture: (event: GuiActionEvent) => {
+      log.push(["capture:root", nodeActions.length]);
+      if (stopRootCapture) event.stopPropagation();
+    },
+    onAction: (event: GuiActionEvent) => {
+      log.push(["bubble:root", nodeActions.length]);
+      assert.equal(event.phase, "bubble");
+      assert.deepEqual(event.path, [wired.columnId, wired.buttonId]);
+    },
+  });
+  nodeActions = wired.actions;
+  const press = () =>
+    wired.emit(
+      pressBatch(wired, wired.buttonId, [wired.columnId, wired.buttonId]),
+    );
+
+  // One committed effect runs each root listener once, outside every node.
+  press();
+  assert.deepEqual(log, [
+    ["capture:root", 0],
+    ["bubble:root", 3],
+  ]);
+  assert.deepEqual(wired.actions, [
+    "capture:column",
+    "bubble:button",
+    "bubble:column",
+  ]);
+  assert.equal(wired.presses.length, 1);
+
+  // Stopping at the root capture hides the effect from every node listener
+  // and the root bubble, but never cancels the committed press callback.
+  log.length = 0;
+  wired.actions.length = 0;
+  stopRootCapture = true;
+  press();
+  assert.deepEqual(log, [["capture:root", 0]]);
+  assert.deepEqual(wired.actions, []);
+  assert.equal(wired.presses.length, 2);
+  assert.deepEqual(wired.errors, []);
+});
+
+test("a node that stops bubbling keeps the GuiRoot bubble listener silent", () => {
+  const calls: string[] = [];
+  dispatchGuiAction(
+    [1, 2],
+    (identity) => ({
+      capture: () => void calls.push(`capture:${identity}`),
+      bubble: (event) => {
+        calls.push(`bubble:${identity}`);
+        if (identity === 1) event.stopPropagation();
+      },
+    }),
+    2,
+    {
+      capture: () => void calls.push("capture:root"),
+      bubble: () => void calls.push("bubble:root"),
+    },
+  );
+  assert.deepEqual(calls, [
+    "capture:root",
+    "capture:1",
+    "capture:2",
+    "bubble:2",
+    "bubble:1",
+  ]);
+});
+
+test("GuiRoot accepts its listeners and rejects props it would ignore", () => {
+  const tree = new ReactWorldTree(stubClient());
+  tree.instance(GUI_ROOT_HOST_TYPE, { onAction: () => {} });
+  assert.throws(
+    () => tree.instance(GUI_ROOT_HOST_TYPE, { onActionCapture: 1 }),
+    /GUI onActionCapture must be a function/,
+  );
+  assert.throws(
+    () => tree.instance(GUI_ROOT_HOST_TYPE, { bound: false }),
+    /Unsupported GuiRoot prop: bound/,
+  );
 });
 
 test("GuiCommits keeps delayed callbacks until diff removals tear them down", async () => {

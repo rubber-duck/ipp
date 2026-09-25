@@ -50,6 +50,15 @@ test("React GuiRoot mounts through the producer lifecycle over native", {
       );
       assert.equal(result.mountBatchRequests, 1);
       assert.equal(result.mountBatchEdits, 50);
+      assert.equal(result.themeHandles.length, 2);
+      assert.equal(result.themeEditsAfterSettle, 0);
+      assert.deepEqual(result.rootActionOrder, [
+        "toggle",
+        "capture:root",
+        "bubble:checkbox",
+        "bubble:row",
+        "bubble:root",
+      ]);
     },
   );
 });

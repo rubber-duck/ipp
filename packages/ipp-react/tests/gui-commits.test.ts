@@ -1,4 +1,5 @@
-/** Ambiguous insert recovery and allocation high-water preservation (R19).
+/** Ambiguous insert recovery, allocation high-water preservation and theme
+ * acknowledgement.
  *
  * Headless and node-runnable: a fake GUI runtime applies edits, drops
  * selected responses and answers inspections. Real runtime coverage stays in
@@ -687,4 +688,66 @@ test("themes flush once per root and nodes reference them", async () => {
   await commits.apply(tree(undefined), () => runtime.entity);
   assert.equal(runtime.themes.size, 0);
   assert.deepEqual(nodeEdits(), [undefined, undefined]);
+});
+
+test("a changed theme before an unchanged one is recorded once", async () => {
+  const runtime = new FakeGuiRuntime();
+  const commits = runtime.commits();
+  const theme = (
+    name: string,
+    color: readonly [number, number, number, number],
+  ) =>
+    ({
+      name,
+      parts: { background: { base: { color } } },
+    }) satisfies GuiControlTheme;
+  const first = theme("first", [1, 0, 0, 1]);
+  const second = theme("second", [0, 0, 1, 1]);
+  const tree = (
+    a: GuiControlTheme,
+    b: GuiControlTheme,
+    style: GuiNodeStyle = {},
+  ) =>
+    describe([
+      containerNode(10, ref(), style, a),
+      { ...containerNode(11, ref(), {}, b), parent: 10 },
+    ]);
+
+  await commits.apply(tree(second, second), () => runtime.entity);
+  assert.equal(runtime.themes.size, 1);
+
+  // The new theme precedes the unchanged one in tree order.
+  await commits.apply(tree(first, second), () => runtime.entity);
+  assert.equal(runtime.themes.size, 2);
+  const handles = [...runtime.themes.keys()];
+  const references = [...runtime.nodes.values()].map(
+    (node) => node.style.theme,
+  );
+
+  // Later commits allocate no handle and send no theme edits.
+  const edits = runtime.themeEdits.length;
+  await commits.apply(
+    tree(first, second, { enabled: false }),
+    () => runtime.entity,
+  );
+  await commits.apply(tree(first, second), () => runtime.entity);
+  assert.equal(runtime.themeEdits.length, edits);
+  assert.deepEqual([...runtime.themes.keys()], handles);
+  assert.deepEqual(
+    [...runtime.nodes.values()].map((node) => node.style.theme),
+    references,
+  );
+
+  // A changed theme before an unchanged one is patched once, then settles.
+  await commits.apply(
+    tree(theme("first", [0, 1, 0, 1]), second),
+    () => runtime.entity,
+  );
+  assert.equal(runtime.themeEdits.length, edits + 1);
+  await commits.apply(
+    tree(theme("first", [0, 1, 0, 1]), second, { enabled: false }),
+    () => runtime.entity,
+  );
+  assert.equal(runtime.themeEdits.length, edits + 1);
+  assert.deepEqual([...runtime.themes.keys()], handles);
 });

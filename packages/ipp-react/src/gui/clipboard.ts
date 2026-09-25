@@ -4,7 +4,7 @@ import type { GuiInputSink } from "./input.js";
  *
  * Platform adapter slice for the optional `@ipp/react/gui` entry point:
  * the browser clipboard supplies paste text into the core-focused
- * `TextInput` (via the ordered `.11` sink as an ordinary `text` command)
+ * `TextInput` (via the ordered input sink as an ordinary `text` command)
  * and accepts committed text copied out of it. Core keeps sole text
  * authority at all times: platform failure — denied permission, insecure
  * context without `navigator.clipboard`, or a rejected read/write —
@@ -14,7 +14,7 @@ import type { GuiInputSink } from "./input.js";
  *
  * Focus: these helpers never move or claim focus. A paste sends an
  * unfocused `text` command that core routes to its focused `TextInput`;
- * with no eligible focus it is `unhandled` there (`.8`), which is the
+ * with no eligible focus core reports it `unhandled`, which is the
  * correct outcome rather than focus stealing. A copy takes the committed
  * text the caller read from the semantic snapshot or inspect response for
  * the focused node; the DOM is never treated as the value source.
@@ -44,7 +44,7 @@ export type ClipboardPermissionState =
   | "prompt"
   | "unknown";
 
-/** Wire string bound mirrored from the `.11` ingress (`.8` caps further). */
+/** Wire string bound of the GUI input ingress; core may cap text further. */
 export const CLIPBOARD_TEXT_MAX_BYTES = 65536;
 
 function globalNavigator(): unknown {
@@ -130,8 +130,8 @@ export type ClipboardReadResult =
 /** Read clipboard text without ever implying an edit.
  *
  * Returns the text on success (possibly empty: the caller then sends
- * nothing, since empty `Text` is `Err(InvalidValue)` at dispatch in
- * `.8`). Every failure — unavailable clipboard, denied permission,
+ * nothing, since core rejects an empty `text` command as an invalid
+ * value). Every failure — unavailable clipboard, denied permission,
  * rejected read, non-string payload, oversize payload — returns
  * `{ ok: false }` with a reason and no text.
  */
@@ -224,7 +224,7 @@ export interface ClipboardSinkOptions {
  *
  * On success sends one ordered `{ kind: "text" }` command carrying the
  * clipboard string (insert at caret / replace selection happens in core
- * under the `.8` revision gate). Returns `true` only when a command was
+ * under its revision gate). Returns `true` only when a command was
  * sent. Empty clipboard text sends nothing (returns `false`); a focus
  * change across the read wait cancels explicitly without sending; any
  * other failure sends nothing, reports through `onError`, and returns

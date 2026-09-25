@@ -12,7 +12,6 @@ import type {
 import type {
   GuiActionEvent,
   GuiActionListener,
-  GuiDeclarationStyle,
   GuiHostType,
   GuiNodeDeclaration,
   GuiNodeRef,
@@ -31,7 +30,7 @@ export interface GuiDescribedNode {
   /** Authored kind-specific scalars, seeded into the node's data row. */
   readonly values: GuiNodeValues;
   /** Complete style with property defaults filled, including asset and enabled. */
-  readonly style: GuiDeclarationStyle;
+  readonly style: GuiNodeStyle;
   readonly nodeRef: GuiNodeRef | null;
   readonly onAction: GuiActionListener | undefined;
   readonly onActionCapture: GuiActionListener | undefined;
@@ -46,20 +45,22 @@ export interface GuiDescribedRoot {
   readonly entity: number;
   /** Resolves to the acknowledged root-node handle after acknowledgement. */
   readonly nodeRef: GuiNodeRef | null;
+  /** Outermost listeners of every action path in this root. JS-only: they
+   * never reach the commit signature or any transport. */
+  readonly onAction?: GuiActionListener | undefined;
+  readonly onActionCapture?: GuiActionListener | undefined;
   readonly nodes: readonly GuiDescribedNode[];
   readonly signature: string;
 }
 
 /** Fill property defaults the runtime applies, so sparse reads compare equal. */
-export function normalizeGuiStyle(
-  style: GuiNodeStyle | GuiDeclarationStyle,
-): GuiDeclarationStyle {
+export function normalizeGuiStyle(style: GuiNodeStyle): GuiNodeStyle {
   return {
     ...style,
     color: style.color === undefined ? [1, 1, 1, 1] : [...style.color],
     opacity: style.opacity ?? 1,
     fontSize: style.fontSize ?? 0.1,
-    enabled: (style as GuiDeclarationStyle).enabled ?? true,
+    enabled: style.enabled ?? true,
     position: style.position === undefined ? [0, 0] : [...style.position],
     scale: style.scale === undefined ? [1, 1] : [...style.scale],
   };
@@ -72,7 +73,7 @@ function assetSignature(asset: GuiAssetSource | null | undefined): unknown {
   return [asset.kind, asset.source, asset.variant ?? 0];
 }
 
-function styleSignature(input: GuiNodeStyle | GuiDeclarationStyle): unknown {
+function styleSignature(input: GuiNodeStyle): unknown {
   const style = normalizeGuiStyle(input);
   const color = style.color ?? [1, 1, 1, 1];
   return [
@@ -179,8 +180,8 @@ export function equalGuiNode(
 }
 
 export function equalGuiStyle(
-  inputA: GuiNodeStyle | GuiDeclarationStyle,
-  inputB: GuiNodeStyle | GuiDeclarationStyle,
+  inputA: GuiNodeStyle,
+  inputB: GuiNodeStyle,
 ): boolean {
   const a = normalizeGuiStyle(inputA);
   const b = normalizeGuiStyle(inputB);
@@ -260,13 +261,16 @@ export function resolveGuiActionPath(
 
 /** Dispatch along the logical ancestor path: capture root-first, then bubble.
  *
- * JavaScript `stopPropagation` controls callbacks only. This helper never
+ * The GuiRoot's own listeners, when present, are the outermost entries: its
+ * capture listener runs before the root node's and its bubble listener after
+ * it. JavaScript `stopPropagation` controls callbacks only. This helper never
  * touches transport; the runtime owns defaults and committed effects.
  */
 export function dispatchGuiAction(
   path: readonly number[],
   listeners: (identity: number) => GuiActionListeners,
   target: number,
+  root: GuiActionListeners | undefined,
   onError?: (error: Error) => void,
 ): void {
   const invoke = (
@@ -280,13 +284,17 @@ export function dispatchGuiAction(
     }
   };
   const capture = new ActionEvent(target, path, "capture");
+  invoke(root?.capture, capture);
+  if (capture.propagationStopped) return;
   for (const identity of path) {
     invoke(listeners(identity).capture, capture);
     if (capture.propagationStopped) return;
   }
+
   const bubble = new ActionEvent(target, path, "bubble");
   for (let index = path.length - 1; index >= 0; index -= 1) {
     invoke(listeners(path[index]!).bubble, bubble);
     if (bubble.propagationStopped) return;
   }
+  invoke(root?.bubble, bubble);
 }

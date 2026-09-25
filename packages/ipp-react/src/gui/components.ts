@@ -107,7 +107,7 @@ export type GuiNodeRef =
   | { current: GuiNodeHandle | null }
   | ((handle: GuiNodeHandle | null) => void);
 
-/** Extension hook for later control callbacks (ipp-9nx.14).
+/** Logical action listener on a GUI node or GuiRoot.
  *
  * Listeners are stored with the declaration and dispatched along the runtime
  * logical ancestor path. They are never transported and never affect the
@@ -189,10 +189,10 @@ export interface GuiNodeProps extends GuiStyleProps {
 
 export interface GuiRootProps {
   readonly children?: ReactNode;
-  /** Overlay mode for the GuiRoot component; defaults to automatic. */
-  readonly bound?: boolean | null | undefined;
   /** Resolves to the acknowledged root-node handle after acknowledgement. */
   readonly nodeRef?: GuiNodeRef | null | undefined;
+  /** Outermost action listeners: capture runs before every node in the root
+   * and bubble after every node. */
   readonly onAction?: GuiActionListener | undefined;
   readonly onActionCapture?: GuiActionListener | undefined;
 }
@@ -261,21 +261,14 @@ export function validateGuiNodeRef(value: unknown): void {
   throw new Error("GUI nodeRef must be a ref object, a callback, or null");
 }
 
-/** Complete style with lane defaults filled, plus the authoring-only
- * `enabled` lane (default true) carried for the runtime named property.
- * The shared client contract gains the lane on regeneration; until then
- * the extra property rides the runtime object without transport changes. */
-export type GuiDeclarationStyle = GuiNodeStyle & {
-  enabled?: boolean | undefined;
-};
-
-/** Complete style with lane defaults filled. Copies tuples defensively. */
-export function guiStyleFor(props: GuiStyleProps): GuiDeclarationStyle {
+/** Complete style with lane defaults filled, including `enabled` (default
+ * true). Copies tuples defensively. */
+export function guiStyleFor(props: GuiStyleProps): GuiNodeStyle {
   const copy4 = (
     value: readonly [number, number, number, number] | undefined,
   ): [number, number, number, number] | undefined =>
     value === undefined ? undefined : [value[0], value[1], value[2], value[3]];
-  const style: GuiDeclarationStyle = {
+  const style: GuiNodeStyle = {
     ...(props.width === undefined ? {} : { width: props.width }),
     ...(props.height === undefined ? {} : { height: props.height }),
     ...(props.minWidth === undefined ? {} : { minWidth: props.minWidth }),

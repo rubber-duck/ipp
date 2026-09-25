@@ -1,4 +1,4 @@
-/** GUI asset binding and enabled-lane declaration tests (P07 R12 + disabled lane).
+/** GUI asset binding and enabled-lane declaration tests.
  *
  * Headless and node-runnable: pure tree description, commit signatures and
  * diffs with no transport and no reconciler. Real runtime coverage stays in

@@ -1,10 +1,11 @@
 import type {
   CameraMotion,
   GeometryPickResultEvent,
+  GuiPointerButton,
   PickingWorldClient,
   WorldPlane,
 } from "@ipp/client";
-import type { GuiPointerButton, GuiUnhandledInputGate } from "@ipp/react/gui";
+import type { GuiUnhandledInputGate } from "@ipp/react/gui";
 
 export interface PickInteraction {
   click(): void;

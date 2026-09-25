@@ -1073,7 +1073,7 @@ function describePanel(mock: MockGuiClient, withListeners: boolean) {
   const noop = (): void => {};
   const entity = tree.instance("ipp-entity", { id: "e" });
   const surface = tree.instance("ipp-surface", { width: 1, height: 1 });
-  const root = tree.instance("ipp-gui-root", { bound: false });
+  const root = tree.instance("ipp-gui-root", {});
   const row = tree.instance("ipp-gui-row", {});
   const button = tree.instance("ipp-gui-button", {
     label: "go",
@@ -1100,7 +1100,7 @@ function describePanel(mock: MockGuiClient, withListeners: boolean) {
 test("listeners are retained JS-only without transport", () => {
   const mock = mockClient();
   const { description, noop } = describePanel(mock, true);
-  // No overlay is ever described for GuiRoot, whatever the bound prop says.
+  // No overlay is ever described for GuiRoot.
   assert.equal(
     description.overlays.some(
       (overlay) => overlay.component === GUI_ROOT_COMPONENT,

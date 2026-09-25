@@ -1,4 +1,4 @@
-/** Skinnable control and theme authoring unit tests (ipp-9nx.14).
+/** Skinnable control and theme authoring unit tests.
  *
  * Headless and node-runnable: pure builders, validators and runtime-property
  * compilation with no transport or reconciler. Callback/path invariants live
@@ -6,30 +6,36 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { equalGuiNode } from "../src/gui/description.js";
+import {
+  equalGuiNode,
+  guiRootSignature,
+  type GuiDescribedNode,
+} from "../src/gui/description.js";
 import {
   Button,
   Checkbox,
+  Slider,
+  TextInput,
+  validateButtonProps,
+  validateSliderProps,
+  type GuiControlBaseProps,
+  type SliderProps,
+} from "../src/gui/controls.js";
+import {
   GUI_BUTTON_HOST_TYPE,
   GUI_CHECKBOX_HOST_TYPE,
   GUI_SLIDER_HOST_TYPE,
   GUI_TEXT_INPUT_HOST_TYPE,
-  Slider,
-  TextInput,
   buttonNode,
   checkboxNode,
-  controlDeclarationSignature,
-  describeButton,
-  describeCheckbox,
-  describeSlider,
-  describeTextInput,
-  isGuiControlHostType,
+  guiStyleFor,
   sliderNode,
   textInputNode,
-} from "../src/gui/controls.js";
+} from "../src/gui/components.js";
 import {
   GUI_THEME_PARTS,
   compileGuiTheme,
+  guiStyleWithTheme,
   defaultGuiTheme,
   guiThemeKey,
   validateGuiTheme,
@@ -50,13 +56,14 @@ function themeRows(theme: GuiControlTheme): Record<string, GuiPartValues> {
     }),
   );
 }
-import {
-  actionsForControlKind,
-  controlKindForData,
-  nameForData,
-} from "../src/gui/callbacks.js";
+import { controlKindForData, nameForData } from "../src/gui/callbacks.js";
 
-test("control host types are distinct and guarded", () => {
+/** Node style the reconciler describes for a control declaration. */
+function controlStyle(props: GuiControlBaseProps) {
+  return guiStyleWithTheme(guiStyleFor(props), props.theme);
+}
+
+test("control host types are distinct", () => {
   assert.equal(
     new Set([
       GUI_BUTTON_HOST_TYPE,
@@ -66,10 +73,6 @@ test("control host types are distinct and guarded", () => {
     ]).size,
     4,
   );
-  assert.equal(isGuiControlHostType(GUI_BUTTON_HOST_TYPE), true);
-  assert.equal(isGuiControlHostType(GUI_TEXT_INPUT_HOST_TYPE), true);
-  assert.equal(isGuiControlHostType("ipp-gui-text"), false);
-  assert.equal(isGuiControlHostType(undefined), false);
 });
 
 test("control builders emit node data and kind-specific values", () => {
@@ -147,7 +150,7 @@ test("control validators reject invalid declarations loudly", () => {
   );
   assert.throws(
     () =>
-      describeButton({
+      validateButtonProps({
         label: "Go",
         onPress: "now" as unknown as never,
       }),
@@ -155,7 +158,7 @@ test("control validators reject invalid declarations loudly", () => {
   );
   assert.throws(
     () =>
-      describeSlider({
+      validateSliderProps({
         onScalarCommit: 1 as unknown as never,
       }),
     /GUI Slider onScalarCommit must be a function/,
@@ -171,81 +174,34 @@ test("control components are pure element factories without transport", () => {
   assert.equal(TextInput({}).type, GUI_TEXT_INPUT_HOST_TYPE);
 });
 
-test("control descriptions carry node data and style only, never value writes", () => {
-  const decl = describeCheckbox({
-    checked: true,
-    color: [1, 0, 0, 1],
-    onToggle: () => {},
-  });
-  assert.equal(decl.hostType, GUI_CHECKBOX_HOST_TYPE);
-  assert.deepEqual(decl.data, { kind: "checkbox" });
-  assert.deepEqual(decl.values, { checked: true });
-  assert.deepEqual(decl.style.color, [1, 0, 0, 1]);
-  assert.equal(decl.style.opacity, 1);
-  assert.equal(decl.nodeRef, null);
-  assert.deepEqual(Object.keys(decl).sort(), [
-    "data",
-    "hostType",
-    "nodeRef",
-    "onAction",
-    "onActionCapture",
-    "onPress",
-    "onScalarCommit",
-    "onTextCommit",
-    "onToggle",
-    "style",
-    "values",
-  ]);
-  // A changed `checked` prop is explicit replacement structure, not a write:
-  // the declaration just names different initial values.
-  assert.deepEqual(describeCheckbox({}).values, { checked: false });
-  assert.deepEqual(describeSlider({ value: 2 }).values, {
-    value: 2,
-    min: 0,
-    max: 1,
-    step: 0,
-  });
-  assert.deepEqual(describeTextInput({ text: "v2" }).data, {
-    kind: "textInput",
-    text: "v2",
-    placeholder: "",
-  });
-  assert.deepEqual(describeButton({ label: "Go" }).data, {
-    kind: "button",
-    label: "Go",
-  });
-});
-
-test("callbacks, refs and initial values resubmit nothing", () => {
-  const first = describeSlider({ value: 1 });
-  const second = describeSlider({ value: 1, onScalarCommit: () => {} });
-  assert.equal(
-    controlDeclarationSignature(first),
-    controlDeclarationSignature(second),
-  );
-  const ref = { current: null };
-  assert.equal(
-    controlDeclarationSignature(describeSlider({ value: 1, nodeRef: ref })),
-    controlDeclarationSignature(first),
-  );
-  assert.equal(
-    controlDeclarationSignature(describeSlider({ value: 2 })),
-    controlDeclarationSignature(first),
-  );
+test("slider values and callbacks never change the commit signature", () => {
+  // Described nodes carry no refs or callbacks, so only structure, authored
+  // ranges, style and theme reach the signature; the committed value is
+  // runtime-owned after insertion.
+  const signature = (props: SliderProps) => {
+    const node: GuiDescribedNode = {
+      identity: 1,
+      parent: undefined,
+      type: GUI_SLIDER_HOST_TYPE,
+      ...sliderNode(props),
+      style: controlStyle(props),
+      nodeRef: null,
+      onAction: undefined,
+      onActionCapture: undefined,
+      ...(props.theme === undefined ? {} : { theme: props.theme }),
+    };
+    return guiRootSignature([node]);
+  };
+  const first = signature({ value: 1 });
+  assert.equal(signature({ value: 2 }), first);
+  assert.notEqual(signature({ value: 1, max: 2 }), first);
+  assert.notEqual(signature({ value: 1, color: [1, 0, 0, 1] }), first);
   assert.notEqual(
-    controlDeclarationSignature(
-      describeSlider({ value: 1, color: [1, 0, 0, 1] }),
-    ),
-    controlDeclarationSignature(first),
-  );
-  assert.notEqual(
-    controlDeclarationSignature(
-      describeSlider({
-        value: 1,
-        theme: { parts: { background: { base: { opacity: 0.5 } } } },
-      }),
-    ),
-    controlDeclarationSignature(first),
+    signature({
+      value: 1,
+      theme: { parts: { background: { base: { opacity: 0.5 } } } },
+    }),
+    first,
   );
 });
 
@@ -406,17 +362,9 @@ test("switch knob alignment authors an animated align_x property", () => {
 
 test("theme fonts enter measured node style and label assets reject", () => {
   const font = { kind: 11, source: "asset://font", variant: 2 };
-  assert.deepEqual(
-    describeButton({ label: "Measured", theme: { font, parts: {} } }).style
-      .asset,
-    font,
-  );
+  assert.deepEqual(controlStyle({ theme: { font, parts: {} } }).asset, font);
   assert.equal(
-    describeButton({
-      label: "Override",
-      asset: null,
-      theme: { font, parts: {} },
-    }).style.asset,
+    controlStyle({ asset: null, theme: { font, parts: {} } }).asset,
     null,
   );
   assert.throws(
@@ -433,11 +381,10 @@ test("theme fonts enter measured node style and label assets reject", () => {
 });
 
 test("theme-only control paint stays in theme rows instead of node style", () => {
-  const button = describeButton({
-    label: "Painted",
-    theme: defaultGuiTheme,
-  });
-  assert.equal(button.style.backgroundColor, undefined);
+  assert.equal(
+    controlStyle({ theme: defaultGuiTheme }).backgroundColor,
+    undefined,
+  );
   const properties = themeRows(defaultGuiTheme);
   assert.deepEqual(properties["background"]?.color, [0.16, 0.34, 0.72, 1]);
   assert.deepEqual(properties["icon_idle_checked"]?.opacity, 1);
@@ -485,7 +432,7 @@ test("colour-only state styles select a solid fill over an inherited gradient", 
   );
 });
 
-test("node kinds map to control roles, names and actions", () => {
+test("node kinds map to control roles and names", () => {
   assert.equal(controlKindForData(buttonNode("Go").data), "button");
   assert.equal(controlKindForData(checkboxNode(true).data), "checkbox");
   assert.equal(controlKindForData(sliderNode({}).data), "slider");
@@ -497,10 +444,6 @@ test("node kinds map to control roles, names and actions", () => {
   assert.equal(controlKindForData({ kind: "text", text: "hi" }), null);
   assert.equal(controlKindForData({ kind: "drawing" }), null);
   assert.equal(controlKindForData({ kind: "image" }), null);
-  assert.deepEqual(actionsForControlKind("button"), ["press"]);
-  assert.deepEqual(actionsForControlKind("checkbox"), ["toggle", "focus"]);
-  assert.deepEqual(actionsForControlKind("slider"), ["setScalar", "focus"]);
-  assert.deepEqual(actionsForControlKind("textInput"), ["setText", "focus"]);
   assert.equal(nameForData(buttonNode("Go").data), "Go");
   assert.equal(
     nameForData(textInputNode({ placeholder: "name" }).data),

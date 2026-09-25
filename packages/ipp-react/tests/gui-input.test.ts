@@ -511,8 +511,8 @@ test("adapter-owned keyboard focus can transfer without clearing core focus", ()
 });
 
 /** Live browser capture (real pointer-capture retargeting, OS focus loss,
- * unmount timing) remains a .15/.17 seam: real-browser drags outside the
- * canvas, window focus loss and unmount-while-held must still be captured
+ * unmount timing) belongs to the browser GUI suite: real-browser drags
+ * outside the canvas, window focus loss and unmount-while-held are captured
  * there. These headless fakes prove the relay termination and fencing
  * logic that the live captures exercise. */
 

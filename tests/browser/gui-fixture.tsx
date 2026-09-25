@@ -288,7 +288,9 @@ function Application({
       width={WIDTH}
       height={HEIGHT}
       canvasProps={{ id: "mounted-gui-canvas" }}
-      guiInput={{}}
+      // A fresh blockers array each render must not reattach live input: the
+      // equivalent rerender keeps text focus and selection.
+      guiInput={{ blockers: [] }}
       onReady={ready}
       onError={(error) => errors.push(error.message)}
     >

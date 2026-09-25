@@ -17,12 +17,6 @@ import {
   normalizeGuiStyle,
   type GuiDescribedNode,
 } from "./description.js";
-import type { GuiDeclarationStyle } from "./components.js";
-
-/** Style patch properties including the authoring-only enabled property. */
-export type GuiDeclarationPatchStyle = GuiNodePatchStyle & {
-  enabled?: boolean | undefined;
-};
 
 /** Acknowledged runtime state for one declared node. */
 export interface GuiAcknowledgedNode {
@@ -32,7 +26,7 @@ export interface GuiAcknowledgedNode {
   readonly parentId: number | undefined;
   readonly data: GuiNodeData;
   readonly values: GuiNodeValues;
-  readonly style: GuiDeclarationStyle;
+  readonly style: GuiNodeStyle;
 }
 
 export interface GuiDiffResult {
@@ -55,16 +49,16 @@ function tuplesEqual(
 }
 
 function stylePatch(
-  desiredInput: GuiNodeStyle | GuiDeclarationStyle,
-  ackedInput: GuiNodeStyle | GuiDeclarationStyle,
-): GuiDeclarationPatchStyle | undefined {
+  desiredInput: GuiNodeStyle,
+  ackedInput: GuiNodeStyle,
+): GuiNodePatchStyle | undefined {
   const desired = normalizeGuiStyle(desiredInput);
   const acked = normalizeGuiStyle(ackedInput);
-  const patch: GuiDeclarationPatchStyle = {};
+  const patch: GuiNodePatchStyle = {};
   let changed = false;
-  const set = <K extends keyof GuiDeclarationPatchStyle>(
+  const set = <K extends keyof GuiNodePatchStyle>(
     key: K,
-    value: GuiDeclarationPatchStyle[K],
+    value: GuiNodePatchStyle[K],
   ): void => {
     patch[key] = value;
     changed = true;

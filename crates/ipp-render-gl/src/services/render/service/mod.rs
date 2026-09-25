@@ -124,6 +124,10 @@ pub struct RenderService<D: RenderDevice> {
     /// atlas entries were not all resident.
     #[cfg(feature = "gui")]
     surface_analytic_text: bool,
+    /// The last Surface submission had no usable retained GUI storage, so it
+    /// skipped its boxes and drew its text analytically.
+    #[cfg(feature = "gui")]
+    surface_gui_unretained: bool,
     /// Program drawing GUI boxes and atlas glyphs.
     #[cfg(feature = "gui")]
     surface_gui_program: Option<D::Program>,

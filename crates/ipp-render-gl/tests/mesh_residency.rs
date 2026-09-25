@@ -1063,6 +1063,119 @@ fn context_loss_during_gui_storage_write_reaches_recovery() {
     assert_eq!((warm.uploaded_bytes, warm.gui_batches), (0, 1));
 }
 
+/// A one-glyph text Surface of the support font with its run at `position`.
+#[cfg(feature = "gui")]
+fn glyph_surface(position: [f32; 2]) -> ipp_core::Surface {
+    use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
+    use ipp_core::{PositionedGlyph, Surface, SurfaceItemContent, SurfaceItemStyle};
+
+    let mut surface = Surface::default();
+    surface
+        .insert_item(
+            0,
+            SurfaceItemContent::GlyphRun(vec![PositionedGlyph {
+                glyph_id: 0,
+                position: [0.0, 0.0],
+                color: None,
+            }]),
+            SurfaceItemStyle {
+                position,
+                font_size: 1.0,
+                asset: Some(AssetSource {
+                    kind: FONT_TYPE,
+                    uri: "fixture:///font.ippf".into(),
+                    variant: 0,
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    surface
+}
+
+#[cfg(feature = "gui")]
+#[test]
+fn recoverable_gui_storage_failure_skips_only_its_surface_and_backs_off() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, failing) = text_surface_scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+
+    // A mesh and a second text Surface nearer the camera, which paints after the
+    // failing Surface.
+    renderable(&mut world, 41, 0.0);
+    upload(&mut world, 41);
+    create(
+        &mut world,
+        vec![
+            ComponentValue::Transform(Transform {
+                z: 1.0,
+                ..Transform::default()
+            }),
+            ComponentValue::Surface(glyph_surface([0.5, 0.5])),
+            ComponentValue::BoundingGeometry(Default::default()),
+        ],
+    );
+    let warm = (0..4)
+        .map(|_| render_frame(&mut renderer, &mut world, 100, 100).unwrap())
+        .last()
+        .unwrap();
+    assert_eq!(
+        (warm.gui_batches, warm.failed_draw_calls),
+        (2, 0),
+        "{warm:?}"
+    );
+    assert_eq!(warm.uploaded_bytes, 0);
+    let resident = warm.gui_resident_bytes;
+    let analytic = state.analytic_glyph_draws.get();
+
+    // Moving the first Surface's text rewrites its storage, which runs out of memory.
+    world
+        .enqueue(ipp_core::Batch {
+            id: world.tick() + 1,
+            operations: vec![ipp_core::Command::insert_value(
+                ipp_core::EntityRef::Handle(failing),
+                ComponentValue::Surface(glyph_surface([0.4, 0.5])),
+            )],
+        })
+        .unwrap();
+    state
+        .fail_gui_batch_write
+        .replace(Some(RenderError::RenderDevice("out of memory".into())));
+    state.surface_events.borrow_mut().clear();
+    let meshes = state.mesh_draws.get();
+    let failed = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!(failed.gui_batches, 1, "{failed:?}");
+    assert_eq!(failed.failed_draw_calls, 1);
+    assert_eq!(failed.draw_calls, warm.draw_calls);
+    assert!(failed.gui_resident_bytes < resident);
+    assert_eq!(state.mesh_draws.get(), meshes + 1);
+    assert_eq!(state.analytic_glyph_draws.get(), analytic + 1);
+    assert_eq!(
+        state.surface_events.borrow().as_str(),
+        "FGT",
+        "the failing Surface's text draws analytically, then the next Surface draws"
+    );
+
+    // The failing Surface waits before retrying its allocation.
+    let writes = state.gui_batch_writes.get();
+    let waiting = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((waiting.gui_batches, waiting.failed_draw_calls), (1, 1));
+    assert_eq!(state.gui_batch_writes.get(), writes);
+
+    // Once the device recovers, a retry rebuilds the storage and draws from it.
+    state.fail_gui_batch_write.replace(None);
+    let recovered = (0..8)
+        .map(|_| render_frame(&mut renderer, &mut world, 100, 100).unwrap())
+        .find(|stats| stats.gui_batches == 2)
+        .expect("the Surface's storage is rebuilt");
+    assert_eq!(recovered.failed_draw_calls, 0, "{recovered:?}");
+    assert_eq!(recovered.gui_resident_bytes, resident);
+    let analytic = state.analytic_glyph_draws.get();
+    let warm = render_frame(&mut renderer, &mut world, 100, 100).unwrap();
+    assert_eq!((warm.gui_batches, warm.uploaded_bytes), (2, 0));
+    assert_eq!(state.analytic_glyph_draws.get(), analytic);
+}
+
 /// Glyphs projected far above the atlas bands draw analytically in every build.
 #[cfg(feature = "surfaces")]
 const ANALYTIC_VIEWPORT: u32 = 1000;

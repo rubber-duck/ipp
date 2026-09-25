@@ -17,6 +17,8 @@ use std::{cell::Cell, rc::Rc};
 pub struct DeviceState {
     pub failed_attempts_remaining: Cell<u32>,
     pub mesh_attempts: Cell<u32>,
+    /// Mesh draw submissions.
+    pub mesh_draws: Cell<u32>,
     #[cfg(feature = "shadows")]
     pub fail_shadow_allocation: Cell<bool>,
     #[cfg(feature = "shadows")]
@@ -578,6 +580,7 @@ impl RenderDevice for TestDevice {
         #[cfg(feature = "mesh-poses")] _pose: Option<(&Self::Mesh, f32)>,
         _texture: Option<&()>,
     ) -> Result<(), RenderError> {
+        self.0.mesh_draws.set(self.0.mesh_draws.get() + 1);
         #[cfg(feature = "surfaces")]
         assert!(
             !self.0.surface_double_sided.get(),

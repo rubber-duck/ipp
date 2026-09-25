@@ -59,7 +59,7 @@ impl<D: RenderDevice> RenderService<D> {
     ///
     /// Primitives whose resource or GPU data is not resident are skipped and
     /// their resources listed in `surface_missing`, which this call resets
-    /// together with `surface_analytic_text`.
+    /// together with `surface_analytic_text` and `surface_gui_unretained`.
     pub(super) fn draw_surface_primitives(
         &mut self,
         world: &WorldContext<'_>,
@@ -72,6 +72,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "gui")]
         {
             self.surface_analytic_text = false;
+            self.surface_gui_unretained = false;
         }
 
         // Unchanged paint lets retained work skip hashing its inputs.
@@ -363,6 +364,12 @@ impl<D: RenderDevice> RenderService<D> {
     /// Boxes and text runs whose atlas entries are all resident become retained
     /// batches; consecutive batches form one [`SurfaceOp::Gui`] range whatever their
     /// clips. Every other visible primitive becomes a [`SurfaceOp::Primitive`].
+    ///
+    /// When the Surface has no usable storage after a recoverable allocation or write
+    /// failure, or while it backs off from one, its boxes are skipped for the frame and
+    /// counted as one failed draw, its text draws analytically and
+    /// `surface_gui_unretained` is set. Other Surfaces and the rest of the frame are
+    /// unaffected.
     #[cfg(feature = "gui")]
     fn prepare_gui_work(
         &mut self,
@@ -454,14 +461,33 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         let glyphs = glyphs.as_deref();
-        cache.commit_surface(
+        let committed = cache.commit_surface(
             |identity, batch| {
                 glyphs.map_or(&[], |glyphs| {
                     glyphs.batch_vertices(item.entity, identity, batch)
                 })
             },
             stats,
-        )
+        )?;
+        if committed {
+            return Ok(());
+        }
+
+        self.surface_gui_unretained = true;
+        stats.failed_draw();
+        ops.clear();
+        for (index, primitive) in item.primitives.iter().enumerate() {
+            let Some(clip) = ipp_core::primitive_effective_clip(primitive.style(), item.clip_size)
+            else {
+                continue;
+            };
+
+            if !matches!(primitive, ipp_core::SurfaceRenderPrimitive::Box { .. }) {
+                ops.push(SurfaceOp::Primitive(index, clip));
+            }
+        }
+
+        Ok(())
     }
 
     /// Draw committed GUI batches `range` of the current Surface.

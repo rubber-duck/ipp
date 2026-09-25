@@ -16,6 +16,14 @@
 //! Volatility is the only partition: backgrounds, fills, icons and focus rings share
 //! batches. Each vertex carries its primitive's clip, so a clip change rewrites the
 //! batches of the boxes it clips.
+//!
+//! A recoverable storage allocation or write failure releases the Surface's storage
+//! and reports the Surface as unretained: the caller skips its boxes and draws its
+//! text analytically while the rest of the frame continues. The Surface retries after
+//! [`STORAGE_RETRY_FRAMES`] frames, doubling the wait after each further failure up to
+//! [`MAX_STORAGE_RETRY_DOUBLINGS`] times, so a persistent failure is not paid every
+//! frame. Success, context recovery and the Surface's release reset the back-off;
+//! context loss still fails the frame so recovery runs.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -124,6 +132,20 @@ const VOLATILE_FRAMES: u64 = 120;
 /// Consecutive volatile boxes one batch holds at most.
 const MAX_VOLATILE_BATCH_BOXES: usize = 8;
 
+/// Frames a Surface waits after a recoverable storage failure before it retries.
+const STORAGE_RETRY_FRAMES: u64 = 4;
+
+/// Times consecutive storage failures of a Surface double its retry wait.
+const MAX_STORAGE_RETRY_DOUBLINGS: u32 = 6;
+
+/// Retry state of a Surface whose storage allocation or write failed.
+struct StorageBackoff {
+    /// Frame from which the Surface may try to commit again.
+    retry_frame: u64,
+    /// Consecutive failures since the last successful commit.
+    failures: u32,
+}
+
 /// Cached CPU geometry for one box primitive.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CachedPrimitiveGeometry {
@@ -155,6 +177,8 @@ pub struct GuiBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     cpu_primitives: BTreeMap<PrimitiveKey, CachedPrimitiveGeometry>,
     storage: BTreeMap<ipp_core::EntityId, GuiSurfaceStorage<D>>,
+    /// Surfaces waiting to retry after a recoverable storage failure.
+    backoff: BTreeMap<ipp_core::EntityId, StorageBackoff>,
     /// Sum of allocated bytes over `storage`.
     #[cfg(any(test, feature = "diagnostics"))]
     resident: usize,
@@ -176,6 +200,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             device,
             cpu_primitives: BTreeMap::new(),
             storage: BTreeMap::new(),
+            backoff: BTreeMap::new(),
             #[cfg(any(test, feature = "diagnostics"))]
             resident: 0,
             entity: ipp_core::EntityId::from_bits(0),
@@ -194,6 +219,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             storage.delete(&mut device);
         }
         self.cpu_primitives.clear();
+        self.backoff.clear();
         #[cfg(any(test, feature = "diagnostics"))]
         {
             self.resident = 0;
@@ -380,18 +406,29 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
 
     /// Place the collected batches in the Surface's storage, writing only changed ones.
     ///
-    /// `glyphs` returns the vertices of atlas page batch `index` of a text run. A failed
-    /// write releases the Surface's storage, so no later frame draws unknown contents.
+    /// `glyphs` returns the vertices of atlas page batch `index` of a text run. Returns
+    /// `false` when the Surface has no usable storage this frame: a recoverable
+    /// allocation or write failed, or an earlier one is still backing off. The failed
+    /// storage is released, so no later frame draws unknown contents. Context loss is
+    /// returned as an error.
     pub fn commit_surface<'g>(
         &mut self,
         glyphs: impl Fn(SurfacePrimitiveIdentity, u32) -> &'g [GuiVertex],
         stats: &mut RenderFrameWork,
-    ) -> Result<(), RenderError> {
+    ) -> Result<bool, RenderError> {
         if self.pieces.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
 
         let entity = self.entity;
+        if self
+            .backoff
+            .get(&entity)
+            .is_some_and(|backoff| backoff.retry_frame > self.frame)
+        {
+            return Ok(false);
+        }
+
         let mut storage = self.storage.remove(&entity);
         #[cfg(any(test, feature = "diagnostics"))]
         let before = storage.as_ref().map_or(0, GuiSurfaceStorage::bytes);
@@ -433,7 +470,23 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             self.storage.insert(entity, storage);
         }
 
-        result
+        match result {
+            Ok(()) => {
+                self.backoff.remove(&entity);
+                Ok(true)
+            }
+            Err(RenderError::ContextLost) => Err(RenderError::ContextLost),
+            Err(_) => {
+                let backoff = self.backoff.entry(entity).or_insert(StorageBackoff {
+                    retry_frame: 0,
+                    failures: 0,
+                });
+                backoff.failures = backoff.failures.saturating_add(1);
+                let doublings = (backoff.failures - 1).min(MAX_STORAGE_RETRY_DOUBLINGS);
+                backoff.retry_frame = self.frame + (STORAGE_RETRY_FRAMES << doublings);
+                Ok(false)
+            }
+        }
     }
 
     /// Draw collected batches `range` of the committed Surface in painter order: one
@@ -495,6 +548,8 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
 
             self.cpu_primitives
                 .retain(|key, cached| !surfaces.is_stale(key.entity, cached.seen == frame));
+            self.backoff
+                .retain(|entity, _| surfaces.live.contains(entity));
         }
 
         self.frame += 1;

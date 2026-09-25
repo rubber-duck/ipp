@@ -236,8 +236,9 @@ impl<D: RenderDevice> RenderService<D> {
 
     /// Repaint every planned image before `begin_frame`, in item order.
     ///
-    /// Recoverable failures release the image and present that Surface
-    /// directly; context loss fails the frame. The returned work seeds the
+    /// Recoverable failures, including a repaint without usable retained GUI
+    /// storage, release the image and present that Surface directly; context
+    /// loss fails the frame. The returned work seeds the
     /// frame's work.
     pub(super) fn repaint_surface_caches(
         &mut self,
@@ -288,8 +289,15 @@ impl<D: RenderDevice> RenderService<D> {
             } else {
                 outcomes.into_iter().collect::<Result<(), _>>()
             };
+            // An image without the Surface's retained GUI work would stay incomplete
+            // with nothing to report its recovery, so the Surface presents directly,
+            // retrying its GUI storage, until the cache retry interval ends.
+            #[cfg(feature = "gui")]
+            let unretained = self.surface_gui_unretained;
+            #[cfg(not(feature = "gui"))]
+            let unretained = false;
             match outcome {
-                Ok(()) => {
+                Ok(()) if !unretained => {
                     // Skipped primitives leave the image incomplete until their
                     // resources are resident. Analytic text drawn while atlas
                     // population was deferred is refined on the next frame.
@@ -305,7 +313,7 @@ impl<D: RenderDevice> RenderService<D> {
                         refine,
                     );
                 }
-                Err(error) => {
+                outcome => {
                     let mut device = self.device.borrow_mut();
                     self.surface_cache.failed(
                         world_id,
@@ -313,8 +321,8 @@ impl<D: RenderDevice> RenderService<D> {
                         time,
                         &mut DeviceCacheTargets(&mut *device),
                     );
-                    if error == RenderError::ContextLost {
-                        return Err(error);
+                    if outcome == Err(RenderError::ContextLost) {
+                        return Err(RenderError::ContextLost);
                     }
                 }
             }

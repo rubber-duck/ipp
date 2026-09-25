@@ -863,6 +863,44 @@ fn allocation_and_repaint_failures_fall_back_directly_and_recover() {
     assert_eq!(work(&later), [1, 0, 0, 0, 1], "{later:?}");
 }
 
+#[cfg(feature = "gui")]
+#[test]
+fn a_repaint_without_gui_storage_presents_directly_and_recovers() {
+    let mut host = ipp_core::HostRuntime::new();
+    let (mut renderer, state, world_id, entity) = scene(&mut host);
+    let mut world = host.world_mut(world_id).unwrap();
+    set_policy(&mut world, entity, Some(ALWAYS));
+
+    // The repaint cannot write the Surface's retained storage: the image would lack
+    // that work, so it is released and the Surface draws its text analytically.
+    state
+        .fail_gui_batch_write
+        .replace(Some(RenderError::RenderDevice("out of memory".into())));
+    let failed = frame(&mut renderer, &mut world, 0.1);
+    assert_eq!(work(&failed), [0, 0, 1, 1, 1], "{failed:?}");
+    assert_eq!(take_events(&state), "BGEFG");
+    // One for the abandoned repaint and one for the direct draw.
+    assert_eq!(failed.failed_draw_calls, 2);
+    assert_eq!(state.cache_targets_live.get(), 0);
+    assert_eq!(
+        presentation(&renderer, world_id),
+        SurfaceCachePresentation::Fallback
+    );
+
+    // Once the device recovers, the storage returns and the cache retry repaints the
+    // image from atlas text.
+    state.fail_gui_batch_write.replace(None);
+    let (recovered, events) = (0..16)
+        .map(|_| {
+            let stats = frame(&mut renderer, &mut world, 0.2);
+            (stats, take_events(&state))
+        })
+        .find(|(stats, _)| stats.surface_cache_repaints == 1)
+        .expect("the image is repainted after the retry interval");
+    assert_eq!(events, "BTEFC", "{recovered:?}");
+    assert_eq!(recovered.failed_draw_calls, 0);
+}
+
 #[test]
 fn context_loss_fails_the_frame_and_recovery_repaints() {
     let mut host = ipp_core::HostRuntime::new();

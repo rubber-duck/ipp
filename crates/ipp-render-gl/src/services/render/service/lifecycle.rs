@@ -34,6 +34,8 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "gui")]
             surface_analytic_text: false,
             #[cfg(feature = "gui")]
+            surface_gui_unretained: false,
+            #[cfg(feature = "gui")]
             surface_gui_program: None,
             #[cfg(feature = "gui")]
             gui_batch_cache: BTreeMap::new(),

@@ -14,6 +14,10 @@ pub struct RenderFrameSummary {
     pub triangles: u32,
     /// Instances skipped because their mesh could not acquire GPU residency.
     /// CPU geometry remains usable; resource reload permits another upload.
+    /// Also counts Surface primitives skipped for a missing resource, and each
+    /// Surface submission, direct or into a cache image, whose retained GUI
+    /// storage could not be allocated or written or is waiting to retry after
+    /// such a failure: its boxes are skipped and its text draws analytically.
     pub failed_draw_calls: u32,
     /// The selected camera cannot represent this viewport; the frame is clear.
     /// Selection and session state remain available for repair or resize.

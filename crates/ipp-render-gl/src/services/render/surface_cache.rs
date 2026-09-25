@@ -83,7 +83,10 @@ use std::collections::BTreeMap;
 /// of any device that runs WebGL 2 or GLES 3.
 pub const SURFACE_CACHE_BUDGET_BYTES: usize = 32 << 20;
 
-/// Largest cache image dimension, further capped by the device limit.
+/// Largest cache image dimension, further capped by the device limit. At 2048
+/// texels one image stays within 16 MiB, half of [`SURFACE_CACHE_BUDGET_BYTES`],
+/// so a single oversized Surface cannot claim the whole budget; the WebGL bridge
+/// reports its raw device limit and this service applies the cap for every device.
 pub const SURFACE_CACHE_MAX_DIMENSION: u32 = 2048;
 
 /// World seconds without cached presentation after which an image is released.

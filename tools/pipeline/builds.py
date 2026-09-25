@@ -183,6 +183,34 @@ def native_host(directory: Path, features: list[str], *, release: bool = False) 
     )
 
 
+def gles_host(directory: Path, features: list[str]) -> None:
+    """The presenting GLES testing host of ipp-server, its contract and client."""
+    cargo(
+        "build",
+        "-p",
+        "ipp-server",
+        "--example",
+        "gles_host",
+        "--no-default-features",
+        "--features",
+        ",".join(["websocket", "diagnostics", *features]),
+    )
+    shutil.copy2(ROOT / "target/debug/examples/gles_host", directory / "gles_host")
+    cargo(
+        "run",
+        "--quiet",
+        "-p",
+        "ipp-protocol",
+        "--example",
+        "export_contract",
+        "--no-default-features",
+        "--features",
+        ",".join(["schema-export", *features]),
+        output=directory / "contract.bin",
+    )
+    compile_client(directory, directory / "contract.bin")
+
+
 def baseline_native() -> None:
     artifacts = ROOT / "target/integration-artifacts"
     with product(artifacts / "native") as native:
@@ -300,6 +328,15 @@ def build(name: str) -> None:
         with product(ROOT / "target/gui-host") as directory:
             native_host(directory, ["surfaces", "gui"])
             compile_client(directory, directory / "contract.bin")
+    elif name == "gles-hosts":
+        # The analytic and retained builds of the native retained GUI check.
+        with product(ROOT / "target/gles-host") as output:
+            for host, features in (
+                ("gles-surfaces", ["surfaces", "builtin-assets"]),
+                ("gles-gui", ["gui"]),
+            ):
+                (output / host).mkdir()
+                gles_host(output / host, features)
     elif name == "font-assets":
         with product(ROOT / "target/font-assets") as directory:
             run([development_python(), "tools/build_font_assets.py", str(directory)])

@@ -30,8 +30,8 @@ websocket = ["dep:tungstenite"]
 skeletal-animation = ["ipp-protocol/skeletal-animation", "ipp-host-session/skeletal-animation", "ipp-render-gl/skeletal-animation"]
 shadows = ["ipp-host-session/shadows", "ipp-render-gl/shadows"]
 
-# The scene profiling example drives the native renderer and reads its statistics;
-# the server itself does not render.
+# The scene profiling example and the GLES testing host drive the native renderer
+# and read its statistics; the server itself does not render.
 [dev-dependencies]
 ipp-render-gl.workspace = true
 
@@ -46,3 +46,7 @@ required-features = ["websocket"]
 [[example]]
 name = "profile_scene"
 required-features = ["diagnostics", "shadows", "skeletal-animation", "mesh-poses", "particles"]
+
+[[example]]
+name = "gles_host"
+required-features = ["websocket", "diagnostics", "surfaces"]

@@ -9,7 +9,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode};
 use tungstenite::{Error, Message};
 
-use crate::NativeHost;
+use crate::services::NativeHostServices;
+use ipp_host_session::{Host, HostServices};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 
@@ -107,16 +108,16 @@ struct HostConnectionOutput {
 }
 
 // Shared production coordination used by the listener and transport test driver.
-struct NativeConnectionHost {
-    host: NativeHost,
+struct NativeConnectionHost<P: HostServices> {
+    host: Host<P>,
     started: Instant,
     outputs: BTreeMap<u64, HostConnectionOutput>,
 }
 
-impl NativeConnectionHost {
+impl<P: HostServices> NativeConnectionHost<P> {
     fn new() -> Result<Self, String> {
         Ok(Self {
-            host: NativeHost::new()?,
+            host: Host::new()?,
             started: Instant::now(),
             outputs: BTreeMap::new(),
         })
@@ -237,6 +238,17 @@ pub fn serve(
     file_access: Option<(String, crate::services::data_source::FileSystemDataSource)>,
     ready: impl FnOnce(std::net::SocketAddr) -> io::Result<()>,
 ) -> io::Result<()> {
+    serve_with::<NativeHostServices>(listener, file_access, ready)
+}
+
+/// [`serve`] with platform services composed by an embedder, such as a test host
+/// that presents through its own graphics context. `P` is initialized on the
+/// calling thread, which then runs every Host frame and presentation.
+pub fn serve_with<P: HostServices>(
+    listener: TcpListener,
+    file_access: Option<(String, crate::services::data_source::FileSystemDataSource)>,
+    ready: impl FnOnce(std::net::SocketAddr) -> io::Result<()>,
+) -> io::Result<()> {
     #[cfg(feature = "diagnostics")]
     let log_level = crate::diagnostics::level_from_env()?;
     if !listener.local_addr()?.ip().is_loopback() {
@@ -253,7 +265,7 @@ pub fn serve(
         .as_nanos();
     let sessions = AtomicU64::new(u64::try_from(seed).map_err(io::Error::other)?);
     let (events, incoming) = mpsc::sync_channel(MAX_CONNECTIONS * 64);
-    let mut host = NativeConnectionHost::new().map_err(io::Error::other)?;
+    let mut host = NativeConnectionHost::<P>::new().map_err(io::Error::other)?;
     if let Some((prefix, source)) = file_access {
         host.host
             .runtime_mut()

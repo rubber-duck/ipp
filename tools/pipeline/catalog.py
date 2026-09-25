@@ -134,6 +134,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build("surface-host", (), ("target/surface-host",), ("node", "npm", "rust"))
     build("gui-host", (), ("target/gui-host",), ("node", "npm", "rust"))
+    build("gles-hosts", (), ("target/gles-host",), ("node", "npm", "rust"))
     build("mesh-pose-fixtures", (), ("target/mesh-pose-build",), ("node", "npm"))
     build(
         "skinning-fixtures",
@@ -288,16 +289,17 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             )
 
     for record in GLES_CHECKS:
+        replacements = {"@node": node()}
+        if egl_directory:
+            replacements["@egl"] = egl_directory
         add(
             Task(
                 record["id"],
                 f"Native GLES {record['id'].removeprefix('check:gles-')}",
-                tuple(
-                    egl_directory if part == "@egl" and egl_directory else part
-                    for part in record["command"]
-                ),
+                tuple(replacements.get(part, part) for part in record["command"]),
                 tuple(record["dependencies"]),
-                ("rust", "gles"),
+                # Checks driving a generated client also declare its requirements.
+                ("rust", "gles", *record.get("requirements", [])),
             )
         )
     select(tasks, [])

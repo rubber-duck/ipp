@@ -5,7 +5,10 @@ import { invoke } from "./evidence.js";
 import { encodePng, type RgbaFrame } from "./retained-gui-images.js";
 import {
   exerciseSurfaceCache,
+  measureCacheDensity,
+  type CacheDensityReport,
   type CacheFrame,
+  type SurfaceCacheDriver,
   type SurfaceCacheReport,
 } from "./surface-cache-scenario.js";
 
@@ -15,11 +18,16 @@ export const SURFACE_CACHE_BUILDS = [
   { name: "headless-gui", gui: true },
 ] as const;
 
+/** Playwright device scale factors of the cached versus direct density measurement. */
+export const DENSITY_DEVICE_PIXEL_RATIOS = [1, 2] as const;
+
 export interface SurfaceCacheBuildReport {
   build: string;
   evidence: string;
   browser: string | null;
   report: SurfaceCacheReport;
+  /** Cached versus direct text per device-pixel ratio, each in its own page. */
+  density: (CacheDensityReport & { evidence: string })[];
 }
 
 /** Launch each build's worker/WASM/WebGL runtime and drive the shared scenario. */
@@ -38,92 +46,127 @@ export async function runSurfaceCache(
       exportWasm: resolve(directory, "export.wasm"),
       contractArtifact: resolve(directory, "contract.bin"),
     };
-    const captured = new Map<string, RgbaFrame>();
-    await runBrowserEnvironment(
+    /** Run `scenario` in a fresh page at `deviceScaleFactor` with the shared driver. */
+    const session = <T>(
+      label: string,
+      deviceScaleFactor: number,
+      scenario: (
+        driver: SurfaceCacheDriver,
+        page: { evidence: string; browser: string | null },
+      ) => Promise<T>,
+    ) => {
+      const captured = new Map<string, RgbaFrame>();
+      return runBrowserEnvironment(
+        label,
+        {
+          workspace,
+          build,
+          mismatchBuild: build,
+          rendering: true,
+          deviceScaleFactor,
+          operationTimeoutMs: 30000,
+          evidenceParent: output,
+        },
+        signal,
+        async (env) => {
+          const module = `${env.urls.origin}/target/surface-build/fixture.js`;
+          const call = <T>(operation: string, args: readonly unknown[] = []) =>
+            env.execute(operation, args, () =>
+              invoke<T>(env.page, module, operation, args),
+            );
+          try {
+            await call("initialize", [
+              {
+                generatedModuleUrl: env.urls.generated,
+                workerScriptUrl: env.urls.workerScript,
+                wasmUrl: env.urls.wasm,
+              },
+            ]);
+            return await scenario(
+              {
+                build: name,
+                gui,
+                call,
+                capture: async (label, next = false) => {
+                  const frame = await call<CacheFrame>("capture", [
+                    label,
+                    { next },
+                  ]);
+                  // Pixels stay in Node for comparisons; the event log keeps the path.
+                  await env.execute(`write ${label}.png`, [label], async () => {
+                    const { width, height, pixels } = await invoke<{
+                      width: number;
+                      height: number;
+                      pixels: string;
+                    }>(env.page, module, "capturePixels", [label]);
+                    const image = {
+                      width,
+                      height,
+                      pixels: new Uint8Array(Buffer.from(pixels, "base64")),
+                    };
+                    captured.set(label, image);
+                    const path = resolve(
+                      env.evidence.directory,
+                      `${label}.png`,
+                    );
+                    await writeFile(path, encodePng(image));
+                    return path;
+                  });
+                  return frame;
+                },
+                pixels: (label) => {
+                  const frame = captured.get(label);
+                  if (!frame) throw new Error(`No capture labelled ${label}`);
+                  return frame;
+                },
+              },
+              {
+                evidence: env.evidence.directory,
+                browser: env.page.context().browser()?.version() ?? null,
+              },
+            );
+          } finally {
+            await call("close");
+          }
+        },
+      ).then(({ value }) => value);
+    };
+    const { report, evidence, browser } = await session(
       `surface-cache-${name}`,
-      {
-        workspace,
-        build,
-        mismatchBuild: build,
-        rendering: true,
-        deviceScaleFactor: 1,
-        operationTimeoutMs: 30000,
-        evidenceParent: output,
-      },
-      signal,
-      async (env) => {
-        const module = `${env.urls.origin}/target/surface-build/fixture.js`;
-        const call = <T>(operation: string, args: readonly unknown[] = []) =>
-          env.execute(operation, args, () =>
-            invoke<T>(env.page, module, operation, args),
-          );
-        try {
-          await call("initialize", [
-            {
-              generatedModuleUrl: env.urls.generated,
-              workerScriptUrl: env.urls.workerScript,
-              wasmUrl: env.urls.wasm,
-            },
-          ]);
-          const report = await exerciseSurfaceCache({
-            build: name,
-            gui,
-            call,
-            capture: async (label, next = false) => {
-              const frame = await call<CacheFrame>("capture", [
-                label,
-                { next },
-              ]);
-              // Pixels stay in Node for comparisons; the event log keeps the path.
-              await env.execute(`write ${label}.png`, [label], async () => {
-                const { width, height, pixels } = await invoke<{
-                  width: number;
-                  height: number;
-                  pixels: string;
-                }>(env.page, module, "capturePixels", [label]);
-                const image = {
-                  width,
-                  height,
-                  pixels: new Uint8Array(Buffer.from(pixels, "base64")),
-                };
-                captured.set(label, image);
-                const path = resolve(env.evidence.directory, `${label}.png`);
-                await writeFile(path, encodePng(image));
-                return path;
-              });
-              return frame;
-            },
-            pixels: (label) => {
-              const frame = captured.get(label);
-              if (!frame) throw new Error(`No capture labelled ${label}`);
-              return frame;
-            },
-          });
-          reports.push({
-            build: name,
-            evidence: env.evidence.directory,
-            browser: env.page.context().browser()?.version() ?? null,
-            report,
-          });
-          await writeFile(
-            resolve(env.evidence.directory, "surface-cache.json"),
-            JSON.stringify(report, null, 2),
-          );
-        } finally {
-          await call("close");
-        }
+      1,
+      async (driver, page) => {
+        const report = await exerciseSurfaceCache(driver);
+        await writeFile(
+          resolve(page.evidence, "surface-cache.json"),
+          JSON.stringify(report, null, 2),
+        );
+        return { report, ...page };
       },
     );
+    const density = [];
+    for (const ratio of DENSITY_DEVICE_PIXEL_RATIOS)
+      density.push(
+        await session(
+          `surface-cache-${name}-dpr${ratio}`,
+          ratio,
+          async (driver, { evidence }) => ({
+            ...(await measureCacheDensity(driver)),
+            evidence,
+          }),
+        ),
+      );
+    reports.push({ build: name, evidence, browser, report, density });
   }
   await mkdir(output, { recursive: true });
   await writeFile(
     resolve(output, "summary.json"),
     JSON.stringify(
-      reports.map(({ build, evidence, browser, report }) => ({
+      reports.map(({ build, evidence, browser, report, density }) => ({
         build,
         evidence,
         browser,
         status: report.status,
+        density,
       })),
       null,
       2,

@@ -47,7 +47,9 @@ export interface BrowserBuildConfiguration {
     | "render-surfaces"
     | "render-skeletal-animation"
     | "render-mesh-poses"
-    | "world-host";
+    | "world-host"
+    | "gles-surfaces"
+    | "gles-gui";
   readonly generatedModule: string;
   readonly runtimeWasm: string;
   readonly exportWasm: string;

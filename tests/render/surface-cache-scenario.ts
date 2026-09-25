@@ -662,3 +662,100 @@ async function exerciseCachedGui(
     release,
   };
 }
+
+/**
+ * Luminance edge energy of a frame: the summed absolute horizontal and
+ * vertical neighbour differences, normalized by the frame area. The terminal
+ * background is uniform, so glyph edges dominate and a softer image has less.
+ */
+function edgeEnergy({ width, height, pixels }: RgbaFrame): number {
+  const luminance = (index: number) =>
+    0.2126 * pixels[index * 4]! +
+    0.7152 * pixels[index * 4 + 1]! +
+    0.0722 * pixels[index * 4 + 2]!;
+  let sum = 0;
+  for (let y = 0; y + 1 < height; y++)
+    for (let x = 0; x + 1 < width; x++) {
+      const index = y * width + x;
+      const here = luminance(index);
+      sum +=
+        Math.abs(luminance(index + 1) - here) +
+        Math.abs(luminance(index + width) - here);
+    }
+  return sum / (width * height);
+}
+
+export type CacheDensityReport = Awaited<
+  ReturnType<typeof measureCacheDensity>
+>;
+
+/**
+ * Cached versus direct terminal text at the page's device-pixel ratio, with
+ * the drawing buffer sized to the 320 x 240 CSS view times that ratio. Band
+ * density is authored per Surface metre and ignores the ratio, so the
+ * {@link TERMINAL_POLICY} image matches the 80 px/m view at DPR 1 and is
+ * magnified at higher ratios; `cache_policy.rs` records that accepted limit.
+ */
+export async function measureCacheDensity(driver: SurfaceCacheDriver) {
+  const { call } = driver;
+  await call("cacheTerminal", [{ devicePixels: true }]);
+  const terminal = await call<string>("setSurfaceCache", [
+    "surface-terminal",
+    null,
+  ]);
+  await call("cameraDistance", [DISTANCE.near]);
+  let direct = await driver.capture("density-direct-0");
+  for (let attempt = 1; ; attempt++) {
+    direct = await driver.capture(`density-direct-${attempt % 2}`, true);
+    if (await call<boolean>("equal", ["density-direct-0", "density-direct-1"]))
+      break;
+    if (attempt === 120) throw new Error("Direct terminal did not settle");
+  }
+  const expected = driver.pixels("density-direct-0");
+
+  await call("setSurfaceCache", ["surface-terminal", TERMINAL_POLICY]);
+  await call("cameraDistance", [DISTANCE.band1]);
+  let record: CacheRecord | undefined;
+  for (let attempt = 0; record?.mode !== "reused"; attempt++) {
+    if (attempt === 60) throw new Error("Terminal cache did not settle");
+    const frame = await driver.capture("density-cached", attempt > 0);
+    record = (
+      frame.statistics!.surfaces!.surfaceCaches as unknown as CacheRecord[]
+    ).find((candidate) => candidate.entity === terminal);
+  }
+  const actual = driver.pixels("density-cached");
+  await call("setSurfaceCache", ["surface-terminal", null]);
+
+  const difference = compareFrames(
+    expected,
+    actual,
+    CACHE_TOLERANCE.maxChannelDifference,
+  );
+  const energy = { direct: edgeEnergy(expected), cached: edgeEnergy(actual) };
+  // The image density follows the policy, whatever the drawing buffer.
+  assert.deepEqual(
+    [record.band, record.width, record.height],
+    [1, ...BAND1_SIZE],
+  );
+  if (direct.devicePixelRatio === 1)
+    assert.ok(
+      difference.maxChannelDifference <= CACHE_TOLERANCE.maxChannelDifference &&
+        difference.meanChannelDifference <=
+          CACHE_TOLERANCE.meanChannelDifference,
+      `DPR 1 cached text differs from direct: ${JSON.stringify(difference)}`,
+    );
+  else
+    assert.ok(
+      difference.meanChannelDifference <=
+        REDUCED_TOLERANCE.meanChannelDifference,
+      `magnified cached text differs from direct beyond resampling: ${JSON.stringify(difference)}`,
+    );
+  return {
+    devicePixelRatio: direct.devicePixelRatio,
+    viewport: [direct.width, direct.height],
+    screenPixelsPerMetre: (80 * direct.width) / 320,
+    cache: { band: record.band, width: record.width, height: record.height },
+    difference,
+    edgeEnergy: { ...energy, cachedToDirect: energy.cached / energy.direct },
+  };
+}

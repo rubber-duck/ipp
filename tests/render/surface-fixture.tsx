@@ -1,5 +1,6 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client";
 import {
+  nativePresentationTransport,
   presentationTesting,
   type GlyphAtlasLimits,
 } from "../../packages/ipp-client/src/testing.js";
@@ -101,21 +102,36 @@ function cacheDeclaration(symbolicId: string) {
   return policy ? <SurfaceCache bound={false} {...policy} /> : null;
 }
 
-export async function initialize(config: {
-  generatedModuleUrl: string;
-  workerScriptUrl: string;
-  wasmUrl: string;
-}) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 320;
-  canvas.height = 240;
-  document.body.replaceChildren(canvas);
+/**
+ * Connect through a worker presenting on a page canvas, or with `nativeHost`
+ * to a native GLES testing host and its presentation channel.
+ */
+export async function initialize(
+  config: { generatedModuleUrl: string } & (
+    | { workerScriptUrl: string; wasmUrl: string }
+    | { nativeHost: { url: string; presentationUrl: string } }
+  ),
+) {
   const contract = await import(config.generatedModuleUrl);
-  host = await contract.IppHostClient.connectWorker(
-    config.workerScriptUrl,
-    config.wasmUrl,
-    { canvas: canvas.transferControlToOffscreen(), timeoutMs: 20000 },
-  );
+  if ("nativeHost" in config) {
+    host = await contract.IppHostClient.connectTransport(
+      nativePresentationTransport(
+        config.nativeHost.url,
+        config.nativeHost.presentationUrl,
+      ),
+      { timeoutMs: 20000 },
+    );
+  } else {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 240;
+    document.body.replaceChildren(canvas);
+    host = await contract.IppHostClient.connectWorker(
+      config.workerScriptUrl,
+      config.wasmUrl,
+      { canvas: canvas.transferControlToOffscreen(), timeoutMs: 20000 },
+    );
+  }
   client = await host.createWorld({ symbolicId: "surface-rendering" });
   client.onRuntimeFailure((failure) => {
     failures.push(failure);
@@ -1088,15 +1104,19 @@ export async function cameraDistance(distance: number) {
 /**
  * The terminal application Surface in a controlled state: `cursor` recolours
  * the cursor item, `translucent` widens it over the text at half opacity, and
- * `font` selects the pending font source used for resource arrival.
+ * `font` selects the pending font source used for resource arrival. The view
+ * is 320 x 240, or with `devicePixels` that CSS size times the page's
+ * `devicePixelRatio`, as an application sizes its drawing buffer.
  */
 export async function cacheTerminal(config: {
   cursor?: readonly [number, number, number, number];
   translucent?: boolean;
   font?: "ready" | "pending";
   angle?: number;
+  devicePixels?: boolean;
 }) {
-  client.presentation!.resize(320, 240);
+  const scale = config.devicePixels ? window.devicePixelRatio : 1;
+  client.presentation!.resize(Math.round(320 * scale), Math.round(240 * scale));
   const items = terminalItems(assets);
   const cursor = items[3]!;
   const color = config.cursor ?? cursor.color ?? [1, 1, 1, 1];

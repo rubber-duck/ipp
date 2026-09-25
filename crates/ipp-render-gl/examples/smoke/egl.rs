@@ -315,13 +315,27 @@ impl Context {
     }
 
     pub fn capture(&self) -> Result<Vec<u8>> {
+        self.capture_region(self.width, self.height)
+    }
+
+    /// Read the top-left-origin RGBA pixels of the `width` x `height` region at
+    /// the pbuffer's bottom-left corner, where a render at that viewport draws.
+    pub fn capture_region(&self, width: u32, height: u32) -> Result<Vec<u8>> {
+        if width == 0 || height == 0 || width > self.width || height > self.height {
+            return Err(format!(
+                "capture region {width}x{height} exceeds the {}x{} pbuffer",
+                self.width, self.height
+            )
+            .into());
+        }
+
         self.finish()?;
         let read = entry!(
             self.gl(c"glReadPixels"),
             unsafe extern "system" fn(i32, i32, i32, i32, u32, u32, *mut c_void)
         );
         let error = entry!(self.gl(c"glGetError"), unsafe extern "system" fn() -> u32);
-        let mut pixels = vec![0; self.width as usize * self.height as usize * 4];
+        let mut pixels = vec![0; width as usize * height as usize * 4];
         // SAFETY: Pbuffer is current with no pixel-pack buffer bound. RGBA/u8
         // rows are 4-byte aligned and fit the exclusive output allocation. GL
         // finishes and copies synchronously, retaining no CPU pointer.
@@ -329,8 +343,8 @@ impl Context {
             read(
                 0,
                 0,
-                self.width as i32,
-                self.height as i32,
+                width as i32,
+                height as i32,
                 0x1908,
                 0x1401,
                 pixels.as_mut_ptr().cast(),
@@ -341,9 +355,9 @@ impl Context {
             }
         }
 
-        let stride = self.width as usize * 4;
-        for y in 0..self.height as usize / 2 {
-            let (top, bottom) = pixels.split_at_mut((self.height as usize - y - 1) * stride);
+        let stride = width as usize * 4;
+        for y in 0..height as usize / 2 {
+            let (top, bottom) = pixels.split_at_mut((height as usize - y - 1) * stride);
             top[y * stride..(y + 1) * stride].swap_with_slice(&mut bottom[..stride]);
         }
         Ok(pixels)

@@ -145,7 +145,7 @@ impl RunningConnection {
         let host = std::thread::spawn(move || {
             let (events, incoming) = mpsc::sync_channel(MAX_CONNECTIONS * 64);
             let transport = std::thread::spawn(move || connection(server, 7, &events));
-            let mut host = NativeConnectionHost::new()?;
+            let mut host = NativeConnectionHost::<NativeHostServices>::new()?;
             let mut last = Instant::now();
             while !transport.is_finished() {
                 for event in incoming.try_iter().take(MAX_CONNECTIONS * 64) {

@@ -329,5 +329,25 @@
       "crates/ipp-render-gl/examples/smoke/mod.rs",
       "crates/ipp-render-gl/Cargo.toml"
     ]
+  },
+  {
+    "id": "check:gles-retained-gui",
+    "command": ["@node", "dist/tests/render/retained-gui-native.js", "@egl"],
+    "dependencies": [
+      "build:typescript",
+      "build:surface-fixtures",
+      "build:gles-hosts"
+    ],
+    "requirements": ["node", "npm", "browser"],
+    "sourceRoots": [
+      "crates/ipp-server/examples/gles_host.rs",
+      "crates/ipp-server/examples/gles_presentation/",
+      "crates/ipp-render-gl/examples/smoke/egl.rs",
+      "packages/ipp-client/src/native-presentation.ts",
+      "tests/render/retained-gui-native.ts",
+      "tests/render/retained-gui-environment.ts",
+      "tests/render/retained-gui-scenario.ts",
+      "tests/render/surface-fixture.tsx"
+    ]
   }
 ]

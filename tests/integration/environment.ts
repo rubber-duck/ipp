@@ -33,6 +33,8 @@ export interface NativeServerConfiguration {
 export interface NativeEnvironmentContext {
   readonly signal: AbortSignal;
   readonly url: string;
+  /** Presentation channel of a presenting test host, when its readiness names one. */
+  readonly presentationUrl?: string;
   readonly evidence: EvidenceRecorder;
   track<T extends Pick<HarnessDriver, "close">>(
     pending: Promise<T>,
@@ -68,6 +70,12 @@ export class HarnessRunError extends Error {
 interface Readiness {
   readonly event: "ready";
   readonly url: string;
+  readonly presentation?: string;
+}
+
+interface ReadyEndpoints {
+  readonly url: string;
+  readonly presentationUrl?: string;
 }
 
 interface OwnedResource {
@@ -128,7 +136,7 @@ class NativeServerEnvironment {
     this.#evidence = evidence;
   }
 
-  async start(signal: AbortSignal): Promise<string> {
+  async start(signal: AbortSignal): Promise<ReadyEndpoints> {
     signal.throwIfAborted();
     await this.#captureBuildIdentity();
     const arguments_ = [
@@ -164,9 +172,9 @@ class NativeServerEnvironment {
       signal,
       this.#configuration.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
     );
-    const url = validateReadiness(readiness);
+    const endpoints = validateReadiness(readiness);
     await this.#evidence.record("server_ready", readiness);
-    return url;
+    return endpoints;
   }
 
   own(resource: OwnedResource): void {
@@ -390,7 +398,9 @@ export async function runNativeEnvironment<T>(
   let scenarioError: unknown;
   try {
     await evidence.record("scenario_start", { name });
-    const url = await environment.start(scenarioController.signal);
+    const { url, presentationUrl } = await environment.start(
+      scenarioController.signal,
+    );
     const execute = async <R>(
       label: string,
       input: unknown,
@@ -415,6 +425,7 @@ export async function runNativeEnvironment<T>(
     const value = await scenario({
       signal: scenarioController.signal,
       url,
+      ...(presentationUrl === undefined ? {} : { presentationUrl }),
       evidence,
       track: (pending) => environment.track(pending),
       execute,
@@ -555,7 +566,7 @@ async function waitForReadiness(
   });
 }
 
-function validateReadiness(value: unknown): string {
+function validateReadiness(value: unknown): ReadyEndpoints {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -569,19 +580,26 @@ function validateReadiness(value: unknown): string {
     );
   }
   const readiness = value as Readiness;
-  const url = new URL(readiness.url);
-  if (
-    url.protocol !== "ws:" ||
-    url.hostname !== "127.0.0.1" ||
-    url.port === "" ||
-    Number(url.port) <= 0 ||
-    url.pathname !== "/"
-  ) {
-    throw new Error(
-      `server emitted an invalid loopback WebSocket URL: ${readiness.url}`,
-    );
+  const endpoints = [readiness.url, readiness.presentation];
+  for (const endpoint of endpoints) {
+    if (endpoint === undefined) continue;
+    const url = typeof endpoint === "string" ? new URL(endpoint) : null;
+    if (
+      url === null ||
+      url.protocol !== "ws:" ||
+      url.hostname !== "127.0.0.1" ||
+      url.port === "" ||
+      Number(url.port) <= 0 ||
+      url.pathname !== "/"
+    ) {
+      throw new Error(
+        `server emitted an invalid loopback WebSocket URL: ${String(endpoint)}`,
+      );
+    }
   }
-  return readiness.url;
+  return readiness.presentation === undefined
+    ? { url: readiness.url }
+    : { url: readiness.url, presentationUrl: readiness.presentation };
 }
 
 async function waitForExit(

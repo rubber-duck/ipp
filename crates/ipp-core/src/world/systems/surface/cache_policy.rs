@@ -14,6 +14,17 @@
 //! its boundary by [`SURFACE_CACHE_BAND_HYSTERESIS`] of the boundary distance,
 //! so small camera movements around a boundary keep the current band and its
 //! cache resolution. Orthographic cameras use the same distance rule.
+//!
+//! Band density is per Surface metre and ignores the presenting viewport's
+//! device-pixel ratio, an accepted limit: a density authored for a 1x view is
+//! magnified on high-DPR viewports, where cached text is softer than direct
+//! text at the same distance. The `surface-cache` browser suite measures it
+//! with Playwright device scale factors: the band-1 terminal image that matches
+//! direct presentation exactly at DPR 1 keeps about three quarters of the
+//! direct glyph edge energy at DPR 2, with a mean channel difference under 3.
+//! Authors who need high-DPR sharpness raise `texels_per_metre` or
+//! `direct_distance`; scaling bands by the viewport ratio would change band
+//! semantics and requires architecture review.
 
 use super::SurfaceCache;
 use crate::ErrorReason;

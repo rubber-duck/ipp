@@ -51,6 +51,16 @@ const scrollBarTheme: GuiControlTheme = {
   },
 };
 
+/** Opaque inner scroll bar skin: a blue track and a yellow thumb, so frames
+ * tell the inner bar column apart from the outer bar beside it. */
+const innerScrollBarTheme: GuiControlTheme = {
+  name: "inner-scroll-bars",
+  parts: {
+    scrollTrackY: { base: { color: [0.1, 0.1, 0.8, 1], opacity: 1 } },
+    scrollThumbY: { base: { color: [0.8, 0.8, 0.1, 1], opacity: 1 } },
+  },
+};
+
 let root: Root | undefined;
 let handle: IppCanvasHandle | undefined;
 let cameraReady = false;
@@ -101,6 +111,8 @@ async function activateCamera(next: IppCanvasHandle): Promise<void> {
  * 2x2 blue block at the left and a 1-unit yellow block. The outer view can
  * scroll by 2 and the inner view by 1. The outer vertical scroll bar spans
  * x 3.85..4 with a 1.8-unit thumb travelling 1.2 units over that capacity.
+ * The inner bar, 0.1 thick, would share that edge, so it ends at the outer
+ * track's inner edge: x 3.75..3.85, with a 4/3-unit thumb.
  * Wheel input keeps the relay's default step of 0.25 units per notch.
  */
 function Application({
@@ -150,6 +162,7 @@ function Application({
                     width={4}
                     height={2}
                     backgroundColor={SCROLL_COLORS.inner}
+                    theme={innerScrollBarTheme}
                   >
                     <Column width={4}>
                       <SizedBox

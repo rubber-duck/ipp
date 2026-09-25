@@ -15,6 +15,10 @@
 //! always-visible bars. Disabled bars never take input, and a
 //! ScrollView disabled as a whole disables its bars.
 //!
+//! Nested ScrollViews keep their bars visible: a track that would lie under
+//! or run into an enclosing ScrollView's track moves to that track's inner
+//! edge or ends there, computed against the current enclosing offsets.
+//!
 //! Geometry is final logical at zero ancestor scroll, like the retained
 //! view. Paint carries the ScrollView's node identity with the scroll bar
 //! parts, so render preparation moves bars with the ScrollView's own outer
@@ -25,7 +29,7 @@ use super::skin::{
     apply_appearance_to_primitive, resolve_paint_appearance, theme_part_style,
 };
 use super::{GuiEvaluatedNode, GuiEvaluatedView};
-use crate::systems::gui::{GuiInputTarget, GuiPartId, GuiRoot};
+use crate::systems::gui::{GuiInputTarget, GuiNodeId, GuiPartId, GuiRoot};
 use crate::systems::surface::{
     GuiPrimitiveId, GuiPrimitivePart, GuiShapeFill, SurfacePrimitiveIdentity,
     SurfacePrimitiveStyle, SurfaceRenderPrimitive, gui_logical_to_surface_content,
@@ -182,80 +186,247 @@ impl GuiScrollBar {
     }
 }
 
-/// Bars one ScrollView shows, per axis, for a committed offset. `shown`
-/// selects the axes, normally from [`scroll_bar_shown`].
-pub(crate) fn scroll_bars(
-    node: &GuiEvaluatedNode,
-    offset: [f32; 2],
-    shown: [bool; 2],
+/// Bars of the ScrollView record at `index` in `view` for committed offsets
+/// read through `offset_of`, kept clear of every enclosing ScrollView's
+/// shown bars.
+///
+/// Records are in pre-order, so the enclosing ScrollViews are the preceding
+/// shallower viewport records. Working outward-in, each ScrollView's tracks
+/// compare against the already placed tracks of its enclosing ScrollViews in
+/// one scrolled frame: the enclosing offsets between them move the inner
+/// viewport, never the outer bars. A track that would overlap a parallel
+/// enclosing track moves across to that track's inner edge, and a track
+/// that would run into a crossing enclosing track ends at its inner edge;
+/// the shared corner between one ScrollView's own bars follows the moved
+/// tracks. Geometry stays final logical at zero ancestor scroll, like the
+/// retained view.
+pub(crate) fn scroll_bars_in_view(
+    view: &GuiEvaluatedView,
+    root: &GuiRoot,
+    index: usize,
+    offset_of: impl Fn(GuiNodeId) -> [f32; 2],
 ) -> [Option<GuiScrollBar>; 2] {
-    let (Some(viewport), Some(extent)) = (node.viewport, node.content_extents) else {
+    let Some(record) = view.nodes.get(index) else {
         return [None, None];
     };
-    let size = [viewport[2] - viewport[0], viewport[3] - viewport[1]];
-    if !viewport.iter().chain(&extent).all(|lane| lane.is_finite())
-        || size[0] <= 0.0
-        || size[1] <= 0.0
-    {
+    if record.viewport.is_none() {
         return [None, None];
     }
 
-    let thickness = size[0].min(size[1]) * SCROLL_BAR_THICKNESS;
-    let capacity = scroll_capacity(node);
-    let page = viewport_local(node);
-    let bar = |axis: usize| {
-        if !shown[axis] {
+    // Enclosing ScrollViews, outermost first, then the record itself.
+    let mut chain = vec![index];
+    let mut depth = record.depth;
+    for (ancestor, candidate) in view.nodes[..index].iter().enumerate().rev() {
+        if depth == 0 {
+            break;
+        }
+        if candidate.depth < depth {
+            depth = candidate.depth;
+            if candidate.viewport.is_some() {
+                chain.push(ancestor);
+            }
+        }
+    }
+    chain.reverse();
+
+    // Tracks placed so far, in the outermost ScrollView's frame.
+    let mut placed: Vec<GuiScrollBar> = Vec::new();
+    let mut shift = [0.0, 0.0];
+    let mut bars = [None, None];
+    for (position, &at) in chain.iter().enumerate() {
+        let node = &view.nodes[at];
+        let offset = offset_of(node.node);
+        let shown = [
+            scroll_bar_shown(root, node, 0),
+            scroll_bar_shown(root, node, 1),
+        ];
+        bars = match GuiScrollBarFrame::of(node) {
+            Some(frame) => {
+                let obstacles: Vec<GuiScrollBar> = placed
+                    .iter()
+                    .map(|bar| bar.shifted([-shift[0], -shift[1]]))
+                    .collect();
+                let bounds = frame.clear_of(shown, &obstacles);
+                frame.bars(node, offset, shown, bounds)
+            }
+            None => [None, None],
+        };
+        if position + 1 == chain.len() {
+            break;
+        }
+
+        // Hidden or suppressed ScrollViews paint no bars to avoid.
+        if node.available && node.visible && !node.paint_suppressed {
+            placed.extend(bars.iter().flatten().map(|bar| bar.shifted(shift)));
+        }
+        shift[0] -= offset[0] * node.acc_scale[0];
+        shift[1] -= offset[1] * node.acc_scale[1];
+    }
+    bars
+}
+
+/// Usable viewport of one ScrollView record and its track thickness.
+#[derive(Clone, Copy, Debug)]
+struct GuiScrollBarFrame {
+    /// Viewport `[min_x, min_y, max_x, max_y]` in final logical units.
+    viewport: [f32; 4],
+    /// Scroll content extents in local logical units.
+    extent: [f32; 2],
+    /// Track thickness in final logical units.
+    thickness: f32,
+}
+
+/// Where one ScrollView's tracks sit: `edge[0]` is the right edge of the
+/// vertical track column and `edge[1]` the bottom edge of the horizontal
+/// track row; `end[axis]` is the furthest point the track along `axis` may
+/// reach.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GuiScrollBarBounds {
+    edge: [f32; 2],
+    end: [f32; 2],
+}
+
+impl GuiScrollBarFrame {
+    /// Frame of a ScrollView record with a finite, non-empty viewport.
+    fn of(node: &GuiEvaluatedNode) -> Option<Self> {
+        let (Some(viewport), Some(extent)) = (node.viewport, node.content_extents) else {
+            return None;
+        };
+        let size = [viewport[2] - viewport[0], viewport[3] - viewport[1]];
+        if !viewport.iter().chain(&extent).all(|lane| lane.is_finite())
+            || size[0] <= 0.0
+            || size[1] <= 0.0
+        {
             return None;
         }
-        let corner = if shown[1 - axis] {
-            thickness
-        } else {
-            0.0
-        };
-        let track = if axis == 0 {
-            [
-                viewport[0],
-                viewport[3] - thickness,
-                size[0] - corner,
-                thickness,
-            ]
-        } else {
-            [
-                viewport[2] - thickness,
-                viewport[1],
-                thickness,
-                size[1] - corner,
-            ]
-        };
-        let length = track[axis + 2];
-        if length <= 0.0 {
-            return None;
-        }
-        let visible = if extent[axis] > 0.0 {
-            (page[axis] / extent[axis]).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let thumb_length = (length * visible)
-            .max(thickness * SCROLL_THUMB_MIN_LENGTH)
-            .min(length);
-        let fraction = if capacity[axis] > 0.0 {
-            (offset[axis] / capacity[axis]).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let mut thumb = track;
-        thumb[axis] += (length - thumb_length) * fraction;
-        thumb[axis + 2] = thumb_length;
-        Some(GuiScrollBar {
-            axis,
-            track,
-            thumb,
-            capacity: capacity[axis],
-            page: page[axis],
+
+        Some(Self {
+            viewport,
+            extent,
+            thickness: size[0].min(size[1]) * SCROLL_BAR_THICKNESS,
         })
-    };
-    [bar(0), bar(1)]
+    }
+
+    /// Tracks along the viewport's right and bottom edges.
+    fn bounds(&self) -> GuiScrollBarBounds {
+        let far = [self.viewport[2], self.viewport[3]];
+        GuiScrollBarBounds {
+            edge: far,
+            end: far,
+        }
+    }
+
+    /// Track rectangle along `axis` within `bounds`, stopping short of the
+    /// crossing track when that axis shows too; None when nothing is left.
+    fn track(&self, axis: usize, shown: [bool; 2], bounds: GuiScrollBarBounds) -> Option<[f32; 4]> {
+        let thickness = self.thickness;
+        let mut end = bounds.end[axis];
+        if shown[1 - axis] {
+            end = end.min(bounds.edge[axis] - thickness);
+        }
+        let start = self.viewport[axis];
+        let length = end - start;
+        if !length.is_finite() || length <= 0.0 {
+            return None;
+        }
+
+        Some(if axis == 0 {
+            [start, bounds.edge[1] - thickness, length, thickness]
+        } else {
+            [bounds.edge[0] - thickness, start, thickness, length]
+        })
+    }
+
+    /// Bounds that keep this ScrollView's shown tracks clear of
+    /// `obstacles`, enclosing tracks in this frame. Parallel tracks move
+    /// first, never past the viewport's start; tracks then end before any
+    /// crossing track they would still run into.
+    fn clear_of(&self, shown: [bool; 2], obstacles: &[GuiScrollBar]) -> GuiScrollBarBounds {
+        let mut bounds = self.bounds();
+        for axis in (0..2).filter(|&axis| shown[axis]) {
+            let cross = 1 - axis;
+            let floor = self.viewport[cross] + self.thickness;
+
+            // Each move only decreases the edge, so this settles within one
+            // pass per obstacle.
+            for _ in 0..=obstacles.len() {
+                let column = self.track(axis, [axis == 0, axis == 1], bounds);
+                let blocking = obstacles
+                    .iter()
+                    .filter(|obstacle| obstacle.axis == axis)
+                    .filter(|obstacle| column.is_some_and(|rect| overlaps(rect, obstacle.track)))
+                    .map(|obstacle| obstacle.track[cross])
+                    .fold(bounds.edge[cross], f32::min)
+                    .max(floor);
+                if blocking == bounds.edge[cross] {
+                    break;
+                }
+                bounds.edge[cross] = blocking;
+            }
+        }
+        for axis in (0..2).filter(|&axis| shown[axis]) {
+            let Some(rect) = self.track(axis, shown, bounds) else {
+                continue;
+            };
+            for obstacle in obstacles.iter().filter(|obstacle| obstacle.axis != axis) {
+                if overlaps(rect, obstacle.track) {
+                    bounds.end[axis] = bounds.end[axis].min(obstacle.track[axis]);
+                }
+            }
+        }
+        bounds
+    }
+
+    /// Bars of `node` within `bounds` for a committed offset.
+    fn bars(
+        &self,
+        node: &GuiEvaluatedNode,
+        offset: [f32; 2],
+        shown: [bool; 2],
+        bounds: GuiScrollBarBounds,
+    ) -> [Option<GuiScrollBar>; 2] {
+        let capacity = scroll_capacity(node);
+        let page = viewport_local(node);
+        let bar = |axis: usize| {
+            if !shown[axis] {
+                return None;
+            }
+            let track = self.track(axis, shown, bounds)?;
+            let length = track[axis + 2];
+            let visible = if self.extent[axis] > 0.0 {
+                (page[axis] / self.extent[axis]).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let thumb_length = (length * visible)
+                .max(self.thickness * SCROLL_THUMB_MIN_LENGTH)
+                .min(length);
+            let fraction = if capacity[axis] > 0.0 {
+                (offset[axis] / capacity[axis]).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut thumb = track;
+            thumb[axis] += (length - thumb_length) * fraction;
+            thumb[axis + 2] = thumb_length;
+            Some(GuiScrollBar {
+                axis,
+                track,
+                thumb,
+                capacity: capacity[axis],
+                page: page[axis],
+            })
+        };
+        [bar(0), bar(1)]
+    }
+}
+
+/// Whether two `[x, y, width, height]` rectangles share interior area.
+fn overlaps(left: [f32; 4], right: [f32; 4]) -> bool {
+    left[0] < right[0] + right[2]
+        && right[0] < left[0] + left[2]
+        && left[1] < right[1] + right[3]
+        && right[1] < left[1] + left[3]
 }
 
 /// Interaction of one scroll bar part from the input cursors: hover and
@@ -298,14 +469,22 @@ pub(crate) fn scroll_bar_primitives(
         root_incarnation: view.root_incarnation,
         node: node.node,
     };
-    let offset = cursors
-        .scroll_bars
-        .get(&target)
-        .map_or([0.0, 0.0], |cursor| cursor.offset);
-    let shown = [
-        scroll_bar_shown(root, node, 0),
-        scroll_bar_shown(root, node, 1),
-    ];
+    let Some(index) = view
+        .nodes
+        .iter()
+        .position(|record| record.node == node.node)
+    else {
+        return Vec::new();
+    };
+    let offset_of = |node: GuiNodeId| {
+        cursors
+            .scroll_bars
+            .get(&GuiInputTarget {
+                node,
+                ..target
+            })
+            .map_or([0.0, 0.0], |cursor| cursor.offset)
+    };
     let clip = node.clip.and_then(|clip| {
         let min = gui_logical_to_surface_content([clip[0], clip[1]], units)?;
         let max = gui_logical_to_surface_content([clip[2], clip[3]], units)?;
@@ -313,7 +492,10 @@ pub(crate) fn scroll_bar_primitives(
     });
 
     let mut primitives = Vec::new();
-    for bar in scroll_bars(node, offset, shown).into_iter().flatten() {
+    for bar in scroll_bars_in_view(view, root, index, offset_of)
+        .into_iter()
+        .flatten()
+    {
         let (track, thumb) = scroll_bar_parts(bar.axis);
         for (part, rect, alpha) in [
             (track, bar.track, SCROLL_TRACK_ALPHA),

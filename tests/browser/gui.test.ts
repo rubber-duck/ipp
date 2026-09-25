@@ -1157,6 +1157,40 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         low: "gray",
       });
 
+      // Nested bars stay visible where they would share the right edge: the
+      // inner bar column at x 228 (logical 3.8) shows its yellow thumb and
+      // blue track beside the outer magenta thumb at x 235.
+      const column = {
+        innerThumb: [228, 30],
+        innerTrack: [228, 100],
+        outerThumb: [235, 30],
+      } as const;
+      const columnFrame = await env.page.evaluate(
+        async ({ url, points }) =>
+          (await import(url)).scrollFrame(Object.values(points)),
+        { url: fixture, points: column },
+      );
+      assert.equal(columnFrame.failedDrawCalls, 0);
+      await writeFile(
+        resolve(env.evidence.directory, "scroll-nested-bars.png"),
+        Buffer.from(
+          columnFrame.dataUrl.slice("data:image/png;base64,".length),
+          "base64",
+        ),
+      );
+      const columnHues = Object.fromEntries(
+        Object.keys(column).map((key, index) => [
+          key,
+          hue(columnFrame.samples[index]),
+        ]),
+      );
+      env.evidence.record("scroll-nested-bars", columnFrame.samples);
+      assert.deepEqual(columnHues, {
+        innerThumb: "yellow",
+        innerTrack: "blue",
+        outerThumb: "magenta",
+      });
+
       // A primary drag over plain outer content scrolls it by the dragged
       // 60 px (1 unit). The inner viewport moves up to y -1..1, so its green
       // block at y 1..2 falls outside it and must not paint over the outer

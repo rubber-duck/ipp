@@ -73,6 +73,13 @@ fn view(nodes: Vec<GuiEvaluatedNode>) -> GuiEvaluatedView {
     }
 }
 
+/// Bars of one lone ScrollView record at a committed offset.
+fn scroll_bars(node: &GuiEvaluatedNode, offset: [f32; 2]) -> [Option<GuiScrollBar>; 2] {
+    scroll_bars_in_view(&view(vec![node.clone()]), &GuiRoot::default(), 0, |_| {
+        offset
+    })
+}
+
 fn assert_rect(actual: [f32; 4], expected: [f32; 4]) {
     for (actual, expected) in actual.into_iter().zip(expected) {
         assert!(
@@ -89,7 +96,7 @@ fn vertical_thumb_follows_viewport_ratio_and_offset() {
     assert_eq!(scroll_bar_overflow(&node), [false, true]);
 
     // Thickness is 5% of the 6-unit side; the thumb shows 60% of the track.
-    let [horizontal, vertical] = scroll_bars(&node, [0.0, 0.0], [false, true]);
+    let [horizontal, vertical] = scroll_bars(&node, [0.0, 0.0]);
     assert!(horizontal.is_none());
     let vertical = vertical.unwrap();
     assert_rect(vertical.track, [9.7, 0.0, 0.3, 6.0]);
@@ -97,9 +104,9 @@ fn vertical_thumb_follows_viewport_ratio_and_offset() {
     assert_eq!((vertical.capacity, vertical.page), (4.0, 6.0));
 
     // The thumb travels the remaining 2.4 units in proportion to the offset.
-    let middle = scroll_bars(&node, [0.0, 2.0], [false, true])[1].unwrap();
+    let middle = scroll_bars(&node, [0.0, 2.0])[1].unwrap();
     assert_rect(middle.thumb, [9.7, 1.2, 0.3, 3.6]);
-    let end = scroll_bars(&node, [0.0, 4.0], [false, true])[1].unwrap();
+    let end = scroll_bars(&node, [0.0, 4.0])[1].unwrap();
     assert_rect(end.thumb, [9.7, 2.4, 0.3, 3.6]);
 
     // Dragging the thumb start maps back to offsets, clamped to the track.
@@ -116,7 +123,7 @@ fn vertical_thumb_follows_viewport_ratio_and_offset() {
 #[test]
 fn both_axes_share_the_corner_and_thumbs_keep_a_minimum_length() {
     let node = scroll_view(1, 0, [10.0, 6.0], [20.0, 1000.0]);
-    let [horizontal, vertical] = scroll_bars(&node, [0.0, 0.0], [true, true]);
+    let [horizontal, vertical] = scroll_bars(&node, [0.0, 0.0]);
     let (horizontal, vertical) = (horizontal.unwrap(), vertical.unwrap());
     assert_rect(horizontal.track, [0.0, 5.7, 9.7, 0.3]);
     assert_rect(vertical.track, [9.7, 0.0, 0.3, 5.7]);
@@ -247,4 +254,101 @@ fn skinned_bars_paint_above_the_subtree_with_hover_and_pressed_states() {
     let active = paint(&cursors);
     assert_eq!(active[1].4, GuiShapeFill::Solid([1.0, 1.0, 0.0, 1.0]));
     assert_eq!(active[2].4, GuiShapeFill::Solid([0.0, 1.0, 0.0, 1.0]));
+}
+
+/// ScrollView record whose viewport spans `[min_x, min_y, max_x, max_y]`.
+fn scroll_view_at(
+    node: u32,
+    depth: u32,
+    viewport: [f32; 4],
+    extents: [f32; 2],
+) -> GuiEvaluatedNode {
+    GuiEvaluatedNode {
+        rect: [
+            viewport[0],
+            viewport[1],
+            viewport[2] - viewport[0],
+            viewport[3] - viewport[1],
+        ],
+        viewport: Some(viewport),
+        ..scroll_view(node, depth, [1.0, 1.0], extents)
+    }
+}
+
+/// Bars of record `index` in `records` with per-node committed offsets.
+fn nested_bars(
+    records: Vec<GuiEvaluatedNode>,
+    index: usize,
+    offsets: &[(u32, [f32; 2])],
+) -> [Option<GuiScrollBar>; 2] {
+    let offset_of = |node: GuiNodeId| {
+        offsets
+            .iter()
+            .find(|(id, _)| *id == node.0)
+            .map_or([0.0, 0.0], |(_, offset)| *offset)
+    };
+    scroll_bars_in_view(&view(records), &GuiRoot::default(), index, offset_of)
+}
+
+/// An outer 4x3 ScrollView over `outer` content holding, through a plain
+/// column, an inner ScrollView at `inner_viewport` over 4x3 content.
+fn nested(outer: [f32; 2], inner_viewport: [f32; 4]) -> Vec<GuiEvaluatedNode> {
+    vec![
+        scroll_view_at(1, 0, [0.0, 0.0, 4.0, 3.0], outer),
+        content(2, 1),
+        scroll_view_at(3, 2, inner_viewport, [4.0, 3.0]),
+        content(4, 3),
+    ]
+}
+
+#[test]
+fn nested_vertical_bars_sharing_an_edge_sit_side_by_side() {
+    let records = nested([4.0, 5.0], [0.0, 0.0, 4.0, 2.0]);
+    let outer = nested_bars(records.clone(), 0, &[])[1].unwrap();
+    assert_rect(outer.track, [3.85, 0.0, 0.15, 3.0]);
+
+    // The inner 0.1-thick track ends at the outer track's inner edge
+    // instead of lying under it, at any vertical outer offset.
+    for offset in [[0.0, 0.0], [0.0, 1.0]] {
+        let [horizontal, vertical] = nested_bars(records.clone(), 2, &[(1, offset)]);
+        assert!(horizontal.is_none());
+        let vertical = vertical.unwrap();
+        assert_rect(vertical.track, [3.75, 0.0, 0.1, 2.0]);
+        assert_eq!(vertical.thumb[0], 3.75);
+    }
+
+    // Records without an enclosing ScrollView keep their own geometry.
+    let alone = nested_bars(records[2..].to_vec(), 0, &[])[1].unwrap();
+    assert_rect(alone.track, [3.9, 0.0, 0.1, 2.0]);
+}
+
+#[test]
+fn nested_bars_that_do_not_meet_keep_their_own_edges() {
+    // A narrower inner viewport, which also overflows horizontally, leaves
+    // both inner tracks clear of the outer one around their own corner.
+    let records = nested([4.0, 5.0], [0.0, 0.0, 3.0, 2.0]);
+    let [horizontal, vertical] = nested_bars(records, 2, &[]);
+    assert_rect(vertical.unwrap().track, [2.9, 0.0, 0.1, 1.9]);
+    assert_rect(horizontal.unwrap().track, [0.0, 1.9, 2.9, 0.1]);
+
+    // A horizontal outer offset moves the inner viewport left of the outer
+    // track, so the inner track stays at its viewport edge; unscrolled, it
+    // moves aside.
+    let records = nested([5.0, 5.0], [0.0, 0.0, 4.0, 2.0]);
+    let scrolled = nested_bars(records.clone(), 2, &[(1, [1.0, 0.0])])[1].unwrap();
+    assert_rect(scrolled.track, [3.9, 0.0, 0.1, 2.0]);
+    let unscrolled = nested_bars(records, 2, &[])[1].unwrap();
+    assert_rect(unscrolled.track, [3.75, 0.0, 0.1, 2.0]);
+}
+
+#[test]
+fn nested_tracks_end_before_a_crossing_outer_track() {
+    // The outer view scrolls only horizontally: its 0.15-thick track runs
+    // along the bottom at y 2.85..3, where the inner vertical track ends.
+    let records = nested([6.0, 3.0], [0.0, 1.0, 4.0, 3.0]);
+    let outer = nested_bars(records.clone(), 0, &[]);
+    assert!(outer[1].is_none());
+    assert_rect(outer[0].unwrap().track, [0.0, 2.85, 4.0, 0.15]);
+    let inner = nested_bars(records, 2, &[])[1].unwrap();
+    assert_rect(inner.track, [3.9, 1.0, 0.1, 1.85]);
 }

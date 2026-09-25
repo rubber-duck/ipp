@@ -69,8 +69,7 @@ use super::target_policy::{
 };
 
 use super::super::layout::scroll_bars::{
-    GuiScrollBar, scroll_bar_axis, scroll_bar_enabled, scroll_bar_shown, scroll_bars,
-    scroll_capacity,
+    GuiScrollBar, scroll_bar_axis, scroll_bar_enabled, scroll_bars_in_view, scroll_capacity,
 };
 use crate::systems::geometry::{GeometryBounds, GeometryRay};
 use crate::systems::lifecycle_publisher::{
@@ -2432,12 +2431,9 @@ impl GuiInputSystem {
             {
                 continue;
             }
-            let offset = self.committed_scroll_offset(entity, view.root_incarnation, record.node);
-            let shown = [
-                scroll_bar_shown(root, record, 0),
-                scroll_bar_shown(root, record, 1),
-            ];
-            let Some(bar) = scroll_bars(record, offset, shown)
+            let offset_of =
+                |node: GuiNodeId| self.committed_scroll_offset(entity, view.root_incarnation, node);
+            let Some(bar) = scroll_bars_in_view(view, root, index, offset_of)
                 .into_iter()
                 .flatten()
                 .filter(|bar| scroll_bar_enabled(record, bar.axis))
@@ -2514,13 +2510,10 @@ impl GuiInputSystem {
             return None;
         }
         let shift = self.scrolled_placements(view, target.entity)[index].shift;
-        let offset =
-            self.committed_scroll_offset(target.entity, target.root_incarnation, target.node);
-        let shown = [
-            scroll_bar_shown(root, record, 0),
-            scroll_bar_shown(root, record, 1),
-        ];
-        scroll_bars(record, offset, shown)[axis].map(|bar| bar.shifted(shift))
+        let offset_of = |node: GuiNodeId| {
+            self.committed_scroll_offset(target.entity, target.root_incarnation, node)
+        };
+        scroll_bars_in_view(view, root, index, offset_of)[axis].map(|bar| bar.shifted(shift))
     }
 
     /// Scrolled placement of every evaluated record, index-aligned with

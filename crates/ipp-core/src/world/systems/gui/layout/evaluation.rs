@@ -85,14 +85,16 @@
 //! branches whose text cache key changed are remeasured. Insert, reorder and
 //! remove change
 //! the structure fingerprint and invalidate dependent output before reuse.
-//! Committed control values join the structure fingerprint with their
-//! revisions, so every routed or authored commit reflows and the retained
-//! view always observes effective values. Computed rectangles are never
-//! written back to component storage.
+//! Committed text-input text is structural because it can change
+//! measurement. Checkbox and slider values, the slider range and every
+//! control revision are paint/state inputs: their commits refresh the
+//! retained payload without reflow, so the retained view always observes
+//! effective values. Computed rectangles are never written back to
+//! component storage.
 //!
 //! ## Consumers
 //!
-//! Input routing (.6), skinning (.9) and semantic-tree readers (.13) consume
+//! Input routing, skinning and semantic-tree readers consume
 //! [`GuiEvaluatedView`] through [`GuiLayoutSystem`](super::GuiLayoutSystem).
 //! Control payloads in the view carry effective (committed, revision-keyed)
 //! values, so skins resolve checked/value variants and readers observe

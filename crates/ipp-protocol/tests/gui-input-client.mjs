@@ -98,8 +98,29 @@ const payloads = {
       u8(0),
     ]),
   key: () => concatenate([u8(1), u8(6), u8(10), u8(0)]),
-  commitComposition: () => concatenate([u8(1), u8(12)]),
+  commitComposition: () => concatenate([u8(1), u8(12), u8(0)]),
 };
+
+const fence = {
+  contextGeneration: 4n,
+  focusGeneration: 5n,
+  entity: 42n,
+  rootIncarnation: 3n,
+  node: 9,
+  revision: 6,
+};
+
+function fenceBytes() {
+  return concatenate([
+    u8(1),
+    u64(4n),
+    u64(5n),
+    u64(42n),
+    u64(3n),
+    u32(9),
+    u32(6),
+  ]);
+}
 
 test("gui input tags, layouts and capability selection are generated", () => {
   assert.equal(codec.CAPABILITIES.gui, true);
@@ -150,7 +171,11 @@ test("every gui input action encodes its exact wire payload", () => {
   );
   assert.deepEqual(
     codec.encodeGuiInput({ kind: "text", text: "héllo" }),
-    concatenate([u8(1), u8(7), text("héllo")]),
+    concatenate([u8(1), u8(7), text("héllo"), u8(0)]),
+  );
+  assert.deepEqual(
+    codec.encodeGuiInput({ kind: "text", text: "héllo", fence }),
+    concatenate([u8(1), u8(7), text("héllo"), fenceBytes()]),
   );
   assert.deepEqual(
     codec.encodeGuiInput({
@@ -170,7 +195,16 @@ test("every gui input action encodes its exact wire payload", () => {
   );
   assert.deepEqual(
     codec.encodeGuiInput({ kind: "setTextSelection", start: 2, end: 7 }),
-    concatenate([u8(1), u8(10), u32(2), u32(7)]),
+    concatenate([u8(1), u8(10), u32(2), u32(7), u8(0)]),
+  );
+  assert.deepEqual(
+    codec.encodeGuiInput({
+      kind: "setTextSelection",
+      start: 2,
+      end: 7,
+      fence,
+    }),
+    concatenate([u8(1), u8(10), u32(2), u32(7), fenceBytes()]),
   );
   assert.deepEqual(
     codec.encodeGuiInput({
@@ -179,23 +213,36 @@ test("every gui input action encodes its exact wire payload", () => {
       caretStart: 6,
       caretEnd: 6,
     }),
-    concatenate([u8(1), u8(11), text("世界"), u32(6), u32(6)]),
+    concatenate([u8(1), u8(11), text("世界"), u32(6), u32(6), u8(0)]),
   );
   assert.deepEqual(
     codec.encodeGuiInput({ kind: "commitComposition" }),
     payloads.commitComposition(),
   );
   assert.deepEqual(
-    codec.encodeGuiInput({ kind: "cancelComposition" }),
-    concatenate([u8(1), u8(13)]),
+    codec.encodeGuiInput({ kind: "cancelComposition", fence }),
+    concatenate([u8(1), u8(13), fenceBytes()]),
+  );
+  // A fence names a live target.
+  assert.throws(
+    () =>
+      codec.encodeGuiInput({
+        kind: "text",
+        text: "x",
+        fence: { ...fence, node: 0 },
+      }),
+    /GUI text fence node/,
   );
 });
 
 test("gui input encoding rejects out-of-domain values before sending", () => {
   const legalText = "a".repeat(65_536);
   const encoded = codec.encodeGuiInput({ kind: "text", text: legalText });
-  assert.equal(encoded.byteLength, 65_542);
-  assert.equal(new TextDecoder().decode(encoded.subarray(6)), legalText);
+  assert.equal(encoded.byteLength, 65_543);
+  assert.equal(
+    new TextDecoder().decode(encoded.subarray(6, 65_542)),
+    legalText,
+  );
   assert.throws(
     () => codec.encodeGuiInput({ kind: "text", text: `${legalText}a` }),
     /string limit|integer out of range/,

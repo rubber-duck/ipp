@@ -437,13 +437,44 @@ export type GuiInputCommand =
       panelDistance?: number;
     }
   | { kind: "key"; key: GuiKey; pressed: boolean }
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; fence?: GuiTextFence }
   | { kind: "focus"; handle: GuiNodeHandle }
   | { kind: "blur" }
-  | { kind: "setTextSelection"; start: number; end: number }
-  | { kind: "composition"; text: string; caretStart: number; caretEnd: number }
-  | { kind: "commitComposition" }
-  | { kind: "cancelComposition" };
+  | {
+      kind: "setTextSelection";
+      start: number;
+      end: number;
+      fence?: GuiTextFence;
+    }
+  | {
+      kind: "composition";
+      text: string;
+      caretStart: number;
+      caretEnd: number;
+      fence?: GuiTextFence;
+    }
+  | { kind: "commitComposition"; fence?: GuiTextFence }
+  | { kind: "cancelComposition"; fence?: GuiTextFence };
+
+/**
+ * Focus and text revision a native text buffer observed, copied from the
+ * published {@link GuiTextFocusState}. The runtime rejects a stamped text,
+ * selection or composition command as a conflict, without writing, when
+ * the input context, focus generation or target moved, or when the
+ * revision is newer than the text. Selections must name the current
+ * revision exactly; insertions and composition may name an older revision
+ * of the same focus generation. An external replacement of the focused
+ * text moves the focus generation. Unstamped commands apply to the current
+ * focus in ingress order, like keys.
+ */
+export interface GuiTextFence {
+  readonly contextGeneration: bigint;
+  readonly focusGeneration: bigint;
+  readonly entity: bigint;
+  readonly rootIncarnation: bigint;
+  readonly node: number;
+  readonly revision: number;
+}
 
 export interface GuiInspectedNode {
   id: GuiNodeId;
@@ -513,7 +544,8 @@ export type GuiConflictReason =
       readonly found: number;
     }
   | { readonly kind: "admissionFailed"; readonly reason: string }
-  | { readonly kind: "touchArbitration"; readonly ownerPointer: number };
+  | { readonly kind: "touchArbitration"; readonly ownerPointer: number }
+  | { readonly kind: "focusMismatch" };
 
 /** One arbitration or admission conflict, reported separately from effects. */
 export interface GuiConflictObservation {

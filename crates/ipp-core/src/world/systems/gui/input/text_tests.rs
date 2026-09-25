@@ -28,6 +28,7 @@ fn text_append_then_backspace_commits_chained_revisions() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "e".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -122,6 +123,7 @@ fn typed_text_reflows_effective_measurement() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "e".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -252,6 +254,7 @@ fn text_insert_at_caret_and_replace_selection() {
                 GuiInputCommand::SetTextSelection {
                     start: 1,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -260,6 +263,7 @@ fn text_insert_at_caret_and_replace_selection() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "V".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -285,6 +289,7 @@ fn text_insert_at_caret_and_replace_selection() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -293,6 +298,7 @@ fn text_insert_at_caret_and_replace_selection() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "e".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -347,6 +353,7 @@ fn text_caret_moves_never_reflow_or_remeasure() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -393,6 +400,7 @@ fn text_caret_moves_never_reflow_or_remeasure() {
                     text: "V".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -428,7 +436,12 @@ fn text_caret_moves_never_reflow_or_remeasure() {
     {
         let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(SESSION, GuiInputCommand::CommitComposition)
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::CommitComposition {
+                    fence: None,
+                },
+            )
             .unwrap();
         context.step(0.0).unwrap();
     }
@@ -479,6 +492,7 @@ fn composition_tracks_authored_reset_before_routing() {
                     text: "V".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -503,7 +517,12 @@ fn composition_tracks_authored_reset_before_routing() {
     {
         let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(SESSION, GuiInputCommand::CommitComposition)
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::CommitComposition {
+                    fence: None,
+                },
+            )
             .unwrap();
         context.step(0.0).unwrap();
     }
@@ -561,6 +580,7 @@ fn text_caret_and_selection_geometry_use_retained_metrics() {
                 GuiInputCommand::SetTextSelection {
                     start: 1,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -591,6 +611,7 @@ fn text_caret_and_selection_geometry_use_retained_metrics() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 2,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -613,6 +634,7 @@ fn text_caret_and_selection_geometry_use_retained_metrics() {
                 GuiInputCommand::SetTextSelection {
                     start: 2,
                     end: 0,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -661,6 +683,7 @@ fn backward_multibyte_focus_observation_preserves_anchor_and_caret() {
                 GuiInputCommand::SetTextSelection {
                     start: 5,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -791,6 +814,7 @@ fn composition_paints_provisional_text_without_committing() {
                     text: "e".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -841,7 +865,12 @@ fn composition_paints_provisional_text_without_committing() {
     {
         let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(SESSION, GuiInputCommand::CancelComposition)
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::CancelComposition {
+                    fence: None,
+                },
+            )
             .unwrap();
         context.step(0.0).unwrap();
     }
@@ -894,6 +923,7 @@ fn composition_paints_while_typed_prediction_pending() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "b".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -904,6 +934,7 @@ fn composition_paints_while_typed_prediction_pending() {
                     text: "e".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1075,6 +1106,7 @@ fn delayed_selection_after_external_reset_conflicts_without_rebase() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1105,6 +1137,7 @@ fn delayed_selection_after_external_reset_conflicts_without_rebase() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1132,6 +1165,7 @@ fn delayed_selection_after_external_reset_conflicts_without_rebase() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "A".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1175,6 +1209,7 @@ fn composition_commit_after_blur_writes_nothing() {
                     text: "V".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1192,7 +1227,12 @@ fn composition_commit_after_blur_writes_nothing() {
     let report = {
         let mut context = world(&mut fixture);
         context
-            .enqueue_gui_input_command(SESSION, GuiInputCommand::CommitComposition)
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::CommitComposition {
+                    fence: None,
+                },
+            )
             .unwrap();
         context.step(0.0).unwrap()
     };
@@ -1238,6 +1278,7 @@ fn composition_commit_after_equal_length_reset_conflicts() {
                     text: "V".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1259,7 +1300,12 @@ fn composition_commit_after_equal_length_reset_conflicts() {
             )
             .unwrap();
         context
-            .enqueue_gui_input_command(SESSION, GuiInputCommand::CommitComposition)
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::CommitComposition {
+                    fence: None,
+                },
+            )
             .unwrap();
         context.step(0.0).unwrap()
     };
@@ -1328,6 +1374,7 @@ fn caret_and_selection_paint_observe_transient_without_committing() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 2,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1350,6 +1397,7 @@ fn caret_and_selection_paint_observe_transient_without_committing() {
                     text: "V".into(),
                     caret_start: 1,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();

@@ -448,7 +448,8 @@ export type GuiConflictReason =
       readonly found: number;
     }
   | { readonly kind: "admissionFailed"; readonly reason: string }
-  | { readonly kind: "touchArbitration"; readonly ownerPointer: number };
+  | { readonly kind: "touchArbitration"; readonly ownerPointer: number }
+  | { readonly kind: "focusMismatch" };
 
 /** One arbitration or admission conflict, reported separately from effects. */
 export interface GuiConflictObservation {

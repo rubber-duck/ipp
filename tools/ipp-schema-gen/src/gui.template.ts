@@ -32,6 +32,7 @@ import type {
   GuiSemanticSnapshotQuery,
   GuiSemanticTree,
   GuiTree,
+  GuiTextFence,
   GuiTextFocusState,
   GuiUnhandledObservation,
 } from "./gui-types.js";
@@ -767,6 +768,47 @@ function writeGuiInputPanelDistance(
   if (panelDistance !== undefined) w.f32(panelDistance);
 }
 
+/** Optional focus/revision fence stamped by a native text buffer. */
+function writeGuiTextFence(w: Writer, fence: GuiTextFence | undefined): void {
+  w.boolean(fence !== undefined);
+  if (fence === undefined) return;
+  exactFields(fence, [
+    "contextGeneration",
+    "focusGeneration",
+    "entity",
+    "rootIncarnation",
+    "node",
+    "revision",
+  ]);
+  if (fence.entity === 0n) fail("GUI text fence entity");
+  if (fence.node === 0) fail("GUI text fence node");
+  w.u64(fence.contextGeneration);
+  w.u64(fence.focusGeneration);
+  w.u64(fence.entity);
+  w.u64(fence.rootIncarnation);
+  w.u32(uint(fence.node, 0xffffffff));
+  w.u32(uint(fence.revision, 0xffffffff));
+}
+
+function readGuiTextFence(r: Reader): GuiTextFence | undefined {
+  if (!r.boolean()) return undefined;
+  const contextGeneration = r.u64();
+  const focusGeneration = r.u64();
+  const entity = r.u64();
+  const rootIncarnation = r.u64();
+  const node = r.u32();
+  if (entity === 0n) fail("GUI text fence entity");
+  if (node === 0) fail("GUI text fence node");
+  return {
+    contextGeneration,
+    focusGeneration,
+    entity,
+    rootIncarnation,
+    node,
+    revision: r.u32(),
+  };
+}
+
 /** Encode one ordered GUI input command. */
 export function encodeGuiInput(
   input: GuiInputCommand,
@@ -845,9 +887,10 @@ export function encodeGuiInput(
       break;
     }
     case "text":
-      exactFields(input, ["kind", "text"]);
+      exactFields(input, ["kind", "text", "fence"]);
       w.u8(7);
       w.string(input.text);
+      writeGuiTextFence(w, input.fence);
       break;
     case "focus":
       exactFields(input, ["kind", "handle"]);
@@ -859,25 +902,29 @@ export function encodeGuiInput(
       w.u8(9);
       break;
     case "setTextSelection":
-      exactFields(input, ["kind", "start", "end"]);
+      exactFields(input, ["kind", "start", "end", "fence"]);
       w.u8(10);
       w.u32(uint(input.start, 0xffffffff));
       w.u32(uint(input.end, 0xffffffff));
+      writeGuiTextFence(w, input.fence);
       break;
     case "composition":
-      exactFields(input, ["kind", "text", "caretStart", "caretEnd"]);
+      exactFields(input, ["kind", "text", "caretStart", "caretEnd", "fence"]);
       w.u8(11);
       w.string(input.text);
       w.u32(uint(input.caretStart, 0xffffffff));
       w.u32(uint(input.caretEnd, 0xffffffff));
+      writeGuiTextFence(w, input.fence);
       break;
     case "commitComposition":
-      exactFields(input, ["kind"]);
+      exactFields(input, ["kind", "fence"]);
       w.u8(12);
+      writeGuiTextFence(w, input.fence);
       break;
     case "cancelComposition":
-      exactFields(input, ["kind"]);
+      exactFields(input, ["kind", "fence"]);
       w.u8(13);
+      writeGuiTextFence(w, input.fence);
       break;
     default:
       fail("GUI input action");
@@ -987,25 +1034,53 @@ function readGuiInputCommand(r: Reader): GuiInputCommand {
       if (key === undefined) fail("GUI input key");
       return { kind: "key", key, pressed: r.boolean() };
     }
-    case 7:
-      return { kind: "text", text: r.string() };
+    case 7: {
+      const text = r.string();
+      const fence = readGuiTextFence(r);
+      return { kind: "text", text, ...(fence === undefined ? {} : { fence }) };
+    }
     case 8:
       return { kind: "focus", handle: readGuiNodeHandle(r) };
     case 9:
       return { kind: "blur" };
-    case 10:
-      return { kind: "setTextSelection", start: r.u32(), end: r.u32() };
-    case 11:
+    case 10: {
+      const start = r.u32();
+      const end = r.u32();
+      const fence = readGuiTextFence(r);
+      return {
+        kind: "setTextSelection",
+        start,
+        end,
+        ...(fence === undefined ? {} : { fence }),
+      };
+    }
+    case 11: {
+      const text = r.string();
+      const caretStart = r.u32();
+      const caretEnd = r.u32();
+      const fence = readGuiTextFence(r);
       return {
         kind: "composition",
-        text: r.string(),
-        caretStart: r.u32(),
-        caretEnd: r.u32(),
+        text,
+        caretStart,
+        caretEnd,
+        ...(fence === undefined ? {} : { fence }),
       };
-    case 12:
-      return { kind: "commitComposition" };
-    case 13:
-      return { kind: "cancelComposition" };
+    }
+    case 12: {
+      const fence = readGuiTextFence(r);
+      return {
+        kind: "commitComposition",
+        ...(fence === undefined ? {} : { fence }),
+      };
+    }
+    case 13: {
+      const fence = readGuiTextFence(r);
+      return {
+        kind: "cancelComposition",
+        ...(fence === undefined ? {} : { fence }),
+      };
+    }
     default:
       return fail("GUI input action");
   }
@@ -1105,6 +1180,14 @@ function readGuiConflictObservation(r: Reader): GuiConflictObservation {
       effectTick,
       ...(target === undefined ? {} : { target }),
       reason: { kind: "touchArbitration", ownerPointer: r.u32() },
+    };
+  if (reason === 3)
+    return {
+      session,
+      sourceTick,
+      effectTick,
+      ...(target === undefined ? {} : { target }),
+      reason: { kind: "focusMismatch" },
     };
   return fail("GUI conflict reason");
 }

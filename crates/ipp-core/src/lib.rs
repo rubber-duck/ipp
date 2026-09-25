@@ -86,7 +86,7 @@ pub use systems::gui::{
     GuiNodeData, GuiNodeDataProperty, GuiNodeDataRow, GuiNodeHandle, GuiNodeId, GuiNodePatch,
     GuiNodePropertyRef, GuiNodeRowProperty, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow,
     GuiNodes, GuiPanelResolution, GuiPointerButton, GuiResourceResolver, GuiRoot, GuiSystem,
-    GuiSystemFactory, GuiTextCompositionState, GuiTextFocusState, GuiTextFocusUpdate,
+    GuiSystemFactory, GuiTextCompositionState, GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate,
     GuiUnhandledInput, GuiUnhandledReason, MAX_GUI_NODE_ID, MAX_GUI_TEXT_BYTES, MAX_LAYOUT_DEPTH,
     resolve_panel_hit,
 };

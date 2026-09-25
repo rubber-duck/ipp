@@ -17,7 +17,7 @@ use crate::{MAX_MESSAGE_BYTES, ProtocolError, ResponseBody};
 use ipp_core::{
     EntityId, GuiControlValue, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
     GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputTarget, GuiNodeId,
-    GuiTextFocusUpdate, GuiUnhandledInput, WorldUpdateReport,
+    GuiTextFence, GuiTextFocusUpdate, GuiUnhandledInput, WorldUpdateReport,
 };
 
 /// Wire bound for every observation text field, matching all protocol strings.
@@ -164,6 +164,7 @@ fn input_text_size(input: &GuiInputCommand) -> usize {
     match input {
         GuiInputCommand::Text {
             text,
+            ..
         } => text.len(),
         GuiInputCommand::UpdateComposition {
             text,
@@ -454,6 +455,9 @@ fn write_conflict(w: &mut Writer, conflict: &GuiInputConflict) -> Result<(), Pro
             w.u8(2)?;
             w.u32(*owner_pointer)?;
         }
+        GuiInputConflictReason::FocusMismatch => {
+            w.u8(3)?;
+        }
     }
     Ok(())
 }
@@ -580,9 +584,11 @@ fn write_gui_input(w: &mut Writer, input: &GuiInputCommand) -> Result<(), Protoc
         }
         GuiInputCommand::Text {
             text,
+            fence,
         } => {
             w.u8(7)?;
             write_bounded_text(w, text)?;
+            write_text_fence(w, fence.as_ref())?;
         }
         GuiInputCommand::Focus {
             handle,
@@ -602,29 +608,57 @@ fn write_gui_input(w: &mut Writer, input: &GuiInputCommand) -> Result<(), Protoc
         GuiInputCommand::SetTextSelection {
             start,
             end,
+            fence,
         } => {
             w.u8(10)?;
             w.u32(*start)?;
             w.u32(*end)?;
+            write_text_fence(w, fence.as_ref())?;
         }
         GuiInputCommand::UpdateComposition {
             text,
             caret_start,
             caret_end,
+            fence,
         } => {
             w.u8(11)?;
             write_bounded_text(w, text)?;
             w.u32(*caret_start)?;
             w.u32(*caret_end)?;
+            write_text_fence(w, fence.as_ref())?;
         }
-        GuiInputCommand::CommitComposition => {
+        GuiInputCommand::CommitComposition {
+            fence,
+        } => {
             w.u8(12)?;
+            write_text_fence(w, fence.as_ref())?;
         }
-        GuiInputCommand::CancelComposition => {
+        GuiInputCommand::CancelComposition {
+            fence,
+        } => {
             w.u8(13)?;
+            write_text_fence(w, fence.as_ref())?;
         }
     }
     Ok(())
+}
+
+fn write_text_fence(w: &mut Writer, fence: Option<&GuiTextFence>) -> Result<(), ProtocolError> {
+    match fence {
+        None => w.u8(0),
+        Some(fence) => {
+            if fence.target.entity.to_bits() == 0 || fence.target.node.0 == 0 {
+                return Err(ProtocolError::Malformed("gui text fence target"));
+            }
+            w.u8(1)?;
+            w.u64(fence.context_generation)?;
+            w.u64(fence.focus_generation)?;
+            w.u64(fence.target.entity.to_bits())?;
+            w.u64(fence.target.root_incarnation)?;
+            w.u32(fence.target.node.0)?;
+            w.u32(fence.revision)
+        }
+    }
 }
 
 fn write_panel(w: &mut Writer, panel: &Option<EntityId>) -> Result<(), ProtocolError> {

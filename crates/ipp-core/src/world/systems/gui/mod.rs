@@ -76,7 +76,7 @@ pub use input::{
     GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
     GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
     GuiInputSystemFactory, GuiInputTarget, GuiKey, GuiPointerButton, GuiTextCompositionState,
-    GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
+    GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
 };
 #[cfg(test)]
 pub(crate) use layout::GuiLayoutDiagnostic;

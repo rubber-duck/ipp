@@ -494,6 +494,7 @@ fn gui_text_limit_is_shared_by_authorship_controls_and_composition() {
                 text: oversized,
                 caret_start: 0,
                 caret_end: 0,
+                fence: None,
             },
         )
         .unwrap();

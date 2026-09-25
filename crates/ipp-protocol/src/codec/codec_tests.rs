@@ -1157,6 +1157,7 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
             vec![1, action],
             (text.len() as u32).to_le_bytes().to_vec(),
             text.as_bytes().to_vec(),
+            vec![0],
         ]
         .concat()
     };
@@ -1285,6 +1286,7 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
             .body,
         RequestBody::GuiInput(Box::new(GuiInputCommand::Text {
             text: "héllo".into(),
+            fence: None,
         }))
     );
     let legal_text = "a".repeat(ipp_core::MAX_GUI_TEXT_BYTES);
@@ -1294,6 +1296,7 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
             .body,
         RequestBody::GuiInput(Box::new(GuiInputCommand::Text {
             text: legal_text,
+            fence: None,
         }))
     );
     assert!(
@@ -1329,14 +1332,54 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
         decode_request(&frame(&[1, 9], 3), 7).unwrap().body,
         RequestBody::GuiInput(Box::new(GuiInputCommand::Blur))
     );
+    let fence = ipp_core::GuiTextFence {
+        context_generation: 4,
+        focus_generation: 5,
+        target: ipp_core::GuiInputTarget {
+            entity: EntityId::from_bits(42),
+            node: ipp_core::systems::gui::GuiNodeId(9),
+            root_incarnation: 3,
+        },
+        revision: 6,
+    };
+    let fence_bytes = [
+        vec![1],
+        4u64.to_le_bytes().to_vec(),
+        5u64.to_le_bytes().to_vec(),
+        42u64.to_le_bytes().to_vec(),
+        3u64.to_le_bytes().to_vec(),
+        9u32.to_le_bytes().to_vec(),
+        6u32.to_le_bytes().to_vec(),
+    ]
+    .concat();
     assert_eq!(
-        decode_request(&frame(&[1, 10, 2, 0, 0, 0, 7, 0, 0, 0], 3), 7)
-            .unwrap()
-            .body,
+        decode_request(
+            &frame(
+                &[vec![1, 10, 2, 0, 0, 0, 7, 0, 0, 0], fence_bytes.clone()].concat(),
+                3
+            ),
+            7
+        )
+        .unwrap()
+        .body,
         RequestBody::GuiInput(Box::new(GuiInputCommand::SetTextSelection {
             start: 2,
             end: 7,
+            fence: Some(fence),
         }))
+    );
+    // A fence names a live target; a zero entity or node is malformed.
+    let mut zero_target = fence_bytes.clone();
+    zero_target[17..25].fill(0);
+    assert!(
+        decode_request(
+            &frame(
+                &[vec![1, 10, 2, 0, 0, 0, 7, 0, 0, 0], zero_target].concat(),
+                3
+            ),
+            7
+        )
+        .is_err()
     );
     let composition = [
         vec![1, 11],
@@ -1344,6 +1387,7 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
         "世界".as_bytes().to_vec(),
         6u32.to_le_bytes().to_vec(),
         6u32.to_le_bytes().to_vec(),
+        vec![0],
     ]
     .concat();
     assert_eq!(
@@ -1352,15 +1396,22 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
             text: "世界".into(),
             caret_start: 6,
             caret_end: 6,
+            fence: None,
         }))
     );
     assert_eq!(
-        decode_request(&frame(&[1, 12], 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::CommitComposition))
+        decode_request(&frame(&[vec![1, 12], fence_bytes].concat(), 3), 7)
+            .unwrap()
+            .body,
+        RequestBody::GuiInput(Box::new(GuiInputCommand::CommitComposition {
+            fence: Some(fence),
+        }))
     );
     assert_eq!(
-        decode_request(&frame(&[1, 13], 3), 7).unwrap().body,
-        RequestBody::GuiInput(Box::new(GuiInputCommand::CancelComposition))
+        decode_request(&frame(&[1, 13, 0], 3), 7).unwrap().body,
+        RequestBody::GuiInput(Box::new(GuiInputCommand::CancelComposition {
+            fence: None,
+        }))
     );
 
     // Correlated inputs require a nonzero request identity.

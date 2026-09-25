@@ -1,5 +1,10 @@
 /** GUI pointer/keyboard/text input through a generated client, independent of process launch and wire layout. */
-import type { WorldPersistenceHostClient } from "@ipp/client";
+import type {
+  GuiObservationBatch,
+  GuiTextFence,
+  GuiTextFocusState,
+  WorldPersistenceHostClient,
+} from "@ipp/client";
 import { aliasId, createEntity, insertComponent } from "../camera-fixtures.js";
 import type { GuiTestClient } from "./gui-lifecycle.js";
 
@@ -18,6 +23,75 @@ async function inspected(
   return node;
 }
 
+/** Every observation batch one client received, in delivery order. */
+interface ObservationLog {
+  readonly batches: GuiObservationBatch[];
+  stop(): void;
+}
+
+function recordObservations(client: GuiTestClient): ObservationLog {
+  const batches: GuiObservationBatch[] = [];
+  const stop = client.subscribeGuiObservations((batch) => {
+    batches.push(batch);
+  });
+  return { batches, stop };
+}
+
+/** Poll until `read` yields a value; observations trail routing replies. */
+async function eventually<T>(
+  read: () => T | undefined,
+  message: string,
+): Promise<T> {
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    const value = read();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** The runtime's current text focus for this session, as last published. */
+function currentTextFocus(log: ObservationLog): GuiTextFocusState | null {
+  for (let index = log.batches.length - 1; index >= 0; index -= 1) {
+    const state = log.batches[index]?.textFocus;
+    if (state !== undefined) return state;
+  }
+  return null;
+}
+
+/** Wait until the current text focus satisfies `accept`. */
+function focusWhere(
+  log: ObservationLog,
+  accept: (state: GuiTextFocusState | null) => boolean,
+  message: string,
+): Promise<GuiTextFocusState | null> {
+  return eventually(() => {
+    const state = currentTextFocus(log);
+    return accept(state) ? { state } : undefined;
+  }, message).then(({ state }) => state);
+}
+
+/** The fence a native buffer stamps after observing one focus state. */
+function fenceOf(state: GuiTextFocusState): GuiTextFence {
+  return {
+    contextGeneration: state.contextGeneration,
+    focusGeneration: state.focusGeneration,
+    entity: state.entity,
+    rootIncarnation: state.rootIncarnation,
+    node: state.node,
+    revision: state.revision,
+  };
+}
+
+/** Conflict reasons published after batch `mark`. */
+function conflictsSince(log: ObservationLog, mark: number): string[] {
+  return log.batches
+    .slice(mark)
+    .flatMap((batch) => batch.conflicts ?? [])
+    .map((conflict) => conflict.reason.kind);
+}
+
 /**
  * Exercise real pointer/keyboard/text outcomes through the production
  * ingress: correlated `submitGuiInput` admissions against a live World,
@@ -33,6 +107,7 @@ export async function exerciseGuiInput(
   fontBytes: ArrayBuffer,
 ) {
   const client = await host.createWorld({ symbolicId: "gui-input" });
+  const log = recordObservations(client);
   const font = await client.createAsset(17, fontBytes);
   const ref = { kind: "alias", alias: 1 } as const;
   const entity = aliasId(
@@ -320,6 +395,127 @@ export async function exerciseGuiInput(
   });
   await client.submitGuiInput({ kind: "cancelComposition" });
 
+  // Native buffers stamp edits with the focus and revision they observed.
+  // A paste whose clipboard read started on the field but resolves after
+  // focus moved to the checkbox conflicts and writes neither control.
+  const fieldFocus = await focusWhere(
+    log,
+    (state) => state?.node === 3 && state.text === "Hp世界",
+    "The focused field published no text focus",
+  );
+  const stalePaste = fenceOf(fieldFocus!);
+  await client.submitGuiInput({ kind: "focus", handle: handle(2) });
+  await focusWhere(
+    log,
+    (state) => state === null,
+    "Moving focus to the checkbox never cleared the text focus",
+  );
+  let mark = log.batches.length;
+  await client.submitGuiInput({
+    kind: "text",
+    text: "pasted",
+    fence: stalePaste,
+  });
+  await eventually(
+    () =>
+      conflictsSince(log, mark).includes("focusMismatch") ? true : undefined,
+    "A paste stamped before the focus move did not conflict",
+  );
+  field = await inspected(client, entity, 3);
+  expect(
+    field.controlValue.kind === "text" && field.controlValue.value === "Hp世界",
+    `A stale paste wrote the old focus: ${JSON.stringify(field.controlValue)}`,
+  );
+  checkbox = await inspected(client, entity, 2);
+  expect(
+    checkbox.controlValue.kind === "bool" &&
+      checkbox.controlValue.value === true,
+    `A stale paste touched the new focus: ${JSON.stringify(checkbox.controlValue)}`,
+  );
+
+  // Stamps chain on the sender's own in-flight edits: two keystrokes sent
+  // before the first one's observation both land.
+  await client.submitGuiInput({ kind: "focus", handle: handle(3) });
+  const typing = fenceOf(
+    (await focusWhere(
+      log,
+      (state) => state?.node === 3,
+      "Refocusing the field published no text focus",
+    ))!,
+  );
+  await client.submitGuiInput({ kind: "key", key: "end", pressed: true });
+  await Promise.all([
+    client.submitGuiInput({ kind: "text", text: "!", fence: typing }),
+    client.submitGuiInput({ kind: "text", text: "?", fence: typing }),
+  ]);
+  field = await inspected(client, entity, 3);
+  expect(
+    field.controlValue.kind === "text" &&
+      field.controlValue.value === "Hp世界!?",
+    `Chained stamped edits were lost: ${JSON.stringify(field.controlValue)}`,
+  );
+
+  // A stamped range after an equal-length external replacement conflicts
+  // and the replacement republishes the focused text without new input.
+  const beforeReplace = fenceOf(
+    (await focusWhere(
+      log,
+      (state) => state?.node === 3 && state.text === "Hp世界!?",
+      "The chained edits never reached the text focus",
+    ))!,
+  );
+  field = await inspected(client, entity, 3);
+  await client.editGui({
+    action: "setControlValue",
+    handle: handle(3),
+    expectedRevision: field.controlRevision,
+    value: { kind: "text", value: "Hp世" },
+  });
+  const replaced = (await focusWhere(
+    log,
+    (state) => state?.node === 3 && state.text === "Hp世",
+    "An external replacement of the focused text did not refresh the bridge",
+  ))!;
+  expect(
+    replaced.focusGeneration !== beforeReplace.focusGeneration,
+    "An external replacement kept the focus generation",
+  );
+  mark = log.batches.length;
+  await client.submitGuiInput({
+    kind: "setTextSelection",
+    start: 1,
+    end: 2,
+    fence: beforeReplace,
+  });
+  await client.submitGuiInput({
+    kind: "text",
+    text: "late",
+    fence: beforeReplace,
+  });
+  await eventually(
+    () =>
+      conflictsSince(log, mark).filter((kind) => kind === "focusMismatch")
+        .length === 2
+        ? true
+        : undefined,
+    "Edits stamped before the replacement did not conflict",
+  );
+  field = await inspected(client, entity, 3);
+  expect(
+    field.controlValue.kind === "text" && field.controlValue.value === "Hp世",
+    `Stamped edits rebased onto replaced text: ${JSON.stringify(field.controlValue)}`,
+  );
+  await client.submitGuiInput({
+    kind: "text",
+    text: "界",
+    fence: fenceOf(replaced),
+  });
+  field = await inspected(client, entity, 3);
+  expect(
+    field.controlValue.kind === "text" && field.controlValue.value === "Hp世界",
+    `An edit stamped against the refreshed text missed: ${JSON.stringify(field.controlValue)}`,
+  );
+
   // A delayed native range is fenced to its revision: an equal-length
   // external replace ("Hp世界" is 8 bytes, like "Hpqrstuv") moves the
   // revision, so the stale range conflicts instead of rebasing and the
@@ -385,4 +581,5 @@ export async function exerciseGuiInput(
     position: at,
     delta: [0, -4],
   });
+  log.stop();
 }

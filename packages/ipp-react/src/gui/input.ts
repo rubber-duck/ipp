@@ -1,4 +1,8 @@
-import type { GuiInputCommand, GuiInputRoutingOutcome } from "@ipp/client";
+import type {
+  GuiInputCommand,
+  GuiInputRoutingOutcome,
+  GuiTextFence,
+} from "@ipp/client";
 import { createImeBridge, shouldSkipBeforeInput } from "./ime.js";
 import {
   closeUnhandledInputGate,
@@ -106,20 +110,26 @@ export type BrowserGuiInputCommand =
       readonly panelDistance?: number;
     }
   | { readonly kind: "key"; readonly key: GuiKey; readonly pressed: true }
-  | { readonly kind: "text"; readonly text: string }
+  | {
+      readonly kind: "text";
+      readonly text: string;
+      readonly fence?: GuiTextFence;
+    }
   | { readonly kind: "blur" }
   | {
       readonly kind: "composition";
       readonly text: string;
       readonly caretStart: number;
       readonly caretEnd: number;
+      readonly fence?: GuiTextFence;
     }
-  | { readonly kind: "commitComposition" }
-  | { readonly kind: "cancelComposition" }
+  | { readonly kind: "commitComposition"; readonly fence?: GuiTextFence }
+  | { readonly kind: "cancelComposition"; readonly fence?: GuiTextFence }
   | {
       readonly kind: "selection";
       readonly start: number;
       readonly end: number;
+      readonly fence?: GuiTextFence;
     };
 
 /** Ordered, session-fenced ingress sink. Must preserve call order. */
@@ -142,6 +152,13 @@ export interface GuiInputSinkOptions {
   readonly onError?: (error: Error) => void;
   /** Route only authoritative no-panel misses into scene gesture admission. */
   readonly unhandledInputGate?: GuiUnhandledInputGate;
+}
+
+/** The stamped text fence, omitted rather than undefined when absent. */
+function fenceOf(command: { readonly fence?: GuiTextFence }): {
+  fence?: GuiTextFence;
+} {
+  return command.fence === undefined ? {} : { fence: command.fence };
 }
 
 /** Translate one relayed browser command to the wire input command.
@@ -209,7 +226,7 @@ export function toGuiInputCommand(
     case "key":
       return { kind: "key", key: command.key, pressed: true };
     case "text":
-      return { kind: "text", text: command.text };
+      return { kind: "text", text: command.text, ...fenceOf(command) };
     case "blur":
       return { kind: "blur" };
     case "composition":
@@ -218,16 +235,18 @@ export function toGuiInputCommand(
         text: command.text,
         caretStart: command.caretStart,
         caretEnd: command.caretEnd,
+        ...fenceOf(command),
       };
     case "commitComposition":
-      return { kind: "commitComposition" };
+      return { kind: "commitComposition", ...fenceOf(command) };
     case "cancelComposition":
-      return { kind: "cancelComposition" };
+      return { kind: "cancelComposition", ...fenceOf(command) };
     case "selection":
       return {
         kind: "setTextSelection",
         start: command.start,
         end: command.end,
+        ...fenceOf(command),
       };
   }
 }

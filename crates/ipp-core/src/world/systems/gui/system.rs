@@ -1,4 +1,4 @@
-use super::system_state::GuiSystemState;
+use super::system_state::{GuiExternalCommit, GuiSystemState};
 use super::tree::node_rows::{GuiNodeDataProperty, GuiNodeDataRow, GuiNodeStyleProperty};
 use super::tree::nodes::{
     GuiControlValue, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
@@ -516,7 +516,74 @@ impl System for GuiSystem {
         self.state.committing = Some(entity);
         let result = context.world.apply_authored_commands(Some(self), &commands);
         self.state.committing = None;
-        result
+        result?;
+
+        if let GuiCommand::SetControlValue {
+            handle,
+            ..
+        } = command
+        {
+            self.record_external_commit(&context.world, session, handle);
+        }
+        Ok(())
+    }
+
+    /// Release external replacements once every System observed this frame.
+    fn finish_update(
+        &mut self,
+        _context: &mut crate::systems::SystemUpdateContext<'_, '_>,
+        _report: &mut crate::WorldUpdateReport,
+    ) {
+        let drained = self.state.external_commits.len() as u64;
+        self.state.external_commits.clear();
+        self.state.external_commit_base = self.state.external_commit_base.saturating_add(drained);
+    }
+}
+
+impl GuiSystem {
+    /// Pin one accepted external replacement from the committed root for
+    /// the input system, which publishes it with ordered input effects and
+    /// fences the focused text against it.
+    fn record_external_commit(
+        &mut self,
+        world: &crate::systems::SystemRuntimeAccess<'_>,
+        session: u64,
+        handle: &GuiNodeHandle,
+    ) {
+        let Some(root) = producer_root(&world.world.state, &world.world.components, handle.entity)
+        else {
+            return;
+        };
+        let Some(state) = root.control_state(handle.node_id) else {
+            return;
+        };
+        let commit = GuiExternalCommit {
+            session,
+            tick: world.world.tick.saturating_add(1),
+            target: super::GuiInputTarget {
+                entity: handle.entity,
+                node: handle.node_id,
+                root_incarnation: handle.root_incarnation,
+            },
+            value: state.value.clone(),
+            revision: state.revision,
+            path: super::input::system::ancestor_path(&root, handle.node_id),
+        };
+        self.state.external_commits.push(commit);
+    }
+
+    /// External replacements from sequence `next` onward, with the sequence
+    /// that follows the last one returned.
+    pub(in crate::world::systems::gui) fn external_commits_since(
+        &self,
+        next: u64,
+    ) -> (&[GuiExternalCommit], u64) {
+        let base = self.state.external_commit_base;
+        let skip = next
+            .saturating_sub(base)
+            .min(self.state.external_commits.len() as u64);
+        let end = base.saturating_add(self.state.external_commits.len() as u64);
+        (&self.state.external_commits[skip as usize..], end)
     }
 }
 

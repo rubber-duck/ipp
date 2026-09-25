@@ -1622,6 +1622,7 @@ fn second_session_cannot_use_focused_control() {
                 SESSION,
                 GuiInputCommand::Text {
                     text: "e".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1630,6 +1631,7 @@ fn second_session_cannot_use_focused_control() {
                 OTHER,
                 GuiInputCommand::Text {
                     text: "X".into(),
+                    fence: None,
                 },
             )
             .unwrap();
@@ -1691,6 +1693,7 @@ fn second_session_cannot_use_focused_control() {
                 OTHER,
                 GuiInputCommand::Text {
                     text: "Y".into(),
+                    fence: None,
                 },
             )
             .unwrap();

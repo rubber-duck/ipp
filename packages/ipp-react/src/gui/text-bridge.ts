@@ -1,5 +1,13 @@
-import type { GuiObservationBatch, GuiTextFocusState } from "@ipp/client";
-import type { GuiInputSink, GuiViewportPoint } from "./input.js";
+import type {
+  GuiObservationBatch,
+  GuiTextFence,
+  GuiTextFocusState,
+} from "@ipp/client";
+import type {
+  BrowserGuiInputCommand,
+  GuiInputSink,
+  GuiViewportPoint,
+} from "./input.js";
 import { keyboardKeyToGuiKey } from "./input.js";
 import {
   createImeBridge,
@@ -34,11 +42,14 @@ import {
  * committed core text, local edits `preventDefault` and forward instead
  * of applying, and every platform failure sends nothing.
  *
- * Focus fencing: an optional focus-token provider identifies the intended
- * target. Paste and user selection reads capture the token and re-check
- * it before sending, so delayed completions across a focus move, node
- * replacement or session change cancel explicitly instead of writing
- * into the new target.
+ * Focus fencing: every text, selection and composition command carries the
+ * runtime fence (input context and focus generations, target and text
+ * revision) of the committed state the buffer last synchronized from, so
+ * core rejects edits that raced a focus move, node removal, session change
+ * or external replacement as conflicts without writing. A clipboard paste
+ * stamps the fence observed when the read started. The optional focus
+ * token additionally cancels delayed paste and selection reads locally
+ * before they reach the runtime.
  *
  * Caret units: core offsets index UTF-8 bytes while the DOM selects in
  * UTF-16 units; the conversion helpers below translate both ways snapped
@@ -56,6 +67,39 @@ export interface TextBridgeCommitted {
   readonly caretUtf8: number;
   readonly anchorUtf8: number | null;
   readonly composing?: boolean;
+  /** Runtime fence stamped on edits made against this text. */
+  readonly fence?: GuiTextFence;
+}
+
+/** Stamp one text, selection or composition command with a fence; other
+ * commands and unfenced sends pass through unchanged. */
+export function stampTextFence(
+  command: BrowserGuiInputCommand,
+  fence: GuiTextFence | undefined,
+): BrowserGuiInputCommand {
+  if (fence === undefined) return command;
+  switch (command.kind) {
+    case "text":
+    case "selection":
+    case "composition":
+    case "commitComposition":
+    case "cancelComposition":
+      return { ...command, fence };
+    default:
+      return command;
+  }
+}
+
+/** The fence a native buffer stamps after observing one focus state. */
+export function textFenceOf(state: GuiTextFocusState): GuiTextFence {
+  return {
+    contextGeneration: state.contextGeneration,
+    focusGeneration: state.focusGeneration,
+    entity: state.entity,
+    rootIncarnation: state.rootIncarnation,
+    node: state.node,
+    revision: state.revision,
+  };
 }
 
 export interface TextBridgeOptions {
@@ -265,12 +309,14 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
           anchorUtf8:
             start + clampUtf8Offset(composition.text, composition.caretStart),
           composing: true,
+          fence: textFenceOf(current),
         };
       }
       return {
         text: current.text,
         caretUtf8: clampUtf8Offset(current.text, current.selectionEnd),
         anchorUtf8: clampUtf8Offset(current.text, current.selectionStart),
+        fence: textFenceOf(current),
       };
     },
     observe(state): boolean {
@@ -350,13 +396,21 @@ export function attachTextBridge(
   const report = (error: unknown): void => {
     onError?.(error instanceof Error ? error : new Error(String(error)));
   };
-  const send = (command: Parameters<GuiInputSink["send"]>[0]): void => {
+  const deliver = (command: BrowserGuiInputCommand): void => {
     try {
       sink.send(command);
     } catch (error) {
       report(error);
     }
   };
+  // Every text edit names the committed state the buffer currently shows.
+  const send = (command: BrowserGuiInputCommand): void => {
+    deliver(stampTextFence(command, readCommitted?.()?.fence));
+  };
+  // Delayed completions stamp the state observed when they started.
+  const sinkFencedAt = (fence: GuiTextFence | undefined): GuiInputSink => ({
+    send: (command) => deliver(stampTextFence(command, fence)),
+  });
 
   const wrapper = document.createElement("div");
   wrapper.style.position = "absolute";
@@ -382,9 +436,12 @@ export function attachTextBridge(
   wrapper.append(area);
   container.append(wrapper);
 
-  const ime: ImeBridge = createImeBridge(sink, {
-    ...(onError === undefined ? {} : { onError }),
-  });
+  const ime: ImeBridge = createImeBridge(
+    { send },
+    {
+      ...(onError === undefined ? {} : { onError }),
+    },
+  );
   // Suppress selection echoes of programmatic syncs; only user-driven
   // selection changes forward while the sync token still holds.
   let suppressSelection = false;
@@ -500,10 +557,15 @@ export function attachTextBridge(
       send({ kind: "text", text });
       return;
     }
-    void pasteClipboardToFocusedInput(sink, resolveClipboardReader(), {
-      ...(getFocusToken === undefined ? {} : { getFocusToken }),
-      ...(onError === undefined ? {} : { onError }),
-    });
+    const fence = readCommitted?.()?.fence;
+    void pasteClipboardToFocusedInput(
+      sinkFencedAt(fence),
+      resolveClipboardReader(),
+      {
+        ...(getFocusToken === undefined ? {} : { getFocusToken }),
+        ...(onError === undefined ? {} : { onError }),
+      },
+    );
   };
 
   const copyOrCut = (event: ClipboardEvent, cut: boolean): void => {
@@ -617,10 +679,14 @@ export function attachTextBridge(
     },
     paste(reader: ClipboardTextReader | undefined): Promise<boolean> {
       if (disposed) return Promise.resolve(false);
-      return pasteClipboardToFocusedInput(sink, reader, {
-        ...(getFocusToken === undefined ? {} : { getFocusToken }),
-        ...(onError === undefined ? {} : { onError }),
-      });
+      return pasteClipboardToFocusedInput(
+        sinkFencedAt(readCommitted?.()?.fence),
+        reader,
+        {
+          ...(getFocusToken === undefined ? {} : { getFocusToken }),
+          ...(onError === undefined ? {} : { onError }),
+        },
+      );
     },
     dispose(): void {
       if (disposed) return;

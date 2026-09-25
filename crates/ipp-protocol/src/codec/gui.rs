@@ -5,9 +5,9 @@ use crate::MAX_MESSAGE_BYTES;
 use ipp_core::components::rows::{SchemaRow, decode_row, decode_row_value, encode_row};
 use ipp_core::systems::gui::{
     GUI_BASE_PARTS, GuiBlockerHit, GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCommand,
-    GuiInspectQuery, GuiInspectResponse, GuiKey, GuiNodeData, GuiNodeDataRow, GuiNodeHandle,
-    GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow, GuiPartId,
-    GuiPartPatch, GuiPartProperty, GuiPointerButton,
+    GuiInputTarget, GuiInspectQuery, GuiInspectResponse, GuiKey, GuiNodeData, GuiNodeDataRow,
+    GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle, GuiNodeStyleProperty, GuiNodeStyleRow,
+    GuiPartId, GuiPartPatch, GuiPartProperty, GuiPointerButton, GuiTextFence,
 };
 
 /// GUI edit framing version; see the `gui-edit` wire convention.
@@ -198,6 +198,7 @@ impl Reader<'_> {
             },
             7 => GuiInputCommand::Text {
                 text: r.string()?,
+                fence: r.gui_text_fence()?,
             },
             8 => GuiInputCommand::Focus {
                 handle: r.gui_node_handle()?,
@@ -206,20 +207,52 @@ impl Reader<'_> {
             10 => GuiInputCommand::SetTextSelection {
                 start: r.u32()?,
                 end: r.u32()?,
+                fence: r.gui_text_fence()?,
             },
             11 => GuiInputCommand::UpdateComposition {
                 text: r.string()?,
                 caret_start: r.u32()?,
                 caret_end: r.u32()?,
+                fence: r.gui_text_fence()?,
             },
-            12 => GuiInputCommand::CommitComposition,
-            13 => GuiInputCommand::CancelComposition,
+            12 => GuiInputCommand::CommitComposition {
+                fence: r.gui_text_fence()?,
+            },
+            13 => GuiInputCommand::CancelComposition {
+                fence: r.gui_text_fence()?,
+            },
             _ => return Err(ProtocolError::Malformed("GUI input action")),
         };
         if r.at != bytes.len() {
             return Err(ProtocolError::Malformed("trailing GUI input bytes"));
         }
         Ok(command)
+    }
+
+    /// Optional text fence: context and focus generations, the focused
+    /// target identity and the observed text revision.
+    fn gui_text_fence(&mut self) -> Result<Option<GuiTextFence>, ProtocolError> {
+        if !self.boolean()? {
+            return Ok(None);
+        }
+        let context_generation = self.u64()?;
+        let focus_generation = self.u64()?;
+        let entity = self.u64()?;
+        let root_incarnation = self.u64()?;
+        let node = self.u32()?;
+        if entity == 0 || node == 0 {
+            return Err(ProtocolError::Malformed("GUI text fence target"));
+        }
+        Ok(Some(GuiTextFence {
+            context_generation,
+            focus_generation,
+            target: GuiInputTarget {
+                entity: ipp_core::EntityId::from_bits(entity),
+                node: GuiNodeId(node),
+                root_incarnation,
+            },
+            revision: self.u32()?,
+        }))
     }
 
     fn gui_input_panel(&mut self) -> Result<Option<ipp_core::EntityId>, ProtocolError> {

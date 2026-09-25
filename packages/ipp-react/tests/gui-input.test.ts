@@ -96,6 +96,44 @@ test("browser commands map to wire inputs without panel scope", () => {
   });
 });
 
+test("stamped text fences reach the wire command unchanged", () => {
+  const fence = {
+    contextGeneration: 1n,
+    focusGeneration: 2n,
+    entity: 3n,
+    rootIncarnation: 4n,
+    node: 5,
+    revision: 6,
+  };
+  assert.deepEqual(toGuiInputCommand({ kind: "text", text: "hi", fence }), {
+    kind: "text",
+    text: "hi",
+    fence,
+  });
+  assert.deepEqual(
+    toGuiInputCommand({ kind: "selection", start: 0, end: 2, fence }),
+    { kind: "setTextSelection", start: 0, end: 2, fence },
+  );
+  assert.deepEqual(
+    toGuiInputCommand({
+      kind: "composition",
+      text: "a",
+      caretStart: 1,
+      caretEnd: 1,
+      fence,
+    }),
+    { kind: "composition", text: "a", caretStart: 1, caretEnd: 1, fence },
+  );
+  assert.deepEqual(toGuiInputCommand({ kind: "commitComposition", fence }), {
+    kind: "commitComposition",
+    fence,
+  });
+  assert.deepEqual(toGuiInputCommand({ kind: "cancelComposition", fence }), {
+    kind: "cancelComposition",
+    fence,
+  });
+});
+
 test("sink submits every input immediately in call order", async () => {
   const submitted: GuiInputCommand[] = [];
   const pending: Array<(outcome: GuiInputRoutingOutcome) => void> = [];

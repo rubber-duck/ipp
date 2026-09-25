@@ -14,5 +14,5 @@ pub use system::{
     GuiInputCancelReason, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
     GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputFocus, GuiInputSystem,
     GuiInputSystemFactory, GuiInputTarget, GuiKey, GuiPointerButton, GuiTextCompositionState,
-    GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
+    GuiTextFence, GuiTextFocusState, GuiTextFocusUpdate, GuiUnhandledInput, GuiUnhandledReason,
 };

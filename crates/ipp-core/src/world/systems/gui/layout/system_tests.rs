@@ -1,10 +1,12 @@
-//! Focused tests for the per-root units-per-metre client contract.
-//!
-//! The scheduled pass must evaluate each root with its client-set density,
-//! defaulting to [`DEFAULT_UNITS_PER_METRE`] when unset and rejecting
-//! non-finite or non-positive values without touching retained output.
+//! Focused tests for the scheduled layout pass: the per-root
+//! `GuiRoot::units_per_metre` density read from the effective component
+//! (ordinary writes, insertion before or after the Surface, animation and
+//! StateOverlays all reflow the root; invalid values are rejected at the
+//! command boundary), resource readiness, retained-output reuse and root
+//! membership.
 
 use super::super::super::test_support::{font_fixture_bytes, font_source};
+use super::super::evaluation::DEFAULT_UNITS_PER_METRE;
 use super::*;
 use crate::GuiNodeDataRow;
 use crate::services::asset_management::AssetSource;
@@ -13,7 +15,10 @@ use crate::systems::gui::{
     GuiNodeStyle, GuiRoot,
 };
 use crate::systems::surface::Surface;
-use crate::{Batch, Command, ComponentValue, EntityMetadata, EntityRef, HostRuntime, WorldLimits};
+use crate::{
+    Batch, BatchOutcome, Command, ComponentValue, EntityMetadata, EntityRef, HostRuntime,
+    WorldLimits,
+};
 
 fn setup() -> (HostRuntime, WorldId, EntityId) {
     let mut host = HostRuntime::new();
@@ -50,9 +55,136 @@ fn setup() -> (HostRuntime, WorldId, EntityId) {
     (host, world, panel)
 }
 
+fn root_bounds(host: &mut HostRuntime, world: WorldId, panel: EntityId) -> [f32; 4] {
+    host.world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap()
+        .root_bounds
+}
+
+fn density_write(panel: EntityId, units: f32) -> Command {
+    Command::SetField {
+        entity: EntityRef::Handle(panel),
+        component: ComponentValue::GUI_ROOT,
+        field: crate::FieldWrite {
+            offset: GuiRoot::units_per_metre_field(),
+            value: crate::FieldValue::F32(units),
+        },
+    }
+}
+
+fn root_with_density(units: f32) -> GuiRoot {
+    let mut root = GuiRoot::default();
+    root.units_per_metre = units;
+    root
+}
+
+fn submit(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> BatchOutcome {
+    let mut context = host.world_mut(world).unwrap();
+    let id = context.tick() + 1;
+    context
+        .enqueue(Batch {
+            id,
+            operations,
+        })
+        .unwrap();
+    context.step(0.0).unwrap().outcomes.remove(0)
+}
+
+/// A 1x1 logical checkbox (node 2) at the root origin under a Column, so hit
+/// regions follow the density: it covers Surface content `[0, 1/U]` on both
+/// axes.
+fn insert_box(host: &mut HostRuntime, world: WorldId, panel: EntityId) {
+    let mut context = host.world_mut(world).unwrap();
+    let root_incarnation = context
+        .inspect_gui(panel, None, 1, 1)
+        .unwrap()
+        .root_incarnation;
+    for command in [
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(1),
+            parent: None,
+            index: 0,
+            data: GuiNodeData::Container(GuiContainerKind::Column),
+            values: GuiNodeDataRow::default(),
+            style: GuiNodeStyle::default(),
+        },
+        GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(2),
+            parent: Some(GuiNodeId(1)),
+            index: 0,
+            data: GuiNodeData::Checkbox,
+            values: GuiNodeDataRow::checkbox(false),
+            style: GuiNodeStyle {
+                width: Some(1.0),
+                height: Some(1.0),
+                background_color: Some([0.2, 0.3, 0.4, 1.0]),
+                ..Default::default()
+            },
+        },
+    ] {
+        context.enqueue_gui_command(SESSION, command).unwrap();
+    }
+    context.step(0.0).unwrap();
+}
+
+/// Retained paint in Surface content metres.
+fn box_paint(
+    host: &mut HostRuntime,
+    world: WorldId,
+    panel: EntityId,
+) -> Vec<crate::systems::surface::SurfaceRenderPrimitive> {
+    host.world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap()
+        .surface_primitives()
+}
+
+/// Authored lanes are metres, so density rescales the logical layout (root
+/// and node rectangles, hit positions) while paint and hit regions stay
+/// together on the same Surface content: the 1 m box spans `U` logical
+/// units, still covers content `[0, 1]` and paints exactly as `paint`.
+fn assert_box_at_density(
+    host: &mut HostRuntime,
+    world: WorldId,
+    panel: EntityId,
+    units: f32,
+    paint: &[crate::systems::surface::SurfaceRenderPrimitive],
+) {
+    let view = host
+        .world_mut(world)
+        .unwrap()
+        .gui_layout_view(panel)
+        .unwrap();
+    assert_eq!(view.units_per_metre, units);
+    assert_eq!(view.root_bounds, [0.0, 0.0, 4.0 * units, 3.0 * units]);
+    let node = view
+        .nodes
+        .iter()
+        .find(|node| node.node == GuiNodeId(2))
+        .unwrap();
+    assert_eq!(node.rect, [0.0, 0.0, units, units]);
+
+    let hit = view.hit_test_content([0.75, 0.75]).unwrap();
+    assert_eq!(hit.node, GuiNodeId(2));
+    assert_eq!(hit.position, [0.75 * units, 0.75 * units]);
+    assert_ne!(
+        view.hit_test_content([1.25, 0.25]).map(|hit| hit.node),
+        Some(GuiNodeId(2))
+    );
+    assert_eq!(view.surface_primitives(), paint);
+}
+
 #[test]
 fn unset_roots_keep_default_density() {
     let (mut host, world, panel) = setup();
+    assert_eq!(GuiRoot::default().units_per_metre, DEFAULT_UNITS_PER_METRE);
     let view = host
         .world_mut(world)
         .unwrap()
@@ -63,15 +195,13 @@ fn unset_roots_keep_default_density() {
 }
 
 #[test]
-fn client_density_rescales_root_extent() {
+fn component_density_write_rescales_root_extent() {
     let (mut host, world, panel) = setup();
-    host.world_mut(world)
-        .unwrap()
-        .set_gui_units_per_metre(panel, 2.0)
-        .unwrap();
-    host.world_mut(world).unwrap().step(0.0).unwrap();
+    let outcome = submit(&mut host, world, vec![density_write(panel, 2.0)]);
+    assert!(outcome.result.is_ok(), "{outcome:?}");
+
     let context = host.world_mut(world).unwrap();
-    assert_eq!(context.gui_units_per_metre(panel), 2.0);
+    assert_eq!(context.gui_root(panel).unwrap().units_per_metre, 2.0);
     let view = context.gui_layout_view(panel).unwrap();
     assert_eq!(view.units_per_metre, 2.0);
     assert_eq!(view.root_bounds, [0.0, 0.0, 8.0, 6.0]);
@@ -81,19 +211,312 @@ fn client_density_rescales_root_extent() {
 fn invalid_density_rejects_without_effect() {
     let (mut host, world, panel) = setup();
     for units in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-        assert!(
-            host.world_mut(world)
-                .unwrap()
-                .set_gui_units_per_metre(panel, units)
-                .is_err()
+        let outcome = submit(&mut host, world, vec![density_write(panel, units)]);
+        assert!(outcome.result.is_err(), "{units} accepted");
+
+        let root = root_with_density(units);
+        let outcome = submit(
+            &mut host,
+            world,
+            vec![Command::insert_value(
+                EntityRef::Handle(panel),
+                ComponentValue::GuiRoot(root),
+            )],
         );
+        assert!(outcome.result.is_err(), "{units} inserted");
     }
-    host.world_mut(world).unwrap().step(0.0).unwrap();
+
     let context = host.world_mut(world).unwrap();
-    assert_eq!(context.gui_units_per_metre(panel), DEFAULT_UNITS_PER_METRE);
+    assert_eq!(
+        context.gui_root(panel).unwrap().units_per_metre,
+        DEFAULT_UNITS_PER_METRE
+    );
     let view = context.gui_layout_view(panel).unwrap();
     assert_eq!(view.units_per_metre, DEFAULT_UNITS_PER_METRE);
     assert_eq!(view.root_bounds, [0.0, 0.0, 4.0, 3.0]);
+}
+
+/// Formerly the density lived in a layout side map that dropped values set
+/// before the root was first evaluated. It now travels with the root, so a
+/// root attached to an already evaluated Surface uses its own density.
+#[test]
+fn density_set_before_attach_applies_on_first_evaluation() {
+    let (mut host, world, _) = setup();
+    let panel = apply(
+        &mut host,
+        world,
+        vec![
+            Command::Create {
+                alias: 1,
+                metadata: EntityMetadata::default(),
+            },
+            Command::insert_value(EntityRef::Alias(1), panel_surface()),
+        ],
+    )[0];
+    host.world_mut(world).unwrap().step(0.0).unwrap();
+    assert!(!evaluated(&mut host, world).contains(&panel));
+
+    apply(
+        &mut host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(panel),
+            ComponentValue::GuiRoot(root_with_density(2.0)),
+        )],
+    );
+    assert_eq!(root_bounds(&mut host, world, panel), [0.0, 0.0, 4.0, 2.0]);
+
+    // Removing and reattaching the root starts from the attached value.
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::RemoveComponent {
+                entity: EntityRef::Handle(panel),
+                component: ComponentValue::GUI_ROOT,
+            },
+            Command::insert_value(
+                EntityRef::Handle(panel),
+                ComponentValue::GuiRoot(GuiRoot::default()),
+            ),
+            density_write(panel, 3.0),
+        ],
+    );
+    assert_eq!(root_bounds(&mut host, world, panel), [0.0, 0.0, 6.0, 3.0]);
+}
+
+fn density_clip(start: f32, end: f32) -> crate::systems::animation::AnimationClip {
+    use crate::systems::animation::*;
+
+    let key = |time, value, interpolation| AnimationKeyframe {
+        time,
+        value: AnimationValue::Field(crate::components::schema::FieldValue::F32(value)),
+        interpolation,
+    };
+    AnimationClip::new(
+        1.0,
+        vec![AnimationTrack {
+            target: density_target(),
+            keys: vec![
+                key(0.0, start, AnimationInterpolation::Linear),
+                key(1.0, end, AnimationInterpolation::Step),
+            ],
+        }],
+    )
+    .unwrap()
+}
+
+fn density_target() -> crate::systems::animation::AnimationTrackTarget {
+    crate::systems::animation::AnimationTrackTarget::AnimationProperty(
+        crate::systems::animation::AnimationProperty {
+            component: ComponentValue::GUI_ROOT,
+            offsets: vec![GuiRoot::units_per_metre_field()],
+        },
+    )
+}
+
+fn frame(host: &mut HostRuntime, world: WorldId, dt: f64) {
+    let mut context = host.world_mut(world).unwrap();
+    context.prepare_update(dt).unwrap();
+    context.poll_assets();
+    context.step(dt).unwrap();
+}
+
+#[test]
+fn animated_density_reflows_root_with_paint_and_hit_regions_together() {
+    use crate::services::asset_management::{AssetUpload, AssetUploadIdentity};
+    use crate::systems::animation::*;
+
+    let (mut host, world, panel) = setup();
+    insert_box(&mut host, world, panel);
+    let paint = box_paint(&mut host, world, panel);
+    assert!(!paint.is_empty());
+    assert_box_at_density(&mut host, world, panel, 1.0, &paint);
+
+    host.world_mut(world)
+        .unwrap()
+        .enqueue_asset(AssetUpload {
+            id: 1,
+            key: AssetUploadIdentity {
+                kind: ANIMATION_TYPE,
+                asset: 1,
+                variant: 0,
+            },
+            bytes: density_clip(1.0, 3.0).encode(),
+        })
+        .unwrap();
+    for _ in 0..512 {
+        let mut context = host.world_mut(world).unwrap();
+        context.prepare_update(0.0).unwrap();
+        context.poll_assets();
+        if !context.step(0.0).unwrap().assets.is_empty() {
+            break;
+        }
+    }
+
+    let controller = {
+        let mut context = host.world_mut(world).unwrap();
+        let controller = context
+            .create_animation_controller(AnimationControllerDescription {
+                drivers: vec![AnimationDriverDescription {
+                    source: "asset://10/1".into(),
+                    variant: 0,
+                    track: 0,
+                    target: panel,
+                    property: density_target(),
+                    weight: 1.0,
+                    additive: false,
+                    reference_time: 0.0,
+                    repeat: false,
+                }],
+                speed: 1.0,
+                ..Default::default()
+            })
+            .unwrap();
+        context
+            .control_animation_controller(controller, AnimationPlaybackControl::Play)
+            .unwrap();
+        controller
+    };
+    frame(&mut host, world, 0.0);
+    frame(&mut host, world, 0.5);
+
+    // Animation precedes layout: the sampled density reflows this frame.
+    assert_box_at_density(&mut host, world, panel, 2.0, &paint);
+
+    // Removing the controller restores the authored density and reflows.
+    host.world_mut(world)
+        .unwrap()
+        .remove_animation_controller(controller)
+        .unwrap();
+    frame(&mut host, world, 0.0);
+    assert_eq!(
+        host.world_mut(world)
+            .unwrap()
+            .gui_root(panel)
+            .unwrap()
+            .units_per_metre,
+        DEFAULT_UNITS_PER_METRE
+    );
+    assert_box_at_density(&mut host, world, panel, 1.0, &paint);
+}
+
+#[test]
+fn overlaid_density_reflows_root_and_release_restores_authored_value() {
+    use crate::{ComponentOverlayMode, EntityOverlayMode, StateOverlayRef};
+
+    let (mut host, world, panel) = setup();
+    insert_box(&mut host, world, panel);
+    let paint = box_paint(&mut host, world, panel);
+    submit(
+        &mut host,
+        world,
+        vec![
+            Command::SetMetadata {
+                entity: EntityRef::Handle(panel),
+                metadata: EntityMetadata {
+                    symbolic_id: Some("density-panel".into()),
+                    classes: vec![],
+                },
+            },
+            density_write(panel, 0.5),
+        ],
+    );
+    assert_box_at_density(&mut host, world, panel, 0.5, &paint);
+
+    let outcome = submit(
+        &mut host,
+        world,
+        vec![
+            Command::CreateStateOverlayOwner {
+                alias: 1,
+            },
+            Command::AttachEntityOverlayBinding {
+                owner: StateOverlayRef::Alias(1),
+                alias: 2,
+                symbolic_id: "density-panel".into(),
+                mode: EntityOverlayMode::Bound,
+            },
+            Command::AttachComponentStateOverlay {
+                owner: StateOverlayRef::Alias(1),
+                binding: StateOverlayRef::Alias(2),
+                alias: 3,
+                component: ComponentValue::GUI_ROOT,
+                mode: ComponentOverlayMode::Bound,
+                fields: vec![crate::FieldWrite {
+                    offset: GuiRoot::units_per_metre_field(),
+                    value: crate::FieldValue::F32(2.0),
+                }],
+            },
+        ],
+    );
+    assert!(outcome.result.is_ok(), "{outcome:?}");
+    assert_box_at_density(&mut host, world, panel, 2.0, &paint);
+
+    // Inspection reports the authored producer and the overlaid effective
+    // density separately.
+    let snapshot = host.world_mut(world).unwrap().inspect(panel).unwrap();
+    let density = |values: &[ComponentValue]| {
+        values.iter().find_map(|value| match value {
+            ComponentValue::GuiRoot(root) => Some(root.units_per_metre),
+            _ => None,
+        })
+    };
+    assert_eq!(density(&snapshot.base), Some(0.5));
+    assert_eq!(density(&snapshot.effective), Some(2.0));
+
+    // An invalid overlay value is rejected at the command boundary.
+    let rejected = submit(
+        &mut host,
+        world,
+        vec![
+            Command::CreateStateOverlayOwner {
+                alias: 1,
+            },
+            Command::AttachEntityOverlayBinding {
+                owner: StateOverlayRef::Alias(1),
+                alias: 2,
+                symbolic_id: "density-panel".into(),
+                mode: EntityOverlayMode::Bound,
+            },
+            Command::AttachComponentStateOverlay {
+                owner: StateOverlayRef::Alias(1),
+                binding: StateOverlayRef::Alias(2),
+                alias: 3,
+                component: ComponentValue::GUI_ROOT,
+                mode: ComponentOverlayMode::Bound,
+                fields: vec![crate::FieldWrite {
+                    offset: GuiRoot::units_per_metre_field(),
+                    value: crate::FieldValue::F32(-1.0),
+                }],
+            },
+        ],
+    );
+    assert!(rejected.result.is_err(), "{rejected:?}");
+
+    let owner = outcome
+        .state_overlays
+        .iter()
+        .find(|alias| alias.alias == 1)
+        .unwrap()
+        .id;
+    let released = submit(
+        &mut host,
+        world,
+        vec![Command::ReleaseStateOverlayOwner {
+            owner: StateOverlayRef::Handle(owner),
+        }],
+    );
+    assert!(released.result.is_ok(), "{released:?}");
+    assert_eq!(
+        host.world_mut(world)
+            .unwrap()
+            .gui_root(panel)
+            .unwrap()
+            .units_per_metre,
+        0.5
+    );
+    assert_box_at_density(&mut host, world, panel, 0.5, &paint);
 }
 
 // The production resolver reports slot generations, so readiness flips the
@@ -502,11 +925,7 @@ fn unchanged_roots_keep_output_without_fingerprinting() {
         [0.0, 0.0, 2.0, 1.0]
     );
 
-    host.world_mut(world)
-        .unwrap()
-        .set_gui_units_per_metre(panel, 2.0)
-        .unwrap();
-    host.world_mut(world).unwrap().step(0.0).unwrap();
+    apply(&mut host, world, vec![density_write(panel, 2.0)]);
     assert_eq!(super::super::evaluation::take_fingerprint_passes(), 1);
     host.world_mut(world).unwrap().step(0.0).unwrap();
     assert_eq!(super::super::evaluation::take_fingerprint_passes(), 0);

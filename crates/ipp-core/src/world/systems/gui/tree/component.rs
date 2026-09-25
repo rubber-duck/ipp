@@ -11,6 +11,7 @@ use super::part_rows::{
 };
 use crate::components::rows::{RowAddress, Rows, SchemaRow, row_address, row_region_relative};
 use crate::components::schema::ComponentLifecycle;
+use crate::systems::gui::DEFAULT_UNITS_PER_METRE;
 use crate::systems::surface::GuiPrimitivePart;
 use crate::{DynamicProperties, DynamicValue, ErrorReason, FieldValue, FieldWrite};
 use ipp_schema_derive::SchemaComponent;
@@ -33,8 +34,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// node's channels present exactly while its theme declares motion for the
 /// part, so writing a theme reference, a theme's motion or either table
 /// re-derives them. Theme updates never rewrite referencing nodes.
+///
+/// `units_per_metre` is the root's logical density: GUI logical units per
+/// Surface metre, a finite positive ordinary property that clients write,
+/// animate or overlay per root. Changing it reflows the root.
 #[repr(C)]
-#[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
+#[derive(Clone, Debug, PartialEq, SchemaComponent)]
 pub struct GuiRoot {
     /// Authoritative root-local node tree and control records.
     nodes: GuiNodes,
@@ -52,12 +57,30 @@ pub struct GuiRoot {
     /// monotonically allocated slots; rows field 3.
     #[schema(rows)]
     part_state: Rows<GuiPartRow>,
+    /// Logical GUI units per Surface metre; finite and positive, default
+    /// [`DEFAULT_UNITS_PER_METRE`].
+    pub units_per_metre: f32,
     /// Application extension values; the runtime writes no GUI names here.
     #[schema(ignore)]
     pub properties: DynamicProperties,
     /// Theme and part row lookup, rebuilt whenever either table is replaced.
     #[schema(ignore)]
     skin_index: GuiSkinIndex,
+}
+
+impl Default for GuiRoot {
+    fn default() -> Self {
+        Self {
+            nodes: Default::default(),
+            node_style: Default::default(),
+            node_data: Default::default(),
+            theme_parts: Default::default(),
+            part_state: Default::default(),
+            units_per_metre: DEFAULT_UNITS_PER_METRE,
+            properties: Default::default(),
+            skin_index: Default::default(),
+        }
+    }
 }
 
 /// Lookup from theme handles and (node, base part) keys to row slots,
@@ -335,6 +358,16 @@ impl GuiRoot {
     /// First theme slot no theme has used in this incarnation.
     fn next_theme_slot(&self) -> u32 {
         self.theme_parts.next_slot().div_ceil(GuiPartId::COUNT)
+    }
+
+    /// Real offset of the root density `units_per_metre`.
+    pub(crate) const fn units_per_metre_field() -> u32 {
+        std::mem::offset_of!(Self, units_per_metre) as u32
+    }
+
+    /// Whether `units` is an accepted root density: finite and positive.
+    fn valid_units_per_metre(units: f32) -> bool {
+        units.is_finite() && units > 0.0
     }
 
     pub(in crate::world::systems::gui) const fn nodes_field() -> u32 {
@@ -1200,7 +1233,7 @@ impl ComponentLifecycle for GuiRoot {
     }
 
     fn supports_numeric_property(offset: u32) -> bool {
-        Self::numeric_animatable(offset)
+        offset == Self::units_per_metre_field() || Self::numeric_animatable(offset)
     }
 
     fn validate_numeric_properties(
@@ -1210,8 +1243,16 @@ impl ComponentLifecycle for GuiRoot {
         use crate::components::schema::{FieldValue, SchemaComponent};
 
         // Numeric writes cannot change structure, so only the written properties
-        // need checks: a row property must be animatable, present and in range.
+        // need checks: the density must be finite and positive, and a row
+        // property must be animatable, present and in range.
         for (offset, field) in fields {
+            if *offset == Self::units_per_metre_field() {
+                match field {
+                    FieldValue::F32(units) if Self::valid_units_per_metre(*units) => continue,
+                    FieldValue::F32(_) => return Err(ErrorReason::InvalidValue),
+                    _ => return Err(ErrorReason::InvalidField),
+                }
+            }
             let FieldValue::Dynamic(value) = field else {
                 return Err(ErrorReason::InvalidField);
             };
@@ -1247,6 +1288,9 @@ impl ComponentLifecycle for GuiRoot {
     }
 
     fn validate(&self) -> Result<(), ErrorReason> {
+        if !Self::valid_units_per_metre(self.units_per_metre) {
+            return Err(ErrorReason::InvalidValue);
+        }
         self.nodes.validate().map_err(field_error)?;
         self.validate_rows()?;
         self.validate_skin_tables()
@@ -1268,8 +1312,14 @@ impl ComponentLifecycle for GuiRoot {
     /// - a theme or part row property: its range; theme motion also checks
     ///   the part rows of the nodes referencing the theme.
     ///
-    /// Row keys are never writable, and extension values carry no GUI rules.
+    /// The density is checked against its range. Row keys are never
+    /// writable, and extension values carry no GUI rules.
     fn validate_field(&self, offset: u32) -> Result<(), ErrorReason> {
+        if offset == Self::units_per_metre_field() {
+            return Self::valid_units_per_metre(self.units_per_metre)
+                .then_some(())
+                .ok_or(ErrorReason::InvalidValue);
+        }
         if offset == Self::nodes_field() {
             return self.validate_tree_rows();
         }

@@ -11,8 +11,7 @@
 //! client commands and never advances simulation time.
 
 use super::evaluation::{
-    DEFAULT_UNITS_PER_METRE, GuiEvaluatedView, GuiFontResolution, GuiLayoutCache, GuiLayoutRequest,
-    GuiResourceResolver,
+    GuiEvaluatedView, GuiFontResolution, GuiLayoutCache, GuiLayoutRequest, GuiResourceResolver,
 };
 use crate::services::asset_management::font::FontAsset;
 use crate::services::asset_management::{AssetManagementService, AssetSource};
@@ -20,7 +19,7 @@ use crate::systems::surface::SurfaceRenderResource;
 use crate::systems::{
     System, SystemDependency, SystemFactory, SystemId, SystemInitContext, SystemInitError,
 };
-use crate::{ComponentValue, EntityId, ErrorReason, WorldId};
+use crate::{ComponentValue, EntityId, WorldId};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Retained GUI layout pass. See the module documentation for the pass
@@ -29,10 +28,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct GuiLayoutSystem {
     cache: GuiLayoutCache,
     bindings: crate::systems::SystemBindings<Self>,
-    /// Client-owned density contract per root entity: explicit logical units
-    /// per Surface metre. Absent entries use [`DEFAULT_UNITS_PER_METRE`];
-    /// entries clear with their entity before identity reuse.
-    units: BTreeMap<EntityId, f32>,
     /// Entities holding a GuiRoot, in entity order, maintained by the
     /// commit lifecycle so each frame visits roots rather than every entity.
     roots: crate::world::component_query::ComponentQuery<super::super::GuiRoot>,
@@ -103,27 +98,6 @@ impl GuiLayoutSystem {
         self.cache.entities()
     }
 
-    /// Effective logical units per Surface metre for one root entity: the
-    /// client-set value, or [`DEFAULT_UNITS_PER_METRE`] when unset.
-    pub fn units_per_metre(&self, entity: EntityId) -> f32 {
-        self.units
-            .get(&entity)
-            .copied()
-            .unwrap_or(DEFAULT_UNITS_PER_METRE)
-    }
-
-    /// Set the client-owned density contract for one root entity. Finite
-    /// positive values only; the change reflows that root on the next
-    /// evaluation through the ordinary layout fingerprint.
-    pub fn set_units_per_metre(&mut self, entity: EntityId, units: f32) -> Result<(), ErrorReason> {
-        if !units.is_finite() || units <= 0.0 {
-            return Err(ErrorReason::InvalidValue);
-        }
-        self.units.insert(entity, units);
-        self.stale.insert(entity);
-        Ok(())
-    }
-
     /// Evaluate one root against explicit inputs without a World, sharing the
     /// retained cache with the scheduled pass, which re-evaluates the root
     /// from World inputs on its next update.
@@ -163,7 +137,6 @@ impl SystemFactory for GuiLayoutSystemFactory {
         Ok(Box::new(GuiLayoutSystem {
             cache: GuiLayoutCache::default(),
             bindings: crate::systems::SystemBindings::resolve(context)?,
-            units: BTreeMap::new(),
             roots: Default::default(),
             stale: BTreeSet::new(),
             all_stale: true,
@@ -348,11 +321,7 @@ impl GuiLayoutSystem {
                 root,
                 root_incarnation,
                 surface_size: [surface.width, surface.height],
-                units_per_metre: self
-                    .units
-                    .get(&entity)
-                    .copied()
-                    .unwrap_or(DEFAULT_UNITS_PER_METRE),
+                units_per_metre: root.units_per_metre,
                 evaluation_tick: tick,
             };
             self.cache.evaluate(entity, &request, &resolver);
@@ -361,7 +330,6 @@ impl GuiLayoutSystem {
         // Entities and components that went away invalidate their retained
         // output before any identity can be reused.
         self.cache.retain_entities(&live);
-        self.units.retain(|entity, _| live.contains(entity));
         self.commits.retain(|entity, _| live.contains(entity));
         self.stale.clear();
         self.all_stale = false;
@@ -371,35 +339,6 @@ impl GuiLayoutSystem {
 /// Components whose changes can alter a root's evaluated layout or paint.
 fn layout_input(component: u16) -> bool {
     component == ComponentValue::GUI_ROOT || component == ComponentValue::SURFACE
-}
-
-impl crate::WorldContext<'_> {
-    /// Set the client-owned GUI density contract for one root entity.
-    /// Finite positive values only; unset roots keep the default. The change
-    /// reflows that root on the next evaluation; React and host clients own
-    /// the per-display value behind this setter.
-    pub fn set_gui_units_per_metre(
-        &mut self,
-        entity: EntityId,
-        units: f32,
-    ) -> Result<(), ErrorReason> {
-        if !units.is_finite() || units <= 0.0 {
-            return Err(ErrorReason::InvalidValue);
-        }
-        self.with_system::<GuiLayoutSystem, _>(GuiLayoutSystem::ID, |system, _| {
-            system.units.insert(entity, units);
-            system.stale.insert(entity);
-        });
-        Ok(())
-    }
-
-    /// Effective GUI density contract for one root entity: the client-set
-    /// value, or the default when unset.
-    pub fn gui_units_per_metre(&self, entity: EntityId) -> f32 {
-        self.system::<GuiLayoutSystem>(GuiLayoutSystem::ID)
-            .map(|system| system.units_per_metre(entity))
-            .unwrap_or(DEFAULT_UNITS_PER_METRE)
-    }
 }
 
 #[cfg(test)]

@@ -832,6 +832,122 @@ export async function exerciseGuiLifecycle(
     "A GuiRoot coexists with raw Surface items",
   );
 
+  // Each root owns its density. Authored lanes are metres, so a 1 x 0.5 m
+  // box spans (U, U/2) logical units; writes, insertion values and overlays
+  // all reflow only their own root, and invalid values are rejected.
+  const densityRoot = async (alias: number, units?: number) => {
+    const densityRef = { kind: "alias", alias } as const;
+    const densityEntity = aliasId(
+      await client.batch([
+        createEntity(alias, `gui-density-${alias}`),
+        insertComponent(client, "Surface", densityRef, {
+          width: 4,
+          height: 3,
+        }),
+        insertComponent(
+          client,
+          "GuiRoot",
+          densityRef,
+          units === undefined ? {} : { units_per_metre: units },
+        ),
+      ]),
+      alias,
+    );
+    const incarnation = (await client.inspectGui({ entity: densityEntity }))
+      .rootIncarnation;
+    await client.editGuiBatch([
+      {
+        action: "insert",
+        entity: densityEntity,
+        rootIncarnation: incarnation,
+        id: 1,
+        index: 0,
+        data: { kind: "container", containerKind: "column" },
+      },
+      {
+        action: "insert",
+        entity: densityEntity,
+        rootIncarnation: incarnation,
+        id: 2,
+        parent: 1,
+        index: 0,
+        data: { kind: "container", containerKind: "sizedBox" },
+        style: { width: 1, height: 0.5 },
+      },
+    ]);
+    return densityEntity;
+  };
+  const boxBounds = async (densityEntity: bigint) => {
+    await client.waitForFrame();
+    const tree = await client.semanticSnapshot({ entity: densityEntity });
+    const box = tree.nodes.find((node) => node.id === 2);
+    expect(box, "Density panel omitted its box");
+    return box.bounds.join();
+  };
+  const densityValue = async (densityEntity: bigint) => {
+    const snapshot = (await client.inspect()).entities.find(
+      (item) => item.id === densityEntity,
+    );
+    expect(snapshot, "Density panel disappeared");
+    const read = (components: typeof snapshot.effective) =>
+      components.find(
+        (item) => item.component === client.components.GuiRoot!.id,
+      )?.fields.units_per_metre;
+    return [read(snapshot.base), read(snapshot.effective)].join();
+  };
+  const densityWrite = (densityEntity: bigint, units: number) => ({
+    kind: "setField" as const,
+    entity: { kind: "handle" as const, id: densityEntity },
+    component: client.components.GuiRoot!.id,
+    field: componentFields(client, "GuiRoot", { units_per_metre: units })[0]!,
+  });
+  const plainDensity = await densityRoot(90);
+  const denseDensity = await densityRoot(91, 2);
+  expect(
+    (await boxBounds(plainDensity)) === "0,0,1,0.5" &&
+      (await boxBounds(denseDensity)) === "0,0,2,1",
+    "Per-root densities did not scale evaluated bounds independently",
+  );
+  successfulBatch(await client.batch([densityWrite(plainDensity, 0.5)]));
+  expect(
+    (await boxBounds(plainDensity)) === "0,0,0.5,0.25" &&
+      (await boxBounds(denseDensity)) === "0,0,2,1",
+    "A density write did not reflow only its own root",
+  );
+  for (const units of [0, -1]) {
+    expect(
+      !(await client.batch([densityWrite(plainDensity, units)])).ok,
+      `An invalid density ${units} was accepted`,
+    );
+  }
+  const densityOverlay = successfulBatch(
+    await client.batch([
+      ...overlay(
+        "gui-density-91",
+        gui,
+        componentFields(client, "GuiRoot", { units_per_metre: 4 }),
+      ),
+    ]),
+  );
+  expect(
+    (await boxBounds(denseDensity)) === "0,0,4,2" &&
+      (await densityValue(denseDensity)) === "2,4",
+    "A density overlay did not reflow the root over its authored value",
+  );
+  successfulBatch(
+    await client.batch([
+      {
+        kind: "releaseStateOverlayOwner",
+        owner: { kind: "handle", id: densityOverlay.stateOverlays[0]!.id },
+      },
+    ]),
+  );
+  expect(
+    (await boxBounds(denseDensity)) === "0,0,2,1" &&
+      (await densityValue(denseDensity)) === "2,2",
+    "Releasing a density overlay did not restore the authored value",
+  );
+
   // Persistence keeps structure and committed values; old handles stay fenced.
   const before = await client.inspectGui({ entity });
   const bytes = await host.saveWorld();
@@ -843,6 +959,21 @@ export async function exerciseGuiLifecycle(
   expect(panel, "Restored World omitted the GUI panel");
   const after = await restored.inspectGui({ entity: panel.id });
   expect(ids(after) === ids(before), `Restored tree ${ids(after)}`);
+  const restoredDensity = (await restored.inspect()).entities.find(
+    (item) => item.metadata.symbolicId === "gui-density-90",
+  );
+  expect(restoredDensity, "Restored World omitted the density panel");
+  const restoredUnits = restoredDensity.effective.find(
+    (item) => item.component === restored.components.GuiRoot!.id,
+  )?.fields.units_per_metre;
+  await restored.waitForFrame();
+  const restoredBox = (
+    await restored.semanticSnapshot({ entity: restoredDensity.id })
+  ).nodes.find((node) => node.id === 2);
+  expect(
+    restoredUnits === 0.5 && restoredBox?.bounds.join() === "0,0,0.5,0.25",
+    `Restored density ${String(restoredUnits)} evaluated ${String(restoredBox?.bounds)}`,
+  );
   const restoredSlider = after.nodes.find((node) => node.id === 3)!;
   expect(
     restoredSlider.controlValue.kind === "scalar" &&

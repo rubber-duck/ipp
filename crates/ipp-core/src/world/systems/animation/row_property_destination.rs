@@ -34,7 +34,8 @@ pub(in crate::world) struct RowPropertyDestination {
 impl RowPropertyDestination {
     /// Bind a present numeric row property of the component at `entity`, or
     /// None when the offset is not a row property the component opts into
-    /// numeric writes for.
+    /// numeric writes for. Boolean, asset and text properties never bind; text
+    /// reads as a string field value.
     pub(super) fn bind(
         storage: &ComponentStorage,
         entity: EntityId,

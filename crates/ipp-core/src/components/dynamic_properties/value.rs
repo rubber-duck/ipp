@@ -3,7 +3,9 @@ use crate::{
     services::asset_management::{AssetSource, AssetTypeId},
 };
 
-/// Supported component parameter types; identities are independent of GPU types.
+/// Value types shared by dynamic properties and schema rows; identities are
+/// independent of GPU types. [`Self::Text`] is row-only: dynamic properties,
+/// animation and canonical payloads never carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum DynamicPropertyKind {
@@ -30,6 +32,8 @@ pub enum DynamicPropertyKind {
     /// A step-sampled owned typed asset reference.
     // Tag 11 belonged to the retired texture-only representation.
     Asset = 12,
+    /// Bounded UTF-8 text of a schema row property; the row layout declares the bound.
+    Text = 13,
 }
 
 /// Typed authored or sampled dynamic property value. Matrices are column-major.
@@ -57,10 +61,13 @@ pub enum DynamicValue {
     Mat4([f32; 16]),
     /// A step-sampled owned typed asset reference.
     Asset(AssetSource),
+    /// Row-only UTF-8 text, checked against its row property's byte bound.
+    Text(String),
 }
 
 impl DynamicPropertyKind {
-    /// Decode a checked canonical wire type tag.
+    /// Decode a checked canonical wire type tag. Row-only [`Self::Text`] has no
+    /// canonical dynamic payload, so its tag is rejected here.
     pub fn from_tag(tag: u8) -> Result<Self, FieldError> {
         Ok(match tag {
             1 => Self::F32,
@@ -78,7 +85,7 @@ impl DynamicPropertyKind {
         })
     }
 
-    /// Numeric storage size. Asset references are owned separately.
+    /// Numeric storage size. Asset references and text are owned separately.
     pub fn byte_len(self) -> usize {
         match self {
             Self::F32 | Self::I32 | Self::U32 | Self::Bool => 4,
@@ -87,7 +94,7 @@ impl DynamicPropertyKind {
             Self::Vec4 | Self::Mat2 => 16,
             Self::Mat3 => 36,
             Self::Mat4 => 64,
-            Self::Asset => 0,
+            Self::Asset | Self::Text => 0,
         }
     }
 }
@@ -107,6 +114,7 @@ impl DynamicValue {
             Self::Mat3(_) => DynamicPropertyKind::Mat3,
             Self::Mat4(_) => DynamicPropertyKind::Mat4,
             Self::Asset(_) => DynamicPropertyKind::Asset,
+            Self::Text(_) => DynamicPropertyKind::Text,
         }
     }
 
@@ -123,7 +131,8 @@ impl DynamicValue {
         }
     }
 
-    /// Reject nonfinite values and invalid asset source references.
+    /// Reject nonfinite values and invalid asset source references. Text is
+    /// valid UTF-8 by construction; its row property checks the byte bound.
     pub fn validate(&self) -> Result<(), FieldError> {
         if self
             .floats()
@@ -195,6 +204,8 @@ impl DynamicValue {
     }
 
     /// Canonical self-describing value encoding, shared by owned wire payloads and assets.
+    /// Row-only text encodes as its tag and UTF-8 bytes, which [`Self::decode`]
+    /// rejects: rows carry text in their table encoding and as string field values.
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = vec![self.kind() as u8];
         if let Some(values) = self.floats() {
@@ -211,6 +222,7 @@ impl DynamicValue {
                     bytes.extend(v.variant.to_le_bytes());
                     bytes.extend(v.uri.as_bytes());
                 }
+                Self::Text(v) => bytes.extend(v.as_bytes()),
                 _ => unreachable!(),
             }
         }
@@ -256,6 +268,7 @@ impl DynamicValue {
                         .into(),
                 })
             }
+            DynamicPropertyKind::Text => return Err(FieldError::WrongType),
         };
         value.validate()?;
         Ok(value)

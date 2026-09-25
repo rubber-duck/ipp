@@ -156,6 +156,14 @@ export const ROWS_FIXTURE_PROPERTIES = [
   { name: "texture", kind: "asset", tag: 12, optional: true, hint: "none" },
   { name: "delta", kind: "i32", tag: 2, optional: false, hint: "none" },
   { name: "count", kind: "u32", tag: 3, optional: true, hint: "none" },
+  {
+    name: "label",
+    kind: "text",
+    tag: 13,
+    optional: true,
+    hint: "none",
+    maxBytes: 8,
+  },
 ];
 
 /**
@@ -190,6 +198,7 @@ export function rowsFieldContract(input) {
     u8(property.tag);
     u8(property.optional ? 1 : 0);
     u8(property.hint === "rotation" ? 1 : 0);
+    if (property.kind === "text") u32(property.maxBytes);
   }
   u32(8);
   bytes.push(0, 0, 0, 0, 0, 0, 0, 0);

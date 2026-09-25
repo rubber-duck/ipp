@@ -447,7 +447,13 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        fixture.items.push(RowsFixtureItem::default()).unwrap();
+        fixture
+            .items
+            .push(RowsFixtureItem {
+                label: Some("zoë ✓".into()),
+                ..Default::default()
+            })
+            .unwrap();
         fixture.items.remove(0);
         fixture
             .tags
@@ -491,6 +497,10 @@ mod tests {
         };
         assert_eq!(restored.items.next_slot(), 2);
         assert!(!restored.items.is_live(0));
+        assert_eq!(
+            restored.items.get(1).unwrap().label.as_deref(),
+            Some("zoë ✓")
+        );
         assert_eq!(restored.tags.next_slot(), 4);
 
         // A table that fails row validation rejects the whole candidate.

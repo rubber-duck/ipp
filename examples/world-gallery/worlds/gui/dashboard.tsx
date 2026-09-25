@@ -10,6 +10,7 @@ import {
   Stack,
   Text,
   TextInput,
+  VirtualList,
   type GuiControlTheme,
 } from "@ipp/react/gui";
 import { useMemo, type ReactNode } from "react";
@@ -26,6 +27,22 @@ const PULSE_HEIGHT = 0.84;
 const TELEMETRY_VIEW_HEIGHT = 0.78;
 const EVENT_LOG_VIEW_WIDTH = 2.86;
 const EVENT_LOG_VIEW_HEIGHT = 0.56;
+
+/** Event log entry width and type size: the monospaced font fits 31
+ * columns, so longer entries wrap into a second line. */
+const EVENT_TEXT_WIDTH = 2.74;
+const EVENT_FONT_SIZE = 0.16;
+
+/** Event log item extent estimate. A one-line entry measures its 0.28
+ * minimum height plus the 0.05 gap below it, and a two-line entry about
+ * 0.41. Estimating the taller item means measuring items only ever shortens
+ * the content, so the anchored offset settles at the end of the log when
+ * its thumb is dragged there: an underestimate would leave the measured
+ * excess of the last items below the viewport. */
+const EVENT_ITEM_EXTENT = 0.42;
+
+/** Event log items declared beyond each end of the visible ones. */
+const EVENT_LOG_OVERSCAN = 2;
 
 /** Logical units one wheel notch scrolls the panel: an eighth of the outer
  * telemetry viewport. The nested event log scrolls by the same step. */
@@ -737,9 +754,11 @@ function scrollBarTheme(palette: Palette): GuiControlTheme {
 
 /**
  * Telemetry readouts, wrapped operator notes and the event log. The event
- * log is a ScrollView nested inside the outer telemetry ScrollView: a wheel
- * over the log scrolls the log until it reaches an end, then the runtime
- * passes the unused movement outward to the telemetry view.
+ * log is a VirtualList nested inside the outer telemetry ScrollView: a
+ * wheel over the log scrolls the log until it reaches an end, then the
+ * runtime passes the unused movement outward to the telemetry view. The
+ * runtime scrolls the whole history by its item count and estimate and asks
+ * for the items it shows; React declares only those entries.
  */
 function Telemetry({
   scene,
@@ -803,27 +822,28 @@ function Telemetry({
               fontSize={0.13}
               color={palette.muted}
             />
-            <ScrollView
+            <VirtualList
               key="event-log"
+              nodeRef={scene.eventLog}
               width={EVENT_LOG_VIEW_WIDTH}
               height={EVENT_LOG_VIEW_HEIGHT}
               theme={bars}
-            >
-              <Column width={2.76}>
-                {scene.events.map((event, index) => (
-                  <Text
-                    key={event}
-                    text={event}
-                    width={2.74}
-                    minHeight={0.28}
-                    margin={[0, 0, 0.05, 0]}
-                    asset={scene.font}
-                    fontSize={0.16}
-                    color={index === 0 ? palette.primary : palette.muted}
-                  />
-                ))}
-              </Column>
-            </ScrollView>
+              itemCount={scene.events.length}
+              itemExtent={EVENT_ITEM_EXTENT}
+              overscan={EVENT_LOG_OVERSCAN}
+              onRangeChange={scene.setEventWindow}
+              renderItem={(index) => (
+                <Text
+                  text={scene.events[index]}
+                  width={EVENT_TEXT_WIDTH}
+                  minHeight={0.28}
+                  margin={[0, 0, 0.05, 0]}
+                  asset={scene.font}
+                  fontSize={EVENT_FONT_SIZE}
+                  color={index === 0 ? palette.primary : palette.muted}
+                />
+              )}
+            />
           </Column>
         </ScrollView>
       </Column>

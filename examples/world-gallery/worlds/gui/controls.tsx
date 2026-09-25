@@ -94,6 +94,13 @@ export function GuiControls({ scene }: GuiControlsProps) {
           </dd>
         </div>
         <div>
+          <dt>Event log</dt>
+          <dd id="gui-events">
+            items {scene.eventWindow.first}-{scene.eventWindow.last} of{" "}
+            {scene.events.length}
+          </dd>
+        </div>
+        <div>
           <dt>Last command</dt>
           <dd id="gui-command">{scene.lastCommand}</dd>
         </div>

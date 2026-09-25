@@ -63,7 +63,9 @@ const FONT_URL = "/target/font-assets/shure-tech-mono.ippf";
 const INITIAL_GAIN = 0.64;
 const INITIAL_CALLSIGN = "VESPER-7";
 const INITIAL_AUTOSCAN = true;
-const MAX_EVENTS = 14;
+/** Event log history bound: long enough that the log's VirtualList holds
+ * many viewports of items while it declares only the visible few. */
+const MAX_EVENTS = 256;
 const STAGING_X = 1_000;
 
 export type GuiDemoSkin = "aurora" | "ember" | "neon";
@@ -92,14 +94,49 @@ const GUI_SURFACE_CACHE = {
   max_refresh_hz: 15,
 } as const;
 
-const INITIAL_EVENTS = [
-  "06 // DEEP ARRAY LINK STABLE",
-  "05 // ROUTE N7 ACQUIRED",
-  "04 // SPECTRUM SWEEP NOMINAL",
-  "03 // ARCHIVE CHANNEL SEALED",
-  "02 // NAV LATTICE ALIGNED",
-  "01 // SUBSYSTEM CLOCKS SYNCED",
+/** Archived operator messages. Short ones fit one event log line; the
+ * longer ones wrap into two, so the log's items measure different extents. */
+const ARCHIVE_MESSAGES = [
+  "SUBSYSTEM CLOCKS SYNCED",
+  "NAV LATTICE ALIGNED",
+  "COOLANT LOOP B BALANCED AFTER PRESSURE DRIFT",
+  "ARCHIVE CHANNEL SEALED",
+  "SPECTRUM SWEEP NOMINAL",
+  "RELAY HANDOFF TO GROUND STATION KESTREL COMPLETE",
+  "ROUTE N7 ACQUIRED",
+  "BEACON 12 SILENT",
+  "STAR TRACKER REACQUIRED GUIDE STAR AFTER GLINT",
+  "DEEP ARRAY LINK STABLE",
+  "LENS HEATER CYCLED",
+  "SPARE BUS ISOLATED WHILE FUSE F3 COOLS DOWN",
+  "UPLINK WINDOW OPEN",
+  "GAIN TRIM LOGGED",
 ] as const;
+
+/** Archived entries the event log starts with, newest first. */
+const ARCHIVE_LENGTH = 96;
+
+function eventEntry(sequence: number, message: string): string {
+  return `${String(sequence).padStart(3, "0")} // ${message}`;
+}
+
+const INITIAL_EVENTS: readonly string[] = Array.from(
+  { length: ARCHIVE_LENGTH },
+  (_, age) => {
+    const sequence = ARCHIVE_LENGTH - age;
+    return eventEntry(
+      sequence,
+      ARCHIVE_MESSAGES[(sequence * 5) % ARCHIVE_MESSAGES.length]!,
+    );
+  },
+);
+
+/** Items of the event log a VirtualList currently declares, `[first,
+ * last)`, as its wanted-range callback last reported them. */
+export interface GuiEventWindow {
+  readonly first: number;
+  readonly last: number;
+}
 
 interface MotionAssets extends ProjectorMotionAssets, WaveformMotionAssets {
   readonly aurora: ClientAssetSource;
@@ -127,7 +164,13 @@ export interface GuiSceneState {
   readonly callsign: string;
   readonly pulseSequence: number;
   readonly lastCommand: string;
+  /** Event log entries, newest first. */
   readonly events: readonly string[];
+  /** Event log items the VirtualList declares for its wanted range. */
+  readonly eventWindow: GuiEventWindow;
+  /** Resolves to the event log VirtualList once acknowledged. */
+  readonly eventLog: { current: GuiNodeHandle | null };
+  readonly setEventWindow: (range: GuiEventWindow) => void;
   /** Whether the input shield in front of PURGE is marked as a blocker. */
   readonly shieldArmed: boolean;
   /** Pointer presses and wheel notches the armed shield has blocked. */
@@ -529,6 +572,11 @@ export function useGuiScene(
   const [lastCommand, setLastCommand] = useState("Awaiting command");
   const [pulseSequence, setPulseSequence] = useState(0);
   const [events, setEvents] = useState<readonly string[]>(INITIAL_EVENTS);
+  const [eventWindow, setEventWindowState] = useState<GuiEventWindow>({
+    first: 0,
+    last: 0,
+  });
+  const eventLog = useRef<GuiNodeHandle | null>(null);
   const [shieldArmed, setShieldArmed] = useState(true);
   const [shieldEntity, setShieldEntity] = useState<bigint>();
   const [shieldBlocks, setShieldBlocks] = useState(0);
@@ -549,10 +597,7 @@ export function useGuiScene(
   const record = useCallback((message: string) => {
     sequence.current += 1;
     setEvents((current) =>
-      [
-        `${String(sequence.current).padStart(2, "0")} // ${message}`,
-        ...current,
-      ].slice(0, MAX_EVENTS),
+      [eventEntry(sequence.current, message), ...current].slice(0, MAX_EVENTS),
     );
   }, []);
 
@@ -579,6 +624,7 @@ export function useGuiScene(
     setLastCommand("Awaiting command");
     setPulseSequence(0);
     setEvents(INITIAL_EVENTS);
+    setEventWindowState({ first: 0, last: 0 });
     setShieldArmed(true);
     setShieldBlocks(0);
     sequence.current = INITIAL_EVENTS.length;
@@ -813,10 +859,27 @@ export function useGuiScene(
     setLastCommand("Uplink sent");
     record("UPLINK PACKET QUEUED");
   }, [record]);
+  // PURGE leaves one entry and anchors the log at its first item: the
+  // runtime keeps a VirtualList's anchor across item count changes, so
+  // without it a log scrolled deep into the history would jump back there
+  // once new entries grow it past the old anchor.
   const purge = useCallback(() => {
     sequence.current += 1;
-    setEvents([`${String(sequence.current).padStart(2, "0")} // LOG PURGED`]);
+    setEvents([eventEntry(sequence.current, "LOG PURGED")]);
     setLastCommand("Log purged");
+    const handle = eventLog.current;
+    if (!canvas || !active || !handle) return;
+    const client = canvas.client as GuiWorldClient;
+    void client
+      .editGui({ action: "scrollToIndex", handle, index: 0, offset: 0 })
+      .catch((failure: unknown) => setError(errorMessage(failure)));
+  }, [canvas, active]);
+  const setEventWindow = useCallback((range: GuiEventWindow) => {
+    setEventWindowState((current) =>
+      current.first === range.first && current.last === range.last
+        ? current
+        : { first: range.first, last: range.last },
+    );
   }, []);
   const toggleShield = useCallback(() => {
     setShieldArmed(!shieldArmed);
@@ -880,6 +943,9 @@ export function useGuiScene(
     pulseSequence,
     lastCommand,
     events,
+    eventWindow,
+    eventLog,
+    setEventWindow,
     shieldArmed,
     shieldBlocks,
     blockers,

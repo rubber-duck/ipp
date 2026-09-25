@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 import {
@@ -543,6 +544,161 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         controlAfter,
         teardown,
       });
+    },
+  );
+});
+
+test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const build: BrowserBuildConfiguration = {
+    name: "headless-gui",
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    exportWasm: resolve(profile, "export.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+  await runBrowserEnvironment(
+    "gui-scroll",
+    {
+      workspace,
+      build,
+      mismatchBuild: build,
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/browser",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const fixture = `${env.urls.origin}/target/react-build/gui-scroll-fixture.js`;
+      await env.page.evaluate(
+        async ({ fixture, runtime }) =>
+          (await import(fixture)).mountScrollCanvas(runtime),
+        {
+          fixture,
+          runtime: {
+            generatedModuleUrl: env.urls.generated,
+            workerScriptUrl: env.urls.workerScript,
+            wasmUrl: env.urls.wasm,
+            timeoutMs: 20_000,
+            logLevel: "off",
+          },
+        },
+      );
+      const bounds = await env.page.locator("#scroll-gui-canvas").boundingBox();
+      assert.ok(bounds, "scroll canvas has no layout box");
+      const page = (x: number, y: number) =>
+        [bounds.x + x, bounds.y + y] as const;
+
+      // Canvas pixels sampled per frame, 60 px per GUI logical unit:
+      // `right` sits at logical (3, 0.5), `middle` at (3, 1.5), `narrow` at
+      // (1, 2.5) and `low` at (3, 2.5).
+      const points = {
+        right: [180, 30],
+        middle: [180, 90],
+        narrow: [60, 150],
+        low: [180, 150],
+      } as const;
+      type Rgb = readonly [number, number, number];
+      type Samples = Record<keyof typeof points, Rgb>;
+      const sample = async (label: string): Promise<Samples> => {
+        const frame = await env.page.evaluate(
+          async ({ url, points }) =>
+            (await import(url)).scrollFrame(Object.values(points)),
+          { url: fixture, points },
+        );
+        assert.equal(frame.failedDrawCalls, 0);
+        await writeFile(
+          resolve(env.evidence.directory, `${label}.png`),
+          Buffer.from(
+            frame.dataUrl.slice("data:image/png;base64,".length),
+            "base64",
+          ),
+        );
+        const samples = Object.fromEntries(
+          Object.keys(points).map((key, index) => [key, frame.samples[index]]),
+        ) as Samples;
+        env.evidence.record(label, samples);
+        return samples;
+      };
+      // Dominant display colour of a sample: fills are 0.8 against 0.1
+      // linear lanes, so dominant lanes lead the others by far more than 80.
+      const hue = (rgb: Rgb): string => {
+        const [r, g, b] = rgb;
+        const lead = (a: number, ...rest: number[]) =>
+          rest.every((other) => a > other + 80);
+        if (lead(r, b) && lead(g, b) && Math.abs(r - g) < 40) return "yellow";
+        if (lead(r, g, b)) return "red";
+        if (lead(g, r, b)) return "green";
+        if (lead(b, r, g)) return "blue";
+        if (Math.max(r, g, b) - Math.min(r, g, b) < 20 && r > 40) return "gray";
+        return `other(${rgb.join(",")})`;
+      };
+      const expectFrame = async (
+        label: string,
+        expected: Record<keyof typeof points, string>,
+      ) => {
+        const deadline = performance.now() + 5_000;
+        let samples = await sample(label);
+        const matches = (value: Samples) =>
+          Object.entries(expected).every(
+            ([key, colour]) => hue(value[key as keyof Samples]) === colour,
+          );
+        while (!matches(samples) && performance.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          samples = await sample(label);
+        }
+        assert.deepEqual(
+          Object.fromEntries(
+            Object.entries(samples).map(([key, rgb]) => [key, hue(rgb)]),
+          ),
+          expected,
+          `${label}: ${JSON.stringify(samples)}`,
+        );
+      };
+
+      await expectFrame("scroll-initial", {
+        right: "red",
+        middle: "red",
+        narrow: "blue",
+        low: "gray",
+      });
+
+      // A primary drag over plain outer content scrolls it by the dragged
+      // 60 px (1 unit). The inner viewport moves up to y -1..1, so its green
+      // block at y 1..2 falls outside it and must not paint over the outer
+      // background at `middle`.
+      await env.page.mouse.move(...page(180, 150));
+      await env.page.mouse.down();
+      await env.page.mouse.move(...page(180, 90), { steps: 6 });
+      await env.page.mouse.up();
+      await expectFrame("scroll-outer-dragged", {
+        right: "red",
+        middle: "gray",
+        narrow: "blue",
+        low: "gray",
+      });
+
+      // A wheel over the moved inner viewport scrolls the inner view by its
+      // remaining unit: the green block rides up into view at `right`.
+      await env.page.mouse.move(...page(180, 30));
+      await env.page.mouse.wheel(0, 1);
+      await expectFrame("scroll-inner-wheeled", {
+        right: "green",
+        middle: "gray",
+        narrow: "blue",
+        low: "gray",
+      });
+
+      const canvasCount = await env.page.evaluate(
+        async (url) => (await import(url)).closeScrollCanvas(),
+        fixture,
+      );
+      assert.equal(canvasCount, 0);
     },
   );
 });

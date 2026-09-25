@@ -401,9 +401,9 @@ type GuiEditNode = Parameters<GuiTestClient["editGui"]>[0] & {
  *
  * The 4x3 panel holds an outer ScrollView (4x3 viewport over 5 units of
  * content) whose content starts with an inner ScrollView (4x2 viewport over
- * 3 units). The inner checkbox rides inner content at y 2..3 and the outer
- * checkbox rides outer content at y 4..5, so the inner view can scroll by 1
- * and the outer view by 2.
+ * 3 units), then a narrow 1x2 spacer. The inner checkbox rides inner content
+ * at y 2..3 and the outer checkbox rides outer content at y 4..5, so the
+ * inner view can scroll by 1 and the outer view by 2.
  */
 async function exerciseGuiScrolling(
   host: WorldPersistenceHostClient<GuiTestClient>,
@@ -464,7 +464,7 @@ async function exerciseGuiScrolling(
       parent: 3,
       index: 1,
       data: sizedBox,
-      style: { width: 4, height: 2 },
+      style: { width: 1, height: 2 },
     },
     {
       id: 9,
@@ -576,5 +576,20 @@ async function exerciseGuiScrolling(
   expect(
     !(await checked(7)),
     "Drag travel beyond the inner ScrollView did not pass outward",
+  );
+
+  // Clips follow the outer scroll: with the outer view at 1 the inner
+  // viewport spans y -1..1. Wheeling the inner view back to 0 leaves its
+  // checkbox at y 1..2, below the moved viewport, so a tap there reaches
+  // only plain outer content and toggles nothing.
+  await client.submitGuiInput({
+    kind: "scroll",
+    position: [2, 0.5],
+    delta: [0, -1],
+  });
+  await tap(6, [2, 1.5]);
+  expect(
+    !(await checked(7)),
+    "A checkbox below the moved inner viewport was still hittable",
   );
 }

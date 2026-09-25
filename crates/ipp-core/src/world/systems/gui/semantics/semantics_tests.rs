@@ -104,6 +104,7 @@ fn evaluated_node(
         visual_scale: [1.0, 1.0],
         acc_scale: [1.0, 1.0],
         content_extents: None,
+        viewport: None,
         content_origin: [rect[0], rect[1]],
         color: [1.0; 4],
         background: None,

@@ -329,7 +329,7 @@ fn aligned_scroll_view_intersects_its_moved_viewport_with_fixed_ancestor_clips()
 }
 
 #[test]
-fn disjoint_nested_viewport_suppresses_paint_and_hits() {
+fn disjoint_nested_viewport_suppresses_hits_and_clips_paint_away() {
     let font = test_font();
     let resolver = TestResolver::with_font(&font);
     let (root_tree, [root, _align, inner, content]) = nested_scroll_tree(3.0);
@@ -339,15 +339,26 @@ fn disjoint_nested_viewport_suppresses_paint_and_hits() {
 
     // Centring in 2 x 3 moves the inner viewport to y 1..2, entirely below
     // the outer 0..1 viewport. Its content keeps an explicit empty clip
-    // instead of escaping unclipped.
+    // instead of escaping unclipped, so nothing there is hittable.
     assert_rect(node_by_id(view, inner).rect, [0.5, 1.0, 1.0, 1.0]);
+    assert_eq!(node_by_id(view, inner).viewport, Some([0.5, 1.0, 1.5, 2.0]));
     let record = node_by_id(view, content);
     assert_rect(record.rect, [0.5, 1.0, 1.0, 2.0]);
     let clip = record.clip.unwrap();
     assert!(crate::systems::surface::surface_clip_is_empty(clip));
-    assert!(record.paint_suppressed);
     assert_eq!(view_hit(view, [1.0, 1.5]), root);
-    assert!(view.surface_primitives().is_empty());
+    // Scrolling the outer view can move the inner viewport back into view,
+    // so the content still paints, under the empty clip that Surface
+    // preparation drops until a scroll moves it.
+    assert!(!record.paint_suppressed);
+    let primitives = view.surface_primitives();
+    assert_eq!(primitives.len(), 1);
+    assert!(
+        primitives[0]
+            .style()
+            .clip
+            .is_some_and(crate::systems::surface::surface_clip_is_empty)
+    );
 }
 
 #[test]

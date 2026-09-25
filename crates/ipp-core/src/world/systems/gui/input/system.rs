@@ -36,7 +36,8 @@
 //! against evaluated ScrollView extents with edge clamping and outward
 //! propagation, chaining same-tick scrolls against routed offsets that
 //! include the deltas already queued, while hit testing observes the
-//! retained snapshot translated by committed ancestor offsets. Button and
+//! retained snapshot translated by committed ancestor offsets and clipped by
+//! viewports that move with their own outer offsets. Button and
 //! checkbox presses stay provisional until an eligible tap completes on
 //! release. A primary press inside eligible ScrollView ancestry also arms a
 //! pointer drag: once its travel passes the drag slop, the nearest
@@ -63,6 +64,7 @@ use crate::systems::geometry::{GeometryBounds, GeometryRay};
 use crate::systems::lifecycle_publisher::{
     ComponentLifecycleKind, EntityLifecycleKind, LifecycleObservation,
 };
+use crate::systems::surface::{GuiScrollPlacement, SurfaceClipRect};
 use crate::systems::{
     System, SystemCommandContext, SystemDependency, SystemDependencyBinding, SystemFactory,
     SystemId, SystemInitContext, SystemInitError, SystemLifecycleContext, SystemRuntimeAccess,
@@ -1060,8 +1062,8 @@ impl GuiInputSystem {
         if !moved {
             return view.hit_test(point);
         }
-        let (_, root) = producer_root(sim, entity)?;
-        self.scroll_hit_in_view(view, &root, entity, point)
+        producer_root(sim, entity)?;
+        self.scroll_hit_in_view(view, entity, point)
             .map(|(node, _)| GuiHit {
                 node,
                 position: point,
@@ -1980,8 +1982,8 @@ impl GuiInputSystem {
 
     /// Total final-logical shift for one node from its ancestor ScrollView
     /// offsets. Each offset moves scrolled content through that ScrollView's
-    /// accumulated scale; viewport clips stay fixed while descendants shift
-    /// beneath them. Paint, hit and caret consumers share this translation.
+    /// accumulated scale beneath its viewport, which itself moves only with
+    /// outer offsets. Paint, hit and caret consumers share this translation.
     fn ancestor_shift(
         &self,
         view: &GuiEvaluatedView,
@@ -2045,22 +2047,27 @@ impl GuiInputSystem {
     fn scroll_hit_in_view(
         &self,
         view: &GuiEvaluatedView,
-        root: &GuiRoot,
         entity: EntityId,
         point: [f32; 2],
     ) -> Option<(GuiNodeId, [f32; 4])> {
         if !view.available {
             return None;
         }
-        for record in view.nodes.iter().rev() {
+        let placements = self.scrolled_placements(view, entity);
+        for (record, placement) in view.nodes.iter().zip(&placements).rev() {
             if !record.available || !record.enabled || !record.visible {
                 continue;
             }
-            let rect = self.scrolled_rect(view, root, entity, record);
+            let rect = [
+                record.rect[0] + placement.shift[0],
+                record.rect[1] + placement.shift[1],
+                record.rect[2],
+                record.rect[3],
+            ];
             if !rect_contains_point(rect, point) {
                 continue;
             }
-            if let Some(clip) = record.clip
+            if let Some(clip) = placement.clip
                 && !clip_contains_point(clip, point)
             {
                 continue;
@@ -2070,6 +2077,88 @@ impl GuiInputSystem {
         None
     }
 
+    /// Scrolled placement of every evaluated record, index-aligned with
+    /// `view.nodes`: the final-logical shift from ancestor ScrollView
+    /// offsets and the clip with every contributing viewport moved by its
+    /// own ancestor shift. A ScrollView's viewport stays fixed relative to
+    /// its own content only, so nested content clips by the moved inner
+    /// viewport after an outer scroll. Records are in pre-order, so each
+    /// parent is the nearest preceding shallower record.
+    fn scrolled_placements(
+        &self,
+        view: &GuiEvaluatedView,
+        entity: EntityId,
+    ) -> Vec<GuiScrollPlacement> {
+        // (depth, shift inherited by children, clip inherited by children)
+        let mut ancestors: Vec<(u32, [f32; 2], Option<SurfaceClipRect>)> = Vec::new();
+        let mut placements = Vec::with_capacity(view.nodes.len());
+        for record in &view.nodes {
+            while ancestors
+                .last()
+                .is_some_and(|(depth, ..)| *depth >= record.depth)
+            {
+                ancestors.pop();
+            }
+            let (shift, clip) = ancestors
+                .last()
+                .map_or(([0.0, 0.0], record.clip), |(_, shift, clip)| {
+                    (*shift, *clip)
+                });
+            placements.push(GuiScrollPlacement {
+                shift,
+                clip,
+            });
+
+            let (children_shift, children_clip) = match record.viewport {
+                Some(viewport) => {
+                    let moved = [
+                        viewport[0] + shift[0],
+                        viewport[1] + shift[1],
+                        viewport[2] + shift[0],
+                        viewport[3] + shift[1],
+                    ];
+                    let offset = self
+                        .scroll_offsets
+                        .get(&GuiInputTarget {
+                            entity,
+                            root_incarnation: view.root_incarnation,
+                            node: record.node,
+                        })
+                        .map_or([0.0, 0.0], |cursor| cursor.offset);
+                    (
+                        [
+                            shift[0] - offset[0] * record.acc_scale[0],
+                            shift[1] - offset[1] * record.acc_scale[1],
+                        ],
+                        Some(match clip {
+                            Some(outer) => {
+                                super::super::layout::evaluation::nested_clip(outer, moved)
+                            }
+                            None => moved,
+                        }),
+                    )
+                }
+                None => (shift, clip),
+            };
+            ancestors.push((record.depth, children_shift, children_clip));
+        }
+        placements
+    }
+
+    /// Final-logical clip of one evaluated node with every contributing
+    /// ScrollView viewport moved by its own ancestor scroll shift.
+    fn scrolled_clip(
+        &self,
+        view: &GuiEvaluatedView,
+        entity: EntityId,
+        node: GuiNodeId,
+    ) -> Option<SurfaceClipRect> {
+        let index = view.nodes.iter().position(|record| record.node == node)?;
+        self.scrolled_placements(view, entity)
+            .get(index)
+            .and_then(|placement| placement.clip)
+    }
+
     /// Current revision of input-owned scroll offsets. Render preparation
     /// watches this alongside paint revisions so pure scrolls refresh
     /// scrolled paint without reflowing layout.
@@ -2077,28 +2166,28 @@ impl GuiInputSystem {
         self.scroll_revision
     }
 
-    /// Nonzero final-logical ancestor shifts for one panel, keyed by node;
-    /// identities are never reused within a root incarnation. Viewport nodes carry only outer shifts: their own offset
-    /// never applies to themselves, while their descendants shift beneath
-    /// the fixed viewport clip.
+    /// Final-logical scroll placements of one panel's moved paint, keyed by
+    /// node; identities are never reused within a root incarnation. Only
+    /// nodes whose shift is nonzero or whose clip moved appear. Viewport
+    /// nodes carry only outer shifts: their own offset never applies to
+    /// themselves, while their descendants shift beneath the viewport clip,
+    /// which itself moves with the viewport's outer shift.
     pub(crate) fn scroll_shifts_logical(
         &self,
         layout: &GuiLayoutSystem,
-        sim: &WorldSimulationState,
         entity: EntityId,
-    ) -> BTreeMap<GuiNodeId, [f32; 2]> {
-        let mut shifts = BTreeMap::new();
-        let (Some(view), Some((_, root))) = (layout.view(entity), producer_root(sim, entity))
-        else {
-            return shifts;
+    ) -> BTreeMap<GuiNodeId, GuiScrollPlacement> {
+        let Some(view) = layout.view(entity) else {
+            return BTreeMap::new();
         };
-        for record in &view.nodes {
-            let shift = self.ancestor_shift(view, &root, entity, record.node);
-            if shift != [0.0, 0.0] {
-                shifts.insert(record.node, shift);
-            }
-        }
-        shifts
+        view.nodes
+            .iter()
+            .zip(self.scrolled_placements(view, entity))
+            .filter(|(record, placement)| {
+                placement.shift != [0.0, 0.0] || placement.clip != record.clip
+            })
+            .map(|(record, placement)| (record.node, placement))
+            .collect()
     }
 }
 
@@ -2350,8 +2439,7 @@ pub(crate) enum TextPaintKind {
 }
 
 /// One derived text-paint overlay in final-logical units with ancestor
-/// scroll shifts applied; viewport clips stay fixed while scrolled
-/// descendants shift beneath them.
+/// scroll shifts applied, clipped like the scrolled node it annotates.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TextPaintOverlay {
     /// Focused text input owning the overlay.
@@ -2360,7 +2448,7 @@ pub(crate) struct TextPaintOverlay {
     pub kind: TextPaintKind,
     /// Paint rects in final-logical units (caret bar widened).
     pub rects: Vec<[f32; 4]>,
-    /// Shared node clip in final-logical units, if any.
+    /// Scrolled node clip in final-logical units, if any.
     pub clip: Option<crate::systems::surface::SurfaceClipRect>,
     /// Retained node opacity.
     pub opacity: f32,
@@ -2465,11 +2553,12 @@ impl GuiInputSystem {
                 entity,
                 target,
                 evaluated.opacity,
-                evaluated.clip,
+                self.scrolled_clip(view, entity, target.node),
                 end,
                 metrics_revision,
             );
         }
+        let clip = self.scrolled_clip(view, entity, target.node);
         let mut overlays = Vec::new();
         if let Some(anchor) = anchor {
             let (start, end) = super::text_edit::normalize_range(anchor, caret);
@@ -2486,7 +2575,7 @@ impl GuiInputSystem {
                     target,
                     kind: TextPaintKind::Selection,
                     rects,
-                    clip: evaluated.clip,
+                    clip,
                     opacity: evaluated.opacity,
                 });
             }
@@ -2498,7 +2587,7 @@ impl GuiInputSystem {
             entity,
             target,
             evaluated.opacity,
-            evaluated.clip,
+            clip,
             caret,
             metrics_revision,
         ));
@@ -2688,6 +2777,7 @@ impl GuiInputSystem {
         let provisional_caret = provisional.caret_position(composed.caret_end)?;
         let scale = *font_size * units;
         let shift = self.ancestor_shift(view, &root, entity, target.node);
+        let clip = self.scrolled_clip(view, entity, target.node);
         let origin = [origin[0] + shift[0], origin[1] + shift[1]];
         let pen_ems = pen.position;
         let pen = [
@@ -2718,7 +2808,7 @@ impl GuiInputSystem {
                 scale: evaluated.acc_scale,
                 color: evaluated.color,
                 opacity: evaluated.opacity,
-                clip: evaluated.clip.and_then(|clip| {
+                clip: clip.and_then(|clip| {
                     let min = gui_logical_to_surface_content([clip[0], clip[1]], units)?;
                     let max = gui_logical_to_surface_content([clip[2], clip[3]], units)?;
                     Some([min[0], min[1], max[0], max[1]])
@@ -2742,7 +2832,7 @@ impl GuiInputSystem {
             target,
             kind: TextPaintKind::Composition,
             rects: vec![caret_rect],
-            clip: evaluated.clip,
+            clip,
             opacity: evaluated.opacity,
         }];
         if composed.caret_start != composed.caret_end {
@@ -2763,7 +2853,7 @@ impl GuiInputSystem {
                     target,
                     kind: TextPaintKind::Selection,
                     rects,
-                    clip: evaluated.clip,
+                    clip,
                     opacity: evaluated.opacity,
                 });
             }
@@ -3467,11 +3557,10 @@ impl GuiInputSystem {
             let Some(view) = layout.view(entity) else {
                 continue;
             };
-            let (_, root) = match producer_root(sim, entity) {
-                Some(root) => root,
-                None => continue,
-            };
-            let Some((node, rect)) = self.scroll_hit_in_view(view, &root, entity, position) else {
+            if producer_root(sim, entity).is_none() {
+                continue;
+            }
+            let Some((node, rect)) = self.scroll_hit_in_view(view, entity, position) else {
                 continue;
             };
             let replace = best.is_none_or(|(current, _, _, _)| entity > current);
@@ -3552,11 +3641,10 @@ impl GuiInputSystem {
             let Some(view) = layout.view(entity) else {
                 continue;
             };
-            let (_, root) = match producer_root(sim, entity) {
-                Some(root) => root,
-                None => continue,
-            };
-            let Some((node, rect)) = self.scroll_hit_in_view(view, &root, entity, logical) else {
+            if producer_root(sim, entity).is_none() {
+                continue;
+            }
+            let Some((node, rect)) = self.scroll_hit_in_view(view, entity, logical) else {
                 continue;
             };
             let better = match best {
@@ -6373,9 +6461,10 @@ impl crate::WorldContext<'_> {
 
     /// Total final-logical shift for one node from its ancestor ScrollView
     /// offsets, or zero outside scrolled subtrees. Retained paint, hit and
-    /// caret consumers apply this translation to the retained rectangle
-    /// while viewport clips stay fixed. Render preparation translates
-    /// retained paint by this shift when the scroll revision moves.
+    /// caret consumers apply this translation to the retained rectangle and
+    /// clip it by viewports moved with their own outer shifts. Render
+    /// preparation places retained paint the same way when the scroll
+    /// revision moves.
     pub fn gui_scroll_shift(&self, entity: EntityId, node: GuiNodeId) -> [f32; 2] {
         let (Some(input), Some(layout), Some(root)) = (
             self.system::<GuiInputSystem>(GuiInputSystem::ID),

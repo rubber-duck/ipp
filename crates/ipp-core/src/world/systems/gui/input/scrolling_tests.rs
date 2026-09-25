@@ -326,6 +326,7 @@ fn scroll_helpers_resolve_ancestry_and_capacity() {
         visual_scale: [1.0, 1.0],
         acc_scale: [1.0, 1.0],
         content_extents: Some([10.0, 10.0]),
+        viewport: Some([0.0, 0.0, 10.0, 6.0]),
         content_origin: [0.0, 0.0],
         color: [1.0; 4],
         background: None,
@@ -660,4 +661,219 @@ fn same_tick_scrolls_chain_outward_like_separate_ticks() {
     // the outer content consumes against the committed offsets.
     let report = scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, -1.0]);
     assert_eq!(scroll_offsets_of(&report), vec![(GuiNodeId(2), [0.0, 3.0])]);
+}
+
+/// Outer ScrollView 10x6 over a column holding an inner ScrollView 10x4
+/// (content 10x8) and a narrow 1x6 filler. `leaf` rides the inner content
+/// at local y 4..5 as node 9, full width. Outer and inner capacities are 4.
+fn insert_clip_fixture(fixture: &mut Fixture, leaf: GuiNodeData, values: GuiNodeDataRow) {
+    let root_incarnation = incarnation(fixture);
+    let panel = fixture.panel;
+    let style = |width: f32, height: f32| GuiNodeStyle {
+        width: Some(width),
+        height: Some(height),
+        ..Default::default()
+    };
+    let node =
+        |id: u32, parent: Option<u32>, index: u32, data, values, style| GuiCommand::InsertNode {
+            entity: panel,
+            root_incarnation,
+            id: GuiNodeId(id),
+            parent: parent.map(GuiNodeId),
+            index,
+            data,
+            values,
+            style,
+        };
+    let column = || GuiNodeData::Container(GuiContainerKind::Column);
+    let scroll = || GuiNodeData::Container(GuiContainerKind::ScrollView);
+    let sized = || GuiNodeData::Container(GuiContainerKind::SizedBox);
+    let empty = GuiNodeDataRow::default;
+    let asset = matches!(leaf, GuiNodeData::TextInput { .. })
+        .then(super::super::super::test_support::font_source);
+    let commands = vec![
+        node(1, None, 0, column(), empty(), style(10.0, 10.0)),
+        node(2, Some(1), 0, scroll(), empty(), style(10.0, 6.0)),
+        node(3, Some(2), 0, column(), empty(), GuiNodeStyle::default()),
+        node(4, Some(3), 0, scroll(), empty(), style(10.0, 4.0)),
+        node(5, Some(4), 0, column(), empty(), GuiNodeStyle::default()),
+        node(6, Some(5), 0, sized(), empty(), style(10.0, 4.0)),
+        node(7, Some(5), 1, sized(), empty(), style(10.0, 4.0)),
+        // Only x 0..1: below the inner viewport, x = 5 meets containers only.
+        node(8, Some(3), 1, sized(), empty(), style(1.0, 6.0)),
+        node(
+            9,
+            Some(7),
+            0,
+            leaf,
+            values,
+            GuiNodeStyle {
+                background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                asset,
+                ..style(10.0, 1.0)
+            },
+        ),
+    ];
+    let mut context = world(fixture);
+    for command in commands {
+        context.enqueue_gui_command(SESSION, command).unwrap();
+    }
+    context.step(0.0).unwrap();
+}
+
+#[test]
+fn nested_clip_follows_outer_scroll_for_hits_and_paint() {
+    let mut fixture = setup();
+    insert_clip_fixture(
+        &mut fixture,
+        GuiNodeData::Checkbox,
+        GuiNodeDataRow::checkbox(false),
+    );
+    let panel = fixture.panel;
+    world(&mut fixture).step(0.0).unwrap();
+
+    // Scroll only the outer view by 2, over the narrow filler.
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, 2.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        [0.0, 2.0]
+    );
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 0.0]
+    );
+
+    // The inner viewport now spans y -2..2, so the checkbox at y 2..3 sits
+    // below it: a tap there reaches no checkbox.
+    {
+        let mut context = world(&mut fixture);
+        for command in down_up(3, [5.0, 2.5]) {
+            context.enqueue_gui_input_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        committed_bool(&mut fixture, GuiNodeId(9)),
+        (GuiControlValue::Bool(false), 1)
+    );
+
+    // Paint agrees: the checkbox background moves up by 2 under the moved
+    // inner viewport, clipped to its overlap with the outer viewport.
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    assert_eq!(
+        paint_box_of(&primitives, GuiNodeId(9)),
+        ([0.0, 2.0], Some([0.0, 0.0, 10.0, 2.0]))
+    );
+
+    // Scrolling the inner view by 2 lifts the checkbox into the moved
+    // viewport, where the same kind of tap now reaches it.
+    scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 2.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 2.0]
+    );
+    {
+        let mut context = world(&mut fixture);
+        for command in down_up(3, [5.0, 0.5]) {
+            context.enqueue_gui_input_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        committed_bool(&mut fixture, GuiNodeId(9)),
+        (GuiControlValue::Bool(true), 2)
+    );
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    assert_eq!(
+        paint_box_of(&primitives, GuiNodeId(9)),
+        ([0.0, 0.0], Some([0.0, 0.0, 10.0, 2.0]))
+    );
+}
+
+#[test]
+fn nested_viewport_scrolled_into_view_paints_its_content() {
+    let mut fixture = setup();
+    insert_nested_scroll_paint(&mut fixture);
+    let panel = fixture.panel;
+    world(&mut fixture).step(0.0).unwrap();
+    // Push the inner viewport fully above the outer one, then bring it back:
+    // its content keeps painting whenever the moved clip reopens.
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, 4.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(2)),
+        [0.0, 4.0]
+    );
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    // Inner content (node 6) now lies at y -4..0 with the inner viewport
+    // at y -4..0, which misses the outer viewport: nothing of it paints.
+    assert!(primitives.iter().all(|primitive| !matches!(
+        primitive.style().identity,
+        crate::SurfacePrimitiveIdentity::Gui(id) if id.node == GuiNodeId(6)
+    )));
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, -3.0]);
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    assert_eq!(
+        paint_box_of(&primitives, GuiNodeId(6)),
+        ([0.0, -1.0], Some([0.0, 0.0, 10.0, 3.0]))
+    );
+}
+
+#[test]
+fn caret_overlay_clip_matches_scrolled_paint_and_hits() {
+    let mut fixture = setup();
+    register_font(&mut fixture);
+    insert_clip_fixture(
+        &mut fixture,
+        GuiNodeData::TextInput {
+            text: "ab".into(),
+            placeholder: String::new(),
+        },
+        GuiNodeDataRow::default(),
+    );
+    let panel = fixture.panel;
+    world(&mut fixture).step(0.0).unwrap();
+    // Scroll outer by 2 and inner by 1: the input rides to y 1..2 inside
+    // the moved inner viewport, whose visible part is y 0..2.
+    scroll_and_apply(&mut fixture, [0.5, 5.0], [0.0, 2.0]);
+    scroll_and_apply(&mut fixture, [5.0, 1.0], [0.0, 1.0]);
+    assert_eq!(
+        world(&mut fixture).gui_input_scroll(panel, GuiNodeId(4)),
+        [0.0, 1.0]
+    );
+    // A press inside the moved viewport focuses the input.
+    {
+        let mut context = world(&mut fixture);
+        for command in down_up(3, [5.0, 1.5]) {
+            context.enqueue_gui_input_command(SESSION, command).unwrap();
+        }
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+    assert_eq!(
+        world(&mut fixture)
+            .gui_input_focus()
+            .map(|focus| focus.target.node),
+        Some(GuiNodeId(9))
+    );
+
+    let expected = Some([0.0, 0.0, 10.0, 2.0]);
+    let (_, _, primitives) = paint_observation(&mut fixture);
+    let node_clips: Vec<_> = primitives
+        .iter()
+        .filter(|primitive| {
+            matches!(
+                primitive.style().identity,
+                crate::SurfacePrimitiveIdentity::Gui(id) if id.node == GuiNodeId(9)
+            )
+        })
+        .map(|primitive| primitive.style().clip)
+        .collect();
+    // Background, label and caret all share the moved clip.
+    assert!(node_clips.len() >= 3, "{node_clips:?}");
+    assert!(
+        node_clips.iter().all(|clip| *clip == expected),
+        "{node_clips:?}"
+    );
 }

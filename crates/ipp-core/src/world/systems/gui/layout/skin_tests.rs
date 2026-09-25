@@ -98,6 +98,7 @@ fn evaluated_node(id: u32, content: GuiEvaluatedContent) -> GuiEvaluatedNode {
         visual_scale: [1.0, 1.0],
         acc_scale: [1.0, 1.0],
         content_extents: None,
+        viewport: None,
         content_origin: [0.0, 0.0],
         color: [1.0, 1.0, 1.0, 1.0],
         background: Some([0.2, 0.2, 0.2, 1.0]),

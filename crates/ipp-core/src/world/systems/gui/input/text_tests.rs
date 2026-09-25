@@ -1369,3 +1369,139 @@ fn caret_and_selection_paint_observe_transient_without_committing() {
         (GuiControlValue::Text("ae".into()), 1)
     );
 }
+
+/// Paint of one prepared GUI primitive: its glyph ids (empty for boxes) and
+/// its Surface position.
+type PreparedPaint = (Vec<u32>, [f32; 2]);
+
+/// GUI identities of the panel's prepared Surface primitives, in painter
+/// order, with their paint.
+fn prepared_gui_paint(
+    fixture: &mut Fixture,
+) -> Vec<(crate::systems::surface::GuiPrimitiveId, PreparedPaint)> {
+    let panel = fixture.panel;
+    world(fixture)
+        .surface_render_items()
+        .iter()
+        .filter(|item| item.entity == panel)
+        .flat_map(|item| item.primitives.iter())
+        .filter_map(|primitive| {
+            let crate::SurfacePrimitiveIdentity::Gui(id) = primitive.style().identity else {
+                return None;
+            };
+            let glyphs = match primitive {
+                crate::SurfaceRenderPrimitive::Glyphs {
+                    glyphs,
+                    ..
+                } => glyphs.iter().map(|glyph| glyph.glyph_id).collect(),
+                _ => Vec::new(),
+            };
+            Some((id, (glyphs, primitive.style().position)))
+        })
+        .collect()
+}
+
+/// Assert every GUI primitive of the panel has its own identity and return
+/// the paint of node 2 keyed by part.
+fn unique_text_input_paint(
+    fixture: &mut Fixture,
+) -> std::collections::BTreeMap<crate::systems::surface::GuiPrimitivePart, Vec<PreparedPaint>> {
+    let paint = prepared_gui_paint(fixture);
+    let identities: std::collections::BTreeSet<_> = paint.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        identities.len(),
+        paint.len(),
+        "repeated identity: {paint:?}"
+    );
+
+    let mut parts = std::collections::BTreeMap::<_, Vec<PreparedPaint>>::new();
+    for (id, primitive) in paint {
+        if id.node == GuiNodeId(2) {
+            parts.entry(id.part).or_default().push(primitive);
+        }
+    }
+    parts
+}
+
+#[test]
+fn text_overlays_and_provisional_runs_keep_distinct_identities() {
+    use crate::systems::surface::GuiPrimitivePart;
+
+    let mut fixture = setup();
+    register_font(&mut fixture);
+    insert_font_control(
+        &mut fixture,
+        GuiNodeData::TextInput {
+            text: "a".into(),
+            placeholder: String::new(),
+        },
+    );
+    let panel = fixture.panel;
+    let root_incarnation = incarnation(&mut fixture);
+    {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::Focus {
+                    handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
+                },
+            )
+            .unwrap();
+        context
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::SetTextSelection {
+                    start: 0,
+                    end: 1,
+                },
+            )
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+
+    // Committed text, its selection highlight and the caret bar paint as
+    // three identities of one node; retained caches keyed by identity keep
+    // each of them.
+    let glyphs = |parts: &std::collections::BTreeMap<_, Vec<PreparedPaint>>, part| {
+        parts[&part]
+            .iter()
+            .map(|(glyphs, _)| glyphs.clone())
+            .collect::<Vec<_>>()
+    };
+    let parts = unique_text_input_paint(&mut fixture);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Label), [vec![3]]);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Selection), [Vec::new()]);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Caret), [Vec::new()]);
+    assert!(!parts.contains_key(&GuiPrimitivePart::Composition));
+    let committed_selection = parts[&GuiPrimitivePart::Selection][0].1;
+
+    // A provisional "ee" with an active clause over its first glyph
+    // paints its own run beside the committed text; its clause replaces the
+    // committed selection highlight and its end caret the committed caret.
+    {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::UpdateComposition {
+                    text: "ee".into(),
+                    caret_start: 0,
+                    caret_end: 1,
+                },
+            )
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    world(&mut fixture).step(0.0).unwrap();
+
+    let parts = unique_text_input_paint(&mut fixture);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Label), [vec![3]]);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Selection), [Vec::new()]);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Caret), [Vec::new()]);
+    assert_eq!(glyphs(&parts, GuiPrimitivePart::Composition), [vec![5, 5]]);
+    // The clause starts at the provisional pen after the committed "a".
+    let clause = parts[&GuiPrimitivePart::Selection][0].1;
+    assert!(clause[0] > committed_selection[0], "{clause:?}");
+}

@@ -31,11 +31,17 @@ pub const GUI_BASE_PARTS: [GuiPrimitivePart; 5] = [
 ];
 
 /// Index of a base part in [`GUI_BASE_PARTS`].
+///
+/// Text-input overlay parts are paint identities, not skin parts: they
+/// resolve through the `Label` they annotate.
 pub const fn base_part_index(part: GuiPrimitivePart) -> u32 {
     match part {
         GuiPrimitivePart::Background => 0,
         GuiPrimitivePart::Fill => 1,
-        GuiPrimitivePart::Label => 2,
+        GuiPrimitivePart::Label
+        | GuiPrimitivePart::Caret
+        | GuiPrimitivePart::Selection
+        | GuiPrimitivePart::Composition => 2,
         GuiPrimitivePart::Icon => 3,
         GuiPrimitivePart::FocusRing => 4,
     }

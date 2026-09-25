@@ -2278,6 +2278,16 @@ fn text_selection_rects(
 /// change here. The caret paints one bar at the committed caret; a
 /// selection fills its line rects; an active provisional paints its caret
 /// over the committed caret so composition never duplicates text.
+///
+/// Overlays paint under their own [`GuiPrimitivePart`]s, so they never share
+/// an identity with each other, with the node's `Label` or with the
+/// provisional `Composition` run: retained renderer caches key paint by
+/// identity. At most one caret bar and one selection highlight paint: a
+/// clean provisional owns both, replacing the committed caret and
+/// selection until it commits or cancels, and a single-line input yields
+/// at most one rect per selection.
+///
+/// [`GuiPrimitivePart`]: crate::systems::surface::GuiPrimitivePart
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextPaintKind {
     /// Collapsed caret bar at the committed caret.
@@ -2286,6 +2296,27 @@ pub(crate) enum TextPaintKind {
     Selection,
     /// Caret bar while a provisional is active on the node.
     Composition,
+}
+
+impl TextPaintKind {
+    /// Paint part; both caret kinds share `Caret` because only one caret
+    /// bar ever paints.
+    const fn part(self) -> crate::systems::surface::GuiPrimitivePart {
+        use crate::systems::surface::GuiPrimitivePart;
+
+        match self {
+            Self::Caret | Self::Composition => GuiPrimitivePart::Caret,
+            Self::Selection => GuiPrimitivePart::Selection,
+        }
+    }
+
+    /// Fill colour of the overlay's rects.
+    const fn color(self) -> [f32; 4] {
+        match self {
+            Self::Selection => TEXT_SELECTION_COLOR,
+            Self::Caret | Self::Composition => TEXT_CARET_COLOR,
+        }
+    }
 }
 
 /// One derived text-paint overlay in final-logical units with ancestor
@@ -2410,6 +2441,9 @@ impl GuiInputSystem {
             );
         }
         let mut overlays = Vec::new();
+        // A clean provisional owns the selection highlight as it owns the
+        // caret: it replaces the committed selection when it commits.
+        let anchor = anchor.filter(|_| !self.clean_provisional(&target, metrics_revision));
         if let Some(anchor) = anchor {
             let (start, end) = super::text_edit::normalize_range(anchor, caret);
             let rects: Vec<[f32; 4]> =
@@ -2651,7 +2685,7 @@ impl GuiInputSystem {
                 identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                     root_incarnation: view.root_incarnation,
                     node: target.node,
-                    part: crate::systems::surface::GuiPrimitivePart::Label,
+                    part: crate::systems::surface::GuiPrimitivePart::Composition,
                 }),
                 position,
                 scale: evaluated.acc_scale,
@@ -2711,10 +2745,11 @@ impl GuiInputSystem {
     }
 
     /// Derived caret/selection/composition primitives for one panel in
-    /// Surface content metres, sharing the retained node identity, clip
-    /// mapping and scroll translation with skinned paint. Committed state
-    /// is never touched: overlays observe cursors and retained metrics,
-    /// and the provisional shapes against the retained font at paint time.
+    /// Surface content metres, sharing the retained node, clip mapping and
+    /// scroll translation with skinned paint under per-kind overlay parts.
+    /// Committed state is never touched: overlays observe cursors and
+    /// retained metrics, and the provisional shapes against the retained
+    /// font at paint time.
     pub(crate) fn text_caret_primitives(
         &self,
         layout: &GuiLayoutSystem,
@@ -2750,10 +2785,7 @@ impl GuiInputSystem {
                 let max = gui_logical_to_surface_content([clip[2], clip[3]], units)?;
                 Some([min[0], min[1], max[0], max[1]])
             });
-            let color = match overlay.kind {
-                TextPaintKind::Selection => TEXT_SELECTION_COLOR,
-                TextPaintKind::Caret | TextPaintKind::Composition => TEXT_CARET_COLOR,
-            };
+            let color = overlay.kind.color();
             for rect in &overlay.rects {
                 if rect[2] <= 0.0 || rect[3] <= 0.0 {
                     continue;
@@ -2767,7 +2799,7 @@ impl GuiInputSystem {
                         identity: SurfacePrimitiveIdentity::Gui(GuiPrimitiveId {
                             root_incarnation: view.root_incarnation,
                             node: overlay.target.node,
-                            part: crate::systems::surface::GuiPrimitivePart::Label,
+                            part: overlay.kind.part(),
                         }),
                         position,
                         scale: [1.0, 1.0],

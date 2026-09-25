@@ -974,6 +974,10 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 GuiPrimitivePart::Fill => has_fill,
                 GuiPrimitivePart::Icon => has_icon,
                 GuiPrimitivePart::Label | GuiPrimitivePart::FocusRing => false,
+                // Text-input overlays paint outside skin synthesis.
+                GuiPrimitivePart::Caret
+                | GuiPrimitivePart::Selection
+                | GuiPrimitivePart::Composition => false,
             };
             if !present && synthesis.part(part).is_some() {
                 parts.push(GuiSkinnedPart {
@@ -1014,6 +1018,9 @@ impl SyntheticControlPlan {
             GuiPrimitivePart::Fill => self.fill.as_ref(),
             GuiPrimitivePart::Icon => self.icon.as_ref(),
             GuiPrimitivePart::Label | GuiPrimitivePart::FocusRing => None,
+            GuiPrimitivePart::Caret
+            | GuiPrimitivePart::Selection
+            | GuiPrimitivePart::Composition => None,
         }
     }
 }

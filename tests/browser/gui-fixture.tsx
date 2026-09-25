@@ -314,6 +314,7 @@ function Application({
                 nodeRef={textRef}
                 width={4}
                 height={1.25}
+                fontSize={0.5}
                 text="a😀b"
                 placeholder="Edit"
                 theme={namedTheme}
@@ -571,6 +572,27 @@ export async function captureThemeEvidence(): Promise<{
     drawCalls: frame.drawCalls,
     coloredPixels,
     parts: [...parts].sort(),
+  };
+}
+
+/** Canvas rows the text input occupies: the top 1.25 of the panel's 3 units. */
+const TEXT_INPUT_ROWS = 75;
+
+/** Completed-frame RGBA pixels of the text input's rows, top row first. */
+export async function textInputPaint(): Promise<{
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: readonly number[];
+}> {
+  const current = handle;
+  if (current === undefined) throw new Error("GUI fixture is not mounted");
+  await current.flush();
+  const frame = await current.capture();
+  const pixels = new Uint8Array(frame.pixels);
+  return {
+    width: frame.width,
+    height: TEXT_INPUT_ROWS,
+    pixels: Array.from(pixels.subarray(0, frame.width * TEXT_INPUT_ROWS * 4)),
   };
 }
 

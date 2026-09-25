@@ -57,6 +57,9 @@
     "description": "Backend shader bodies, named properties, animation, overlays, fallbacks and completed WebGL frames",
     "files": [
       "dist/tests/render/custom-materials.test.js"
+    ],
+    "sourceRoots": [
+      "tests/render/custom-materials-fixture.ts"
     ]
   },
   "blender": {
@@ -151,7 +154,8 @@
     ],
     "sourceRoots": [
       "integrations/blender/",
-      "tests/blender/"
+      "tests/blender/",
+      "tests/render/blender-fixture.tsx"
     ]
   },
   "runner": {
@@ -244,12 +248,17 @@
       "crates/ipp-protocol/tests/gui-input-client.mjs",
       "crates/ipp-protocol/tests/gui-semantics-client.mjs",
       "crates/ipp-protocol/tests/gui-observations-client.mjs"
+    ],
+    "sourceRoots": [
+      "crates/ipp-protocol/tests/generated-client.mjs"
     ]
   },
   "contracts": {
     "description": "Executed native/WASM contracts and reproducible generation",
     "sourceRoots": [
-      "crates/ipp-core/src/lib.rs"
+      "crates/ipp-core/src/lib.rs",
+      "tools/ipp-schema-derive/src/",
+      "tools/ipp-schema-gen/tests/target-contract.mjs"
     ],
     "commands": []
   },
@@ -282,6 +291,48 @@
       "dist/tests/integration/world-persistence.test.js",
       "dist/tests/browser/world-persistence.test.js",
       "dist/tests/render/world-persistence.test.js"
+    ],
+    "commands": [
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui,skeletal-animation",
+          "--test",
+          "world_persistence",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "core-lib",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui,skeletal-animation",
+          "--lib",
+          "services::world_serialization::",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ],
+    "sourceRoots": [
+      "crates/ipp-core/src/services/world_serialization/",
+      "crates/ipp-core/tests/world_persistence.rs"
     ]
   },
   "worlds": {
@@ -375,6 +426,9 @@
       "dist/tests/render/camera.test.js",
       "dist/tests/render/debug-geometry.test.js",
       "dist/tests/render/geometry.test.js"
+    ],
+    "sourceRoots": [
+      "tests/render/skinning-fixture.ts"
     ]
   },
   "react": {
@@ -457,7 +511,8 @@
     ],
     "sourceRoots": [
       "integrations/blender/",
-      "tests/blender/"
+      "tests/blender/",
+      "tests/render/blender-fixture.tsx"
     ]
   },
   "gallery-particles": {
@@ -521,12 +576,43 @@
     "description": "Vertex pose interpolation, animation, normals, skinning, shadows and recovery",
     "files": [
       "dist/tests/render/mesh-poses.test.js"
+    ],
+    "sourceRoots": [
+      "tests/render/mesh-poses-fixture.ts"
     ]
   },
   "skinning": {
     "description": "Skeletal rigs, pose-keyframe players, blended deformation, normals and recovery",
     "files": [
       "dist/tests/render/skinning.test.js"
+    ],
+    "commands": [
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "skeletal-animation",
+          "--test",
+          "skeleton",
+          "--test",
+          "skeleton_animation",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      }
+    ],
+    "sourceRoots": [
+      "crates/ipp-core/src/world/systems/skeleton/",
+      "crates/ipp-core/tests/skeleton.rs",
+      "crates/ipp-core/tests/skeleton_animation.rs",
+      "tests/render/skinning-fixture.ts"
     ]
   },
   "textures": {
@@ -549,7 +635,9 @@
     "sourceRoots": [
       "crates/ipp-core/src/world/mod.rs",
       "crates/ipp-core/src/world/mutation.rs",
-      "crates/ipp-core/src/world/runtime.rs"
+      "crates/ipp-core/src/world/runtime.rs",
+      "crates/ipp-core/src/world/systems/state_overlay/",
+      "crates/ipp-core/tests/state_overlays.rs"
     ],
     "commands": [
       {
@@ -595,6 +683,24 @@
         "requirements": [
           "rust"
         ]
+      },
+      {
+        "name": "overlays",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "gui",
+          "--test",
+          "state_overlays",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
       }
     ],
     "files": [
@@ -613,7 +719,9 @@
       "assets/fonts/",
       "licences/fonts/",
       "tools/build_surface_assets.py",
-      "tests/render/surface-fixture.tsx"
+      "tests/render/surface-fixture.tsx",
+      "tests/integration/surface-scenario.ts",
+      "crates/ipp-core/tests/surfaces.rs"
     ],
     "files": [
       "dist/tests/integration/surface.test.js",
@@ -637,6 +745,24 @@
         ],
         "requirements": [
           "python-tools"
+        ]
+      },
+      {
+        "name": "core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--features",
+          "surfaces",
+          "--test",
+          "surfaces",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
         ]
       }
     ]
@@ -677,6 +803,10 @@
           "gui",
           "--test",
           "gui",
+          "--test",
+          "gui_layout",
+          "--test",
+          "schema_rows",
           "--locked"
         ],
         "builds": [],
@@ -697,7 +827,9 @@
           "--locked",
           "--",
           "world::systems::gui::",
-          "world::systems::render::"
+          "world::systems::render::",
+          "components::",
+          "world::component_state::"
         ],
         "builds": [],
         "requirements": [
@@ -737,7 +869,15 @@
       "crates/ipp-core/src/world/systems/render/surface_preparation_tests.rs",
       "crates/ipp-core/src/world/mod.rs",
       "crates/ipp-core/src/world/mutation.rs",
-      "crates/ipp-core/src/world/runtime.rs"
+      "crates/ipp-core/src/world/runtime.rs",
+      "crates/ipp-core/tests/gui.rs",
+      "crates/ipp-core/tests/gui_layout.rs",
+      "crates/ipp-core/tests/schema_rows.rs",
+      "crates/ipp-core/src/components/",
+      "crates/ipp-core/src/commands.rs",
+      "crates/ipp-core/src/world/component_state/",
+      "tools/ipp-schema-derive/src/",
+      "crates/ipp-protocol/tests/generated-client.mjs"
     ]
   },
   "retained-gui": {
@@ -761,7 +901,8 @@
       "tests/render/retained-gui-images.ts",
       "tests/render/retained-gui-scenario.ts",
       "tests/render/surface-fixture.tsx",
-      "tests/performance/retained-gui.ts"
+      "tests/performance/retained-gui.ts",
+      "tests/integration/surface-scenario.ts"
     ],
     "files": [
       "dist/tests/render/retained-gui.test.js"
@@ -789,7 +930,9 @@
       "tests/render/surface-cache-environment.ts",
       "tests/render/surface-cache-scenario.ts",
       "tests/render/surface-cache.test.ts",
-      "tests/render/surface-fixture.tsx"
+      "tests/render/surface-fixture.tsx",
+      "tests/integration/surface-scenario.ts",
+      "crates/ipp-render-gl/Cargo.toml"
     ],
     "files": [
       "dist/tests/render/surface-cache.test.js"
@@ -856,7 +999,8 @@
     "description": "Renderer residency, upload failures, glyph atlas population and recovery through failure-injecting GL devices",
     "sourceRoots": [
       "crates/ipp-render-gl/tests/mesh_residency.rs",
-      "crates/ipp-render-gl/tests/support/mod.rs"
+      "crates/ipp-render-gl/tests/support/mod.rs",
+      "crates/ipp-render-gl/Cargo.toml"
     ],
     "commands": [
       {

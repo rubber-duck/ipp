@@ -1826,3 +1826,68 @@ fn drawn_ranges_hold_exactly_the_painter_order_work_across_edits() {
         "replaced storage is released"
     );
 }
+
+/// Upload bytes of one glyph quad in the shared GUI vertex layout.
+const GLYPH_QUAD_BYTES: u32 = 6 * std::mem::size_of::<GuiVertex>() as u32;
+
+/// The retained-gui benchmark terminal: one text piece of 36 glyph quads per row, 12
+/// rows, each row's revision changing when its text changes.
+fn terminal_work(revisions: &[u64; 12]) -> Vec<TestWork> {
+    let clip = [0.0, 0.0, 8.0, 2.0];
+    revisions
+        .iter()
+        .enumerate()
+        .map(|(row, &revision)| TestWork::Text {
+            node: 100 + row as u32,
+            page: 0,
+            revision,
+            vertices: glyph_quads(36, row as f32, clip),
+        })
+        .collect()
+}
+
+#[test]
+fn terminal_updates_upload_exactly_the_changed_rows_glyph_vertices() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device.clone());
+    let live = BTreeSet::from([ipp_core::EntityId::from_bits(1)]);
+    let submit = |cache: &mut GuiBatchRenderCache<MockGuiDevice>, revisions: &[u64; 12]| {
+        let stats = submit_work(cache, &device, &terminal_work(revisions)).stats;
+        cache.finish_frame(Some(&RetainedSurfaceSubmission {
+            live: &live,
+            submitted: &live,
+        }));
+        stats
+    };
+
+    // The 152-byte vertex makes a 12x36 screen 2,592 vertices, 393,984 bytes.
+    assert_eq!(std::mem::size_of::<GuiVertex>(), 152);
+    let screen_bytes = 12 * 36 * GLYPH_QUAD_BYTES;
+    assert_eq!(screen_bytes, 393_984);
+
+    let mut revisions = [1u64; 12];
+    let cold = submit(&mut cache, &revisions);
+    assert_eq!(cold.statistics.uploaded_bytes, screen_bytes);
+    let storages = device.borrow().created_batches.len();
+
+    let warm = submit(&mut cache, &revisions);
+    assert_eq!(warm.statistics.uploaded_bytes, 0);
+
+    // Scrolling or replacing the screen retexts every row at the same length: every
+    // row rewrites in place and nothing beyond the glyph vertices is uploaded.
+    for revision in &mut revisions {
+        *revision += 1;
+    }
+    let full = submit(&mut cache, &revisions);
+    assert_eq!(full.statistics.uploaded_bytes, screen_bytes);
+    assert_eq!(full.statistics.gui_allocations, 12);
+    assert_eq!(device.borrow().created_batches.len(), storages);
+
+    // Typing retexts one row.
+    revisions[5] += 1;
+    let typed = submit(&mut cache, &revisions);
+    assert_eq!(typed.statistics.uploaded_bytes, 36 * GLYPH_QUAD_BYTES);
+    assert_eq!(typed.statistics.uploaded_bytes, 32_832);
+    assert_eq!(typed.statistics.gui_allocations, 1);
+    assert_eq!(device.borrow().created_batches.len(), storages);
+}

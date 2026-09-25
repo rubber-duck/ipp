@@ -56,7 +56,7 @@ flowchart LR
     docs --> common["Repository / whitespace"]
     source --> common
     common --> review["Review / handoff"]
-    common -->|"Merge / push requested"| regression["Full regression"]
+    common -->|"Merge / push requested"| regression["Core + affected coverage"]
     regression --> review
 ```
 
@@ -68,11 +68,11 @@ flowchart LR
 - Review Rust blank lines between definitions and logical steps, including macro bodies. rustfmt preserves spacing but does not insert missing separation. Format maintained generator templates, then regenerate output.
 - Scope Rust tests/Clippy to affected packages, targets and features. Examples: `cargo test -p ipp-core --test mesh_attributes --locked`; `cargo clippy -p ipp-core --all-targets --locked -- -D warnings`. These already compile their targets; separate `cargo check` is optional for a specific uncertainty.
 - Crate/dependency/composition changes also run `python3 tools/check_workspace.py`. WASM changes check affected target/features; contract changes regenerate and verify matching clients. New targets establish toolchain/CI coverage.
-- Follow the [workspace policy](../architecture/rust-workspace.md): representative minimal/expanded configurations, actual production dependency/artifact costs, and packaged native-shim evidence. Reserve the full matrix for the regression trigger.
+- Follow the [workspace policy](../architecture/rust-workspace.md): representative minimal/expanded configurations, actual production dependency/artifact costs, and packaged native-shim evidence. Select broader matrix coverage on demand for affected composition changes or explicit requests.
 
-**Full regression is triggered only by an explicit merge-to-main or push request.** A commit, handoff or editing on `main` does not trigger it. One integration owner runs combined evidence; subagents report focused checks. Use only [`python tools/ipp.py regression`](building.md#regression-entry-point), including retries. Do not assemble or repeat its constituent commands separately.
+**A merge-to-main or push request triggers core regression plus affected groups or suites.** A commit, handoff or editing on `main` does not trigger an additional pass. Full regression (`--full`) runs only when explicitly requested. One integration owner runs combined evidence; subagents report focused checks. Use only [`python tools/ipp.py regression`](building.md#regression-entry-point), including retries. Do not assemble or repeat its constituent commands separately. Add coverage for the changed subsystem and its callers: for example GUI/rendering changes need their real frame scenarios, and feature/contract changes need the relevant matrix checks. Unaffected expensive regions remain on demand.
 
-Reuse passing evidence while relevant source/configuration/environment remains unchanged. Retry unfinished steps with `python tools/ipp.py retry <summary.json>`; add affected checks with repeatable `--only`/`--suite`. Preserve all applicable reports and report partial scope honestly. The runner deduplicates declared prerequisites and records source/output identities; prior passing evidence still requires unchanged relevant inputs.
+Reuse passing evidence while relevant source/configuration/environment remains unchanged. Retry unfinished steps with `python tools/ipp.py retry <summary.json>`; add affected coverage with repeatable `--group`/`--only`/`--suite`. Preserve all applicable reports and report partial scope honestly. The runner deduplicates declared prerequisites and records source/output identities; prior passing evidence still requires unchanged relevant inputs.
 
 Behavior changes extend maintained scenarios/fixtures and representative CI with failure artifacts. Await readiness/frame completion, assert real outcomes and meaningful images, and clean up owned participants under the [testing policy](integration-testing.md). Missing/skipped environments are not passing coverage. Docs-only changes need no runtime tests.
 

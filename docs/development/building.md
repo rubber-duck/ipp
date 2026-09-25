@@ -126,20 +126,48 @@ Preserve applicable prior reports and reuse evidence only while its source, conf
 
 ### Regression entry point
 
-Only an instructed merge into `main` or push triggers agent-run full regression. Working directly on `main` does not trigger it. One integration owner uses `python tools/ipp.py regression`, including retries and focused regression selections; `npm run regression` is the same entry point.
+`python tools/ipp.py regression` (also `npm run regression`) runs the bounded **core** gate: repository/catalog/workspace checks, formatting, Python/TypeScript checks, pipeline tests, default Rust tests/Clippy, generated-client tests and real native WebSocket integration. It requires the normal Rust/Node/Python development tools, with no browser, WASM, Blender or GLES environment. Cold builds still pay compilation costs.
+
+Merge-to-main and push requests require core plus coverage for affected subsystems and callers. A plain commit, handoff or working on `main` does not trigger an additional regression pass. The `--full` flag selects complete regression when explicitly requested; it includes every maintained check, suite, target distribution and native GLES scenario. Stress benchmarks remain separate under `benchmark`.
 
 ```sh
+python tools/ipp.py regression
 python tools/ipp.py regression --list
+python tools/ipp.py regression --group gui --group rendering --plan
+python tools/ipp.py regression --group gui --group gallery
 python tools/ipp.py regression --only check:repository --suite cameras
-python tools/ipp.py regression --retry target/pipeline/runs/run-EXAMPLE/summary.json
-LIBGL_ALWAYS_SOFTWARE=1 python tools/ipp.py regression --profile integration --egl-dir /usr/lib/x86_64-linux-gnu
+python tools/ipp.py regression --retry target/pipeline/runs/run-EXAMPLE/summary.json --group gui
+LIBGL_ALWAYS_SOFTWARE=1 python tools/ipp.py regression --full --egl-dir /usr/lib/x86_64-linux-gnu
 ```
 
-The `repository` profile checks documentation, pipeline selection, Python formatting/types and executor tests. The `native` profile runs executor tests, workspace boundaries and native Clippy configurations on the current platform. The `integration` profile selects every maintained suite/check, all target distributions and native GLES scenarios. Focused selections report partial regression coverage. Required GLES coverage remains selected when libraries are missing: the prerequisite check fails instead of silently omitting it.
+Repeatable `--group` adds on-demand coverage to core, using the existing suites and deduplicating shared tests and prerequisites. These groups select coverage by area; their real scenarios may require other environments for fixtures or participating runtimes. Inspect `--plan` before preparing an environment.
+
+| Group | Run when changing |
+| --- | --- |
+| `runtime` | World state, lifecycle, persistence, animation, hierarchy, command streaming or React reconciliation |
+| `browser` | Worker/WASM transport or browser lifecycle |
+| `rendering` | WebGL, cameras, geometry, materials, lights, deformation or resource recovery |
+| `gui` | Surface/GUI layout, input, retained rendering or cache correctness |
+| `gallery` | Published gallery, demo behavior or application assets |
+| `blender` | Addon packaging, export, streaming or Blender integration |
+| `gles` | Native GL device/presentation or shared rendering behavior affecting GLES |
+| `matrix` | Crate features, target contracts, generation, dependencies or distribution composition |
+| `scaling` | Bulk mutation, hierarchy, restoration or command-streaming complexity |
+
+Select the relevant combination or narrower named suites/checks; shared renderer changes generally require both browser rendering and GLES evidence. The [catalog](../../tools/pipeline/catalog.py) owns group membership and rejects unassigned new checks/suites. Core is an explicit selection so new expensive suites enter full regression and an on-demand group without silently expanding the routine gate.
+
+`--only`/`--suite` without a group runs focused coverage. Retries run unfinished steps plus explicitly added groups/suites/checks, without adding core automatically; `--full` cannot be combined with `--retry`. Reports distinguish core, core plus named groups, focused partial coverage and full regression. A passing core report does not establish full regression coverage. Missing selected environments fail prerequisites rather than silently omitting coverage.
+
+For a smaller tooling or native-only selection, use named checks and suites directly:
+
+```sh
+python tools/ipp.py check repository catalog format-python python-types --suite runner
+python tools/ipp.py check workspace clippy-default clippy-minimal clippy-expanded --suite runner
+```
 
 `IPP_EGL_LIBRARY_DIR` or `--egl-dir` selects actual EGL/GLES libraries. `NODE_BIN`, `BLENDER_BIN` and the invoking Python interpreter select executables; the executor passes the same selections to child harnesses. A Blender release installed through setup is resolved from `target/tools`. The browser inherits its configured environment; use the [Blender/browser environment guide](blender.md) on hosts with private library wrappers.
 
-The [Pages workflow](../../.github/workflows/gallery-pages.yml) invokes the `gallery-site` browser suite and the `retained-gui` and `surface-cache` browser suites through this CLI in separate jobs and uploads their evidence; the retained GUI job fails visibly when its browser environment is missing. Pipeline tests validate its commands against the current catalog. The repository, native and integration regression profiles remain available for local use; routine pushes do not run them as separate GitHub Actions jobs. Local validation does not claim that hosted jobs ran. Extend the maintained real native WebSocket, browser worker/WASM/WebGL and GLES scenarios when changing participating behavior; keep scenario intent separate from process setup.
+The [Pages workflow](../../.github/workflows/gallery-pages.yml) invokes the `gallery-site` browser suite and the `retained-gui` and `surface-cache` browser suites through this CLI in separate jobs and uploads their evidence; the retained GUI job fails visibly when its browser environment is missing. Pipeline tests validate its commands against the current catalog. Regression commands and groups remain available for local use; routine pushes do not run them as separate GitHub Actions jobs. Local validation does not claim that hosted jobs ran. Extend the maintained real native WebSocket, browser worker/WASM/WebGL and GLES scenarios when changing participating behavior; keep scenario intent separate from process setup.
 
 ## Release and size experiments
 
@@ -163,4 +191,4 @@ Stable remains mandatory for normal builds. Add a pinned dated nightly only for 
 
 ## Opt-in performance scenes
 
-`python tools/ipp.py benchmark native|browser` runs the maintained [Blender stress scene](../../tests/performance/stress.md). Native runs accept `--egl-dir`; `--preset full` selects 10,000 animated cubes. Counters require the separate `--instrumented` native build. `python tools/ipp.py benchmark browser --scene retained-gui` compares analytic and retained Surface text over `--frames` streaming updates, optionally with the terminal panels cached (`--surface-cache`), and rejects stress-scene options; the [retained rendering guide](../../tests/performance/retained-gui.md) describes its self-identifying reports and the physical-device procedure. Benchmarks and performance build products are excluded from regression profiles.
+`python tools/ipp.py benchmark native|browser` runs the maintained [Blender stress scene](../../tests/performance/stress.md). Native runs accept `--egl-dir`; `--preset full` selects 10,000 animated cubes. Counters require the separate `--instrumented` native build. `python tools/ipp.py benchmark browser --scene retained-gui` compares analytic and retained Surface text over `--frames` streaming updates, optionally with the terminal panels cached (`--surface-cache`), and rejects stress-scene options; the [retained rendering guide](../../tests/performance/retained-gui.md) describes its self-identifying reports and the physical-device procedure. Benchmarks and performance build products are excluded from regression, including `--full`.

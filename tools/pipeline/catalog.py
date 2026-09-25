@@ -1,5 +1,6 @@
 """The single build, suite and check catalog used by the CLI and CI."""
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import sys
@@ -14,7 +15,92 @@ PROFILES = json.loads((DATA / "profiles.json").read_text())
 SUITES = json.loads((DATA / "suites.json").read_text())
 TEST_INPUTS = json.loads((DATA / "test-inputs.json").read_text())
 GLES_CHECKS = json.loads((DATA / "gles.json").read_text())
-CI_PROFILES = ("repository", "native", "integration")
+
+
+@dataclass(frozen=True)
+class RegressionGroup:
+    description: str
+    suites: tuple[str, ...] = ()
+    steps: tuple[str, ...] = ()
+
+
+# Groups reference the maintained suites/checks; commands and prerequisites stay
+# in their owning registries. Keep costly additions out of the explicit core set.
+REGRESSION_GROUPS = {
+    "runtime": RegressionGroup(
+        "Worlds, lifecycle, persistence, animation, hierarchy and React through real transports",
+        (
+            "filesystem",
+            "worlds",
+            "lifecycle",
+            "snapshots",
+            "animation",
+            "hierarchy",
+            "command-streaming",
+            "react",
+        ),
+    ),
+    "browser": RegressionGroup(
+        "Chromium worker/WASM transport and lifecycle", ("browser",)
+    ),
+    "rendering": RegressionGroup(
+        "WebGL frames, cameras, geometry, materials, lighting, deformation and resource recovery",
+        (
+            "render",
+            "canvas",
+            "cameras",
+            "geometry",
+            "custom-materials",
+            "lighting",
+            "particles",
+            "mesh-poses",
+            "skinning",
+            "textures",
+            "shapes",
+            "render-residency",
+        ),
+    ),
+    "gui": RegressionGroup(
+        "Surface/GUI state, input, retained rendering and Surface cache correctness",
+        ("surfaces", "gui", "retained-gui", "surface-cache"),
+    ),
+    "gallery": RegressionGroup(
+        "Published gallery and interactive GUI, camera, particle and platformer demos",
+        (
+            "gallery-site",
+            "gallery-gui",
+            "gallery-gui-camera",
+            "gallery-particles",
+            "gallery-platformer",
+        ),
+    ),
+    "blender": RegressionGroup(
+        "Blender packaging, exports, streaming and browser presentation",
+        ("blender", "particles-blender"),
+    ),
+    "gles": RegressionGroup(
+        "All native GLES frame scenarios; requires configured EGL/GLES libraries",
+        steps=tuple(record["id"] for record in GLES_CHECKS),
+    ),
+    "matrix": RegressionGroup(
+        "Minimal/expanded Rust, WASM builds, target contracts and browser distribution identities",
+        ("contracts",),
+        (
+            "test:rust:minimal",
+            "test:rust:expanded",
+            "check:clippy-minimal",
+            "check:clippy-expanded",
+            "check:wasm-default",
+            "check:wasm-minimal",
+            "check:wasm-expanded",
+            "check:wasm-size",
+            "check:browser-identities",
+        ),
+    ),
+    "scaling": RegressionGroup(
+        "Release-mode 1k/4k/16k mutation timings and operation counts", ("scaling",)
+    ),
+}
 
 
 def operation(*args: str) -> tuple[str, ...]:
@@ -326,21 +412,32 @@ def suite_ids(names: list[str]) -> list[str]:
     return list(dict.fromkeys(result))
 
 
-def regression_ids(tasks: dict[str, Task], profile: str) -> list[str]:
-    if profile == "repository":
-        return [
-            "check:repository",
-            "check:catalog",
-            "check:format-python",
-            "check:python-types",
-            *suite_ids(["runner"]),
-        ]
-    if profile == "native":
-        return [
-            *suite_ids(["runner"]),
-            "check:workspace",
-            *[f"check:clippy-{name}" for name in ("default", "minimal", "expanded")],
-        ]
-    if profile != "integration":
-        raise ValueError(f"Unknown regression profile: {profile}")
-    return [name for name in tasks if name.startswith(("check:", "test:"))]
+def regression_ids(tasks: dict[str, Task], *, full: bool = False) -> list[str]:
+    if full:
+        return [name for name in tasks if name.startswith(("check:", "test:"))]
+    return [
+        "check:repository",
+        "check:catalog",
+        "check:diff",
+        *[f"check:format-{name}" for name in ("js", "python", "rust", "md")],
+        "check:python-types",
+        "check:workspace",
+        "check:typecheck",
+        *suite_ids(["runner"]),
+        "check:clippy-default",
+        "test:rust:default",
+        *suite_ids(["client", "native"]),
+    ]
+
+
+def regression_group_ids(names: list[str]) -> list[str]:
+    result: list[str] = []
+    for name in names:
+        if name not in REGRESSION_GROUPS:
+            raise ValueError(
+                f"Unknown regression group: {name}. Use regression --list."
+            )
+        group = REGRESSION_GROUPS[name]
+        result.extend(suite_ids(list(group.suites)))
+        result.extend(group.steps)
+    return list(dict.fromkeys(result))

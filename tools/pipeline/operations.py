@@ -10,12 +10,13 @@ import sys
 
 from .builds import build, verify_browser_identities
 from .catalog import (
-    CI_PROFILES,
     GLES_CHECKS,
     PROFILES,
+    REGRESSION_GROUPS,
     SUITES,
     TEST_INPUTS,
     catalog,
+    regression_group_ids,
     regression_ids,
 )
 from .environment import development_python
@@ -110,8 +111,16 @@ def format_source(language: str, mode: str, paths: list[str]) -> None:
 
 def validate_catalog() -> None:
     tasks = catalog("/validation/egl")
-    for name in CI_PROFILES:
-        select(tasks, regression_ids(tasks, name))
+    for full in (False, True):
+        select(tasks, regression_ids(tasks, full=full))
+    grouped = regression_group_ids(list(REGRESSION_GROUPS))
+    select(tasks, grouped)
+    covered = set(regression_ids(tasks)) | set(grouped)
+    unassigned = set(regression_ids(tasks, full=True)) - covered
+    if unassigned:
+        raise ValueError(
+            f"Assign checks/suites to core or an on-demand regression group: {sorted(unassigned)}"
+        )
     declared = {path for suite in SUITES.values() for path in suite.get("files", [])}
     if set(TEST_INPUTS) != declared:
         raise ValueError(

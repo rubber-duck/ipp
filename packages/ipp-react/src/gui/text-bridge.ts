@@ -425,13 +425,13 @@ export function attachTextBridge(
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (disposed) return;
-    const key = keyboardKeyToGuiKey(event.key);
+    const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
     if (key === null) return;
     // Space, backspace and delete ride through beforeinput on an editable
     // buffer; forwarding them here as well would apply every keystroke
     // twice. All other mapped keys have no beforeinput payload.
     if (key === "space" || key === "backspace" || key === "delete") return;
-    if (key === "tab") event.preventDefault();
+    if (key === "tab" || key === "backTab") event.preventDefault();
     send({ kind: "key", key, pressed: true });
   };
 

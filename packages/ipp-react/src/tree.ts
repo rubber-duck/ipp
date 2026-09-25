@@ -427,6 +427,8 @@ export class ReactWorldTree {
     }
     if (gui.enabled !== undefined && typeof gui.enabled !== "boolean")
       throw new Error("GUI enabled must be a boolean or undefined");
+    if (gui.focusScope !== undefined && typeof gui.focusScope !== "boolean")
+      throw new Error("GUI focusScope must be a boolean or undefined");
     if (gui.theme !== undefined)
       validateGuiTheme(gui.theme as import("./gui/theme.js").GuiControlTheme);
     if (type === GUI_ROOT_HOST_TYPE) {
@@ -519,6 +521,7 @@ export class ReactWorldTree {
       "fontSize",
       "asset",
       "enabled",
+      "focusScope",
       "children",
       "nodeRef",
       "onAction",

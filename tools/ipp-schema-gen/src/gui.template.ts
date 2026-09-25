@@ -209,6 +209,7 @@ const GUI_STYLE_DEFAULTS: Readonly<Record<string, RowPropertyValue>> = {
   fontSize: 0.1,
   position: [0, 0],
   scale: [1, 1],
+  focusScope: false,
 };
 
 const GUI_ROW_VECTOR_LENGTHS: Readonly<Record<string, number>> = {
@@ -735,6 +736,7 @@ const GUI_KEYS: readonly GuiKey[] = [
   "down",
   "home",
   "end",
+  "backTab",
 ];
 
 function writeGuiInputBlockers(
@@ -1367,6 +1369,7 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
   const enabled = r.boolean();
   const visible = r.boolean();
   const available = r.boolean();
+  const focusScope = r.boolean();
   const actionCount = r.u8();
   if (actionCount > 5) fail("GUI semantic actions");
   const actions: GuiSemanticActionKind[] = [];
@@ -1386,6 +1389,7 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
     enabled,
     visible,
     available,
+    focusScope,
     actions,
   };
 }
@@ -1393,7 +1397,7 @@ function readGuiSemanticNode(r: Reader): GuiSemanticNode {
 /** Decode one bounded semantic snapshot with its observed focus. */
 export function decodeGuiSemanticSnapshot(bytes: Uint8Array): GuiSemanticTree {
   const r = new Reader(bytes);
-  if (r.u8() !== 1) fail("GUI semantic snapshot version");
+  if (r.u8() !== 2) fail("GUI semantic snapshot version");
   const entity = r.u64();
   if (entity === 0n) fail("GUI semantic snapshot entity");
   const rootIncarnation = r.u64();

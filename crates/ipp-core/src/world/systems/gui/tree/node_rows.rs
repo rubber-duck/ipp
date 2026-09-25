@@ -59,6 +59,9 @@ pub struct GuiNodeStyleRow {
     /// Handle of the root theme skinning this node; a handle without a live
     /// theme resolves as no theme.
     pub theme: Option<u32>,
+    /// Whether this node bounds keyboard traversal: Tab and BackTab from a
+    /// focused descendant cycle within the node's subtree.
+    pub focus_scope: bool,
 }
 
 impl Default for GuiNodeStyleRow {
@@ -91,6 +94,7 @@ impl From<&GuiNodeStyle> for GuiNodeStyleRow {
             padding: style.padding,
             margin: style.margin,
             theme: style.theme,
+            focus_scope: style.focus_scope,
         }
     }
 }
@@ -119,6 +123,7 @@ impl From<&GuiNodeStyleRow> for GuiNodeStyle {
             position: row.position,
             scale: row.scale,
             theme: row.theme,
+            focus_scope: row.focus_scope,
         }
     }
 }
@@ -153,6 +158,7 @@ impl GuiNodeStyleRow {
         set(&mut self.position, &patch.position);
         set(&mut self.scale, &patch.scale);
         set(&mut self.theme, &patch.theme);
+        set(&mut self.focus_scope, &patch.focus_scope);
     }
 
     /// Check every present property against its declared range.
@@ -211,6 +217,7 @@ impl GuiNodePatch {
             P::Padding => optional(&self.padding),
             P::Margin => optional(&self.margin),
             P::Theme => optional(&self.theme),
+            P::FocusScope => required(&self.focus_scope),
         }
     }
 
@@ -268,6 +275,7 @@ impl GuiNodePatch {
             P::Padding => optional(&mut self.padding, change),
             P::Margin => optional(&mut self.margin, change),
             P::Theme => optional(&mut self.theme, change),
+            P::FocusScope => required(&mut self.focus_scope, change),
         }
     }
 }
@@ -316,11 +324,13 @@ pub enum GuiNodeStyleProperty {
     Margin,
     /// `theme`: optional U32 theme handle; command-owned.
     Theme,
+    /// `focus_scope`: Bool.
+    FocusScope,
 }
 
 impl GuiNodeStyleProperty {
     /// Number of node style properties.
-    pub const COUNT: u32 = 20;
+    pub const COUNT: u32 = 21;
 
     /// Every property in layout order; `ALL[i] as u32 == i`.
     pub const ALL: [Self; Self::COUNT as usize] = [
@@ -344,6 +354,7 @@ impl GuiNodeStyleProperty {
         Self::Padding,
         Self::Margin,
         Self::Theme,
+        Self::FocusScope,
     ];
 
     /// Property at a layout index.
@@ -674,6 +685,7 @@ impl GuiNodeRowProperty {
                 GuiNodeStyleProperty::Enabled
                     | GuiNodeStyleProperty::Asset
                     | GuiNodeStyleProperty::Theme
+                    | GuiNodeStyleProperty::FocusScope
             ),
             Self::Data(property) => !property.command_owned(),
         }

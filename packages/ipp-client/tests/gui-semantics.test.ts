@@ -145,6 +145,7 @@ const tree: GuiSemanticTree = {
       enabled: true,
       visible: true,
       available: true,
+      focusScope: false,
       actions: ["press"],
     },
   ],

@@ -732,6 +732,58 @@ export async function observation(): Promise<{
   };
 }
 
+/** Runtime keyboard focus, DOM key ownership and control outcomes for
+ * keyboard-only operation. */
+export async function keyboardObservation(): Promise<{
+  readonly focused: string | null;
+  readonly keyOwner: "canvas" | "editor" | "other";
+  readonly presses: number;
+  readonly text: string;
+  readonly errors: readonly string[];
+}> {
+  const current = handle;
+  const controls = {
+    text: textRef.current,
+    checkbox: checkboxRef.current,
+    slider: sliderRef.current,
+    button: buttonRef.current,
+  };
+  if (current === undefined || controls.text === null)
+    throw new Error("GUI keyboard fixture is not ready");
+  await current.flush();
+  const client = current.client as GuiWorldClient;
+  const [snapshot, inspected] = await Promise.all([
+    client.semanticSnapshot({ entity: controls.text.entity }),
+    client.inspectGui({
+      entity: controls.text.entity,
+      nodeId: controls.text.nodeId,
+      maxDepth: 1,
+    }),
+  ]);
+  const focusedId = snapshot.focused?.id;
+  const focused =
+    focusedId === undefined
+      ? null
+      : (Object.entries(controls).find(
+          ([, control]) => control?.nodeId === focusedId,
+        )?.[0] ?? `node-${focusedId}`);
+  const active = document.activeElement;
+  const value = inspected.nodes[0]?.controlValue;
+  if (value?.kind !== "text") throw new Error("mounted text input disappeared");
+  return {
+    focused,
+    keyOwner:
+      active === document.querySelector("#mounted-gui-canvas")
+        ? "canvas"
+        : active === document.querySelector("textarea")
+          ? "editor"
+          : "other",
+    presses,
+    text: value.value,
+    errors: [...errors],
+  };
+}
+
 export async function closeGuiCanvas(): Promise<{
   readonly canvasCount: number;
   readonly editorCount: number;

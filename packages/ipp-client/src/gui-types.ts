@@ -109,6 +109,8 @@ export interface GuiNodeStyle {
   scale?: readonly [number, number];
   /** Handle of the root theme skinning this node. */
   theme?: number;
+  /** Bound keyboard traversal from focused descendants to this subtree. */
+  focusScope?: boolean;
 }
 
 /** Sparse style change; `null` clears an optional property. */
@@ -133,6 +135,7 @@ export interface GuiNodePatchStyle {
   position?: readonly [number, number];
   scale?: readonly [number, number];
   theme?: number | null;
+  focusScope?: boolean;
 }
 
 /** Stable primitive part a skin styles. */
@@ -371,9 +374,14 @@ export interface GuiInspectQuery {
 /** Which physical button a pointer input carries. */
 export type GuiPointerButton = "primary" | "secondary" | "auxiliary";
 
-/** Non-text keys routable to the focused control. */
+/**
+ * Non-text keys routable to the focused control. `tab` and `backTab`
+ * (Shift+Tab) traverse controls in tree order within the innermost focus
+ * scope and enter the keyboard panel when nothing has focus.
+ */
 export type GuiKey =
   | "tab"
+  | "backTab"
   | "enter"
   | "space"
   | "escape"
@@ -724,6 +732,8 @@ export interface GuiSemanticNode {
   enabled: boolean;
   visible: boolean;
   available: boolean;
+  /** Keyboard traversal from a focused descendant stays in this subtree. */
+  focusScope: boolean;
   actions: GuiSemanticActionKind[];
 }
 

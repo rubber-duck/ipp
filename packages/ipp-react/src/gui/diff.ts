@@ -109,6 +109,8 @@ function stylePatch(
     set("asset", desired.asset ?? null);
   if (!Object.is(desired.enabled ?? true, acked.enabled ?? true))
     set("enabled", desired.enabled ?? true);
+  if (!Object.is(desired.focusScope ?? false, acked.focusScope ?? false))
+    set("focusScope", desired.focusScope ?? false);
   if (!tuplesEqual(desired.position, acked.position))
     set("position", [...(desired.position ?? [0, 0])]);
   if (!tuplesEqual(desired.scale, acked.scale))

@@ -22,7 +22,10 @@ fn inspect_fixture() -> GuiInspectResponse {
                 children: vec![GuiNodeId(2), GuiNodeId(3), GuiNodeId(4), GuiNodeId(5)],
                 data: GuiNodeData::Container(GuiContainerKind::Column),
                 values: crate::GuiNodeDataRow::default(),
-                style: GuiNodeStyle::default(),
+                style: GuiNodeStyle {
+                    focus_scope: true,
+                    ..GuiNodeStyle::default()
+                },
                 control_value: GuiControlValue::None,
                 control_revision: 0,
             },
@@ -189,11 +192,13 @@ fn roles_values_revisions_bounds_exposed() {
     let tree = build_tree(&inspect_fixture(), &view_fixture(0.0)).expect("tree");
     assert_eq!(tree.entity, entity(21));
     assert_eq!(tree.len(), 5);
+    assert!(tree.node(GuiNodeId(1)).expect("root").focus_scope);
     let button = tree.node(GuiNodeId(2)).expect("button");
     assert_eq!(button.role, GuiSemanticRole::Button);
     assert_eq!(button.name.as_deref(), Some("Go"));
     assert_eq!(button.actions, vec![GuiSemanticActionKind::Press]);
     assert_eq!(button.bounds, [1.0, 1.0, 2.0, 1.0]);
+    assert!(!button.focus_scope);
 
     let checkbox = tree.node(GuiNodeId(3)).expect("checkbox");
     assert_eq!(checkbox.role, GuiSemanticRole::Checkbox);
@@ -322,6 +327,7 @@ fn semantic_diff_covers_structure_role_name_state_and_actions() {
     assert_changed(|node| node.enabled = false);
     assert_changed(|node| node.visible = false);
     assert_changed(|node| node.available = false);
+    assert_changed(|node| node.focus_scope = true);
     assert_changed(|node| node.actions.clear());
 
     let mut replacement = before.clone();

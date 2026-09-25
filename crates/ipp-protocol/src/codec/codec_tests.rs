@@ -1280,6 +1280,13 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
         }))
     );
     assert_eq!(
+        decode_request(&frame(&[1, 6, 12, 1], 3), 7).unwrap().body,
+        RequestBody::GuiInput(Box::new(GuiInputCommand::Key {
+            key: GuiKey::BackTab,
+            pressed: true,
+        }))
+    );
+    assert_eq!(
         decode_request(&frame(&text_payload(7, "héllo"), 3), 7)
             .unwrap()
             .body,
@@ -1372,7 +1379,7 @@ fn gui_input_decodes_every_action_and_rejects_before_queueing() {
         vec![2, 9],
         vec![1, 14],
         vec![1, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
-        vec![1, 6, 12, 1],
+        vec![1, 6, 13, 1],
         {
             let mut bad = vec![1, 3, 9, 0, 0, 0, 0, 0];
             bad.extend_from_slice(&f32::NAN.to_le_bytes());
@@ -1652,6 +1659,7 @@ fn gui_semantic_snapshots_preserve_legal_text_and_reject_oversize() {
             enabled: true,
             visible: true,
             available: true,
+            focus_scope: false,
             actions: vec![
                 ipp_core::GuiSemanticActionKind::SetText,
                 ipp_core::GuiSemanticActionKind::Focus,

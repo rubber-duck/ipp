@@ -22,6 +22,7 @@ import {
   attachCanvasGuiInput,
   canvasViewportPoint,
   createGuiInputSink,
+  keyboardFocusHandoff,
   type AttachCanvasGuiInputOptions,
   type GuiViewportPoint,
 } from "./gui/input.js";
@@ -55,15 +56,21 @@ export interface IppCanvasProps
   readonly runtime: CanvasRuntimeConfiguration;
   /** Opt-in browser input: attach the GUI relay to the canvas once connected.
    *
-   * Pointer and wheel events originate on the canvas. By default one hidden
-   * native editor owns keyboard, `beforeinput`, IME and clipboard events and
-   * forwards them through the session client's `submitGuiInput` in DOM order;
-   * capture, focus scopes and gesture arbitration stay in core. While
-   * attached the canvas uses
+   * Pointer and wheel events originate on the canvas. Keyboard input has one
+   * owner at a time: by default a hidden native editor owns keyboard,
+   * `beforeinput`, IME and clipboard events while a text input has runtime
+   * focus, and the focusable canvas (or an explicit `keyboardTarget`) owns
+   * keys otherwise, so Tab/Shift+Tab traversal, Space/Enter activation and
+   * slider arrows reach non-text controls. Keyboard focus moves between the
+   * two as runtime text focus starts and ends; both forward through the
+   * session client's `submitGuiInput` in DOM order, and capture, focus
+   * scopes and gesture arbitration stay in core. While attached the canvas
+   * uses
    * `touch-action: none` (opt out per attach with
    * `enableTouchActionNone: false`), wheel input is always
-   * `preventDefault`ed and Tab is prevented. Disable `textBridge` to keep
-   * keyboard ownership on the canvas or an explicit `keyboardTarget`.
+   * `preventDefault`ed and Tab/Shift+Tab are prevented. Disable `textBridge`
+   * to keep keyboard ownership on the canvas or an explicit `keyboardTarget`
+   * throughout.
    * Requires a GUI-capable client, otherwise `onError` fires and no listeners
    * attach.
    */
@@ -456,10 +463,7 @@ export function IppCanvas({
     // paste reads and selection echoes cancel across focus moves,
     // replacements and teardown instead of writing into a new target.
     let detachTextBridge: (() => void) | undefined;
-    let nativeKeyboardTarget: HTMLElement | null | undefined =
-      inputOptions.keyboardTarget;
     let blurOnKeyboardTarget = true;
-    let keyboardInput = true;
     if (inputOptions.textBridge !== false && surface.canvas.parentElement) {
       const container = surface.canvas.parentElement;
       const canvas = surface.canvas;
@@ -475,12 +479,14 @@ export function IppCanvas({
           model.noteLocalSelection(selection.start, selection.end);
         },
       });
-      nativeKeyboardTarget = bridge.element;
-      keyboardInput = false;
-      // The editor mirrors runtime focus. Blurring it during an internal
-      // canvas/editor transfer must not clear the runtime focus that the
-      // pointer event just selected. Window blur remains authoritative.
+      // The canvas relay owns keys while no text input has runtime focus and
+      // the editor owns them while one does; each listens only on its own
+      // element, so a key reaches core once. Keyboard focus follows runtime
+      // text focus below. Blurring either element during that internal
+      // transfer must not clear the runtime focus that the key or pointer
+      // just selected; window blur remains authoritative.
       blurOnKeyboardTarget = false;
+      const keyOwner: HTMLElement = inputOptions.keyboardTarget ?? canvas;
       const toViewport: (point: GuiViewportPoint) => GuiViewportPoint = (
         point,
       ) => guiInputRef.current?.toViewport?.(point) ?? point;
@@ -491,7 +497,27 @@ export function IppCanvas({
         typeof target.subscribeGuiObservations === "function"
           ? target.subscribeGuiObservations((batch) => {
               try {
+                const editorFocused = document.activeElement === bridge.element;
                 if (observeTextBridgeBatch(model, batch)) bridge.syncFromCore();
+                // Keyboard traversal hands key ownership across: entering a
+                // text input focuses the editor and leaving one returns keys
+                // to the canvas. Pointer activations use the pending gesture
+                // below instead.
+                const handoff = keyboardFocusHandoff({
+                  textFocused:
+                    batch.textFocus === undefined
+                      ? undefined
+                      : batch.textFocus !== null,
+                  documentFocused: document.hasFocus(),
+                  editorFocused,
+                  ownerFocused: document.activeElement === keyOwner,
+                  pointerActivationPending: pendingActivation !== undefined,
+                });
+                if (handoff === "editor") {
+                  bridge.element.focus({ preventScroll: true });
+                } else if (handoff === "owner") {
+                  keyOwner.focus({ preventScroll: true });
+                }
                 if (pendingActivation && batch.textFocus !== undefined) {
                   if (batch.textFocus === null) {
                     pendingActivation = undefined;
@@ -545,6 +571,9 @@ export function IppCanvas({
         if (event.key === "Tab" || event.key === "Escape") {
           model.noteActivation();
         }
+        // Keyboard traversal supersedes an earlier tap that never reached a
+        // text input; its text focus result focuses the editor directly.
+        if (event.key === "Tab") pendingActivation = undefined;
       };
       // Losing the window drops the buffer focus view; the relay already
       // sends the core blur. Stale paste reads cancel on the cleared token.
@@ -554,10 +583,12 @@ export function IppCanvas({
       };
       canvas.addEventListener("pointerdown", onPointerDown);
       bridge.element.addEventListener("keydown", onKeyDown);
+      keyOwner.addEventListener("keydown", onKeyDown);
       window.addEventListener("blur", onWindowBlur);
       detachTextBridge = (): void => {
         canvas.removeEventListener("pointerdown", onPointerDown);
         bridge.element.removeEventListener("keydown", onKeyDown);
+        keyOwner.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("blur", onWindowBlur);
         unsubscribeObservations?.();
         pendingActivation = undefined;
@@ -569,14 +600,10 @@ export function IppCanvas({
       ...inputOptions,
       toViewport: (point) => guiInputRef.current?.toViewport?.(point) ?? point,
       blurOnKeyboardTarget,
-      keyboardInput,
       onError: (error) => {
         guiInputRef.current?.onError?.(error);
         callbacks.current.onError?.(error);
       },
-      ...(nativeKeyboardTarget === undefined
-        ? {}
-        : { keyboardTarget: nativeKeyboardTarget }),
     });
     const detach = (): void => {
       detachTextBridge?.();

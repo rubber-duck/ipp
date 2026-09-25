@@ -172,6 +172,8 @@ pub struct GuiNodeStyle {
     pub scale: [f32; 2],
     /// Handle of the root theme skinning this node, if any.
     pub theme: Option<u32>,
+    /// Whether this node bounds keyboard traversal of its descendants.
+    pub focus_scope: bool,
 }
 
 impl Default for GuiNodeStyle {
@@ -197,6 +199,7 @@ impl Default for GuiNodeStyle {
             position: [0.0, 0.0],
             scale: [1.0, 1.0],
             theme: None,
+            focus_scope: false,
         }
     }
 }
@@ -252,6 +255,8 @@ pub struct GuiNodePatch {
     pub scale: Option<[f32; 2]>,
     /// Replacement theme reference.
     pub theme: Option<Option<u32>>,
+    /// Replacement focus-scope flag.
+    pub focus_scope: Option<bool>,
 }
 
 /// One authoritative node in the GUI tree.

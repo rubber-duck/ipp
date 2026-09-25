@@ -778,3 +778,171 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
     },
   );
 });
+
+test("mounted IppCanvas operates text, checkbox, slider and button by keyboard only", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = resolve(process.cwd());
+  const profile = resolve(workspace, "target/browser-build/headless-gui");
+  const build: BrowserBuildConfiguration = {
+    name: "headless-gui",
+    generatedModule: resolve(profile, "generated.js"),
+    runtimeWasm: resolve(profile, "runtime.wasm"),
+    exportWasm: resolve(profile, "export.wasm"),
+    contractArtifact: resolve(profile, "contract.bin"),
+  };
+  await runBrowserEnvironment(
+    "gui-keyboard",
+    {
+      workspace,
+      build,
+      mismatchBuild: build,
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/browser",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const fixture = `${env.urls.origin}/target/react-build/gui-fixture.js`;
+      await env.page.evaluate(
+        async ({ fixture, runtime }) => {
+          const mounted = await import(fixture);
+          await mounted.mountGuiCanvas(runtime);
+        },
+        {
+          fixture,
+          runtime: {
+            generatedModuleUrl: env.urls.generated,
+            workerScriptUrl: env.urls.workerScript,
+            wasmUrl: env.urls.wasm,
+            timeoutMs: 20_000,
+            logLevel: "off",
+          },
+        },
+      );
+      const readKeyboard = () =>
+        env.page.evaluate(
+          async (url) => (await import(url)).keyboardObservation(),
+          fixture,
+        );
+      const readControlPaint = () =>
+        env.page.evaluate(
+          async (url) => (await import(url)).controlPaintObservation(),
+          fixture,
+        );
+      type KeyboardObservation = Awaited<ReturnType<typeof readKeyboard>>;
+      const settle = async <T>(
+        read: () => Promise<T>,
+        predicate: (value: T) => boolean,
+        message: string,
+      ): Promise<T> => {
+        const deadline = performance.now() + 5_000;
+        let value = await read();
+        while (!predicate(value) && performance.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          value = await read();
+        }
+        assert.ok(predicate(value), `${message}: ${JSON.stringify(value)}`);
+        return value;
+      };
+      // Each trusted key waits for the runtime focus and the element that
+      // owns keys before the next one, as a keyboard user would.
+      const press = async (
+        key: string,
+        focused: string | null,
+        keyOwner: KeyboardObservation["keyOwner"],
+      ): Promise<KeyboardObservation> => {
+        await env.page.keyboard.press(key);
+        return settle(
+          readKeyboard,
+          (value) => value.focused === focused && value.keyOwner === keyOwner,
+          `${key} did not reach ${focused} through the ${keyOwner}`,
+        );
+      };
+
+      // From a fresh mount no pointer ever touches the page. The document's
+      // first Tab focuses the canvas; the next enters the panel at its first
+      // control, the text input, whose native editor then owns the keys.
+      const fresh = await readKeyboard();
+      assert.equal(fresh.focused, null);
+      assert.equal(fresh.keyOwner, "other");
+      await press("Tab", null, "canvas");
+      await press("Tab", "text", "editor");
+      const controlBefore = await readControlPaint();
+      assert.equal(controlBefore.checked, false);
+
+      // Leaving the text input returns keys to the canvas relay.
+      await press("Tab", "checkbox", "canvas");
+      await env.page.keyboard.press("Space");
+      const checked = await settle(
+        readControlPaint,
+        (value) => value.checked,
+        "Space did not toggle the focused checkbox",
+      );
+      assert.equal(checked.failedDrawCalls, 0);
+      assert.ok(checked.drawCalls > 0);
+
+      await press("Tab", "slider", "canvas");
+      await env.page.keyboard.press("ArrowRight");
+      const stepped = await settle(
+        readControlPaint,
+        (value) => value.slider > controlBefore.slider + 0.001,
+        "ArrowRight did not step the focused slider",
+      );
+
+      await press("Tab", "button", "canvas");
+      await env.page.keyboard.press("Space");
+      const pressed = await settle(
+        readKeyboard,
+        (value) => value.presses > 0,
+        "Space did not press the focused button",
+      );
+      assert.equal(pressed.presses, 1, "one Space pressed the button twice");
+
+      // Shift+Tab walks backward in tree order: the slider steps back down.
+      await press("Shift+Tab", "slider", "canvas");
+      await env.page.keyboard.press("ArrowLeft");
+      const back = await settle(
+        readControlPaint,
+        (value) => value.slider < stepped.slider - 0.001,
+        "ArrowLeft did not step the slider back",
+      );
+      assert.equal(back.checked, true);
+
+      // Tabbing back into the text input hands keys to the native editor
+      // again, and a typed character reaches core exactly once.
+      await press("Shift+Tab", "checkbox", "canvas");
+      const beforeTyping = await press("Shift+Tab", "text", "editor");
+      await env.page.keyboard.type("Z");
+      const typed = await settle(
+        readKeyboard,
+        (value) => value.text !== beforeTyping.text,
+        "typed text did not reach the focused text input",
+      );
+      assert.equal(typed.text.length, beforeTyping.text.length + 1);
+      assert.equal([...typed.text].filter((c) => c === "Z").length, 1);
+      assert.equal(typed.presses, 1);
+      assert.deepEqual(typed.errors, []);
+
+      // Traversal wraps at the ends: Shift+Tab from the first control
+      // reaches the last.
+      await press("Shift+Tab", "button", "canvas");
+      await press("Tab", "text", "editor");
+
+      const teardown = await env.page.evaluate(
+        async (url) => (await import(url)).closeGuiCanvas(),
+        fixture,
+      );
+      assert.deepEqual(teardown, { canvasCount: 0, editorCount: 0 });
+      env.evidence.record("keyboard-only controls", {
+        controlBefore,
+        checked,
+        stepped,
+        back,
+        typed,
+      });
+    },
+  );
+});

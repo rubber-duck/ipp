@@ -935,6 +935,8 @@ export class GuiCommits {
           }
           const declaredEnabled = patch.enabled;
           if (declaredEnabled !== undefined) style.enabled = declaredEnabled;
+          if (patch.focusScope !== undefined)
+            style.focusScope = patch.focusScope;
           if (patch.position !== undefined)
             style.position = [...patch.position];
           if (patch.scale !== undefined) style.scale = [...patch.scale];

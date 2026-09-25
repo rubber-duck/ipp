@@ -7,6 +7,11 @@ function expect(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
+/** Focused node of one panel as the semantic snapshot observes it. */
+async function focusedNode(client: GuiTestClient, entity: bigint) {
+  return (await client.semanticSnapshot({ entity })).focused?.id;
+}
+
 async function inspected(
   client: GuiTestClient,
   entity: bigint,
@@ -181,13 +186,25 @@ export async function exerciseGuiInput(
     `In-bounds tap missed the checkbox: ${JSON.stringify(checkbox.controlValue)}`,
   );
 
-  // Keys without focus admit without effect; focusing the checkbox then
-  // pressing Enter toggles it back on, and blur clears the focus.
-  await client.submitGuiInput({ kind: "key", key: "tab", pressed: true });
-  await client.submitGuiInput({
-    kind: "focus",
-    handle: handle(2),
+  // Keys other than traversal admit without effect while nothing has focus.
+  // Tab then enters the panel at its first control without a pointer, and
+  // Enter toggles it back on; Escape and blur clear the focus. The taps
+  // above focused the checkbox, so blur it first.
+  await client.submitGuiInput({ kind: "blur" });
+  const enterWithoutFocus = await client.submitGuiInput({
+    kind: "key",
+    key: "enter",
+    pressed: true,
   });
+  expect(
+    enterWithoutFocus.unhandled?.kind === "noFocus",
+    `Unfocused Enter was handled: ${JSON.stringify(enterWithoutFocus.unhandled)}`,
+  );
+  await client.submitGuiInput({ kind: "key", key: "tab", pressed: true });
+  expect(
+    (await focusedNode(client, entity)) === 2,
+    "Tab without focus did not enter the checkbox",
+  );
   await client.submitGuiInput({ kind: "key", key: "enter", pressed: true });
   checkbox = await inspected(client, entity, 2);
   expect(
@@ -225,6 +242,37 @@ export async function exerciseGuiInput(
     style: { width: 4, height: 1.5, asset: font },
   });
   let field = await inspected(client, entity, 3);
+
+  // Reverse traversal: Shift+Tab without focus enters the last control and
+  // moves backward in tree order, wrapping at the start; Tab wraps forward.
+  // The root column bounds traversal as a focus scope, which the semantic
+  // tree reports; it holds every control, so the order is unchanged.
+  await client.editGui({
+    action: "update",
+    handle: handle(1),
+    patch: { style: { focusScope: true } },
+  });
+  const scoped = await client.semanticSnapshot({ entity });
+  expect(
+    scoped.nodes.find((node) => node.id === 1)?.focusScope === true &&
+      scoped.nodes.find((node) => node.id === 2)?.focusScope === false,
+    "The semantic tree omitted the focus scope",
+  );
+  const traversal: (number | undefined)[] = [];
+  for (const key of ["backTab", "backTab", "backTab", "tab"] as const) {
+    await client.submitGuiInput({ kind: "key", key, pressed: true });
+    traversal.push(await focusedNode(client, entity));
+  }
+  expect(
+    JSON.stringify(traversal) === JSON.stringify([3, 2, 3, 2]),
+    `Keyboard traversal order is wrong: ${JSON.stringify(traversal)}`,
+  );
+  await client.submitGuiInput({ kind: "key", key: "escape", pressed: true });
+  expect(
+    (await focusedNode(client, entity)) === undefined,
+    "Escape did not release keyboard focus",
+  );
+
   await client.submitGuiInput({
     kind: "focus",
     handle: handle(3),

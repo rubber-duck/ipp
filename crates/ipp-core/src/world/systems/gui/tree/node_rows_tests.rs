@@ -6,7 +6,7 @@ use crate::components::schema::{
 use crate::services::asset_management::font::FONT_TYPE;
 use crate::world::systems::gui::{GuiContainerKind, GuiNodeData, GuiNodeId, GuiRoot};
 
-const NAMES: [&str; 20] = [
+const NAMES: [&str; 21] = [
     "enabled",
     "width",
     "height",
@@ -27,6 +27,7 @@ const NAMES: [&str; 20] = [
     "padding",
     "margin",
     "theme",
+    "focus_scope",
 ];
 
 fn font() -> AssetSource {
@@ -59,6 +60,7 @@ fn styled() -> GuiNodeStyle {
         position: [0.3, -0.2],
         scale: [2.0, 0.5],
         theme: Some(4),
+        focus_scope: true,
     }
 }
 
@@ -91,6 +93,7 @@ fn layout_order_matches_property_index() {
         GuiNodeStyleProperty::FontSize,
         GuiNodeStyleProperty::Position,
         GuiNodeStyleProperty::Scale,
+        GuiNodeStyleProperty::FocusScope,
     ];
     for property in GuiNodeStyleProperty::ALL {
         assert_eq!(
@@ -420,7 +423,7 @@ fn numeric_animation_targets_only_numeric_style_and_image_size() {
 
     for property in GuiNodeStyleProperty::ALL {
         let offset = GuiRoot::node_style_offset(GuiNodeId(4), property).unwrap();
-        let expected = !matches!(property, S::Enabled | S::Asset | S::Theme);
+        let expected = !matches!(property, S::Enabled | S::Asset | S::Theme | S::FocusScope);
         assert_eq!(
             GuiRoot::numeric_animatable(offset),
             expected,

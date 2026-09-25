@@ -506,3 +506,42 @@ test("focused text state replays to late subscribers and clears on session close
   assert.equal(early.at(-1), null);
   assert.equal(late.at(-1), null);
 });
+
+test("the latest range of each VirtualList replays to late subscribers", async () => {
+  const { client, emit } = await connect();
+  const rangePayload = (node, first, last, revision) =>
+    concatenate([
+      u8(4),
+      u32(1),
+      u8(3),
+      u64(11n),
+      u64(11n),
+      u64(100n),
+      u32(node),
+      u32(first),
+      u32(last),
+      u32(revision),
+      u32(0),
+      u32(0),
+      u32(0),
+    ]);
+  const early = [];
+  client.subscribeGuiObservations((batch) => early.push(batch));
+  emit(observationsResponse(rangePayload(31, 0, 8, 1)));
+  emit(observationsResponse(rangePayload(31, 4, 12, 2)));
+  emit(observationsResponse(rangePayload(32, 0, 3, 1)));
+  assert.equal(early.length, 3);
+
+  const late = [];
+  client.subscribeGuiObservations((batch) => late.push(batch));
+  assert.equal(late.length, 1);
+  assert.deepEqual(
+    late[0].virtualRanges.map((range) => [range.node, range.first, range.last]),
+    [
+      [31, 4, 12],
+      [32, 0, 3],
+    ],
+  );
+  assert.deepEqual(late[0].effects, []);
+  await client.close();
+});

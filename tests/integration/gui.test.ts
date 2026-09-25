@@ -11,6 +11,7 @@ import {
   type GuiTestClient,
 } from "./scenarios/gui-lifecycle.js";
 import { exerciseGuiInput } from "./scenarios/gui-input.js";
+import { exerciseGuiVirtualList } from "./scenarios/gui-virtual-list.js";
 
 test("GUI roots, node identity and committed values cross a real native connection", {
   timeout: 60000,
@@ -136,6 +137,46 @@ test("GUI pointer, keyboard and text input routes through a real native connecti
         ),
       );
       env.evidence.record("gui input", result);
+    },
+  );
+});
+
+test("a 100000-item VirtualList scrolls, anchors and restores through a real native connection", {
+  timeout: 60000,
+}, async (context) => {
+  const workspace = process.cwd();
+  const profile = resolve(workspace, "target/gui-host");
+  const contract = await import(
+    pathToFileURL(resolve(profile, "generated.js")).href
+  );
+  await runNativeEnvironment(
+    "gui",
+    {
+      executable: resolve(
+        profile,
+        process.platform === "win32" ? "ipp-server.exe" : "ipp-server",
+      ),
+      schemaArtifact: resolve(profile, "contract.bin"),
+      workingDirectory: workspace,
+      operationTimeoutMs: 20000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/gui/native",
+      ),
+    },
+    context.signal,
+    async (env) => {
+      const host = await env.track<WorldPersistenceHostClient<GuiTestClient>>(
+        contract.IppHostClient.connectWebSocket(env.url, {
+          signal: env.signal,
+        }),
+      );
+      const result = await env.execute("gui virtual list", {}, () =>
+        exerciseGuiVirtualList(host),
+      );
+      env.evidence.record("gui virtual list", result);
+      assert.deepEqual(result.attached, [0, 10]);
+      assert.ok(result.declaredAtOnce <= 14);
     },
   );
 });

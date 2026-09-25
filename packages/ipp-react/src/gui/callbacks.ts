@@ -536,8 +536,10 @@ export class GuiEffectSubscriptions {
       deliverRange(listener!, entry.latest, onError);
   }
 
-  /** Deliver wanted ranges in order; a range older than the latest one fed
-   * for its list is stale and skipped. */
+  /** Deliver wanted ranges in arrival order, which is publication order:
+   * the client replays its latest ranges only to a new subscriber, before
+   * any later one. Revisions are not compared because a replaced root
+   * incarnation restarts them for the same entity and node. */
   feedRanges(
     ranges: readonly GuiVirtualRangeChangedEffect[],
     onError?: (error: Error) => void,
@@ -546,8 +548,6 @@ export class GuiEffectSubscriptions {
     for (const range of ranges) {
       const key = `${range.entity}:${range.node}`;
       const entry = this.ranges.get(key) ?? {};
-      if (entry.latest !== undefined && range.revision <= entry.latest.revision)
-        continue;
       entry.latest = range;
       this.ranges.set(key, entry);
       if (entry.listener === undefined) continue;

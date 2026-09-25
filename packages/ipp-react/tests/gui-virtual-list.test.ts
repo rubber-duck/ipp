@@ -298,7 +298,7 @@ function range(
   };
 }
 
-test("wanted ranges wait for their list, then deliver in revision order", () => {
+test("wanted ranges wait for their list, then deliver in arrival order", () => {
   const subscriptions = new GuiEffectSubscriptions();
   const seen: GuiVirtualRange[] = [];
   const errors: Error[] = [];
@@ -308,17 +308,20 @@ test("wanted ranges wait for their list, then deliver in revision order", () => 
   subscriptions.subscribeRange(100n, 2, (next) => void seen.push(next));
   assert.deepEqual(seen, [{ first: 0, last: 14 }]);
 
-  // Later revisions deliver; stale ones and other lists do not.
+  // Later ranges deliver in arrival order, including a replaced root's
+  // restarted revisions; other lists do not.
   assert.equal(
     subscriptions.feedRanges([
       range(2, 10, 24, 3),
-      range(2, 4, 18, 2),
+      range(2, 4, 18, 1),
       range(9, 0, 1, 1),
     ]),
-    1,
+    2,
   );
-  assert.deepEqual(seen.at(-1), { first: 10, last: 24 });
-  assert.equal(seen.length, 2);
+  assert.deepEqual(seen.slice(1), [
+    { first: 10, last: 24 },
+    { first: 4, last: 18 },
+  ]);
 
   // Replacing the observer does not replay; a throwing one is isolated.
   subscriptions.subscribeRange(
@@ -340,5 +343,5 @@ test("wanted ranges wait for their list, then deliver in revision order", () => 
   // Removing the list drops its observer and its latest range.
   subscriptions.unsubscribe(100n, 1n, 2);
   subscriptions.subscribeRange(100n, 2, (next) => void seen.push(next));
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
 });

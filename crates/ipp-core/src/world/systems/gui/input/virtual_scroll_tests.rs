@@ -342,3 +342,71 @@ fn scroll_to_index_moves_the_anchor_and_a_new_incarnation_restores_it() {
         [0.0, 70_000.0]
     );
 }
+
+/// Route one primary pointer step in its own tick, then apply it.
+fn pointer(fixture: &mut Fixture, kind: &str, position: [f32; 2]) {
+    let command = match kind {
+        "down" => crate::GuiInputCommand::PointerDown {
+            pointer: 1,
+            panel: None,
+            position,
+            button: crate::GuiPointerButton::Primary,
+            blockers: Vec::new(),
+            panel_distance: None,
+        },
+        "move" => crate::GuiInputCommand::PointerMove {
+            pointer: 1,
+            panel: None,
+            position,
+            blockers: Vec::new(),
+            panel_distance: None,
+        },
+        _ => crate::GuiInputCommand::PointerUp {
+            pointer: 1,
+            panel: None,
+            position,
+            button: crate::GuiPointerButton::Primary,
+            blockers: Vec::new(),
+            panel_distance: None,
+        },
+    };
+    world(fixture)
+        .enqueue_gui_input_command(SESSION, command)
+        .unwrap();
+    step(fixture);
+    step(fixture);
+}
+
+#[test]
+fn scroll_bars_and_drags_scroll_a_virtual_list_like_a_scroll_view() {
+    let mut fixture = setup();
+    let panel = fixture.panel;
+    insert_list(&mut fixture);
+
+    // The 10 x 6 viewport shows a vertical bar 0.3 wide at x 9.7..10; over
+    // 100000 items its thumb keeps the two-thickness minimum of 0.6 and
+    // travels 5.4 over the capacity.
+    let capacity = COUNT as f32 - 6.0;
+    pointer(&mut fixture, "down", [9.85, 0.3]);
+    pointer(&mut fixture, "move", [9.85, 0.3 + 2.7]);
+    let offset = world(&mut fixture).gui_input_scroll(panel, LIST);
+    assert!(
+        offset[0] == 0.0 && (offset[1] - capacity / 2.0).abs() < 1.0,
+        "{offset:?}"
+    );
+    pointer(&mut fixture, "up", [9.85, 3.0]);
+    let (index, within) = anchor(&mut fixture);
+    assert!((index as f32 + within - offset[1]).abs() < 1.0e-2);
+
+    // A primary drag over content past the slop scrolls the list by the
+    // dragged distance, and its anchor follows.
+    let before = world(&mut fixture).gui_input_scroll(panel, LIST)[1];
+    pointer(&mut fixture, "down", [5.0, 4.0]);
+    pointer(&mut fixture, "move", [5.0, 3.0]);
+    pointer(&mut fixture, "move", [5.0, 2.0]);
+    pointer(&mut fixture, "up", [5.0, 2.0]);
+    let after = world(&mut fixture).gui_input_scroll(panel, LIST)[1];
+    assert!((after - before - 2.0).abs() < 1.0e-2, "{before} -> {after}");
+    let (index, within) = anchor(&mut fixture);
+    assert!((index as f32 + within - after).abs() < 1.0e-2);
+}

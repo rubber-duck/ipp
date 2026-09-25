@@ -12,7 +12,7 @@ use crate::systems::animation::{
 #[cfg(feature = "gui")]
 use crate::systems::gui::{
     GuiCommand, GuiContainerKind, GuiControlValue, GuiInputCancelReason, GuiInputCommand,
-    GuiInputEffectKind, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
+    GuiInputEffectKind, GuiKey, GuiNodeData, GuiNodeHandle, GuiNodeId, GuiNodePatch, GuiNodeStyle,
     GuiPointerButton, GuiRoot, GuiUnhandledReason,
 };
 #[cfg(feature = "gui")]
@@ -836,7 +836,8 @@ fn unchanged_frames_prepare_once_while_hover_press_and_focus_still_repaint() {
         panel_box_color(&mut host, world, panel),
         [1.0, 0.0, 0.0, 1.0]
     );
-    assert!(panel_has_focus_ring(&mut host, world, panel));
+    // Pointer-press focus takes semantic focus without the ring.
+    assert!(!panel_has_focus_ring(&mut host, world, panel));
     assert_eq!(idle_frames(&mut host, world, 3), (3, 0));
 
     let (_, reconciliations) = input_frames(&mut host, world, pointer_up(1, at));
@@ -845,6 +846,18 @@ fn unchanged_frames_prepare_once_while_hover_press_and_focus_still_repaint() {
         panel_box_color(&mut host, world, panel),
         [0.0, 1.0, 0.0, 1.0]
     );
+    assert!(!panel_has_focus_ring(&mut host, world, panel));
+
+    // Keyboard focus earns the ring and still repaints.
+    let (_, reconciliations) = input_frames(
+        &mut host,
+        world,
+        GuiInputCommand::Key {
+            key: GuiKey::Tab,
+            pressed: true,
+        },
+    );
+    assert!(reconciliations >= 1);
     assert!(panel_has_focus_ring(&mut host, world, panel));
 
     let (_, reconciliations) = input_frames(&mut host, world, pointer_move(1, [9.0, 9.0]));

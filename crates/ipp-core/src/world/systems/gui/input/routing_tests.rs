@@ -2961,3 +2961,45 @@ fn cancel_across_steps_discards_provisional_press() {
     let report = world(&mut fixture).step(0.0).unwrap();
     assert!(report.gui_input_effects.is_empty());
 }
+
+#[test]
+fn pointer_press_takes_focus_without_ring_while_tab_earns_it() {
+    let mut fixture = setup();
+    insert_nodes(&mut fixture, false, true);
+    let first = node_centre(&mut fixture, GuiNodeId(2));
+    {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(SESSION, down_up(1, first)[0].clone())
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    // A pointer press takes semantic focus so the same tick can chain
+    // focus-then-key inputs, but the focus ring stays keyboard-only.
+    let cursors = world(&mut fixture)
+        .system::<GuiInputSystem>(GuiInputSystem::ID)
+        .unwrap()
+        .skin_cursors();
+    assert!(cursors.focus.is_some());
+    assert!(!cursors.focus_visible);
+    {
+        let mut context = world(&mut fixture);
+        context
+            .enqueue_gui_input_command(
+                SESSION,
+                GuiInputCommand::Key {
+                    key: GuiKey::Tab,
+                    pressed: true,
+                },
+            )
+            .unwrap();
+        context.step(0.0).unwrap();
+    }
+    // Keyboard traversal earns the ring on the newly focused control.
+    let cursors = world(&mut fixture)
+        .system::<GuiInputSystem>(GuiInputSystem::ID)
+        .unwrap()
+        .skin_cursors();
+    assert!(cursors.focus.is_some());
+    assert!(cursors.focus_visible);
+}

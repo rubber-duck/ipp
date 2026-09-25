@@ -794,7 +794,10 @@ export function ProjectorDashboard({
             width={0.8}
             height={0.38}
             alignY={0}
-            padding={[0.085, 0.1, 0.085, 0.16]}
+            // Button labels lay out left-aligned from the content origin, so
+            // the left padding is tuned per label to centre the ink: SPAN
+            // measures 0.386 wide, leaving (0.8 - 0.386) / 2 per side.
+            padding={[0.085, 0.1, 0.085, 0.207]}
             label="SPAN"
             fontSize={0.15}
             theme={inputTheme}
@@ -848,7 +851,9 @@ export function ProjectorDashboard({
             key="uplink"
             width={1.0}
             height={0.38}
-            padding={[0.085, 0.1, 0.085, 0.14]}
+            // As above: UPLINK measures 0.502 wide, leaving
+            // (1.0 - 0.502) / 2 per side.
+            padding={[0.085, 0.1, 0.085, 0.249]}
             label="UPLINK"
             fontSize={0.15}
             theme={inputTheme}

@@ -92,6 +92,10 @@ pub struct GuiInteractionState {
     pub pressed: bool,
     /// Whether keyboard focus names this exact target.
     pub focused: bool,
+    /// Whether the focus source earns the focus ring: set only for keyboard
+    /// and programmatic focus, never for pointer-press focus. Text inputs
+    /// additionally keep the ring on pointer focus; see [`Self::ring_visible`].
+    pub focus_visible: bool,
 }
 
 impl GuiInteractionState {
@@ -102,7 +106,15 @@ impl GuiInteractionState {
             hovered: false,
             pressed: false,
             focused: false,
+            focus_visible: false,
         }
+    }
+
+    /// Whether this target paints the focus ring: keyboard and programmatic
+    /// focus everywhere, pointer-press focus only on text inputs where
+    /// keyboard input lands and the caret target must stay visible.
+    pub fn ring_visible(&self, is_text_input: bool) -> bool {
+        self.focus_visible || (self.focused && is_text_input)
     }
 
     /// Resolve the mutually exclusive appearance state.
@@ -120,6 +132,11 @@ pub struct GuiSkinCursors {
     pub pressed: BTreeSet<GuiInputTarget>,
     /// Full-fenced keyboard focus.
     pub focus: Option<GuiInputFocus>,
+    /// Whether the focus source earns the focus ring: keyboard and
+    /// programmatic focus show it, pointer-press focus does not. Text inputs
+    /// additionally keep the ring on pointer focus at paint time; see
+    /// [`GuiInteractionState::ring_visible`].
+    pub focus_visible: bool,
     /// Committed offsets and bar interaction of ScrollViews that scrolled or
     /// whose scroll bars a pointer hovers or presses.
     pub scroll_bars: BTreeMap<GuiInputTarget, GuiScrollBarCursor>,
@@ -139,11 +156,13 @@ pub struct GuiScrollBarCursor {
 impl GuiSkinCursors {
     /// Project transient cursors onto one exact live target.
     pub fn interaction_for(&self, target: GuiInputTarget, enabled: bool) -> GuiInteractionState {
+        let focused = self.focus.is_some_and(|focus| focus.target == target);
         GuiInteractionState {
             disabled: !enabled,
             hovered: self.hovered.contains(&target),
             pressed: self.pressed.contains(&target),
-            focused: self.focus.is_some_and(|focus| focus.target == target),
+            focused,
+            focus_visible: focused && self.focus_visible,
         }
     }
 
@@ -938,7 +957,11 @@ pub(crate) fn skinned_primitives_for_view_with_overrides(
                 painted.push(primitive);
             }
         }
-        if eligible && interaction.focused {
+        let ring = interaction.ring_visible(matches!(
+            node.content,
+            GuiEvaluatedContent::TextInput { .. }
+        ));
+        if eligible && ring {
             let id = GuiPrimitiveId {
                 root_incarnation: view.root_incarnation,
                 node: node.node,
@@ -1043,7 +1066,11 @@ pub(crate) fn skinned_parts_for_view<'a>(
                 });
             }
         }
-        if interaction.focused {
+        let ring = interaction.ring_visible(matches!(
+            node.content,
+            GuiEvaluatedContent::TextInput { .. }
+        ));
+        if ring {
             parts.push(GuiSkinnedPart {
                 id: GuiPrimitiveId {
                     root_incarnation: view.root_incarnation,
@@ -1256,6 +1283,8 @@ fn synthetic_control_part(
                 _ => 0.0,
             };
             let height = node.rect[3] * SLIDER_TRACK_HEIGHT;
+            // Not inset by the track border by decision (ipp-jtst.7): the
+            // flush fill and the track read as one shape; see fill_rect.
             let logical = super::super::slider_rail(node.rect)?.fill_rect(ratio, height)?;
             (logical, node.color, node.opacity, height * 0.5 / units)
         }

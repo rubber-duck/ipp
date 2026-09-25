@@ -1,6 +1,6 @@
 import { ReactAnimationRegistry } from "./animation_state.js";
 import { ReactAssetRegistry } from "./asset_state.js";
-import { GuiCommits } from "./gui/commits.js";
+import { GuiAdoptionRefusedError, GuiCommits } from "./gui/commits.js";
 import type { FieldWrite, StateOverlayAlias } from "@ipp/client";
 import type {
   StateOverlayLifecycleDiagnostic,
@@ -38,13 +38,6 @@ export class EntityOverlayBindingLostError extends Error {
     );
     this.name = "EntityOverlayBindingLostError";
   }
-}
-
-/** True for GUI adoption refusals: the runtime tree belongs to another
- * writer (see GuiCommits adoption), so this attempt must release what it
- * acquired and leave foreign state alone. */
-function isGuiAdoptionRefusal(error: unknown): boolean {
-  return error instanceof Error && /another writer/.test(error.message);
 }
 
 type AcknowledgedStateOverlay<T> = {
@@ -373,7 +366,8 @@ export class ReactWorldCommits {
       // acquired; previously acknowledged declarations and foreign trees
       // are never removed. A failed cleanup retains its handles for the
       // next render, and unmount still releases the owner.
-      if (isGuiAdoptionRefusal(error)) await this.cleanupAttemptDelta();
+      if (error instanceof GuiAdoptionRefusedError)
+        await this.cleanupAttemptDelta();
       throw error;
     } finally {
       this.attemptBase = undefined;

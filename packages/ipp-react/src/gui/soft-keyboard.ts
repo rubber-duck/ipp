@@ -9,7 +9,7 @@
  * keyboard itself, and core keeps text authority throughout — a denied or
  * failed request sends no input command and changes no focus.
  *
- * The policy mirrors the `.8` focus fence: showing the keyboard is tied
+ * The policy follows the runtime focus fence: showing the keyboard is tied
  * to genuine activation gestures, and blur always allows dismissal.
  * Headless use imports no DOM dependencies: platform objects resolve
  * inside the functions via `globalThis`.
@@ -41,18 +41,6 @@ export interface VirtualKeyboardLike {
   hide(): Promise<void> | void;
 }
 
-export interface SoftKeyboardHookOptions {
-  readonly onError?: (error: Error) => void;
-}
-
-export type SoftKeyboardShowOutcome =
-  | "shown"
-  | "skipped"
-  | "unavailable"
-  | "failed";
-
-export type SoftKeyboardHideOutcome = "hidden" | "unavailable" | "failed";
-
 /** Whether the gesture kind alone can ever request the keyboard. */
 export function isTrustedSoftKeyboardTrigger(
   trigger: SoftKeyboardTrigger,
@@ -76,11 +64,6 @@ export function shouldShowSoftKeyboard(
   return request.trigger === "key" && (options.allowKeyTrigger ?? false);
 }
 
-/** Blur and focus loss always allow keyboard dismissal. */
-export function shouldHideSoftKeyboardOnBlur(): boolean {
-  return true;
-}
-
 /** Resolve the platform virtual keyboard without throwing. */
 export function resolveVirtualKeyboard(
   navigatorLike: unknown = globalNavigator(),
@@ -101,47 +84,4 @@ export function resolveVirtualKeyboard(
 
 function globalNavigator(): unknown {
   return (globalThis as { navigator?: unknown }).navigator;
-}
-
-/** Request the soft keyboard subject to the trusted-gesture policy.
- *
- * Returns `unavailable` when the platform has no virtual keyboard,
- * `skipped` when the policy denies the request (no error: denial is the
- * normal outcome for untrusted callers), `shown` after `show()` settles,
- * and `failed` when `show()` rejects (reported through `onError`). Never
- * sends input commands and never moves focus.
- */
-export async function requestSoftKeyboard(
-  keyboard: VirtualKeyboardLike | undefined,
-  request: SoftKeyboardRequest,
-  options: SoftKeyboardHookOptions & SoftKeyboardPolicyOptions = {},
-): Promise<SoftKeyboardShowOutcome> {
-  if (keyboard === undefined) return "unavailable";
-  if (!shouldShowSoftKeyboard(request, options)) return "skipped";
-  try {
-    await keyboard.show();
-  } catch (error) {
-    options.onError?.(
-      error instanceof Error ? error : new Error(String(error)),
-    );
-    return "failed";
-  }
-  return "shown";
-}
-
-/** Dismiss the soft keyboard (best effort, always policy-allowed). */
-export async function dismissSoftKeyboard(
-  keyboard: VirtualKeyboardLike | undefined,
-  options: SoftKeyboardHookOptions = {},
-): Promise<SoftKeyboardHideOutcome> {
-  if (keyboard === undefined) return "unavailable";
-  try {
-    await keyboard.hide();
-  } catch (error) {
-    options.onError?.(
-      error instanceof Error ? error : new Error(String(error)),
-    );
-    return "failed";
-  }
-  return "hidden";
 }

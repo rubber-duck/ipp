@@ -428,6 +428,11 @@ export function IppCanvas({
     };
   }, [surface, session, width, height]);
 
+  // Blockers attach by value: an inline array literal that names the same
+  // blockers must not detach live pointers and the text bridge on every render.
+  const blockersKey = guiInput?.blockers
+    ?.map((blocker) => `${blocker.entity}:${blocker.distance}`)
+    .join(",");
   useEffect(() => {
     const inputOptions = guiInputRef.current;
     if (!surface || !session || !inputOptions || session.isClosing) return;
@@ -592,7 +597,7 @@ export function IppCanvas({
     guiInput?.blurOnKeyboardTarget,
     guiInput?.preventDefaultPointer,
     guiInput?.enableTouchActionNone,
-    guiInput?.blockers,
+    blockersKey,
     guiInput?.panelDistance,
     guiInput?.unhandledInputGate,
   ]);

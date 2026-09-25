@@ -1,6 +1,6 @@
 /** Clipboard bridge permission and failure coverage; headless fakes only.
  *
- * Every failure test pins the `.12` invariant: platform failure never
+ * Every failure test pins the text-authority invariant: platform failure never
  * transfers text authority — no input command is sent and no DOM value
  * is treated as committed text.
  */

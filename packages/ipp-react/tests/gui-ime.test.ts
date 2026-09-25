@@ -2,13 +2,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  attachImeBridge,
   createImeBridge,
   mapCompositionEnd,
   mapCompositionUpdate,
   shouldSkipBeforeInput,
   utf8ByteLength,
-  type ImeEventTarget,
 } from "../src/gui/ime.js";
 import type { BrowserGuiInputCommand } from "../src/gui/input.js";
 
@@ -143,54 +141,4 @@ test("bridge reports sink failures without breaking the session", () => {
   assert.equal(calls, 2);
   assert.equal(errors.length, 2);
   assert.match(errors[0]!.message, /sink full/);
-});
-
-interface FakeTarget {
-  listeners: Map<string, Set<(event: never) => void>>;
-  addEventListener(type: string, listener: (event: never) => void): void;
-  removeEventListener(type: string, listener: (event: never) => void): void;
-  dispatch(type: string, event: Record<string, unknown>): void;
-}
-
-function fakeTarget(): FakeTarget {
-  const listeners = new Map<string, Set<(event: never) => void>>();
-  return {
-    listeners,
-    addEventListener(type, listener) {
-      let group = listeners.get(type);
-      if (!group) listeners.set(type, (group = new Set()));
-      group.add(listener);
-    },
-    removeEventListener(type, listener) {
-      listeners.get(type)?.delete(listener);
-    },
-    dispatch(type, event) {
-      for (const listener of listeners.get(type) ?? []) {
-        listener(event as never);
-      }
-    },
-  };
-}
-
-test("attach wires composition events in DOM order and detaches", () => {
-  const target = fakeTarget();
-  const sent: BrowserGuiInputCommand[] = [];
-  const detach = attachImeBridge(target as unknown as ImeEventTarget, {
-    send: (command) => sent.push(command),
-  });
-  target.dispatch("compositionstart", { data: "" });
-  target.dispatch("compositionupdate", { data: "世界" });
-  target.dispatch("compositionend", { data: "世界" });
-  // A cancelled session ends with empty data.
-  target.dispatch("compositionstart", { data: "" });
-  target.dispatch("compositionend", { data: "" });
-  assert.deepEqual(sent, [
-    { kind: "composition", text: "世界", caretStart: 6, caretEnd: 6 },
-    { kind: "commitComposition" },
-    { kind: "cancelComposition" },
-  ]);
-  detach();
-  assert.equal(target.listeners.get("compositionstart")?.size ?? 0, 0);
-  assert.equal(target.listeners.get("compositionupdate")?.size ?? 0, 0);
-  assert.equal(target.listeners.get("compositionend")?.size ?? 0, 0);
 });

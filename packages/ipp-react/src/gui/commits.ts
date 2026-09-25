@@ -22,36 +22,48 @@ import {
   guiPartFromIndex,
   type BatchOutcome,
   type Command,
+  type GuiCommittedEffect,
   type GuiEdit,
   type GuiEditBatchOutcome,
   type GuiInspectedNode,
   type GuiInspectResponse,
   type GuiNodeHandle,
+  type GuiNodeStyle,
+  type GuiObservationBatch,
   type GuiPartPatch,
   type GuiPartValues,
 } from "@ipp/client";
 import type { ReactWorldClient } from "../contract.js";
-import type { GuiDeclarationStyle, GuiNodeRef } from "./components.js";
-import type { GuiDeclarationPatchStyle } from "./diff.js";
+import type { GuiNodeRef } from "./components.js";
 import {
   controlKindForData,
   GuiEffectSubscriptions,
   isCommittedEffect,
   nameForData,
-  type GuiCommittedEffect,
-  type GuiObservationBatch,
   type GuiObservationSink,
   type GuiObservationSummary,
 } from "./callbacks.js";
 import {
   equalGuiNode,
   normalizeGuiStyle,
+  type GuiActionListeners,
   type GuiDescribedNode,
   type GuiDescribedRoot,
 } from "./description.js";
 import { diffGuiTree, type GuiAcknowledgedNode } from "./diff.js";
 import { retainedNodeCallbacks } from "../tree.js";
 import { compileGuiTheme, guiThemeKey, type GuiControlTheme } from "./theme.js";
+
+/** A GuiRoot already holds live nodes from another writer, so this commit
+ * refuses to adopt them and leaves the foreign tree untouched. */
+export class GuiAdoptionRefusedError extends Error {
+  constructor() {
+    super(
+      "GuiRoot already has live nodes from another writer; refusing to adopt them",
+    );
+    this.name = "GuiAdoptionRefusedError";
+  }
+}
 
 export interface GuiCommitOptions {
   checkSession(): void;
@@ -283,7 +295,23 @@ export class GuiCommits {
         ...sink,
         ...(onError === undefined ? {} : { onError }),
       },
+      (entity, rootIncarnation) => this.rootListeners(entity, rootIncarnation),
     );
+  }
+
+  /** Current GuiRoot action listeners for one acknowledged root identity. */
+  private rootListeners(
+    entity: bigint,
+    rootIncarnation: bigint,
+  ): GuiActionListeners | undefined {
+    for (const [identity, state] of this.states) {
+      if (state.entity !== entity || state.incarnation !== rootIncarnation)
+        continue;
+      const root = this.localRoots.get(identity);
+      if (root === undefined) return undefined;
+      return { capture: root.onActionCapture, bubble: root.onAction };
+    }
+    return undefined;
   }
 
   private observationSource(): GuiObservationSource | null {
@@ -446,11 +474,7 @@ export class GuiCommits {
     producerOwned: boolean,
   ): GuiRootState {
     if (inspection.nodes.length > 0)
-      throw this.options.report(
-        new Error(
-          "GuiRoot already has live nodes from another writer; refusing to adopt them",
-        ),
-      );
+      throw this.options.report(new GuiAdoptionRefusedError());
     const restored = this.highWater.get(
       this.waterKey(entity, inspection.rootIncarnation),
     );
@@ -742,6 +766,7 @@ export class GuiCommits {
       const previous = state.themes.get(key);
       const id = previous?.id ?? nextThemeId++;
       ids.set(key, id);
+      const firstEdit = edits.length;
       const indices = new Set([
         ...(previous?.rows.keys() ?? []),
         ...rows.keys(),
@@ -771,9 +796,12 @@ export class GuiCommits {
         });
         effects.push(() => {});
       }
-      effects[effects.length - 1] = () => {
-        state.themes.set(key, { id, rows });
-      };
+      // Record the theme only when its own final edit applies; an unchanged
+      // theme sends nothing and records nothing.
+      if (edits.length > firstEdit)
+        effects[effects.length - 1] = () => {
+          state.themes.set(key, { id, rows });
+        };
     }
     for (const [nodeId, key] of references) {
       const id = key === undefined ? undefined : ids.get(key);
@@ -859,7 +887,7 @@ export class GuiCommits {
         const identity = identityOf(edit.handle.nodeId);
         const ack = state.acked.get(identity);
         if (!ack) throw new Error("Missing acknowledged GUI node");
-        const style: GuiDeclarationStyle = { ...ack.style };
+        const style: GuiNodeStyle = { ...ack.style };
         const patch = edit.patch.style;
         if (patch) {
           if (patch.width !== undefined)
@@ -905,7 +933,7 @@ export class GuiCommits {
             if (patch.asset === null) delete style.asset;
             else style.asset = patch.asset;
           }
-          const declaredEnabled = (patch as GuiDeclarationPatchStyle).enabled;
+          const declaredEnabled = patch.enabled;
           if (declaredEnabled !== undefined) style.enabled = declaredEnabled;
           if (patch.position !== undefined)
             style.position = [...patch.position];

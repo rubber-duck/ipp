@@ -1,4 +1,10 @@
-import type { GuiInputCommand, GuiInputRoutingOutcome } from "@ipp/client";
+import type {
+  GuiInputCommand,
+  GuiInputRoutingOutcome,
+  GuiKey,
+  GuiLogicalPoint,
+  GuiPointerButton,
+} from "@ipp/client";
 import { createImeBridge, shouldSkipBeforeInput } from "./ime.js";
 import {
   closeUnhandledInputGate,
@@ -32,25 +38,6 @@ import {
  * multiple panels and pointer identities; other clients may author or
  * observe without acquiring input ownership.
  */
-
-export type GuiPointerButton = "primary" | "secondary" | "auxiliary";
-
-export type GuiKey =
-  | "tab"
-  | "enter"
-  | "space"
-  | "escape"
-  | "backspace"
-  | "delete"
-  | "left"
-  | "right"
-  | "up"
-  | "down"
-  | "home"
-  | "end";
-
-/** GUI logical point: top-left origin, +X right, +Y down. */
-export type GuiLogicalPoint = readonly [number, number];
 
 /**
  * Normalized viewport point: CSS fraction of the live canvas rect,

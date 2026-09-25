@@ -567,8 +567,7 @@ export interface GuiUnhandledObservation {
 }
 
 /** One ordered observation batch: committed effects plus the records that
- * never accompany one. Shapes mirror `@ipp/react/gui` callbacks so the
- * registry consumes client batches directly. */
+ * never accompany one. `@ipp/react/gui` consumes these batches directly. */
 export interface GuiObservationBatch {
   readonly effects: readonly GuiCommittedEffect[];
   readonly conflicts?: readonly GuiConflictObservation[] | undefined;

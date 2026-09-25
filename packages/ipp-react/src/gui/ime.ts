@@ -5,9 +5,9 @@ import type { BrowserGuiInputCommand, GuiInputSink } from "./input.js";
  * Platform adapter slice for the optional `@ipp/react/gui` entry point:
  * DOM `compositionstart` / `compositionupdate` / `compositionend` and
  * `beforeinput` payloads translate into the ordered composition commands
- * owned by core (`.8`: `UpdateComposition` / `CommitComposition` /
- * `CancelComposition`) through the existing ordered ingress sink (`.11`:
- * `GuiInputSink` into the correlated `RequestBody::GuiInput` path, or
+ * owned by core (`UpdateComposition` / `CommitComposition` /
+ * `CancelComposition`) through the existing ordered ingress sink
+ * (`GuiInputSink` into the correlated `RequestBody::GuiInput` path, or
  * `WorldContext::enqueue_gui_input_command` for host-owned loops).
  *
  * Ownership: core `GuiInputSystem` owns the provisional composition buffer,
@@ -15,8 +15,7 @@ import type { BrowserGuiInputCommand, GuiInputSink } from "./input.js";
  * only the open flag and last provisional payload needed to make a terminal
  * `compositionend.data` authoritative when a platform omits its matching
  * final update. It never mutates scene state or re-decides routing. Headless
- * use imports no DOM dependencies: the DOM is touched only inside
- * {@link attachImeBridge}.
+ * use imports no DOM dependencies: callers attach the DOM listeners.
  *
  * W3C sequence per composition session: `compositionstart`, then one or
  * more `compositionupdate` provisional payloads (each paired with a
@@ -27,20 +26,14 @@ import type { BrowserGuiInputCommand, GuiInputSink } from "./input.js";
  * `compositionupdate` only, and both `beforeinput` composition payloads
  * are skipped (see {@link shouldSkipBeforeInput}). `keydown` 229 handling
  * stays absent deliberately: `beforeinput` remains the text source of
- * truth, as in the `.11` relay.
+ * truth, as in the canvas input relay.
  *
- * Caret offsets index UTF-8 bytes (`.8`); browsers report no caret, so
+ * Caret offsets index UTF-8 bytes; browsers report no caret, so
  * each provisional carries a caret collapsed at its UTF-8 end.
  */
 
 export interface ImeBridgeOptions {
   readonly onError?: (error: Error) => void;
-}
-
-/** Minimal event target for IME listeners; real elements satisfy this. */
-export interface ImeEventTarget {
-  addEventListener(type: string, listener: EventListener): void;
-  removeEventListener(type: string, listener: EventListener): void;
 }
 
 /** UTF-8 byte length of a string (caret unit for composition commands). */
@@ -116,8 +109,8 @@ export interface ImeBridge {
  *
  * Sends serialize in call order through the sink. A `compositionstart`
  * arriving while a session is open cancels the stale provisional first
- * (no silent merge, mirroring `.8` direct-edit cancellation); blur
- * cancels an open session (mirroring the `.8` focus fence) and is a
+ * (no silent merge, matching core direct-edit cancellation); blur
+ * cancels an open session (matching the core focus fence) and is a
  * no-op while idle.
  */
 export function createImeBridge(
@@ -167,44 +160,5 @@ export function createImeBridge(
       lastProvisional = null;
       send({ kind: "cancelComposition" });
     },
-  };
-}
-
-export interface AttachImeBridgeOptions {
-  readonly onError?: (error: Error) => void;
-}
-
-/** Attach IME composition listeners to a keyboard target.
- *
- * Forwards `compositionstart` / `compositionupdate` / `compositionend`
- * through a session tracker into the ordered sink. Use this for focused
- * text-input hosts (for example a hidden input element) that do not use
- * the combined canvas relay; `attachCanvasGuiInput` already wires the
- * same composition mapping onto its own keyboard target, so attaching
- * both to one element would double-send. Returns a detach function
- * removing every listener.
- */
-export function attachImeBridge(
-  target: ImeEventTarget,
-  sink: GuiInputSink,
-  options: AttachImeBridgeOptions = {},
-): () => void {
-  const bridge = createImeBridge(sink, options);
-  const onStart = (): void => {
-    bridge.compositionStart();
-  };
-  const onUpdate = (event: Event): void => {
-    bridge.compositionUpdate((event as CompositionEvent).data);
-  };
-  const onEnd = (event: Event): void => {
-    bridge.compositionEnd((event as CompositionEvent).data);
-  };
-  target.addEventListener("compositionstart", onStart);
-  target.addEventListener("compositionupdate", onUpdate);
-  target.addEventListener("compositionend", onEnd);
-  return () => {
-    target.removeEventListener("compositionstart", onStart);
-    target.removeEventListener("compositionupdate", onUpdate);
-    target.removeEventListener("compositionend", onEnd);
   };
 }

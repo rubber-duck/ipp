@@ -1,5 +1,5 @@
-import type { GuiInputRoutingOutcome } from "@ipp/client";
-import type { BrowserGuiInputCommand, GuiPointerButton } from "./input.js";
+import type { GuiInputRoutingOutcome, GuiPointerButton } from "@ipp/client";
+import type { BrowserGuiInputCommand } from "./input.js";
 
 /** Admission gate for scene gestures sharing a canvas with runtime GUI input.
  *

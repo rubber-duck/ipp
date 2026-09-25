@@ -1,11 +1,11 @@
-/** GUI event callbacks for `@ipp/react/gui` (ipp-9nx.14).
+/** GUI event callbacks for `@ipp/react/gui`.
  *
  * Application callbacks observe committed effects only. The host app feeds
- * committed input outcomes (mirroring the frozen `GuiInputEffectKind`
- * control variants: momentary `ButtonPressed` and revision-keyed
- * `ControlCommitted`) together with the acknowledged listener table, and
- * this module invokes the matching control callback plus the logical
- * ancestor `onAction` path. Transient cursors (focus, hover, scroll) are
+ * committed input outcomes (the client's momentary `buttonPressed` and
+ * revision-keyed `controlCommitted` effects) together with the acknowledged
+ * listener table, and this module invokes the matching control callback plus
+ * the logical ancestor `onAction` path, whose outermost entries are the
+ * GuiRoot's own listeners. Transient cursors (focus, hover, scroll) are
  * not representable here and never produce callbacks.
  *
  * IPP keeps interaction and editing ownership: dispatch returns an
@@ -21,23 +21,23 @@
  * already-committed data and performs no transport.
  */
 import type {
+  GuiCancelObservation,
+  GuiCommittedEffect,
+  GuiConflictObservation,
   GuiControlValue,
-  GuiInputCommand,
   GuiNodeData,
+  GuiObservationBatch,
+  GuiUnhandledObservation,
 } from "@ipp/client";
-import { dispatchGuiAction, resolveGuiActionPath } from "./description.js";
+import {
+  dispatchGuiAction,
+  resolveGuiActionPath,
+  type GuiActionListeners,
+} from "./description.js";
 import type { GuiActionListener } from "./components.js";
 
 /** Controls that carry committed values and event callbacks. */
 export type GuiControlKind = "button" | "checkbox" | "slider" | "textInput";
-
-/** Supported headless actions per control kind, mirroring the .13 semantics. */
-export type GuiControlAction =
-  | "press"
-  | "toggle"
-  | "setScalar"
-  | "setText"
-  | "focus";
 
 /** Momentary-press observation. Buttons store no value and no revision. */
 export interface GuiPressEvent {
@@ -69,51 +69,6 @@ export type GuiPressListener = (event: GuiPressEvent) => void;
 export type GuiToggleListener = (event: GuiControlEvent<boolean>) => void;
 export type GuiScalarCommitListener = (event: GuiControlEvent<number>) => void;
 export type GuiTextCommitListener = (event: GuiControlEvent<string>) => void;
-
-/** Committed button outcome, mirroring `ButtonPressed{entity, node}`. */
-export interface GuiButtonPressedEffect {
-  readonly kind: "buttonPressed";
-  readonly entity: bigint;
-  readonly rootIncarnation: bigint;
-  readonly node: number;
-  /** Runtime logical ancestor path, root-first including the target, when pinned. */
-  readonly path?: readonly number[] | undefined;
-  /** Routing frame, when the feeding publication carries ticks. */
-  readonly sourceTick?: bigint | undefined;
-  /** Application frame, when the feeding publication carries ticks. */
-  readonly effectTick?: bigint | undefined;
-}
-
-/** Committed control outcome, mirroring `ControlCommitted`. */
-export interface GuiControlCommittedEffect {
-  readonly kind: "controlCommitted";
-  readonly entity: bigint;
-  readonly rootIncarnation: bigint;
-  readonly node: number;
-  readonly value: GuiControlValue;
-  readonly revision: number;
-  /** Runtime logical ancestor path, root-first including the target, when pinned. */
-  readonly path?: readonly number[] | undefined;
-  /** Routing frame, when the feeding publication carries ticks. */
-  readonly sourceTick?: bigint | undefined;
-  /** Application frame, when the feeding publication carries ticks. */
-  readonly effectTick?: bigint | undefined;
-}
-
-/** Committed effects only; transient cursors are unrepresentable by design. */
-export type GuiCommittedEffect =
-  | GuiButtonPressedEffect
-  | GuiControlCommittedEffect;
-
-/** Whether one committed effect refreshes committed semantics.
- *
- * Mirrors the .13 rule: `ButtonPressed` and `ControlCommitted` name control
- * outcomes; focus, hover and scroll effects report transient cursors and
- * never change committed values, revisions, bounds or states.
- */
-export function refreshesSemantics(kind: GuiCommittedEffect["kind"]): boolean {
-  return kind === "buttonPressed" || kind === "controlCommitted";
-}
 
 function isU32(value: unknown): value is number {
   return (
@@ -191,26 +146,10 @@ export function controlKindForData(data: GuiNodeData): GuiControlKind | null {
   }
 }
 
-/** Supported headless actions for one control kind, mirroring .13. */
-export function actionsForControlKind(
-  kind: GuiControlKind,
-): readonly GuiControlAction[] {
-  switch (kind) {
-    case "button":
-      return ["press"];
-    case "checkbox":
-      return ["toggle", "focus"];
-    case "slider":
-      return ["setScalar", "focus"];
-    case "textInput":
-      return ["setText", "focus"];
-  }
-}
-
 /** Human-readable name for one node's authored strings, if any.
  *
- * Mirrors the .13 rule: button labels, text-input placeholders while
- * nonempty, otherwise none.
+ * Button labels and nonempty text-input placeholders; otherwise none. This
+ * matches the semantic name the runtime reports.
  */
 export function nameForData(data: GuiNodeData): string | undefined {
   switch (data.kind) {
@@ -250,8 +189,16 @@ export interface GuiCallbackResolution {
     rootIncarnation: bigint,
     node: number,
   ) => GuiControlListenerRecord | undefined;
+  /** The GuiRoot's own action listeners, outermost on every path. */
+  readonly rootListeners?: GuiRootListenerResolver | undefined;
   readonly onError?: (error: Error) => void;
 }
+
+/** Resolves the GuiRoot action listeners of one exact root identity. */
+export type GuiRootListenerResolver = (
+  entity: bigint,
+  rootIncarnation: bigint,
+) => GuiActionListeners | undefined;
 
 /** Observation summary. No retroactive cancel channel exists by design. */
 export interface GuiCallbackSummary {
@@ -293,7 +240,7 @@ function resolveEffectPath(
  * For each effect, in order: skip unknown nodes, report-and-skip
  * value-kind mismatches, invoke the matching control callback
  * (observe-only; throws are isolated), then dispatch capture/bubble
- * `onAction` along the logical ancestor path via the frozen helper.
+ * `onAction` along the logical ancestor path.
  */
 export function dispatchControlEffects(
   effects: readonly GuiCommittedEffect[],
@@ -341,6 +288,7 @@ export function dispatchControlEffects(
         };
       },
       effect.node,
+      resolution.rootListeners?.(effect.entity, effect.rootIncarnation),
       resolution.onError,
     );
   }
@@ -433,68 +381,6 @@ function matchControlCallback(
   }
 }
 
-/** Session-scoped target for conflicts, cancellations and scene fallback. */
-export interface GuiObservationTarget {
-  readonly entity: bigint;
-  readonly rootIncarnation: bigint;
-  readonly node: number;
-}
-
-/** Why a routed intent could not apply cleanly. Mirrors the core reason. */
-export type GuiConflictReason =
-  | {
-      readonly kind: "revisionMismatch";
-      readonly expected: number;
-      readonly found: number;
-    }
-  | { readonly kind: "admissionFailed"; readonly reason: string }
-  | { readonly kind: "touchArbitration"; readonly ownerPointer: number };
-
-/** One arbitration or admission conflict, reported separately from effects. */
-export interface GuiConflictObservation {
-  readonly session: bigint;
-  readonly sourceTick: bigint;
-  readonly effectTick: bigint;
-  readonly target?: GuiObservationTarget | undefined;
-  readonly reason: GuiConflictReason;
-}
-
-/** Why a routed intent never applied. Never mixed with effects. */
-export type GuiCancelReason =
-  | "targetRemoved"
-  | "targetHidden"
-  | "sessionReplaced"
-  | "gestureCancelled";
-
-/** One routed input cancelled between routing and application. */
-export interface GuiCancelObservation {
-  readonly session: bigint;
-  readonly sourceTick: bigint;
-  readonly effectTick: bigint;
-  readonly target?: GuiObservationTarget | undefined;
-  readonly reason: GuiCancelReason;
-}
-
-/** Why routing reached no target. Mirrors the core reason. */
-export type GuiUnhandledReason =
-  | { readonly kind: "noPanelHit" }
-  | { readonly kind: "blocked"; readonly entity: bigint }
-  | { readonly kind: "staleTarget" }
-  | { readonly kind: "noFocus" }
-  | { readonly kind: "noCapture" }
-  | { readonly kind: "notFocusable" }
-  | { readonly kind: "notOwner" };
-
-/** One well-formed input that reached no GUI target, for scene controls.
- * The complete input is preserved verbatim so scene fallback observes the
- * same positions, buttons, blockers and distances the router saw. */
-export interface GuiUnhandledObservation {
-  readonly session: bigint;
-  readonly tick: bigint;
-  readonly input: GuiInputCommand;
-  readonly reason: GuiUnhandledReason;
-}
-
 /** Non-effect observation listeners. A throwing listener is isolated
  * through the resolution `onError` without breaking later deliveries. */
 export interface GuiObservationSink {
@@ -508,16 +394,6 @@ export interface GuiObservationSink {
     | ((observation: GuiCancelObservation) => void)
     | undefined;
   readonly onError?: ((error: Error) => void) | undefined;
-}
-
-/** One ordered observation batch: committed effects plus the records that
- * never accompany one. Each record is delivered at most once per feed; the
- * host guarantees observations drain exactly once. */
-export interface GuiObservationBatch {
-  readonly effects: readonly GuiCommittedEffect[];
-  readonly conflicts?: readonly GuiConflictObservation[] | undefined;
-  readonly cancellations?: readonly GuiCancelObservation[] | undefined;
-  readonly unhandled?: readonly GuiUnhandledObservation[] | undefined;
 }
 
 /** Observation summary. No retroactive cancel channel exists by design. */
@@ -618,6 +494,7 @@ export class GuiEffectSubscriptions {
   resolution(
     parentOf: GuiCallbackResolution["parentOf"],
     onError?: (error: Error) => void,
+    rootListeners?: GuiRootListenerResolver,
   ): GuiCallbackResolution {
     const listeners = (
       entity: bigint,
@@ -625,9 +502,12 @@ export class GuiEffectSubscriptions {
       node: number,
     ): GuiControlListenerRecord | undefined =>
       this.records.get(this.key(entity, rootIncarnation, node));
-    return onError === undefined
-      ? { parentOf, listeners }
-      : { parentOf, listeners, onError };
+    return {
+      parentOf,
+      listeners,
+      ...(rootListeners === undefined ? {} : { rootListeners }),
+      ...(onError === undefined ? {} : { onError }),
+    };
   }
 
   /** Dispatch committed effects through retained records. */
@@ -635,8 +515,12 @@ export class GuiEffectSubscriptions {
     effects: readonly GuiCommittedEffect[],
     parentOf: GuiCallbackResolution["parentOf"],
     onError?: (error: Error) => void,
+    rootListeners?: GuiRootListenerResolver,
   ): GuiCallbackSummary {
-    return dispatchControlEffects(effects, this.resolution(parentOf, onError));
+    return dispatchControlEffects(
+      effects,
+      this.resolution(parentOf, onError, rootListeners),
+    );
   }
 
   /** Dispatch one ordered observation batch through retained records. */
@@ -644,10 +528,11 @@ export class GuiEffectSubscriptions {
     batch: GuiObservationBatch,
     parentOf: GuiCallbackResolution["parentOf"],
     sink: GuiObservationSink = {},
+    rootListeners?: GuiRootListenerResolver,
   ): GuiObservationSummary {
     return dispatchGuiObservations(
       batch,
-      this.resolution(parentOf, sink.onError),
+      this.resolution(parentOf, sink.onError, rootListeners),
       sink,
     );
   }

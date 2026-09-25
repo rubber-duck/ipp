@@ -62,6 +62,7 @@ import {
   type GuiActionListener,
   type GuiHostType,
   type GuiNodeProps,
+  type GuiRootProps,
   type GuiNodeRef,
 } from "./gui/components.js";
 import {
@@ -429,26 +430,16 @@ export class ReactWorldTree {
     if (gui.theme !== undefined)
       validateGuiTheme(gui.theme as import("./gui/theme.js").GuiControlTheme);
     if (type === GUI_ROOT_HOST_TYPE) {
-      if (gui.bound != null && typeof gui.bound !== "boolean")
-        throw new Error(
-          "GuiRoot.bound must be true, false, null, or undefined",
-        );
       for (const key of Object.keys(props)) {
         if (
-          ![
-            "bound",
-            "children",
-            "nodeRef",
-            "onAction",
-            "onActionCapture",
-          ].includes(key)
+          !["children", "nodeRef", "onAction", "onActionCapture"].includes(key)
         )
           throw new Error(`Unsupported GuiRoot prop: ${key}`);
       }
       return;
     }
     if (gui.bound !== undefined)
-      throw new Error("Only GuiRoot accepts a bound prop");
+      throw new Error("GUI declarations do not accept a bound prop");
     const name = type;
     const finite = (key: string): void => {
       const value = gui[key];
@@ -644,6 +635,8 @@ export class ReactWorldTree {
       {
         entity: number;
         nodeRef: GuiNodeRef | null;
+        onAction: GuiActionListener | undefined;
+        onActionCapture: GuiActionListener | undefined;
         nodes: GuiDescribedNodeWithCallbacks[];
       }
     >();
@@ -670,16 +663,16 @@ export class ReactWorldTree {
         // removeComponent on unmount. No overlay is described here: core
         // rejects overlay declarations that would create a GuiRoot or write
         // its node tree, so Auto/Owned root overlays always fail, and any
-        // property-lane overlay must stay Bound. The accepted `bound` prop
-        // keeps declaration compatibility and selects no overlay mode.
-        const record: {
-          entity: number;
-          nodeRef: GuiNodeRef | null;
-          nodes: GuiDescribedNodeWithCallbacks[];
-        } = {
+        // property-lane overlay must stay Bound. GuiRoot therefore accepts
+        // no `bound` prop. Its action listeners are the outermost entries of
+        // every action path in the root.
+        const rootProps = props as unknown as GuiRootProps;
+        const record = {
           entity: parent,
-          nodeRef: (props as unknown as GuiNodeProps).nodeRef ?? null,
-          nodes: [],
+          nodeRef: rootProps.nodeRef ?? null,
+          onAction: rootProps.onAction,
+          onActionCapture: rootProps.onActionCapture,
+          nodes: [] as GuiDescribedNodeWithCallbacks[],
         };
         guiRoots.set(instance.identity, record);
         let roots = 0;
@@ -1008,6 +1001,8 @@ export class ReactWorldTree {
       identity,
       entity: record.entity,
       nodeRef: record.nodeRef,
+      onAction: record.onAction,
+      onActionCapture: record.onActionCapture,
       nodes: record.nodes,
       signature: guiRootSignature(record.nodes),
     }));

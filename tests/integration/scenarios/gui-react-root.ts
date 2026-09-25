@@ -8,7 +8,10 @@
  * tree and its reconciler-created producer. A sabotaged occupied root proves
  * partial-failure refusal and recovery through the same lifecycle: the
  * refused attempt releases its own binding/overlay while previously
- * acknowledged declarations and the foreign tree stay intact.
+ * acknowledged declarations and the foreign tree stay intact. A themed
+ * panel proves root theme handles stay stable across commits, and a real
+ * checkbox toggle reaches GuiRoot action listeners as the outermost capture
+ * and bubble entries.
  */
 import { createElement as h, StrictMode } from "react";
 import type {
@@ -20,12 +23,16 @@ import {
   createRoot,
   Entity,
   Surface,
+  Transform,
 } from "../../../packages/ipp-react/src/index.js";
 import {
+  Button,
+  Checkbox,
   GuiRoot,
   Row,
   Slider,
   Text,
+  type GuiControlTheme,
 } from "../../../packages/ipp-react/src/gui.js";
 import {
   aliasId,
@@ -142,6 +149,71 @@ function fiftyNodePanel() {
   );
 }
 
+const steadyTheme: GuiControlTheme = {
+  parts: { background: { base: { color: [0.2, 0.3, 0.8, 1] } } },
+};
+
+function freshTheme(green: number): GuiControlTheme {
+  return {
+    parts: { background: { base: { color: [0.1, green, 0.2, 1] } } },
+  };
+}
+
+/** Two themed buttons: the first theme precedes an unchanged second one. */
+function themedPanel(first: GuiControlTheme, label: string) {
+  return h(
+    Entity,
+    { id: "theme-panel", key: "theme-panel" },
+    h(Surface, { width: 4, height: 3 }),
+    h(
+      GuiRoot,
+      null,
+      h(
+        Row,
+        null,
+        h(Button, { label, width: 2, height: 1, theme: first }),
+        h(Button, { label: "steady", width: 2, height: 1, theme: steadyTheme }),
+      ),
+    ),
+  );
+}
+
+type ControlRef = { current: GuiNodeHandle | null };
+
+/** One full-panel checkbox whose committed toggle travels through every
+ * action listener level. */
+function actionPanel(log: string[], checkboxRef: ControlRef) {
+  return h(
+    Entity,
+    { id: "action-panel", key: "action-panel" },
+    h(Transform, null),
+    h(Surface, { width: 4, height: 3 }),
+    h(
+      GuiRoot,
+      {
+        onActionCapture: () => void log.push("capture:root"),
+        onAction: () => void log.push("bubble:root"),
+      },
+      h(
+        Row,
+        {
+          width: 4,
+          height: 3,
+          onAction: () => void log.push("bubble:row"),
+        },
+        h(Checkbox, {
+          nodeRef: checkboxRef,
+          width: 4,
+          height: 3,
+          checked: false,
+          onToggle: () => void log.push("toggle"),
+          onAction: () => void log.push("bubble:checkbox"),
+        }),
+      ),
+    ),
+  );
+}
+
 async function panelEntity(
   client: GuiTestClient,
   symbolicId: string,
@@ -224,10 +296,8 @@ export async function exerciseGuiReactRoot(
     ]),
     1,
   );
-  // ipp-9nx.23 reproduction on the real generated-client/native transport:
-  // a successful binding acknowledgement must enrich the accepted alias
-  // with its concrete entity. This was intermittently absent from older,
-  // mixed artifacts; current matched artifacts must preserve it exactly.
+  // On the real generated-client/native transport, a successful binding
+  // acknowledgement enriches the accepted alias with its concrete entity.
   const bindingProbe = await client.batch([
     { kind: "createStateOverlayOwner", alias: 91 },
     {
@@ -433,6 +503,14 @@ export async function exerciseGuiReactRoot(
     "A remount reused the retired incarnation",
   );
   await second.unmount();
+
+  const reported = errors.length;
+  const themes = await exerciseThemeStability(client, errors);
+  const actions = await exerciseRootActionListeners(client, errors);
+  expect(
+    errors.length === reported,
+    `Unexpected React GUI errors: ${errors.slice(reported)}`,
+  );
   return {
     incarnation: String(incarnation),
     remountedIncarnation: String(remounted.rootIncarnation),
@@ -441,5 +519,123 @@ export async function exerciseGuiReactRoot(
     correctedSliderRevision: correctedSlider.controlRevision,
     mountBatchRequests: fiftyNodeBatchRequests,
     mountBatchEdits: fiftyNodeBatchEdits,
+    themeHandles: themes.handles,
+    themeEditsAfterSettle: themes.editsAfterSettle,
+    rootActionOrder: actions,
   };
+}
+
+/** Distinct root theme handles in the authoritative GuiRoot theme rows. */
+async function rootThemeHandles(
+  client: GuiTestClient,
+  entity: bigint,
+): Promise<number[]> {
+  const found = (await client.inspect()).entities.find(
+    (item) => item.id === entity,
+  );
+  const fields = found?.effective.find(
+    (component) => component.component === client.components.GuiRoot?.id,
+  )?.fields;
+  const rows = (
+    fields?.theme_parts as
+      | { rows: ReadonlyMap<number, Readonly<Record<string, unknown>>> }
+      | undefined
+  )?.rows;
+  expect(rows, "GuiRoot inspection omitted its theme rows");
+  return [
+    ...new Set([...rows.values()].map((row) => row.theme as number)),
+  ].sort((a, b) => a - b);
+}
+
+/**
+ * A new theme ordered before an unchanged one is created once: later
+ * commits send no theme edits, allocate no handle and keep node references.
+ */
+async function exerciseThemeStability(client: GuiTestClient, errors: Error[]) {
+  const root = createRoot(client, { onError: (error) => errors.push(error) });
+  const originalEditGuiBatch = client.editGuiBatch.bind(client);
+  const themeEdits: unknown[] = [];
+  client.editGuiBatch = async (edits) => {
+    for (const edit of edits)
+      if (edit.action === "updateTheme" || edit.action === "removeTheme")
+        themeEdits.push(edit);
+    return await originalEditGuiBatch(edits);
+  };
+  try {
+    await root.render(themedPanel(steadyTheme, "first"));
+    const entity = await panelEntity(client, "theme-panel");
+    expect(
+      (await rootThemeHandles(client, entity)).length === 1,
+      "Two buttons sharing one theme created more than one root theme",
+    );
+
+    await root.render(themedPanel(freshTheme(0.7), "first"));
+    const handles = await rootThemeHandles(client, entity);
+    expect(handles.length === 2, `Expected two root themes: ${handles}`);
+    const references = (await client.inspectGui({ entity })).nodes.map(
+      (node) => node.style.theme ?? null,
+    );
+    const settled = themeEdits.length;
+
+    // Label edits reach the GUI commit without touching either theme.
+    for (const label of ["second", "third"]) {
+      await root.render(themedPanel(freshTheme(0.7), label));
+      await client.waitForFrame();
+      const current = await rootThemeHandles(client, entity);
+      expect(
+        current.join() === handles.join(),
+        `Theme handles churned across commits: ${handles} -> ${current}`,
+      );
+      const now = (await client.inspectGui({ entity })).nodes.map(
+        (node) => node.style.theme ?? null,
+      );
+      expect(
+        now.join() === references.join(),
+        `Node theme references churned: ${references} -> ${now}`,
+      );
+    }
+    const editsAfterSettle = themeEdits.length - settled;
+    expect(
+      editsAfterSettle === 0,
+      `Unchanged themes sent ${editsAfterSettle} theme edits`,
+    );
+    await root.unmount();
+    return { handles, editsAfterSettle };
+  } finally {
+    client.editGuiBatch = originalEditGuiBatch;
+  }
+}
+
+/**
+ * A real focused Enter toggle commits a control effect whose action path runs
+ * GuiRoot capture first and GuiRoot bubble last, once each.
+ */
+async function exerciseRootActionListeners(
+  client: GuiTestClient,
+  errors: Error[],
+): Promise<string[]> {
+  const log: string[] = [];
+  const checkboxRef: ControlRef = { current: null };
+  const root = createRoot(client, { onError: (error) => errors.push(error) });
+  await root.render(actionPanel(log, checkboxRef));
+  await client.waitForFrame();
+  const checkbox = checkboxRef.current;
+  expect(checkbox, "React checkbox ref was not acknowledged");
+  await client.submitGuiInput({ kind: "focus", handle: checkbox });
+  await client.submitGuiInput({ kind: "key", key: "enter", pressed: true });
+  for (let frame = 0; frame < 30 && !log.includes("bubble:root"); frame += 1)
+    await client.waitForFrame();
+  const expected = [
+    "toggle",
+    "capture:root",
+    "bubble:checkbox",
+    "bubble:row",
+    "bubble:root",
+  ];
+  expect(
+    log.join() === expected.join(),
+    `GuiRoot action listeners ran out of order: ${log}`,
+  );
+  await root.unmount();
+  return log;
 }

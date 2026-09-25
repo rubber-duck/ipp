@@ -23,6 +23,12 @@ const CONTENT_WIDTH = 6.8;
 const LEFT_WIDTH = 3.24;
 const RIGHT_WIDTH = 3.4;
 const PULSE_HEIGHT = 0.84;
+const TELEMETRY_VIEW_HEIGHT = 0.78;
+
+/** Metres one wheel notch scrolls the panel: an eighth of the telemetry
+ * ScrollView viewport, the panel's only scrollable view. */
+export const GUI_WHEEL_STEP = TELEMETRY_VIEW_HEIGHT / 8;
+
 const PULSE_ICON_CELL = 0.9;
 const SPAN_NARROW = 1.2;
 const SPAN_WIDE = 2.0;
@@ -686,7 +692,7 @@ function Telemetry({
         />
         <ScrollView
           width={3.05}
-          height={0.78}
+          height={TELEMETRY_VIEW_HEIGHT}
           margin={[0.1, 0.03, 0, 0]}
           opacity={scene.prepared ? 1 : 0}
         >

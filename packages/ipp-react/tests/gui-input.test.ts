@@ -6,6 +6,7 @@ import {
   attachCanvasGuiInput,
   canvasRelativePoint,
   createGuiInputSink,
+  DEFAULT_GUI_WHEEL_STEP,
   domMouseButtonToGuiButton,
   keyboardFocusHandoff,
   keyboardKeyToGuiKey,
@@ -30,8 +31,46 @@ test("button, key and geometry helpers translate platform values", () => {
   assert.equal(keyboardKeyToGuiKey("a"), null);
   assert.equal(keyboardKeyToGuiKey("Enter"), "enter");
   assert.deepEqual(canvasRelativePoint(15, 25, { left: 10, top: 20 }), [5, 5]);
-  assert.deepEqual(wheelDeltaToLogical(3, -4, 0), [3, -4]);
-  assert.deepEqual(wheelDeltaToLogical(3, -4, 1), [48, -64]);
+});
+
+test("wheel deltas scroll a fixed number of logical units per notch", () => {
+  // One notch in each delta mode: 100 CSS px, 3 lines, or an eighth page.
+  assert.deepEqual(wheelDeltaToLogical(0, 100, 0), [0, DEFAULT_GUI_WHEEL_STEP]);
+  assert.deepEqual(wheelDeltaToLogical(-3, 0, 1), [-DEFAULT_GUI_WHEEL_STEP, 0]);
+  assert.deepEqual(wheelDeltaToLogical(0, 0.125, 2), [
+    0,
+    DEFAULT_GUI_WHEEL_STEP,
+  ]);
+  // Smooth pixel scrolling moves fractional notches; the step scales them.
+  assert.deepEqual(wheelDeltaToLogical(50, -200, 0, 0.1), [0.05, -0.2]);
+  assert.deepEqual(wheelDeltaToLogical(0, 6, 1, 2), [0, 4]);
+  assert.deepEqual(wheelDeltaToLogical(0, 1, 2, 0.5), [0, 4]);
+});
+
+test("the canvas relay scrolls by its wheel step and rejects invalid steps", () => {
+  const wheel = { clientX: 15, clientY: 25, deltaX: 0, deltaMode: 0 };
+  const stepped = harness({ wheelStep: 0.1 });
+  stepped.canvas.dispatch("wheel", { ...wheel, deltaY: 500 });
+  assert.deepEqual(stepped.errors, []);
+  assert.deepEqual(stepped.sent, [
+    { kind: "scroll", position: [0.05, 0.05], delta: [0, 0.5], blockers: [] },
+  ]);
+  stepped.detach();
+
+  const invalid = harness({ wheelStep: 0 });
+  invalid.canvas.dispatch("wheel", { ...wheel, deltaY: 100 });
+  assert.equal(invalid.errors.length, 1);
+  assert.match(
+    invalid.errors[0]!.message,
+    /wheel step must be finite and positive/,
+  );
+  assert.deepEqual(invalid.sent[0], {
+    kind: "scroll",
+    position: [0.05, 0.05],
+    delta: [0, DEFAULT_GUI_WHEEL_STEP],
+    blockers: [],
+  });
+  invalid.detach();
 });
 
 test("browser commands map to wire inputs without panel scope", () => {
@@ -451,7 +490,7 @@ test("pointer, wheel and keyboard events forward in DOM order", () => {
     clientX: 15,
     clientY: 25,
     deltaX: 0,
-    deltaY: -4,
+    deltaY: -200,
     deltaMode: 0,
   });
   keyboard.dispatch("keydown", { key: "Tab" });
@@ -491,7 +530,7 @@ test("pointer, wheel and keyboard events forward in DOM order", () => {
     {
       kind: "scroll",
       position: [0.05, 0.05],
-      delta: [0, -4],
+      delta: [0, -0.5],
       blockers: [],
     },
     { kind: "key", key: "tab", pressed: true },

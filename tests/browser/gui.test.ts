@@ -1123,10 +1123,45 @@ test("mounted nested ScrollViews drag, wheel and clip in completed WebGL frames"
         low: "gray",
       });
 
-      // A wheel over the moved inner viewport scrolls the inner view by its
-      // remaining unit: the green block rides up into view at `right`.
+      // One 100 px wheel notch over the moved inner viewport scrolls the
+      // inner view by the default 0.25-unit wheel step, an eighth of its
+      // 2-unit viewport: the green block's top rises to logical y 0.75
+      // (45 px). Pixel rows 50..56 turn green only past 0.17 units and rows
+      // 34..40 stay red below 0.33 units, bounding the notch.
       await env.page.mouse.move(...page(180, 30));
-      await env.page.mouse.wheel(0, 1);
+      await env.page.mouse.wheel(0, 100);
+      const notch = { above: [180, 37], below: [180, 53] } as const;
+      const notchDeadline = performance.now() + 5_000;
+      let notchHues: Record<keyof typeof notch, string>;
+      for (;;) {
+        const frame = await env.page.evaluate(
+          async ({ url, points }) =>
+            (await import(url)).scrollFrame(Object.values(points)),
+          { url: fixture, points: notch },
+        );
+        assert.equal(frame.failedDrawCalls, 0);
+        notchHues = {
+          above: hue(frame.samples[0]),
+          below: hue(frame.samples[1]),
+        };
+        if (notchHues.below === "green" || performance.now() >= notchDeadline) {
+          await writeFile(
+            resolve(env.evidence.directory, "scroll-inner-notch.png"),
+            Buffer.from(
+              frame.dataUrl.slice("data:image/png;base64,".length),
+              "base64",
+            ),
+          );
+          env.evidence.record("scroll-inner-notch", frame.samples);
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      assert.deepEqual(notchHues, { above: "red", below: "green" });
+
+      // Three more notches scroll the inner view by its remaining 0.75
+      // units: the green block rides up into view at `right`.
+      await env.page.mouse.wheel(0, 300);
       await expectFrame("scroll-inner-wheeled", {
         right: "green",
         middle: "gray",

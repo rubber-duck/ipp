@@ -235,6 +235,16 @@ export class GuiCommits {
       return;
     }
     const callbacks = retainedNodeCallbacks(node);
+    if (
+      node.data.kind === "container" &&
+      node.data.containerKind === "virtualList"
+    )
+      this.subscriptions.subscribeRange(
+        state.entity,
+        ack.nodeId,
+        callbacks.onRangeChange,
+        (error) => this.options.observationSink?.onError?.(error),
+      );
     this.subscriptions.subscribe(state.entity, state.incarnation, ack.nodeId, {
       kind: controlKindForData(node.data) ?? "container",
       name: nameForData(node.data),
@@ -323,12 +333,14 @@ export class GuiCommits {
   }
 
   /** Feed committed client observations into retained subscriptions once any
-   * node is acknowledged. Older or narrower clients simply never feed. */
-  private ensureObservationBridge(): void {
+   * node is acknowledged, or before a VirtualList is first submitted, whose
+   * attach range may arrive ahead of its acknowledgement. Older or narrower
+   * clients simply never feed. */
+  private ensureObservationBridge(declaresList = false): void {
     if (this.observationDetach) return;
     const source = this.observationSource();
     if (!source) return;
-    let live = false;
+    let live = declaresList;
     for (const state of this.states.values())
       if (state.acked.size > 0) {
         live = true;
@@ -365,6 +377,15 @@ export class GuiCommits {
     if (roots.length === 0) return;
     if (!hasGui(this.client))
       throw new Error("GUI declarations require a GUI-capable client");
+    this.ensureObservationBridge(
+      roots.some((root) =>
+        root.nodes.some(
+          (node) =>
+            node.data.kind === "container" &&
+            node.data.containerKind === "virtualList",
+        ),
+      ),
+    );
     for (const root of roots) {
       const entity = desiredEntities.get(root.identity);
       const known = this.states.get(root.identity);

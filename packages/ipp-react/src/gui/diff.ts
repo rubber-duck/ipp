@@ -184,10 +184,21 @@ export function diffGuiTree(
   }));
 
   // Desired children per parent, and each node's desired sibling position.
+  // A VirtualList places its children by item index instead: their index is
+  // the runtime order key, so they never move among themselves.
   const desiredChildren = new Map<number | undefined, number[]>();
   const desiredParent = new Map<number, number | undefined>();
   const position = new Map<number, number>();
+  const itemIndex = new Map<number, number>();
+  const virtualLists = new Set<number>();
   for (const node of desired) {
+    if (
+      node.data.kind === "container" &&
+      node.data.containerKind === "virtualList"
+    )
+      virtualLists.add(node.identity);
+    if (node.itemIndex !== undefined)
+      itemIndex.set(node.identity, node.itemIndex);
     let list = desiredChildren.get(node.parent);
     if (!list) desiredChildren.set(node.parent, (list = []));
     position.set(node.identity, list.length);
@@ -218,6 +229,16 @@ export function diffGuiTree(
   // unknown remainder never determines an index.
   const stable = new Set<number>();
   for (const [parent, members] of current) {
+    if (parent !== undefined && virtualLists.has(parent)) {
+      const parentId = assigned.get(parent);
+      for (const identity of members)
+        if (
+          desiredParent.get(identity) === parent &&
+          acked.get(identity)!.parentId === parentId
+        )
+          stable.add(identity);
+      continue;
+    }
     // A single child has only one order.
     const known =
       members.length === 1
@@ -252,6 +273,8 @@ export function diffGuiTree(
     parent: number | undefined,
     identity: number,
   ): number => {
+    if (parent !== undefined && virtualLists.has(parent))
+      return itemIndex.get(identity) ?? 0;
     const siblings = desiredChildren.get(parent)!;
     const list = listOf(parent);
     for (let index = position.get(identity)! - 1; index >= 0; index -= 1) {

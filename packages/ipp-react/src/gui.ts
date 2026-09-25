@@ -13,6 +13,8 @@ export {
   Align,
   SizedBox,
   ScrollView,
+  VirtualList,
+  MAX_VIRTUAL_ITEMS,
   Text,
   Drawing,
   Image,
@@ -31,6 +33,9 @@ export type {
   GuiNodeRef,
   GuiActionEvent,
   GuiActionListener,
+  GuiRangeChangeListener,
+  GuiVirtualRange,
+  VirtualListProps,
 } from "./gui/components.js";
 export { Button, Checkbox, Slider, TextInput } from "./gui/controls.js";
 export type {

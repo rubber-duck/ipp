@@ -13,7 +13,14 @@
  * Handles: `nodeRef` targets resolve after acknowledgement only, and clear
  * when their node is removed or the root unmounts.
  */
-import { createElement, type ReactNode } from "react";
+import {
+  createElement,
+  useCallback,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type {
   GuiAssetSource,
   GuiNodeData,
@@ -31,6 +38,9 @@ export const GUI_PADDING_HOST_TYPE = "ipp-gui-padding";
 export const GUI_ALIGN_HOST_TYPE = "ipp-gui-align";
 export const GUI_SIZED_BOX_HOST_TYPE = "ipp-gui-sized-box";
 export const GUI_SCROLL_VIEW_HOST_TYPE = "ipp-gui-scroll-view";
+export const GUI_VIRTUAL_LIST_HOST_TYPE = "ipp-gui-virtual-list";
+/** Internal item wrapper a VirtualList declares for each index it renders. */
+export const GUI_VIRTUAL_ITEM_HOST_TYPE = "ipp-gui-virtual-item";
 export const GUI_TEXT_HOST_TYPE = "ipp-gui-text";
 export const GUI_DRAWING_HOST_TYPE = "ipp-gui-drawing";
 export const GUI_IMAGE_HOST_TYPE = "ipp-gui-image";
@@ -48,6 +58,8 @@ export type GuiHostType =
   | typeof GUI_ALIGN_HOST_TYPE
   | typeof GUI_SIZED_BOX_HOST_TYPE
   | typeof GUI_SCROLL_VIEW_HOST_TYPE
+  | typeof GUI_VIRTUAL_LIST_HOST_TYPE
+  | typeof GUI_VIRTUAL_ITEM_HOST_TYPE
   | typeof GUI_TEXT_HOST_TYPE
   | typeof GUI_DRAWING_HOST_TYPE
   | typeof GUI_IMAGE_HOST_TYPE
@@ -65,6 +77,8 @@ export const guiHostTypes: ReadonlySet<string> = new Set([
   GUI_ALIGN_HOST_TYPE,
   GUI_SIZED_BOX_HOST_TYPE,
   GUI_SCROLL_VIEW_HOST_TYPE,
+  GUI_VIRTUAL_LIST_HOST_TYPE,
+  GUI_VIRTUAL_ITEM_HOST_TYPE,
   GUI_TEXT_HOST_TYPE,
   GUI_DRAWING_HOST_TYPE,
   GUI_IMAGE_HOST_TYPE,
@@ -86,7 +100,9 @@ export function isGuiContainerHostType(type: unknown): boolean {
     type === GUI_PADDING_HOST_TYPE ||
     type === GUI_ALIGN_HOST_TYPE ||
     type === GUI_SIZED_BOX_HOST_TYPE ||
-    type === GUI_SCROLL_VIEW_HOST_TYPE
+    type === GUI_SCROLL_VIEW_HOST_TYPE ||
+    type === GUI_VIRTUAL_LIST_HOST_TYPE ||
+    type === GUI_VIRTUAL_ITEM_HOST_TYPE
   );
 }
 
@@ -258,6 +274,129 @@ export function Image(props: GuiImageProps) {
   return createElement(GUI_IMAGE_HOST_TYPE, props);
 }
 
+/** Wanted item range `[first, last)` of one VirtualList. */
+export interface GuiVirtualRange {
+  readonly first: number;
+  /** One past the last wanted item index. */
+  readonly last: number;
+}
+
+/** Observer of the runtime's wanted range for one VirtualList. */
+export type GuiRangeChangeListener = (range: GuiVirtualRange) => void;
+
+export interface VirtualListProps extends Omit<GuiNodeProps, "children"> {
+  /** Number of items; at most 2^24. */
+  readonly itemCount: number;
+  /** Per-item main-axis extent estimate in logical units; finite and
+   * positive. A declared item's measured extent replaces it. */
+  readonly itemExtent: number;
+  /** Items wanted beyond each end of the visible range. Defaults to 0. */
+  readonly overscan?: number | undefined;
+  /** Main axis. Defaults to vertical. */
+  readonly axis?: "horizontal" | "vertical" | undefined;
+  /** Declares the item at `index`; called for each index of the current
+   * wanted range. */
+  readonly renderItem: (index: number) => ReactNode;
+  /** Observes the wanted range after the list declares it. */
+  readonly onRangeChange?: GuiRangeChangeListener | undefined;
+}
+
+/** Largest VirtualList item count, mirroring the runtime bound. */
+export const MAX_VIRTUAL_ITEMS = 1 << 24;
+
+/** VirtualList declaration for validated item properties. The anchor starts
+ * at the first item; the runtime owns it afterwards. */
+export function virtualListNode(options: {
+  readonly itemCount?: number | undefined;
+  readonly itemExtent?: number | undefined;
+  readonly overscan?: number | undefined;
+  readonly axis?: "horizontal" | "vertical" | undefined;
+}): GuiNodeDeclaration {
+  const { itemCount, itemExtent, overscan = 0, axis = "vertical" } = options;
+  if (
+    !Number.isInteger(itemCount) ||
+    (itemCount as number) < 0 ||
+    (itemCount as number) > MAX_VIRTUAL_ITEMS
+  )
+    throw new Error(
+      `GUI VirtualList itemCount must be an integer in 0..${MAX_VIRTUAL_ITEMS}`,
+    );
+  if (!finite(itemExtent) || itemExtent <= 0)
+    throw new Error("GUI VirtualList itemExtent must be a finite number > 0");
+  if (!Number.isInteger(overscan) || overscan < 0 || overscan > 0xffffffff)
+    throw new Error("GUI VirtualList overscan must be a non-negative integer");
+  if (axis !== "horizontal" && axis !== "vertical")
+    throw new Error('GUI VirtualList axis must be "horizontal" or "vertical"');
+  return {
+    data: { kind: "container", containerKind: "virtualList" },
+    values: {
+      itemCount: itemCount as number,
+      itemExtent,
+      overscan,
+      axis: axis === "horizontal" ? 0 : 1,
+      anchorIndex: 0,
+      anchorOffset: 0,
+    },
+  };
+}
+
+/** Scrolling list over `itemCount` items that declares only the items the
+ * runtime asks for. The runtime owns scrolling, scroll bars, clipping and
+ * the anchor from the count and estimate, and publishes the wanted range;
+ * this component then declares `renderItem(index)` for each wanted index,
+ * keyed by index, and the runtime places each item by its index. Items
+ * outside the range are removed; missing items never delay scrolling. */
+export function VirtualList(props: VirtualListProps): ReactElement {
+  const {
+    itemCount,
+    itemExtent,
+    overscan,
+    axis,
+    renderItem,
+    onRangeChange,
+    ...node
+  } = props;
+  virtualListNode(props);
+  if (typeof renderItem !== "function")
+    throw new Error("GUI VirtualList renderItem must be a function");
+  const [range, setRange] = useState<GuiVirtualRange>({ first: 0, last: 0 });
+  const observer = useRef(onRangeChange);
+  observer.current = onRangeChange;
+  const received = useCallback((next: GuiVirtualRange) => {
+    setRange((current) =>
+      current.first === next.first && current.last === next.last
+        ? current
+        : { first: next.first, last: next.last },
+    );
+    observer.current?.(next);
+  }, []);
+  const items: ReactElement[] = [];
+  for (
+    let index = range.first;
+    index < Math.min(range.last, itemCount);
+    index += 1
+  )
+    items.push(
+      createElement(
+        GUI_VIRTUAL_ITEM_HOST_TYPE,
+        { key: index, itemIndex: index },
+        renderItem(index),
+      ),
+    );
+  return createElement(
+    GUI_VIRTUAL_LIST_HOST_TYPE,
+    {
+      ...node,
+      itemCount,
+      itemExtent,
+      overscan,
+      axis,
+      onRangeChange: received,
+    },
+    items,
+  );
+}
+
 export function validateGuiNodeRef(value: unknown): void {
   if (value == null) return;
   if (typeof value === "function") return;
@@ -393,6 +532,10 @@ export function guiNodeFor(
       readonly step?: number | undefined;
       readonly text?: string | undefined;
       readonly placeholder?: string | undefined;
+      readonly itemCount?: number | undefined;
+      readonly itemExtent?: number | undefined;
+      readonly overscan?: number | undefined;
+      readonly axis?: "horizontal" | "vertical" | undefined;
     },
 ): GuiNodeDeclaration {
   switch (type) {
@@ -410,6 +553,10 @@ export function guiNodeFor(
       return structural({ kind: "container", containerKind: "sizedBox" });
     case GUI_SCROLL_VIEW_HOST_TYPE:
       return structural({ kind: "container", containerKind: "scrollView" });
+    case GUI_VIRTUAL_LIST_HOST_TYPE:
+      return virtualListNode(props);
+    case GUI_VIRTUAL_ITEM_HOST_TYPE:
+      return structural({ kind: "container", containerKind: "stack" });
     case GUI_TEXT_HOST_TYPE:
       return structural({ kind: "text", text: props.text ?? "" });
     case GUI_DRAWING_HOST_TYPE:

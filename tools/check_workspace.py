@@ -65,6 +65,9 @@ def check_manifests():
         "schema-export",
         # Opt-in profiling instrumentation; never included in a runtime default.
         "profiling",
+        # Dev-only core oracle, enabled solely through ipp-core's self
+        # dev-dependency and never in a build profile.
+        "checked-invariants",
     }
     declared = {
         feature for package in packages.values() for feature in package["features"]
@@ -79,7 +82,20 @@ def check_manifests():
             == (["builtin-assets"] if name in BUILTIN_DEFAULTS else []),
             f"{name}: default capabilities differ from the architecture",
         )
-        internal = {d["name"] for d in package["dependencies"] if d["name"] in EDGES}
+        # A package's dev-dependency on itself only enables test features.
+        internal = {
+            d["name"]
+            for d in package["dependencies"]
+            if d["name"] in EDGES and not (d["name"] == name and d["kind"] == "dev")
+        }
+        require(
+            all(
+                d["name"] == CORE == name and d["kind"] == "dev"
+                for d in package["dependencies"]
+                if "checked-invariants" in d["features"]
+            ),
+            f"{name}: only ipp-core's own tests may enable checked-invariants",
+        )
         require(
             internal == EDGES[name],
             f"{name}: internal dependencies differ from the architecture",

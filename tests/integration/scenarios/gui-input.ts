@@ -5,8 +5,13 @@ import type {
   GuiTextFocusState,
   WorldPersistenceHostClient,
 } from "@ipp/client";
-import { aliasId, createEntity, insertComponent } from "../camera-fixtures.js";
-import type { GuiTestClient } from "./gui-lifecycle.js";
+import {
+  aliasId,
+  createEntity,
+  insertComponent,
+  successfulBatch,
+} from "../camera-fixtures.js";
+import { type GuiTestClient, loadedFont } from "./gui-lifecycle.js";
 
 function expect(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -408,8 +413,8 @@ export async function exerciseGuiInput(
 
   // Transient caret, selection and provisional work never touches the
   // committed value or revision through the real pipeline: moves and
-  // updates paint only (browser/GLES captures are env-blocked, so this
-  // scenario asserts the committed seams headless instead).
+  // updates paint only. The mounted browser test asserts that paint in
+  // completed frames; this scenario asserts the committed seams.
   const transientRevision = field.controlRevision;
   await client.submitGuiInput({ kind: "key", key: "left", pressed: true });
   await client.submitGuiInput({ kind: "setTextSelection", start: 1, end: 2 });
@@ -778,7 +783,18 @@ export async function exerciseGuiInput(
 
   log.stop();
   await host.detachWorld();
-  await exerciseGuiScrolling(host);
+  const scrolling = await exerciseGuiScrolling(host);
+  const removal = await exerciseGuiRemoval(host, fontBytes);
+  return {
+    traversal,
+    submissions: submitted.length,
+    commitSources: [
+      ...new Set(commitsSince(log, 0).map((effect) => effect.source)),
+    ].sort(),
+    unhandledScroll: unscrolled.unhandled?.kind,
+    scrolling,
+    removal,
+  };
 }
 
 type GuiEditNode = Parameters<GuiTestClient["editGui"]>[0] & {
@@ -1070,4 +1086,480 @@ async function exerciseGuiScrolling(
     !(await checked(7)) && (await checked(9)),
     "A scroll bar press reached content under the bar",
   );
+  await host.detachWorld();
+  return {
+    outerMaxOffset: outer.maxOffset[1],
+    innerMaxOffset: inner.maxOffset[1],
+    edgeUnhandled: atEdge.unhandled?.kind,
+    finalOuterOffset: outer.offset[1],
+  };
+}
+
+/** Committed effects and cancellations of one node after batch `mark`. */
+function nodeRecordsSince(
+  log: ObservationLog,
+  mark: number,
+  entity: bigint,
+  rootIncarnation: bigint,
+  node: number,
+) {
+  const batches = log.batches.slice(mark);
+  const matches = (target?: {
+    entity: bigint;
+    rootIncarnation: bigint;
+    node: number;
+  }) =>
+    target !== undefined &&
+    target.entity === entity &&
+    target.rootIncarnation === rootIncarnation &&
+    target.node === node;
+  return {
+    effects: batches.flatMap((batch) => batch.effects).filter(matches),
+    cancellations: batches
+      .flatMap((batch) => batch.cancellations ?? [])
+      .filter((cancellation) => matches(cancellation.target))
+      .map((cancellation) => cancellation.reason),
+  };
+}
+
+/** Whether an operation rejected, for stale-handle assertions. */
+async function rejected(operation: Promise<unknown>): Promise<boolean> {
+  return await operation.then(
+    () => false,
+    () => true,
+  );
+}
+
+/**
+ * Remove GUI targets while they hold interaction state, in their own World:
+ * a focused TextInput with an open composition, a slider captured mid-drag,
+ * and then the whole GuiRoot mid-interaction. Each removal clears the
+ * published text focus and capture, publishes no later effect for the
+ * removed target, routes later input over the vacated area to its new
+ * occupant and rejects the removed handles.
+ *
+ * The 4x3 panel stacks two 4x1.5 controls: the upper half at y 0..1.5 and
+ * the lower half at y 1.5..3.
+ */
+async function exerciseGuiRemoval(
+  host: WorldPersistenceHostClient<GuiTestClient>,
+  fontBytes: ArrayBuffer,
+) {
+  const client = await host.createWorld({ symbolicId: "gui-removal" });
+  const log = recordObservations(client);
+  const font = await client.createAsset(17, fontBytes);
+  const ref = { kind: "alias", alias: 1 } as const;
+  const entity = aliasId(
+    await client.batch([
+      createEntity(1, "gui-removal-panel"),
+      insertComponent(client, "Transform", ref),
+      insertComponent(client, "Surface", ref, { width: 4, height: 3 }),
+      insertComponent(client, "GuiRoot", ref),
+    ]),
+    1,
+  );
+  const upper: [number, number] = [2, 0.75];
+  const lower: [number, number] = [2, 2.25];
+  const half = { width: 4, height: 1.5 } as const;
+  const populate = async (rootIncarnation: bigint) => {
+    await client.editGuiBatch([
+      {
+        action: "insert",
+        entity,
+        rootIncarnation,
+        id: 1,
+        index: 0,
+        data: { kind: "container", containerKind: "column" },
+        style: { width: 4, height: 3 },
+      },
+      {
+        action: "insert",
+        entity,
+        rootIncarnation,
+        id: 2,
+        parent: 1,
+        index: 0,
+        data: { kind: "textInput", text: "", placeholder: "" },
+        style: { ...half, asset: font },
+      },
+      {
+        action: "insert",
+        entity,
+        rootIncarnation,
+        id: 3,
+        parent: 1,
+        index: 1,
+        data: { kind: "slider" },
+        values: { value: 0, min: 0, max: 1, step: 0 },
+        style: half,
+      },
+    ]);
+    // Programmatic focus is fenced against evaluated layout with a ready
+    // font.
+    await loadedFont(client);
+    await client.waitForFrame();
+  };
+  let { rootIncarnation } = await client.inspectGui({ entity });
+  await populate(rootIncarnation);
+  const handle = (id: number, incarnation = rootIncarnation) =>
+    client.createGuiNodeHandle(entity, incarnation, id);
+  const composing = async () => {
+    await client.submitGuiInput({ kind: "focus", handle: handle(2) });
+    await client.submitGuiInput({ kind: "text", text: "ab" });
+    await client.submitGuiInput({
+      kind: "composition",
+      text: "zz",
+      caretStart: 2,
+      caretEnd: 2,
+    });
+    return (await focusWhere(
+      log,
+      (state) =>
+        state?.node === 2 &&
+        state.rootIncarnation === rootIncarnation &&
+        state.composition?.text === "zz",
+      "The focused TextInput published no open composition",
+    ))!;
+  };
+  const tapCommits = async (
+    pointer: number,
+    position: [number, number],
+    node: number,
+    incarnation: bigint,
+  ) => {
+    const mark = log.batches.length;
+    await client.submitGuiInput({
+      kind: "pointerDown",
+      pointer,
+      position,
+      button: "primary",
+    });
+    await client.submitGuiInput({
+      kind: "pointerUp",
+      pointer,
+      position,
+      button: "primary",
+    });
+    return await eventually(() => {
+      const found = nodeRecordsSince(
+        log,
+        mark,
+        entity,
+        incarnation,
+        node,
+      ).effects;
+      return found.length > 0 ? found : undefined;
+    }, `A tap over the vacated area did not reach node ${node}`);
+  };
+
+  // A focused TextInput with an open composition is removed: the text focus
+  // clears, a later commit finds no focus, and the typed prefix never
+  // publishes an effect for the removed node.
+  const focus = await composing();
+  const textMark = log.batches.length;
+  await client.editGui({ action: "remove", handle: handle(2) });
+  await focusWhere(
+    log,
+    (state) => state === null,
+    "Removing the composing TextInput did not clear the text focus",
+  );
+  const lateCommit = await client.submitGuiInput({ kind: "commitComposition" });
+  const lateText = await client.submitGuiInput({
+    kind: "text",
+    text: "late",
+    fence: fenceOf(focus),
+  });
+  const textFocusGone =
+    (await client.semanticSnapshot({ entity })).focused === undefined;
+  expect(
+    lateCommit.unhandled?.kind === "noFocus" && textFocusGone,
+    `A composition commit after removal found a target: ${JSON.stringify(lateCommit.unhandled)}`,
+  );
+  // A native edit stamped with the removed focus conflicts.
+  await eventually(
+    () =>
+      conflictsSince(log, textMark).includes("focusMismatch")
+        ? true
+        : undefined,
+    `A stamped edit for the removed TextInput did not conflict: ${JSON.stringify(lateText.unhandled)}`,
+  );
+  const staleText = await rejected(
+    client.editGui({
+      action: "update",
+      handle: handle(2),
+      patch: { style: { opacity: 0.5 } },
+    }),
+  );
+  expect(staleText, "The removed TextInput handle was accepted");
+
+  // A slider captured mid-drag is removed: the rest of the drag commits
+  // nothing, and a new checkbox in the vacated area takes later input. The
+  // column reflowed the slider into the upper half.
+  await client.waitForFrame();
+  let sliderMark = log.batches.length;
+  await client.submitGuiInput({
+    kind: "pointerDown",
+    pointer: 1,
+    position: [1, upper[1]],
+    button: "primary",
+  });
+  const move = await client.submitGuiInput({
+    kind: "pointerMove",
+    pointer: 1,
+    position: [3, upper[1]],
+  });
+  // Wait for the move's own commit so no drag effect trails the removal.
+  const dragged = await eventually(() => {
+    const found = nodeRecordsSince(
+      log,
+      sliderMark,
+      entity,
+      rootIncarnation,
+      3,
+    ).effects;
+    return found.some((effect) => effect.sourceTick === move.tick)
+      ? found
+      : undefined;
+  }, "The captured slider drag committed no value");
+  sliderMark = log.batches.length;
+  await client.editGui({ action: "remove", handle: handle(3) });
+  const afterSlider = [
+    await client.submitGuiInput({
+      kind: "pointerMove",
+      pointer: 1,
+      position: [2, upper[1]],
+    }),
+    await client.submitGuiInput({
+      kind: "pointerUp",
+      pointer: 1,
+      position: [2, upper[1]],
+      button: "primary",
+    }),
+  ];
+  await client.editGui({
+    action: "insert",
+    entity,
+    rootIncarnation,
+    id: 4,
+    parent: 1,
+    index: 0,
+    data: { kind: "checkbox" },
+    values: { checked: false },
+    style: { width: 4, height: 3 },
+  });
+  await client.waitForFrame();
+  const vacated = await tapCommits(2, upper, 4, rootIncarnation);
+  // Observations are ordered, so the new target's commit follows any stale
+  // effect for either removed control.
+  const textRecords = nodeRecordsSince(
+    log,
+    textMark,
+    entity,
+    rootIncarnation,
+    2,
+  );
+  const sliderRecords = nodeRecordsSince(
+    log,
+    sliderMark,
+    entity,
+    rootIncarnation,
+    3,
+  );
+  expect(
+    textRecords.effects.length === 0 &&
+      sliderRecords.effects.length === 0 &&
+      sliderRecords.cancellations.includes("targetRemoved") &&
+      afterSlider[1]!.unhandled?.kind === "noCapture" &&
+      vacated.length === 1 &&
+      vacated[0]!.kind === "controlCommitted" &&
+      vacated[0]!.value.kind === "bool" &&
+      vacated[0]!.value.value === true,
+    `Removed controls left stale effects or misrouted later input: ${JSON.stringify({ textRecords, sliderRecords, afterSlider, vacated }, (_, value) => (typeof value === "bigint" ? `${value}` : value))}`,
+  );
+  const staleSlider = await rejected(
+    client.editGui({
+      action: "setControlValue",
+      handle: handle(3),
+      expectedRevision: 1,
+      value: { kind: "scalar", value: 0.5 },
+    }),
+  );
+  expect(staleSlider, "The removed slider handle was accepted");
+
+  // The whole GuiRoot is removed while a TextInput composes and a press
+  // holds the checkbox: focus and capture clear, the press completes
+  // nothing, and every handle of the old incarnation is rejected. A new
+  // GuiRoot on the same Surface has a fresh incarnation whose controls take
+  // the same input.
+  await client
+    .editGuiBatch([
+      {
+        action: "update",
+        handle: handle(4),
+        patch: { style: { height: 1.5 } },
+      },
+      {
+        action: "insert",
+        entity,
+        rootIncarnation,
+        id: 2,
+        parent: 1,
+        index: 1,
+        data: { kind: "textInput", text: "", placeholder: "" },
+        style: { ...half, asset: font },
+      },
+    ])
+    .then((outcome) => {
+      // Node identities are never reused within an incarnation.
+      expect(
+        !outcome.ok && outcome.applied === 1,
+        "A removed node id was reused",
+      );
+    });
+  await client.editGui({
+    action: "insert",
+    entity,
+    rootIncarnation,
+    id: 5,
+    parent: 1,
+    index: 1,
+    data: { kind: "textInput", text: "", placeholder: "" },
+    style: { ...half, asset: font },
+  });
+  await client.waitForFrame();
+  await client.submitGuiInput({ kind: "focus", handle: handle(5) });
+  await client.submitGuiInput({
+    kind: "composition",
+    text: "qq",
+    caretStart: 2,
+    caretEnd: 2,
+  });
+  await focusWhere(
+    log,
+    (state) => state?.node === 5 && state.composition?.text === "qq",
+    "The second TextInput published no open composition",
+  );
+  await client.submitGuiInput({
+    kind: "pointerDown",
+    pointer: 3,
+    position: upper,
+    button: "primary",
+  });
+  const oldIncarnation = rootIncarnation;
+  const rootMark = log.batches.length;
+  successfulBatch(
+    await client.batch([
+      {
+        kind: "removeComponent",
+        entity: { kind: "handle", id: entity },
+        component: client.components.GuiRoot!.id,
+      },
+    ]),
+  );
+  await focusWhere(
+    log,
+    (state) => state === null,
+    "Removing the GuiRoot did not clear the text focus",
+  );
+  const afterRoot = [
+    await client.submitGuiInput({
+      kind: "pointerUp",
+      pointer: 3,
+      position: upper,
+      button: "primary",
+    }),
+    await client.submitGuiInput({ kind: "commitComposition" }),
+  ];
+  const staleRoot = [
+    await rejected(
+      client.editGui({
+        action: "update",
+        handle: handle(4, oldIncarnation),
+        patch: { style: { opacity: 0.5 } },
+      }),
+    ),
+    await rejected(
+      client.editGui({
+        action: "insert",
+        entity,
+        rootIncarnation: oldIncarnation,
+        id: 6,
+        index: 0,
+        data: { kind: "container", containerKind: "column" },
+      }),
+    ),
+  ];
+  successfulBatch(
+    await client.batch([
+      insertComponent(client, "GuiRoot", { kind: "handle", id: entity }),
+    ]),
+  );
+  ({ rootIncarnation } = await client.inspectGui({ entity }));
+  expect(
+    rootIncarnation !== oldIncarnation,
+    "A replacement GuiRoot reused the removed incarnation",
+  );
+  staleRoot.push(
+    await rejected(
+      client.editGui({
+        action: "update",
+        handle: handle(4, oldIncarnation),
+        patch: { style: { opacity: 0.5 } },
+      }),
+    ),
+  );
+  await populate(rootIncarnation);
+  // The upper half now holds a fresh TextInput: a tap focuses it rather
+  // than reaching the removed checkbox, and the lower slider commits.
+  await client.submitGuiInput({
+    kind: "pointerDown",
+    pointer: 4,
+    position: upper,
+    button: "primary",
+  });
+  await client.submitGuiInput({
+    kind: "pointerUp",
+    pointer: 4,
+    position: upper,
+    button: "primary",
+  });
+  await focusWhere(
+    log,
+    (state) =>
+      state?.node === 2 &&
+      state.rootIncarnation === rootIncarnation &&
+      state.composition === undefined,
+    "A tap on the replacement root did not focus its TextInput",
+  );
+  const replacement = await tapCommits(5, [3, lower[1]], 3, rootIncarnation);
+  const staleRootEffects = log.batches
+    .slice(rootMark)
+    .flatMap((batch) => batch.effects)
+    .filter((effect) => effect.rootIncarnation === oldIncarnation);
+  expect(
+    staleRootEffects.length === 0 &&
+      afterRoot[0]!.unhandled?.kind === "noCapture" &&
+      afterRoot[1]!.unhandled?.kind === "noFocus" &&
+      staleRoot.every(Boolean) &&
+      replacement[0]!.kind === "controlCommitted",
+    `Removing the GuiRoot left stale effects, accepted stale input or handles: ${JSON.stringify({ staleRootEffects, afterRoot, staleRoot }, (_, value) => (typeof value === "bigint" ? `${value}` : value))}`,
+  );
+  log.stop();
+  await host.detachWorld();
+  return {
+    textRemoval: {
+      lateCommit: lateCommit.unhandled?.kind,
+      lateStampedEdit: "focusMismatch",
+    },
+    sliderRemoval: {
+      draggedCommits: dragged.length,
+      afterRemoval: afterSlider.map((reply) => reply.unhandled?.kind),
+      cancellations: sliderRecords.cancellations,
+    },
+    rootRemoval: {
+      afterRemoval: afterRoot.map((reply) => reply.unhandled?.kind),
+      staleHandlesRejected: staleRoot.length,
+      incarnations: [String(oldIncarnation), String(rootIncarnation)],
+    },
+  };
 }

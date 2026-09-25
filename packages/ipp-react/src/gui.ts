@@ -56,6 +56,7 @@ export type {
   GuiPressListener,
   GuiScalarCommitListener,
   GuiTextCommitListener,
+  GuiTextSubmitListener,
   GuiToggleListener,
 } from "./gui/callbacks.js";
 export { attachCanvasGuiInput, createGuiInputSink } from "./gui/input.js";

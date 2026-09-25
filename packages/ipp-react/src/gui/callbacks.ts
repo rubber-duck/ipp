@@ -1,11 +1,11 @@
 /** GUI event callbacks for `@ipp/react/gui`.
  *
  * Application callbacks observe committed effects only. The host app feeds
- * committed input outcomes (the client's momentary `buttonPressed` and
- * revision-keyed `controlCommitted` effects) together with the acknowledged
- * listener table, and this module invokes the matching control callback plus
- * the logical ancestor `onAction` path, whose outermost entries are the
- * GuiRoot's own listeners. Transient cursors (focus, hover, scroll) are
+ * committed input outcomes (the client's momentary `buttonPressed`,
+ * revision-keyed `controlCommitted` and text `submitted` effects) together
+ * with the acknowledged listener table, and this module invokes the matching
+ * control callback plus the logical ancestor `onAction` path, whose outermost
+ * entries are the GuiRoot's own listeners. Transient cursors (focus, hover, scroll) are
  * not representable here and never produce callbacks.
  *
  * IPP keeps interaction and editing ownership: dispatch returns an
@@ -22,6 +22,7 @@
  */
 import type {
   GuiCancelObservation,
+  GuiCommitSource,
   GuiCommittedEffect,
   GuiConflictObservation,
   GuiControlValue,
@@ -58,6 +59,9 @@ export interface GuiControlEvent<T> {
   readonly node: number;
   readonly revision: number;
   readonly value: T;
+  /** What produced a committed value; absent for submissions and when the
+   * feeding publication omits it. */
+  readonly source?: GuiCommitSource | undefined;
   readonly name?: string | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
   readonly sourceTick?: bigint | undefined;
@@ -69,6 +73,8 @@ export type GuiPressListener = (event: GuiPressEvent) => void;
 export type GuiToggleListener = (event: GuiControlEvent<boolean>) => void;
 export type GuiScalarCommitListener = (event: GuiControlEvent<number>) => void;
 export type GuiTextCommitListener = (event: GuiControlEvent<string>) => void;
+/** Observer of Enter submitting the committed text outside composition. */
+export type GuiTextSubmitListener = (event: GuiControlEvent<string>) => void;
 
 function isU32(value: unknown): value is number {
   return (
@@ -123,6 +129,16 @@ export function isCommittedEffect(value: unknown): value is GuiCommittedEffect {
       return (
         isU32(effect.revision) &&
         isControlValue(effect.value) &&
+        (effect.source === undefined ||
+          effect.source === "user" ||
+          effect.source === "semantic" ||
+          effect.source === "external") &&
+        isEffectMetadata(effect)
+      );
+    case "submitted":
+      return (
+        isU32(effect.revision) &&
+        typeof effect.text === "string" &&
         isEffectMetadata(effect)
       );
     default:
@@ -172,6 +188,7 @@ export interface GuiControlListenerRecord {
   readonly onToggle?: GuiToggleListener | undefined;
   readonly onScalarCommit?: GuiScalarCommitListener | undefined;
   readonly onTextCommit?: GuiTextCommitListener | undefined;
+  readonly onSubmit?: GuiTextSubmitListener | undefined;
   readonly onAction?: GuiActionListener | undefined;
   readonly onActionCapture?: GuiActionListener | undefined;
 }
@@ -318,9 +335,7 @@ function matchControlCallback(
   switch (record.kind) {
     case "button": {
       if (effect.kind !== "buttonPressed") {
-        report(
-          `GUI button node ${effect.node} ignores controlCommitted effects`,
-        );
+        report(`GUI button node ${effect.node} ignores ${effect.kind} effects`);
         return null;
       }
       const listener = record.onPress;
@@ -338,6 +353,7 @@ function matchControlCallback(
         ...base,
         revision: effect.revision,
         value: effect.value.value,
+        ...(effect.source === undefined ? {} : { source: effect.source }),
       };
       return () => listener?.(event);
     }
@@ -356,10 +372,20 @@ function matchControlCallback(
         ...base,
         revision: effect.revision,
         value: effect.value.value,
+        ...(effect.source === undefined ? {} : { source: effect.source }),
       };
       return () => listener?.(event);
     }
     case "textInput": {
+      if (effect.kind === "submitted") {
+        const listener = record.onSubmit;
+        const event: GuiControlEvent<string> = {
+          ...base,
+          revision: effect.revision,
+          value: effect.text,
+        };
+        return () => listener?.(event);
+      }
       if (effect.kind !== "controlCommitted" || effect.value.kind !== "text") {
         report(
           `GUI textInput node ${effect.node} expects a text controlCommitted effect`,
@@ -371,6 +397,7 @@ function matchControlCallback(
         ...base,
         revision: effect.revision,
         value: effect.value.value,
+        ...(effect.source === undefined ? {} : { source: effect.source }),
       };
       return () => listener?.(event);
     }

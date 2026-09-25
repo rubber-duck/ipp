@@ -582,3 +582,51 @@ fn semantic_refusals_preserve_unknown_stale_and_unsupported() {
         "refusal reply missing: {refusal_tags:?}"
     );
 }
+
+#[test]
+fn external_replacement_publishes_a_committed_observation_marked_external() {
+    let mut host = ready();
+    let panel = build_panel(&mut host);
+    let root_incarnation = root_incarnation(&mut host, panel);
+    send(
+        &mut host,
+        40,
+        RequestBody::GuiCommands {
+            batch_id: None,
+            commands: vec![GuiCommand::SetControlValue {
+                handle: GuiNodeHandle::new(SESSION, panel, root_incarnation, GuiNodeId(2)),
+                expected_revision: 1,
+                value: GuiControlValue::Bool(true),
+            }],
+        },
+    );
+    host.session_mut(SESSION).unwrap().tick(0.0).unwrap();
+
+    // One broadcast observation carries the committed checkbox effect: tag
+    // 1 (ControlCommitted), the new revision and value, then the source byte
+    // (2, external) before the three empty trailing record counts.
+    let mut observations = Vec::new();
+    {
+        let mut session = host.session_mut(SESSION).unwrap();
+        while let Some(bytes) = session.take_response() {
+            if bytes[24] == 31 {
+                observations.push(bytes);
+            }
+        }
+    }
+    assert_eq!(observations.len(), 1, "{observations:?}");
+    let bytes = &observations[0];
+    assert_eq!(bytes[29], 3);
+    assert_eq!(&bytes[30..34], &1u32.to_le_bytes());
+    assert_eq!(bytes[34], 1);
+    assert_eq!(&bytes[35..43], &SESSION.to_le_bytes());
+    let end = bytes.len() - 12;
+    assert_eq!(&bytes[end..], &[0; 12]);
+    assert_eq!(bytes[end - 1], 2, "source must be external");
+    assert_eq!(&bytes[end - 3..end - 1], &[1, 1], "bool true");
+    assert_eq!(&bytes[end - 7..end - 3], &2u32.to_le_bytes(), "revision");
+    assert_eq!(
+        checkbox_value(&mut host, panel),
+        GuiControlValue::Bool(true)
+    );
+}

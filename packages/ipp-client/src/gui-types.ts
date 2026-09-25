@@ -445,13 +445,44 @@ export type GuiInputCommand =
       panelDistance?: number;
     }
   | { kind: "key"; key: GuiKey; pressed: boolean }
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; fence?: GuiTextFence }
   | { kind: "focus"; handle: GuiNodeHandle }
   | { kind: "blur" }
-  | { kind: "setTextSelection"; start: number; end: number }
-  | { kind: "composition"; text: string; caretStart: number; caretEnd: number }
-  | { kind: "commitComposition" }
-  | { kind: "cancelComposition" };
+  | {
+      kind: "setTextSelection";
+      start: number;
+      end: number;
+      fence?: GuiTextFence;
+    }
+  | {
+      kind: "composition";
+      text: string;
+      caretStart: number;
+      caretEnd: number;
+      fence?: GuiTextFence;
+    }
+  | { kind: "commitComposition"; fence?: GuiTextFence }
+  | { kind: "cancelComposition"; fence?: GuiTextFence };
+
+/**
+ * Focus and text revision a native text buffer observed, copied from the
+ * published {@link GuiTextFocusState}. The runtime rejects a stamped text,
+ * selection or composition command as a conflict, without writing, when
+ * the input context, focus generation or target moved, or when the
+ * revision is newer than the text. Selections must name the current
+ * revision exactly; insertions and composition may name an older revision
+ * of the same focus generation. An external replacement of the focused
+ * text moves the focus generation. Unstamped commands apply to the current
+ * focus in ingress order, like keys.
+ */
+export interface GuiTextFence {
+  readonly contextGeneration: bigint;
+  readonly focusGeneration: bigint;
+  readonly entity: bigint;
+  readonly rootIncarnation: bigint;
+  readonly node: number;
+  readonly revision: number;
+}
 
 export interface GuiInspectedNode {
   id: GuiNodeId;
@@ -485,6 +516,12 @@ export interface GuiButtonPressedEffect {
   readonly effectTick?: bigint | undefined;
 }
 
+/**
+ * What produced a committed control value: routed user input, a semantic
+ * action, or an explicit revision-aware external replacement.
+ */
+export type GuiCommitSource = "user" | "semantic" | "external";
+
 /** Committed control outcome, mirroring core ControlCommitted. */
 export interface GuiControlCommittedEffect {
   readonly kind: "controlCommitted";
@@ -493,6 +530,26 @@ export interface GuiControlCommittedEffect {
   readonly node: number;
   readonly value: GuiControlValue;
   readonly revision: number;
+  /** What produced the commit, when the feeding publication carries it. */
+  readonly source?: GuiCommitSource | undefined;
+  /** Runtime logical ancestor path, root-first including the target, when pinned. */
+  readonly path?: readonly number[] | undefined;
+  /** Routing frame, when the feeding publication carries ticks. */
+  readonly sourceTick?: bigint | undefined;
+  /** Application frame, when the feeding publication carries ticks. */
+  readonly effectTick?: bigint | undefined;
+}
+
+/** Enter submitted a focused text input outside composition, mirroring core Submitted. */
+export interface GuiSubmittedEffect {
+  readonly kind: "submitted";
+  readonly entity: bigint;
+  readonly rootIncarnation: bigint;
+  readonly node: number;
+  /** Committed text revision that was submitted. */
+  readonly revision: number;
+  /** Committed text at that revision. */
+  readonly text: string;
   /** Runtime logical ancestor path, root-first including the target, when pinned. */
   readonly path?: readonly number[] | undefined;
   /** Routing frame, when the feeding publication carries ticks. */
@@ -504,7 +561,8 @@ export interface GuiControlCommittedEffect {
 /** Committed effects only; transient cursors are unrepresentable by design. */
 export type GuiCommittedEffect =
   | GuiButtonPressedEffect
-  | GuiControlCommittedEffect;
+  | GuiControlCommittedEffect
+  | GuiSubmittedEffect;
 
 /** Session-scoped target for conflicts, cancellations and scene fallback. */
 export interface GuiObservationTarget {
@@ -521,7 +579,8 @@ export type GuiConflictReason =
       readonly found: number;
     }
   | { readonly kind: "admissionFailed"; readonly reason: string }
-  | { readonly kind: "touchArbitration"; readonly ownerPointer: number };
+  | { readonly kind: "touchArbitration"; readonly ownerPointer: number }
+  | { readonly kind: "focusMismatch" };
 
 /** One arbitration or admission conflict, reported separately from effects. */
 export interface GuiConflictObservation {

@@ -24,9 +24,11 @@ import type { BrowserGuiInputCommand, GuiInputSink } from "./input.js";
  * followed by a `beforeinput` of type `insertFromComposition` on accept.
  * Every provisional therefore applies exactly once: updates flow through
  * `compositionupdate` only, and both `beforeinput` composition payloads
- * are skipped (see {@link shouldSkipBeforeInput}). `keydown` 229 handling
- * stays absent deliberately: `beforeinput` remains the text source of
- * truth, as in the canvas input relay.
+ * are skipped (see {@link shouldSkipBeforeInput}). `beforeinput` remains
+ * the text source of truth, as in the `.11` relay; keys pressed while a
+ * composition is open (`isComposing`, or the legacy `keyCode` 229) belong to
+ * the IME and are never forwarded as GUI keys, so Enter confirming a
+ * candidate never submits (see {@link isComposingKeyEvent}).
  *
  * Caret offsets index UTF-8 bytes; browsers report no caret, so
  * each provisional carries a caret collapsed at its UTF-8 end.
@@ -74,6 +76,19 @@ export function mapCompositionEnd(
     return { kind: "commitComposition" };
   }
   return { kind: "cancelComposition" };
+}
+
+/** Whether a `keydown` belongs to an open IME composition.
+ *
+ * Browsers flag keys handled by the IME with `isComposing`; some report
+ * only the legacy `keyCode` 229 for the keydown that starts or confirms a
+ * composition. Such keys must not reach the runtime as GUI keys.
+ */
+export function isComposingKeyEvent(event: {
+  readonly isComposing?: boolean;
+  readonly keyCode?: number;
+}): boolean {
+  return event.isComposing === true || event.keyCode === 229;
 }
 
 /** Whether a `beforeinput` payload belongs to an IME session.

@@ -1,8 +1,8 @@
 //! Unsolicited GUI observation publication.
 //!
-//! Committed control effects with their conflicts and cancellations broadcast
-//! as committed state; unhandled inputs go only to their supplying session so
-//! raw input stays private. Messages chunk like Resources: at most 128
+//! Committed control effects and text submissions with their conflicts and
+//! cancellations broadcast as committed state; unhandled inputs go only to
+//! their supplying session so raw input stays private. Messages chunk like Resources: at most 128
 //! records within the transport budget, order preserved, each record in
 //! exactly one message.
 //!
@@ -15,9 +15,9 @@ use crate::codec::Writer;
 use crate::wire::error_name;
 use crate::{MAX_MESSAGE_BYTES, ProtocolError, ResponseBody};
 use ipp_core::{
-    EntityId, GuiControlValue, GuiInputCancellation, GuiInputCommand, GuiInputConflict,
-    GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputTarget, GuiNodeId,
-    GuiTextFocusUpdate, GuiUnhandledInput, WorldUpdateReport,
+    EntityId, GuiCommitSource, GuiControlValue, GuiInputCancellation, GuiInputCommand,
+    GuiInputConflict, GuiInputConflictReason, GuiInputEffect, GuiInputEffectKind, GuiInputTarget,
+    GuiNodeId, GuiTextFence, GuiTextFocusUpdate, GuiUnhandledInput, WorldUpdateReport,
 };
 
 /// Wire bound for every observation text field, matching all protocol strings.
@@ -31,7 +31,7 @@ pub const GUI_OBSERVATIONS_PER_MESSAGE: usize = 128;
 const INNER_BUDGET: usize = MAX_MESSAGE_BYTES - 65536;
 
 /// Split one frame report into that session's unsolicited responses.
-/// Committed button and control effects broadcast with conflicts and
+/// Committed button, control and submission effects broadcast with conflicts and
 /// cancellations; unhandled inputs filter to their supplying session and
 /// transient cursor effects are skipped as unrepresentable.
 pub fn gui_observation_bodies(report: &WorldUpdateReport, session: u64) -> Vec<ResponseBody> {
@@ -44,6 +44,7 @@ pub fn gui_observation_bodies(report: &WorldUpdateReport, session: u64) -> Vec<R
                 effect.kind,
                 GuiInputEffectKind::ButtonPressed { .. }
                     | GuiInputEffectKind::ControlCommitted { .. }
+                    | GuiInputEffectKind::Submitted { .. }
             )
         })
         .cloned()
@@ -135,6 +136,11 @@ fn effect_size(effect: &GuiInputEffect) -> usize {
             value,
             ..
         } => (path, Some(value)),
+        GuiInputEffectKind::Submitted {
+            path,
+            text,
+            ..
+        } => return 128 + 4 * path.len() + text.len(),
         _ => return 0,
     };
     128 + 4 * path.len()
@@ -164,6 +170,7 @@ fn input_text_size(input: &GuiInputCommand) -> usize {
     match input {
         GuiInputCommand::Text {
             text,
+            ..
         } => text.len(),
         GuiInputCommand::UpdateComposition {
             text,
@@ -343,6 +350,7 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
             value,
             revision,
             path,
+            source,
         } => {
             w.u8(1)?;
             write_effect_head(
@@ -373,6 +381,33 @@ fn write_effect(w: &mut Writer, effect: &GuiInputEffect) -> Result<(), ProtocolE
                     return Err(ProtocolError::Malformed("gui effect value"));
                 }
             }
+            w.u8(match source {
+                GuiCommitSource::User => 0,
+                GuiCommitSource::Semantic => 1,
+                GuiCommitSource::External => 2,
+            })?;
+        }
+        GuiInputEffectKind::Submitted {
+            entity,
+            root_incarnation,
+            node,
+            revision,
+            text,
+            path,
+        } => {
+            w.u8(2)?;
+            write_effect_head(
+                w,
+                effect.session,
+                effect.source_tick,
+                effect.effect_tick,
+                *entity,
+                *root_incarnation,
+                *node,
+                path,
+            )?;
+            w.u32(*revision)?;
+            write_bounded_text(w, text)?;
         }
         _ => return Err(ProtocolError::Malformed("transient gui effect")),
     }
@@ -453,6 +488,9 @@ fn write_conflict(w: &mut Writer, conflict: &GuiInputConflict) -> Result<(), Pro
         } => {
             w.u8(2)?;
             w.u32(*owner_pointer)?;
+        }
+        GuiInputConflictReason::FocusMismatch => {
+            w.u8(3)?;
         }
     }
     Ok(())
@@ -581,9 +619,11 @@ fn write_gui_input(w: &mut Writer, input: &GuiInputCommand) -> Result<(), Protoc
         }
         GuiInputCommand::Text {
             text,
+            fence,
         } => {
             w.u8(7)?;
             write_bounded_text(w, text)?;
+            write_text_fence(w, fence.as_ref())?;
         }
         GuiInputCommand::Focus {
             handle,
@@ -603,29 +643,57 @@ fn write_gui_input(w: &mut Writer, input: &GuiInputCommand) -> Result<(), Protoc
         GuiInputCommand::SetTextSelection {
             start,
             end,
+            fence,
         } => {
             w.u8(10)?;
             w.u32(*start)?;
             w.u32(*end)?;
+            write_text_fence(w, fence.as_ref())?;
         }
         GuiInputCommand::UpdateComposition {
             text,
             caret_start,
             caret_end,
+            fence,
         } => {
             w.u8(11)?;
             write_bounded_text(w, text)?;
             w.u32(*caret_start)?;
             w.u32(*caret_end)?;
+            write_text_fence(w, fence.as_ref())?;
         }
-        GuiInputCommand::CommitComposition => {
+        GuiInputCommand::CommitComposition {
+            fence,
+        } => {
             w.u8(12)?;
+            write_text_fence(w, fence.as_ref())?;
         }
-        GuiInputCommand::CancelComposition => {
+        GuiInputCommand::CancelComposition {
+            fence,
+        } => {
             w.u8(13)?;
+            write_text_fence(w, fence.as_ref())?;
         }
     }
     Ok(())
+}
+
+fn write_text_fence(w: &mut Writer, fence: Option<&GuiTextFence>) -> Result<(), ProtocolError> {
+    match fence {
+        None => w.u8(0),
+        Some(fence) => {
+            if fence.target.entity.to_bits() == 0 || fence.target.node.0 == 0 {
+                return Err(ProtocolError::Malformed("gui text fence target"));
+            }
+            w.u8(1)?;
+            w.u64(fence.context_generation)?;
+            w.u64(fence.focus_generation)?;
+            w.u64(fence.target.entity.to_bits())?;
+            w.u64(fence.target.root_incarnation)?;
+            w.u32(fence.target.node.0)?;
+            w.u32(fence.revision)
+        }
+    }
 }
 
 fn write_panel(w: &mut Writer, panel: &Option<EntityId>) -> Result<(), ProtocolError> {

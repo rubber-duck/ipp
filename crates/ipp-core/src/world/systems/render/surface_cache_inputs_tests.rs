@@ -1003,6 +1003,7 @@ mod gui {
             vec![GuiInputCommand::SetTextSelection {
                 start: 0,
                 end: 0,
+                fence: None,
             }],
         );
         advanced(&mut world, "caret");
@@ -1012,6 +1013,7 @@ mod gui {
                 text: "A".into(),
                 caret_start: 1,
                 caret_end: 1,
+                fence: None,
             }],
         );
         advanced(&mut world, "composition");

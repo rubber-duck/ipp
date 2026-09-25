@@ -612,6 +612,43 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       );
       assert.equal(edited.callbackRenders.at(-1), 1);
       assert.deepEqual(edited.errors, []);
+      assert.deepEqual(edited.callbackSources, [
+        "user",
+        "user",
+        "user",
+        "user",
+      ]);
+
+      // Enter in the native editor submits the committed text once.
+      await env.page.keyboard.press("Enter");
+      await waitForObservation(
+        (value) =>
+          value.submissions.length === 1 &&
+          value.submissions[0] === "aX世-clip-b!",
+        "Enter did not submit the focused text",
+      );
+
+      // An external replacement of the focused text reaches React marked
+      // external and refreshes the native editor without further input;
+      // typing then continues on the replaced text.
+      await env.page.evaluate(
+        async (url) => (await import(url)).replaceText("ext"),
+        fixture,
+      );
+      await waitForObservation(
+        (value) =>
+          value.editorValue === "ext" &&
+          value.callbackValues.at(-1) === "ext" &&
+          value.callbackSources.at(-1) === "external",
+        "external replacement did not refresh the editor",
+      );
+      await env.page.keyboard.insertText("!");
+      const afterReplace = await waitForObservation(
+        (value) => value.text === "ext!",
+        "typing after the external replacement did not commit",
+      );
+      assert.equal(afterReplace.submissions.length, 1);
+      assert.deepEqual(afterReplace.errors, []);
 
       // A non-text control click clears authoritative text focus and does
       // not write another text value.
@@ -625,9 +662,9 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         async (url) => (await import(url)).observation(),
         fixture,
       );
-      assert.equal(afterButton.text, "aX世-clip-b!");
+      assert.equal(afterButton.text, "ext!");
       assert.equal(afterButton.presses, 1);
-      assert.equal(afterButton.callbackValues.length, 4);
+      assert.equal(afterButton.callbackValues.length, 6);
 
       const controlBefore = await readControlPaint();
       assert.equal(controlBefore.checked, false);

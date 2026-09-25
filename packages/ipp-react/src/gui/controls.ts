@@ -33,6 +33,7 @@ import type {
   GuiPressListener,
   GuiScalarCommitListener,
   GuiTextCommitListener,
+  GuiTextSubmitListener,
   GuiToggleListener,
 } from "./callbacks.js";
 
@@ -83,6 +84,9 @@ export interface TextInputProps extends GuiControlBaseProps {
   readonly placeholder?: string | undefined;
   /** Text-commit observer; fed by committed effects only. */
   readonly onTextCommit?: GuiTextCommitListener | undefined;
+  /** Enter-submission observer for the committed text; never fires during
+   * IME composition. */
+  readonly onSubmit?: GuiTextSubmitListener | undefined;
 }
 
 function checkListener(kind: string, name: string, value: unknown): void {
@@ -119,6 +123,7 @@ export function validateTextInputProps(props: TextInputProps): void {
   checkControlBase("TextInput", props);
   textInputNode(props);
   checkListener("TextInput", "onTextCommit", props.onTextCommit);
+  checkListener("TextInput", "onSubmit", props.onSubmit);
 }
 
 /** Momentary button. Label is static structure; presses are committed effects. */

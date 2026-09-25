@@ -242,6 +242,7 @@ export class GuiCommits {
       onToggle: callbacks.onToggle,
       onScalarCommit: callbacks.onScalarCommit,
       onTextCommit: callbacks.onTextCommit,
+      onSubmit: callbacks.onSubmit,
       onAction: callbacks.onAction,
       onActionCapture: callbacks.onActionCapture,
     });

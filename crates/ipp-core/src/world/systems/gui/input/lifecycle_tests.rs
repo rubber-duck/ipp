@@ -147,6 +147,7 @@ fn disabling_focused_text_without_new_input_clears_caret_and_composition() {
                 GuiInputCommand::SetTextSelection {
                     start: 0,
                     end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -157,6 +158,7 @@ fn disabling_focused_text_without_new_input_clears_caret_and_composition() {
                     text: "a".into(),
                     caret_start: 0,
                     caret_end: 1,
+                    fence: None,
                 },
             )
             .unwrap();
@@ -688,6 +690,7 @@ fn committed_toggle_pins_runtime_ancestor_path_and_drains_once() {
                 value,
                 revision,
                 path,
+                ..
             } => Some((
                 *entity,
                 *effect_root,

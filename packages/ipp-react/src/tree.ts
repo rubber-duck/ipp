@@ -74,6 +74,7 @@ import type {
   GuiPressListener,
   GuiScalarCommitListener,
   GuiTextCommitListener,
+  GuiTextSubmitListener,
   GuiToggleListener,
 } from "./gui/callbacks.js";
 import { guiStyleWithTheme, validateGuiTheme } from "./gui/theme.js";
@@ -158,6 +159,7 @@ export interface GuiRetainedNodeCallbacks {
   readonly onToggle: GuiToggleListener | undefined;
   readonly onScalarCommit: GuiScalarCommitListener | undefined;
   readonly onTextCommit: GuiTextCommitListener | undefined;
+  readonly onSubmit: GuiTextSubmitListener | undefined;
 }
 
 /** Described GUI node with its JS-only callback seam attached. This remains
@@ -181,6 +183,7 @@ export function retainedNodeCallbacks(
       onToggle: undefined,
       onScalarCommit: undefined,
       onTextCommit: undefined,
+      onSubmit: undefined,
     }
   );
 }
@@ -574,6 +577,7 @@ export class ReactWorldTree {
         allowed.add("text");
         allowed.add("placeholder");
         allowed.add("onTextCommit");
+        allowed.add("onSubmit");
         break;
       default:
         break;
@@ -711,6 +715,7 @@ export class ReactWorldTree {
           onToggle?: GuiToggleListener | undefined;
           onScalarCommit?: GuiScalarCommitListener | undefined;
           onTextCommit?: GuiTextCommitListener | undefined;
+          onSubmit?: GuiTextSubmitListener | undefined;
         };
         const callbacks: GuiRetainedNodeCallbacks = {
           onAction: nodeProps.onAction as GuiActionListener | undefined,
@@ -721,6 +726,7 @@ export class ReactWorldTree {
           onToggle: controlListeners.onToggle,
           onScalarCommit: controlListeners.onScalarCommit,
           onTextCommit: controlListeners.onTextCommit,
+          onSubmit: controlListeners.onSubmit,
         };
         const described: GuiDescribedNodeWithCallbacks = {
           identity: instance.identity,

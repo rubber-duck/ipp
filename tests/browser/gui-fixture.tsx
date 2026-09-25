@@ -104,6 +104,8 @@ let editorIdentity: HTMLTextAreaElement | undefined;
 let latestTextFocus: GuiTextFocusState | null | undefined;
 let commits = 0;
 let callbackValues: string[] = [];
+let callbackSources: string[] = [];
+let submissions: string[] = [];
 let callbackRenders: number[] = [];
 let presses = 0;
 let errors: string[] = [];
@@ -322,7 +324,11 @@ function Application({
                 theme={namedTheme}
                 onTextCommit={(event) => {
                   callbackValues.push(event.value);
+                  callbackSources.push(event.source ?? "unknown");
                   callbackRenders.push(renderRevision);
+                }}
+                onSubmit={(event) => {
+                  submissions.push(event.value);
                 }}
               />
               <Row width={4} height={0.5}>
@@ -385,6 +391,8 @@ export async function mountGuiCanvas(
   latestTextFocus = undefined;
   commits = 0;
   callbackValues = [];
+  callbackSources = [];
+  submissions = [];
   callbackRenders = [];
   presses = 0;
   errors = [];
@@ -644,10 +652,34 @@ export function equivalentRerender(): void {
   rerenderEquivalent();
 }
 
+/** Replace the mounted text input's committed value from outside, as a
+ * controlled-value pattern or machine client would. */
+export async function replaceText(value: string): Promise<void> {
+  const current = handle;
+  const textHandle = textRef.current;
+  if (current === undefined || textHandle === null)
+    throw new Error("GUI fixture is not ready");
+  const client = current.client as GuiWorldClient;
+  const inspected = await client.inspectGui({
+    entity: textHandle.entity,
+    nodeId: textHandle.nodeId,
+    maxDepth: 1,
+  });
+  await client.editGui({
+    action: "setControlValue",
+    handle: textHandle,
+    expectedRevision: inspected.nodes[0]!.controlRevision,
+    value: { kind: "text", value },
+  });
+}
+
 export async function observation(): Promise<{
   readonly text: string;
   readonly revision: number;
+  readonly editorValue: string | null;
   readonly callbackValues: readonly string[];
+  readonly callbackSources: readonly string[];
+  readonly submissions: readonly string[];
   readonly callbackRenders: readonly number[];
   readonly presses: number;
   readonly commits: number;
@@ -701,7 +733,10 @@ export async function observation(): Promise<{
   return {
     text: node.controlValue.value,
     revision: node.controlRevision,
+    editorValue: editor?.value ?? null,
     callbackValues: [...callbackValues],
+    callbackSources: [...callbackSources],
+    submissions: [...submissions],
     callbackRenders: [...callbackRenders],
     presses,
     commits,

@@ -98,7 +98,8 @@ pub enum GuiKey {
     /// Move keyboard focus to the next control in traversal order, or enter
     /// the keyboard panel at its first control.
     Tab,
-    /// Activate the focused button or checkbox.
+    /// Activate the focused button or checkbox, or submit focused text
+    /// outside composition.
     Enter,
     /// Activate the focused button or checkbox, or type a space into text.
     Space,
@@ -212,6 +213,8 @@ pub enum GuiInputCommand {
     Text {
         /// Text to insert at the committed caret.
         text: String,
+        /// Focus and revision the sender observed; see [`GuiTextFence`].
+        fence: Option<GuiTextFence>,
     },
     /// Move keyboard focus to one fenced control node.
     Focus {
@@ -228,6 +231,9 @@ pub enum GuiInputCommand {
         start: u32,
         /// Caret byte offset.
         end: u32,
+        /// Focus and exact revision the offsets were chosen against; see
+        /// [`GuiTextFence`].
+        fence: Option<GuiTextFence>,
     },
     /// Provisional IME composition for the focused text input.
     /// Distinct from committed text: no reflow until explicit commit.
@@ -239,11 +245,50 @@ pub enum GuiInputCommand {
         caret_start: u32,
         /// Provisional caret within `text`.
         caret_end: u32,
+        /// Focus and revision the sender observed; see [`GuiTextFence`].
+        fence: Option<GuiTextFence>,
     },
     /// Commit the active provisional at the committed caret/selection.
-    CommitComposition,
+    CommitComposition {
+        /// Focus and revision the sender observed; see [`GuiTextFence`].
+        fence: Option<GuiTextFence>,
+    },
     /// Cancel the active provisional without committing.
-    CancelComposition,
+    CancelComposition {
+        /// Focus and revision the sender observed; see [`GuiTextFence`].
+        fence: Option<GuiTextFence>,
+    },
+}
+
+/// Focus and text revision a native text buffer observed when it produced
+/// one text, selection or composition command.
+///
+/// The fields mirror the published [`GuiTextFocusState`]. Routing rejects a
+/// fenced command as a conflict, without any write, when the input context
+/// generation, focus generation or target differs from the current focus,
+/// or when the revision is newer than the current text. Selection offsets
+/// must name the current revision exactly; insertions and composition may
+/// name an older revision of the same focus, because the sender's own
+/// in-flight edits advance the revision before it observes them. An external
+/// replacement of the focused text moves the focus generation, so an
+/// insertion stamped before it conflicts instead of rebasing onto the newer
+/// text; a rejected prediction republishes the rolled-back text, and
+/// insertions stamped against the prediction name a newer revision and
+/// conflict.
+///
+/// Adapters holding a temporary native buffer or delivering delayed platform
+/// results (clipboard reads, IME updates) stamp every edit. An unfenced
+/// command applies to the current focus in ingress order, like keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuiTextFence {
+    /// Input context generation the sender observed.
+    pub context_generation: u64,
+    /// Focus generation the sender observed.
+    pub focus_generation: u64,
+    /// Focused text input the sender observed.
+    pub target: GuiInputTarget,
+    /// Text revision the sender observed.
+    pub revision: u32,
 }
 
 /// Identity of a routed node, fenced against removal and replacement.
@@ -348,6 +393,24 @@ pub enum GuiInputEffectKind {
         /// Runtime logical ancestor path, root-first including the target,
         /// pinned from the live tree at application for listener dispatch.
         path: Vec<GuiNodeId>,
+        /// What produced the commit.
+        source: GuiCommitSource,
+    },
+    /// Enter submitted a focused single-line text input outside composition.
+    Submitted {
+        /// Panel entity.
+        entity: EntityId,
+        /// Root component incarnation fencing replacement.
+        root_incarnation: u64,
+        /// Submitted text input node.
+        node: GuiNodeId,
+        /// Committed text revision that was submitted.
+        revision: u32,
+        /// Committed text at that revision.
+        text: String,
+        /// Runtime logical ancestor path, root-first including the target,
+        /// pinned from the live tree at application for listener dispatch.
+        path: Vec<GuiNodeId>,
     },
     /// Keyboard focus moved, or cleared when None.
     FocusChanged {
@@ -373,6 +436,18 @@ pub enum GuiInputEffectKind {
         /// Accumulated offset in logical units.
         offset: [f32; 2],
     },
+}
+
+/// What produced one committed control value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuiCommitSource {
+    /// Routed pointer, key, text or composition input.
+    User,
+    /// A semantic action through the validated control path.
+    Semantic,
+    /// An explicit revision-aware external replacement
+    /// ([`GuiCommand::SetControlValue`](crate::GuiCommand)).
+    External,
 }
 
 /// One routed input cancelled between routing and application.
@@ -436,6 +511,9 @@ pub enum GuiInputConflictReason {
         /// Pointer holding the press.
         owner_pointer: u32,
     },
+    /// A fenced text command named another input context, focus generation
+    /// or target than the current focus.
+    FocusMismatch,
 }
 
 /// One well-formed input that reached no GUI target, observable by scene
@@ -567,9 +645,16 @@ enum EnvelopeKind {
         expected_revision: u32,
         /// Value to commit.
         value: GuiControlValue,
+        /// Routed user input or a semantic action.
+        source: GuiCommitSource,
     },
     /// Completed button press.
     PressButton,
+    /// Text input submission of the revision the routing snapshot predicted.
+    Submit {
+        /// Revision the submitted text must still hold at application.
+        expected_revision: u32,
+    },
     /// Focus move, or blur when None.
     Focus {
         /// New focus, or None after blur.
@@ -634,6 +719,8 @@ struct CompositionUpdate<'a> {
     caret_start: u32,
     /// Provisional caret within `text`.
     caret_end: u32,
+    /// Focus and revision the sender observed.
+    fence: Option<&'a GuiTextFence>,
 }
 
 /// Shape validation for provisional IME updates, shared by admission (the
@@ -718,6 +805,11 @@ struct ScrollCursor {
 /// Ordered GUI input routing pass. See the module documentation for the
 /// routing/application contract.
 pub struct GuiInputSystem {
+    /// Authored edit owner whose accepted external replacements this system
+    /// publishes and fences the focused text against.
+    gui: Option<SystemDependencyBinding<GuiSystem>>,
+    /// Sequence of the next external replacement to observe.
+    external_commit_next: u64,
     /// Retained layout views borrowed during routing.
     layout: Option<SystemDependencyBinding<GuiLayoutSystem>>,
     /// Active camera and host viewport borrowed during routing. Projection
@@ -737,7 +829,8 @@ pub struct GuiInputSystem {
     keyboard_panel: Option<(EntityId, u64)>,
     /// Frame the focus cursor was set against.
     focus_tick: u64,
-    /// Monotonic fence for focus/blur and focused-node lifetime changes.
+    /// Monotonic fence for focus/blur, focused-node lifetime changes and
+    /// external replacement of the focused text.
     focus_generation: u64,
     /// Per-pointer capture/press cursors.
     captures: BTreeMap<u32, PointerCapture>,
@@ -818,7 +911,7 @@ impl SystemFactory for GuiInputSystemFactory {
         // current layout snapshot, while camera and geometry presence keeps
         // the host projection/blocker contract behind every routed pointer
         // total.
-        context.dependency::<GuiSystem>(GuiSystem::ID)?;
+        let gui = context.dependency::<GuiSystem>(GuiSystem::ID)?;
         let camera = context.dependency::<crate::systems::camera::CameraSystem>(
             crate::systems::camera::CameraSystem::ID,
         )?;
@@ -826,6 +919,8 @@ impl SystemFactory for GuiInputSystemFactory {
             crate::systems::geometry::GeometrySystem::ID,
         )?;
         Ok(Box::new(GuiInputSystem {
+            gui: Some(gui),
+            external_commit_next: 0,
             layout: Some(layout),
             camera: Some(camera),
             ingress: Vec::new(),
@@ -1621,6 +1716,7 @@ impl GuiInputSystem {
                 kind: EnvelopeKind::SetValue {
                     expected_revision,
                     value,
+                    source: GuiCommitSource::User,
                 },
             },
         );
@@ -3926,6 +4022,7 @@ impl GuiInputSystem {
                 ControlKind::TextInput if key == GuiKey::Space => {
                     self.append_text(session, tick, input, &root, &focus.target, " ".into());
                 }
+                ControlKind::TextInput => self.route_submit(session, tick, &root, focus.target),
                 _ => self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable),
             },
             GuiKey::Backspace => {
@@ -4135,6 +4232,37 @@ impl GuiInputSystem {
         }
     }
 
+    /// Queue a submission of the focused text input's predicted text. Enter
+    /// during an active composition belongs to the IME: it is consumed
+    /// without submitting, and the composition stays for the platform to
+    /// commit or cancel.
+    fn route_submit(&mut self, session: u64, tick: u64, root: &GuiRoot, target: GuiInputTarget) {
+        let composing = self
+            .composition
+            .as_ref()
+            .is_some_and(|composed| composed.target == target);
+        if composing {
+            return;
+        }
+
+        let expected_revision = self.base_revision(root, &target);
+        self.push_envelope(
+            tick,
+            PendingEnvelope {
+                session,
+                epoch: self.owner_epoch,
+                source_tick: tick,
+                target: Some(target),
+                pointer: None,
+                press_seq: None,
+                cancel_on_miss: false,
+                kind: EnvelopeKind::Submit {
+                    expected_revision,
+                },
+            },
+        );
+    }
+
     /// Insert payload text at the caret, replacing the selection, with
     /// revision chaining. Direct edits cancel provisional composition first.
     fn append_text(
@@ -4184,6 +4312,93 @@ impl GuiInputSystem {
         self.store_committed_cursor(target, outcome.caret, revision, session);
     }
 
+    /// Current keyboard focus for one text, selection or composition
+    /// command, or None after reporting why it cannot route. A fence naming
+    /// another input context, focus generation or target (including one
+    /// observed before the focus cleared) conflicts before any other check;
+    /// otherwise text follows only the focus owner's session.
+    fn text_command_focus(
+        &mut self,
+        session: u64,
+        tick: u64,
+        input: &GuiInputCommand,
+        fence: Option<&GuiTextFence>,
+    ) -> Option<GuiInputFocus> {
+        if let Some(fence) = fence {
+            let current = self.focus.is_some_and(|focus| {
+                fence.context_generation == self.owner_epoch
+                    && fence.focus_generation == self.focus_generation
+                    && fence.target == focus.target
+            });
+            if !current {
+                self.conflict(
+                    session,
+                    tick,
+                    Some(fence.target),
+                    GuiInputConflictReason::FocusMismatch,
+                );
+                return None;
+            }
+        }
+
+        let Some(focus) = self.focus else {
+            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+            return None;
+        };
+        if focus.session != session {
+            self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
+            return None;
+        }
+        Some(focus)
+    }
+
+    /// Check one fenced text command's revision against the current
+    /// predicted or committed revision. Selections name their offsets'
+    /// revision exactly; insertions and composition may name an older
+    /// revision of the same focus generation, never a newer one. Reports
+    /// the conflict and returns false when stale.
+    fn text_revision_current(
+        &mut self,
+        session: u64,
+        tick: u64,
+        target: GuiInputTarget,
+        fence: Option<&GuiTextFence>,
+        revision: u32,
+        exact: bool,
+    ) -> bool {
+        let Some(fence) = fence else {
+            return true;
+        };
+        let stale = if exact {
+            fence.revision != revision
+        } else {
+            fence.revision > revision
+        };
+        if stale {
+            self.conflict(
+                session,
+                tick,
+                Some(target),
+                GuiInputConflictReason::RevisionMismatch {
+                    expected: fence.revision,
+                    found: revision,
+                },
+            );
+        }
+        !stale
+    }
+
+    /// Current predicted or committed revision for one control, without
+    /// copying its value.
+    fn base_revision(&self, root: &GuiRoot, target: &GuiInputTarget) -> u32 {
+        match self.predicted.get(target) {
+            Some(predicted) => predicted.revision,
+            None => root
+                .control_state(target.node)
+                .map_or(0, |state| state.revision),
+        }
+    }
+
     /// Route one text append on the focused text input.
     fn route_text(
         &mut self,
@@ -4192,19 +4407,14 @@ impl GuiInputSystem {
         tick: u64,
         input: &GuiInputCommand,
         payload: &str,
+        fence: Option<&GuiTextFence>,
     ) -> Result<(), ErrorReason> {
         if payload.is_empty() {
             return Err(ErrorReason::InvalidValue);
         }
-        let Some(focus) = self.focus else {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+        let Some(focus) = self.text_command_focus(session, tick, input, fence) else {
             return Ok(());
         };
-        // Text follows only the focus owner's session.
-        if focus.session != session {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
-            return Ok(());
-        }
         let Some((kind, root)) = self.revalidate_capture(sim, &focus.target) else {
             self.clear_focus();
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
@@ -4212,6 +4422,10 @@ impl GuiInputSystem {
         };
         if kind != ControlKind::TextInput {
             self.unhandled(session, tick, input, GuiUnhandledReason::NotFocusable);
+            return Ok(());
+        }
+        let revision = self.base_revision(&root, &focus.target);
+        if !self.text_revision_current(session, tick, focus.target, fence, revision, false) {
             return Ok(());
         }
         self.append_text(
@@ -4228,6 +4442,7 @@ impl GuiInputSystem {
     /// Route an explicit caret/selection move on the focused text input.
     /// Offsets are fenced to the current predicted/committed text: past-end
     /// or split-grapheme ranges conflict without moving the cursor.
+    #[allow(clippy::too_many_arguments)]
     fn route_selection(
         &mut self,
         sim: &WorldSimulationState,
@@ -4236,16 +4451,11 @@ impl GuiInputSystem {
         input: &GuiInputCommand,
         start: u32,
         end: u32,
+        fence: Option<&GuiTextFence>,
     ) {
-        let Some(focus) = self.focus else {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+        let Some(focus) = self.text_command_focus(session, tick, input, fence) else {
             return;
         };
-        // Selection moves follow only the focus owner's session.
-        if focus.session != session {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
-            return;
-        }
         let Some((kind, root)) = self.revalidate_capture(sim, &focus.target) else {
             self.clear_focus();
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
@@ -4267,8 +4477,14 @@ impl GuiInputSystem {
         // Delayed native ranges are fenced to the revision their offsets
         // were chosen against: an external reset or equal-length replace
         // that moved the revision conflicts instead of rebasing the range
-        // onto newer text. Fresh gestures re-resolve through cursor_for.
-        if let Some(stored) = self.text_carets.get(&focus.target)
+        // onto newer text. A fenced range names that revision itself;
+        // unfenced ranges fall back to the stored cursor's revision. Fresh
+        // gestures re-resolve through cursor_for.
+        if fence.is_some() {
+            if !self.text_revision_current(session, tick, focus.target, fence, revision, true) {
+                return;
+            }
+        } else if let Some(stored) = self.text_carets.get(&focus.target)
             && stored.revision != revision
         {
             self.conflict(
@@ -4315,17 +4531,12 @@ impl GuiInputSystem {
             text,
             caret_start,
             caret_end,
+            fence,
         } = update;
         validate_composition_shape(text, caret_start, caret_end)?;
-        let Some(focus) = self.focus else {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+        let Some(focus) = self.text_command_focus(session, tick, input, fence) else {
             return Ok(());
         };
-        // Provisional updates follow only the focus owner's session.
-        if focus.session != session {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
-            return Ok(());
-        }
         let Some((kind, root)) = self.revalidate_capture(sim, &focus.target) else {
             self.clear_focus();
             self.unhandled(session, tick, input, GuiUnhandledReason::StaleTarget);
@@ -4344,6 +4555,10 @@ impl GuiInputSystem {
             );
             return Ok(());
         };
+        if !self.text_revision_current(session, tick, focus.target, fence, revision, false) {
+            return Ok(());
+        }
+
         // Ensure a cursor exists so later commits have an insertion point.
         let _ = self.cursor_for(&root, &focus.target, session);
         let Some(composed) = super::composition::ActiveComposition::new(
@@ -4369,16 +4584,11 @@ impl GuiInputSystem {
         session: u64,
         tick: u64,
         input: &GuiInputCommand,
+        fence: Option<&GuiTextFence>,
     ) {
-        let Some(focus) = self.focus else {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+        let Some(focus) = self.text_command_focus(session, tick, input, fence) else {
             return;
         };
-        // Composition commits follow only the focus owner's session.
-        if focus.session != session {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
-            return;
-        }
         let Some((kind, root)) = self.revalidate_capture(sim, &focus.target) else {
             self.clear_focus();
             self.clear_composition();
@@ -4408,6 +4618,9 @@ impl GuiInputSystem {
             );
             return;
         };
+        if !self.text_revision_current(session, tick, focus.target, fence, revision, false) {
+            return;
+        }
         if composed.revision != revision {
             let found = revision;
             self.clear_composition();
@@ -4461,16 +4674,11 @@ impl GuiInputSystem {
         session: u64,
         tick: u64,
         input: &GuiInputCommand,
+        fence: Option<&GuiTextFence>,
     ) {
-        let Some(focus) = self.focus else {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NoFocus);
+        let Some(focus) = self.text_command_focus(session, tick, input, fence) else {
             return;
         };
-        // Composition cancels follow only the focus owner's session.
-        if focus.session != session {
-            self.unhandled(session, tick, input, GuiUnhandledReason::NotOwner);
-            return;
-        }
         let Some((kind, _)) = self.revalidate_capture(sim, &focus.target) else {
             self.clear_focus();
             self.clear_composition();
@@ -4764,6 +4972,7 @@ impl GuiInputSystem {
                 EnvelopeKind::SetValue {
                     expected_revision: command.expected_revision,
                     value: GuiControlValue::Bool(!value),
+                    source: GuiCommitSource::Semantic,
                 }
             }
             crate::GuiSemanticAction::SetScalar(value) if kind == ControlKind::Slider => {
@@ -4786,6 +4995,7 @@ impl GuiInputSystem {
                 EnvelopeKind::SetValue {
                     expected_revision: command.expected_revision,
                     value,
+                    source: GuiCommitSource::Semantic,
                 }
             }
             crate::GuiSemanticAction::SetText(value) if kind == ControlKind::TextInput => {
@@ -4808,6 +5018,7 @@ impl GuiInputSystem {
                 EnvelopeKind::SetValue {
                     expected_revision: command.expected_revision,
                     value,
+                    source: GuiCommitSource::Semantic,
                 }
             }
             crate::GuiSemanticAction::Focus => EnvelopeKind::Focus {
@@ -4827,6 +5038,7 @@ impl GuiInputSystem {
         if let EnvelopeKind::SetValue {
             expected_revision,
             ref value,
+            ..
         } = envelope_kind
         {
             self.predicted.insert(
@@ -5056,6 +5268,21 @@ impl GuiInputSystem {
             }
         } else {
             self.predicted.remove(target);
+        }
+    }
+
+    /// Drop one node's prediction after its envelope conflicted. A focused
+    /// text input republishes its authoritative text, so the native buffer
+    /// resynchronizes from the rolled-back revision instead of the
+    /// prediction it last observed.
+    fn reject_prediction(
+        &mut self,
+        target: &GuiInputTarget,
+        remaining: &mut BTreeMap<GuiInputTarget, usize>,
+    ) {
+        self.release_prediction(target, remaining);
+        if self.focus.is_some_and(|focus| focus.target == *target) {
+            self.touch_caret();
         }
     }
 
@@ -5325,11 +5552,102 @@ impl GuiInputSystem {
                     },
                 });
             }
+            EnvelopeKind::Submit {
+                expected_revision,
+            } => {
+                let expected_revision = *expected_revision;
+                let Some(target) = envelope.target else {
+                    return;
+                };
+                let status = self
+                    .layout(&*access)
+                    .map_or(GuiTargetStatus::Ineligible, |layout| {
+                        evaluated_status(access.world, layout, &target)
+                    });
+                let root = match status {
+                    GuiTargetStatus::Eligible(root) => root,
+                    GuiTargetStatus::Removed => {
+                        self.cancel_envelope(
+                            tick,
+                            &envelope,
+                            GuiInputCancelReason::TargetRemoved,
+                            remaining,
+                        );
+                        return;
+                    }
+                    GuiTargetStatus::Ineligible => {
+                        self.cancel_envelope(
+                            tick,
+                            &envelope,
+                            GuiInputCancelReason::TargetHidden,
+                            remaining,
+                        );
+                        return;
+                    }
+                };
+
+                // The submitted text is the committed text at the revision
+                // routing predicted: a text input that changed kind or text
+                // since then conflicts instead of submitting other text.
+                let committed = root
+                    .nodes()
+                    .node(target.node)
+                    .filter(|node| ControlKind::of(&node.data) == Some(ControlKind::TextInput))
+                    .and_then(|_| root.control_state(target.node));
+                let Some(state) = committed else {
+                    self.pending_conflicts.push(GuiInputConflict {
+                        session: envelope.session,
+                        source_tick: envelope.source_tick,
+                        effect_tick: tick,
+                        target: Some(target),
+                        reason: GuiInputConflictReason::AdmissionFailed(ErrorReason::InvalidValue),
+                    });
+                    return;
+                };
+                let GuiControlValue::Text(text) = &state.value else {
+                    self.pending_conflicts.push(GuiInputConflict {
+                        session: envelope.session,
+                        source_tick: envelope.source_tick,
+                        effect_tick: tick,
+                        target: Some(target),
+                        reason: GuiInputConflictReason::AdmissionFailed(ErrorReason::InvalidValue),
+                    });
+                    return;
+                };
+                if state.revision != expected_revision {
+                    self.pending_conflicts.push(GuiInputConflict {
+                        session: envelope.session,
+                        source_tick: envelope.source_tick,
+                        effect_tick: tick,
+                        target: Some(target),
+                        reason: GuiInputConflictReason::RevisionMismatch {
+                            expected: expected_revision,
+                            found: state.revision,
+                        },
+                    });
+                    return;
+                }
+                self.pending_effects.push(GuiInputEffect {
+                    session: envelope.session,
+                    source_tick: envelope.source_tick,
+                    effect_tick: tick,
+                    kind: GuiInputEffectKind::Submitted {
+                        entity: target.entity,
+                        root_incarnation: target.root_incarnation,
+                        node: target.node,
+                        revision: state.revision,
+                        text: text.clone(),
+                        path: ancestor_path(&root, target.node),
+                    },
+                });
+            }
             EnvelopeKind::SetValue {
                 expected_revision,
                 value,
+                source,
             } => {
                 let expected_revision = *expected_revision;
+                let source = *source;
                 let Some(target) = envelope.target else {
                     return;
                 };
@@ -5362,7 +5680,7 @@ impl GuiInputSystem {
                 let committed_revision =
                     root.control_state(target.node).map(|state| state.revision);
                 let Some(found) = committed_revision else {
-                    self.release_prediction(&target, remaining);
+                    self.reject_prediction(&target, remaining);
                     self.pending_conflicts.push(GuiInputConflict {
                         session: envelope.session,
                         source_tick: envelope.source_tick,
@@ -5373,7 +5691,7 @@ impl GuiInputSystem {
                     return;
                 };
                 if found != expected_revision {
-                    self.release_prediction(&target, remaining);
+                    self.reject_prediction(&target, remaining);
                     self.cancel_composition_for_target(&target);
                     self.pending_conflicts.push(GuiInputConflict {
                         session: envelope.session,
@@ -5406,7 +5724,7 @@ impl GuiInputSystem {
                     value,
                 );
                 if let Err(reason) = commit {
-                    self.release_prediction(&target, remaining);
+                    self.reject_prediction(&target, remaining);
                     self.pending_conflicts.push(GuiInputConflict {
                         session: envelope.session,
                         source_tick: envelope.source_tick,
@@ -5439,11 +5757,22 @@ impl GuiInputSystem {
                                 value: value.clone(),
                                 revision,
                                 path,
+                                source,
                             },
                         });
+
+                        // A semantic replacement of the focused text is not
+                        // part of the native buffer's own edit chain: fence
+                        // its stamped edits and resynchronize it.
+                        if source != GuiCommitSource::User
+                            && self.focus.is_some_and(|focus| focus.target == target)
+                        {
+                            self.focus_generation = self.focus_generation.saturating_add(1).max(1);
+                            self.touch_caret();
+                        }
                     }
                     Err(reason) => {
-                        self.release_prediction(&target, remaining);
+                        self.reject_prediction(&target, remaining);
                         self.pending_conflicts.push(GuiInputConflict {
                             session: envelope.session,
                             source_tick: envelope.source_tick,
@@ -5462,7 +5791,10 @@ impl GuiInputSystem {
 /// the target. Pinned from the authoritative tree at application so listener
 /// dispatch observes the committed ancestry even if later edits move the
 /// tree. Validated trees are acyclic; the length cap fails safe otherwise.
-fn ancestor_path(root: &GuiRoot, node: GuiNodeId) -> Vec<GuiNodeId> {
+pub(in crate::world::systems::gui) fn ancestor_path(
+    root: &GuiRoot,
+    node: GuiNodeId,
+) -> Vec<GuiNodeId> {
     let mut path = vec![node];
     let mut current = node;
     let cap = root.nodes().len().saturating_add(1).max(2);
@@ -5490,6 +5822,7 @@ impl System for GuiInputSystem {
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         let tick = context.world.world.tick.saturating_add(1);
         self.last_tick = tick;
+        self.observe_external_commits(context);
         if let Some(binding) = self.layout
             && let Some(layout) = context.dependency(binding)
         {
@@ -5542,11 +5875,13 @@ impl System for GuiInputSystem {
             }
             GuiInputCommand::Text {
                 text,
+                ..
             } if text.is_empty() => return Err(ErrorReason::InvalidValue),
             GuiInputCommand::UpdateComposition {
                 text,
                 caret_start,
                 caret_end,
+                ..
             } => validate_composition_shape(text, *caret_start, *caret_end)?,
             GuiInputCommand::Focus {
                 handle,
@@ -5650,6 +5985,10 @@ impl System for GuiInputSystem {
     fn accept_ingress(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         let tick = context.world.world.tick.saturating_add(1);
         self.last_tick = tick;
+        // Replacements a Host applied between frames precede this frame's
+        // envelopes; those applied during this frame's mutation are observed
+        // in `update`, before routing.
+        self.observe_external_commits(context);
         self.apply_envelopes(&mut context.world, tick);
     }
 
@@ -5782,6 +6121,45 @@ impl System for GuiInputSystem {
 }
 
 impl GuiInputSystem {
+    /// Observe the external replacements accepted since the last
+    /// observation, in commit order: each publishes the committed control
+    /// effect a user edit would, marked external. Replacing the focused
+    /// text moves the
+    /// focus generation and republishes the text focus, so edits stamped
+    /// before the replacement conflict and the native buffer resynchronizes
+    /// without further input. A provisional composition stays until its
+    /// commit conflicts against the moved revision or it is cancelled.
+    fn observe_external_commits(&mut self, context: &SystemUpdateContext<'_, '_>) {
+        let Some(gui) = self.gui.and_then(|binding| context.dependency(binding)) else {
+            return;
+        };
+        let (commits, next) = gui.external_commits_since(self.external_commit_next);
+        self.external_commit_next = next;
+        for commit in commits {
+            self.pending_effects.push(GuiInputEffect {
+                session: commit.session,
+                source_tick: commit.tick,
+                effect_tick: commit.tick,
+                kind: GuiInputEffectKind::ControlCommitted {
+                    entity: commit.target.entity,
+                    root_incarnation: commit.target.root_incarnation,
+                    node: commit.target.node,
+                    value: commit.value.clone(),
+                    revision: commit.revision,
+                    path: commit.path.clone(),
+                    source: GuiCommitSource::External,
+                },
+            });
+            if self
+                .focus
+                .is_some_and(|focus| focus.target == commit.target)
+            {
+                self.focus_generation = self.focus_generation.saturating_add(1).max(1);
+                self.touch_caret();
+            }
+        }
+    }
+
     fn text_focus_state(&self, sim: &WorldSimulationState) -> Option<GuiTextFocusState> {
         let focus = self.focus?;
         let (text, revision) = if let Some(predicted) = self.predicted.get(&focus.target) {
@@ -5983,9 +6361,10 @@ impl GuiInputSystem {
             }
             GuiInputCommand::Text {
                 text,
+                fence,
             } => {
                 if self
-                    .route_text(access.world, *session, tick, command, &text)
+                    .route_text(access.world, *session, tick, command, &text, fence.as_ref())
                     .is_err()
                 {
                     failed(self);
@@ -5994,10 +6373,19 @@ impl GuiInputSystem {
             GuiInputCommand::SetTextSelection {
                 start,
                 end,
+                fence,
             } => {
                 if self
                     .route_with_layout(access, |input, _, sim| {
-                        input.route_selection(sim, *session, tick, command, start, end);
+                        input.route_selection(
+                            sim,
+                            *session,
+                            tick,
+                            command,
+                            start,
+                            end,
+                            fence.as_ref(),
+                        );
                     })
                     .is_err()
                 {
@@ -6008,6 +6396,7 @@ impl GuiInputSystem {
                 text,
                 caret_start,
                 caret_end,
+                fence,
             } => {
                 if self
                     .route_composition_update(
@@ -6019,6 +6408,7 @@ impl GuiInputSystem {
                             text: &text,
                             caret_start,
                             caret_end,
+                            fence: fence.as_ref(),
                         },
                     )
                     .is_err()
@@ -6026,11 +6416,27 @@ impl GuiInputSystem {
                     failed(self);
                 }
             }
-            GuiInputCommand::CommitComposition => {
-                self.route_composition_commit(access.world, *session, tick, command);
+            GuiInputCommand::CommitComposition {
+                fence,
+            } => {
+                self.route_composition_commit(
+                    access.world,
+                    *session,
+                    tick,
+                    command,
+                    fence.as_ref(),
+                );
             }
-            GuiInputCommand::CancelComposition => {
-                self.route_composition_cancel(access.world, *session, tick, command);
+            GuiInputCommand::CancelComposition {
+                fence,
+            } => {
+                self.route_composition_cancel(
+                    access.world,
+                    *session,
+                    tick,
+                    command,
+                    fence.as_ref(),
+                );
             }
             GuiInputCommand::Focus {
                 handle,
@@ -6370,6 +6776,9 @@ impl crate::WorldContext<'_> {
 }
 
 #[cfg(test)]
+#[path = "commit_source_tests.rs"]
+mod commit_source_tests;
+#[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[cfg(test)]
@@ -6381,6 +6790,12 @@ mod scrolling_tests;
 #[cfg(test)]
 #[path = "test_support.rs"]
 mod test_support;
+#[cfg(test)]
+#[path = "text_fence_tests.rs"]
+mod text_fence_tests;
+#[cfg(test)]
+#[path = "text_submit_tests.rs"]
+mod text_submit_tests;
 #[cfg(test)]
 #[path = "text_tests.rs"]
 mod text_tests;

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isComposingKeyEvent,
   createImeBridge,
   mapCompositionEnd,
   mapCompositionUpdate,
@@ -141,4 +142,11 @@ test("bridge reports sink failures without breaking the session", () => {
   assert.equal(calls, 2);
   assert.equal(errors.length, 2);
   assert.match(errors[0]!.message, /sink full/);
+});
+
+test("keys during an open composition belong to the IME", () => {
+  assert.equal(isComposingKeyEvent({ isComposing: true, keyCode: 13 }), true);
+  assert.equal(isComposingKeyEvent({ isComposing: false, keyCode: 229 }), true);
+  assert.equal(isComposingKeyEvent({ isComposing: false, keyCode: 13 }), false);
+  assert.equal(isComposingKeyEvent({}), false);
 });

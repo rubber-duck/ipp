@@ -22,6 +22,9 @@ dist/
 .beads-credential-key
 /.beads/dolt-config.log
 
+# Local resources used for LLM interactions
+/.resources/
+
 # Linked source worktrees
 /.worktrees/
 /.claude/worktrees/

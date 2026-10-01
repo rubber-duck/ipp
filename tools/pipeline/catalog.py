@@ -366,9 +366,10 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("target/blender-test",),
         ("node", "npm"),
     )
+    # Its typecheck reads the native generated client.
     build(
         "blender-headless-fixtures",
-        (),
+        ("native",),
         (
             "target/blender-headless/scenario.js",
             "target/blender-headless/blender-headless.test.js",
